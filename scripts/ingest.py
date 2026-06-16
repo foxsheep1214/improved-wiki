@@ -2259,13 +2259,18 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
                     continue
                 # Normalize: if path has more than 2 segments (subdir/.../file.md),
                 # merge extra segments into filename by replacing / with -.
+                # Exception: sources/ keeps its category subdirectory (e.g. sources/book/x.md)
                 parts = path.split("/")
                 if len(parts) > 2:
-                    subdir, *slug_parts = parts
-                    merged_slug = "-".join(slug_parts)
-                    corrected = f"{subdir}/{merged_slug}"
-                    print(f"  [parse] merged / in slug: {path} → {corrected}")
-                    path = corrected
+                    subdir = parts[0]
+                    if subdir == "sources":
+                        # Preserve: sources/book/slug.md → keep as-is
+                        pass
+                    else:
+                        merged_slug = "-".join(parts[1:])
+                        corrected = f"{subdir}/{merged_slug}"
+                        print(f"  [parse] merged / in slug: {path} → {corrected}")
+                        path = corrected
                 # Auto-correct LLM hyphen-for-slash error (subdir-slug → subdir/slug)
                 for subdir in _KNOWN_SUBDIRS:
                     prefix = f"{subdir}-"
@@ -3479,7 +3484,8 @@ def build_query_generation_prompt(
     concepts_str = '\n'.join(f"- {c}" for c in concept_titles[:80])
     entities_str = '\n'.join(f"- {e}" for e in entity_titles[:40])
     claims_str = '\n'.join(
-        f"- [{c.get('confidence', '?')}] {c.get('claim', str(c))}"
+        f"- {c.get('claim', str(c))}" if isinstance(c, dict)
+        else f"- {c}"
         for c in (key_claims or [])[:30]
     )
     existing_slugs = list_existing_slugs(config)
