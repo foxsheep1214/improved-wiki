@@ -58,6 +58,58 @@ sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir  # noqa: E402
 
 
+# ── Progress & heartbeat helpers ──
+
+import threading
+
+_stage_start_times: dict[str, float] = {}
+_current_file_local = threading.local()
+
+def _set_current_file(name: str) -> None:
+    _current_file_local.value = name
+
+def _get_current_file() -> str:
+    return getattr(_current_file_local, "value", "")
+
+def _file_tag() -> str:
+    """Short file label for progress lines. Empty string if no file context."""
+    f = _get_current_file()
+    if not f:
+        return ""
+    if len(f) > 50:
+        return f"[{f[:40]}...{f[-6:]}] "
+    return f"[{f}] "
+
+def _stage_begin(name: str) -> None:
+    _stage_start_times[name] = time.time()
+    tag = _file_tag()
+    print(f"\n{'─'*40}\n{tag}[{name}] Starting...\n{'─'*40}", flush=True)
+
+def _stage_end(name: str) -> None:
+    t0 = _stage_start_times.pop(name, None)
+    elapsed = time.time() - t0 if t0 else 0.0
+    tag = _file_tag()
+    if elapsed >= 60:
+        print(f"{tag}[{name}] Done ({elapsed/60:.1f}m)", flush=True)
+    else:
+        print(f"{tag}[{name}] Done ({elapsed:.0f}s)", flush=True)
+
+def _heartbeat(msg: str = "") -> None:
+    ts = time.strftime("%H:%M:%S")
+    tag = _file_tag()
+    suffix = f" — {msg}" if msg else ""
+    print(f"  {ts}  {tag}… {suffix}", flush=True)
+
+def _llm_call_progress(label: str, attempt: int = 1, retries: int = 0) -> None:
+    tag = _file_tag()
+    retry_hint = f" (retry {attempt}/{retries+1})" if retries else ""
+    print(f"  {tag}→ {label}{retry_hint}...", end=" ", flush=True)
+
+def _llm_call_done(elapsed: float, chars: int | None = None) -> None:
+    size_hint = f", {chars:,} chars" if chars else ""
+    print(f"OK ({elapsed:.0f}s{size_hint})", flush=True)
+
+
 class ConversationPending(Exception):
     """Raised in --conversation mode when a prompt is written and we wait for agent."""
 
@@ -1951,6 +2003,8 @@ def _call_anthropic_api(prompt: str, config: Config, max_tokens: int | None = No
     last_error = None
     for attempt in range(max_retries + 1):
         try:
+            t0 = time.time()
+            _llm_call_progress("LLM (Anthropic)", attempt=attempt + 1, retries=max_retries)
             req = urllib.request.Request(
                 url, data=body, method="POST",
                 headers={
@@ -1966,7 +2020,9 @@ def _call_anthropic_api(prompt: str, config: Config, max_tokens: int | None = No
                 raise RuntimeError(f"LLM response has no content: {data}")
             text_parts = [block.get("text", "") for block in content if block.get("type") == "text"]
             stop_reason = data.get("stop_reason", "unknown")
-            return "".join(text_parts), stop_reason
+            result = "".join(text_parts)
+            _llm_call_done(time.time() - t0, chars=len(result))
+            return result, stop_reason
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="replace")
             last_error = RuntimeError(f"LLM API HTTP {e.code}: {err_body[-500:]}")
@@ -2013,6 +2069,8 @@ def _call_openai_api(prompt: str, config: Config, max_tokens: int | None = None)
     last_error = None
     for attempt in range(max_retries + 1):
         try:
+            t0 = time.time()
+            _llm_call_progress("LLM (OpenAI)", attempt=attempt + 1, retries=max_retries)
             req = urllib.request.Request(
                 url, data=body, method="POST",
                 headers={
@@ -2027,6 +2085,7 @@ def _call_openai_api(prompt: str, config: Config, max_tokens: int | None = None)
                 raise RuntimeError(f"LLM response has no choices: {data}")
             text = choices[0].get("message", {}).get("content", "")
             stop_reason = choices[0].get("finish_reason", "unknown")
+            _llm_call_done(time.time() - t0, chars=len(text))
             usage = data.get("usage", {})
             if usage:
                 print(f"[llm] tokens: {usage.get('prompt_tokens', '?')} in / {usage.get('completion_tokens', '?')} out", flush=True)
@@ -4739,6 +4798,7 @@ def ingest_one(
     pilot_confirmed: bool = False,
 ) -> dict:
     """Process one file end-to-end (NashSU-style 15-stage pipeline with checkpoint/resume)."""
+    _set_current_file(raw_file.name)
     print(f"\n=== Ingest: {raw_file} ===")
 
     # 0. Clean up resolved review pages
@@ -4782,6 +4842,7 @@ def ingest_one(
         print(f"[extract] (cached) {method}: {len(extracted_text)} chars")
         _verify_stage_0_text(raw_file, extracted_text, method)
     else:
+        _stage_begin("Stage 0: Text extraction")
         extracted_text, method = extract_text(raw_file, config, pilot_confirmed=pilot_confirmed)
         print(f"[extract] {method}: {len(extracted_text)} chars")
         _verify_stage_0_text(raw_file, extracted_text, method)
@@ -4790,6 +4851,7 @@ def ingest_one(
             "extracted_text": extracted_text,
             "extract_method": method,
         })
+        _stage_end("Stage 0: Text extraction")
 
     # 3. Detect and load template (used in all 3 stages to guide LLM output)
     template_name = detect_template_type(raw_file, config.raw_root, template_override)
@@ -4821,13 +4883,14 @@ def ingest_one(
     stage_0_6_result = progress.get("stage_0_6", {"captioned": 0}) if progress and "stage_0_6" in progress else {"captioned": 0}
 
     if needs_caption and needs_digest:
-        print(f"[parallel] Stage 0.6 (caption) ∥ Stage 1.1 (digest) — launching both...")
+        _stage_begin("Stage 0.6∥1: Caption + Global Digest (parallel)")
         with ThreadPoolExecutor(max_workers=2) as executor:
             fut_cap = executor.submit(stage_0_6_caption_images, config, stage_0_5_result)
             fut_dig = executor.submit(stage_1_global_digest, extracted_text, raw_file, config, template_content, verbose=verbose)
             stage_0_6_result = fut_cap.result()
             global_digest = fut_dig.result()
         _verify_stage_1_digest(global_digest, raw_file)
+        _stage_end("Stage 0.6∥1: Caption + Global Digest (parallel)")
         if "extracted_text" not in (progress or {}):
             save_progress(config, h, {"stage": "stage_0_done", "extracted_text": extracted_text,
                   "extract_method": method, "stage_0_5": stage_0_5_result, "stage_0_6": stage_0_6_result})
@@ -4864,8 +4927,10 @@ def ingest_one(
         print(f"[stage_1_5] (cached) Chunk Analysis — {len(chunk_analyses)} chunks")
         _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
     else:
+        _stage_begin("Stage 1.5: Chunk Analysis")
         chunk_analyses = stage_1_5_chunk_analysis(extracted_text, global_digest, raw_file, config, template_content, verbose=verbose)
         _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
+        _stage_end("Stage 1.5: Chunk Analysis")
         save_progress(config, h, {
             "stage": "stage_1_5_done",
             "extracted_text": extracted_text,
@@ -4878,6 +4943,7 @@ def ingest_one(
 
     # ── Stage 2: Generation ──
     # Per-chunk mode for multi-chunk books (better coverage), legacy synthesis for small books
+    _stage_begin("Stage 2: Synthesis + File blocks")
     if progress and progress.get("stage") == "stage_2_done" and "raw_response" in progress:
         analysis = progress["analysis"]
         raw_response = progress["raw_response"]
@@ -4916,6 +4982,8 @@ def ingest_one(
         print(f"{'='*60}")
         print(raw_response[:10000])
         print(f"{'='*60}\n")
+
+    _stage_end("Stage 2: Synthesis + File blocks")
 
     # ── Stage 2.3: Query generation ──
     query_blocks, query_response = stage_2_3_query_generation(
@@ -5130,6 +5198,7 @@ def _do_prepare(
     Returns a dict with all data needed for Stage 3+, or None on skip/failure.
     Suitable for parallel execution across multiple books.
     """
+    _set_current_file(raw_file.name)
     print(f"\n=== [prepare] {raw_file.name} ===")
     try:
         # Dedup check
