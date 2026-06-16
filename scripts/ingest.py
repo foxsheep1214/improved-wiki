@@ -26,10 +26,13 @@ Configuration:
   LLM_API_KEY             override API key (env var)
   LLM_BASE_URL            override base URL (env var)
   LLM_MODEL               override model name (env var)
-  LLM_CHUNK_CONCURRENCY   max concurrent chunk analysis workers (default 8)
+  LLM_CHUNK_CONCURRENCY   max concurrent chunk analysis + generation workers (default 8)
+                            (shared by Stage 1.5 chunk analysis and Stage 2.1 per-chunk generation)
   LLM_CHUNK_RETRIES       extra attempts per failed chunk (default 2 → 3 total)
   Text LLM:               config.json default provider (DeepSeek V4 Pro via OpenAI protocol)
   Image caption:          config.json caption_provider (MiniMax via Anthropic protocol)
+                            CAPTION_BATCH_SIZE=8   images per API call
+                            CAPTION_MAX_WORKERS=6  parallel batch concurrency
   Embeddings:             local Ollama (EMBEDDING_BASE_URL / EMBEDDING_MODEL)
 
 This script is idempotent: if the source page exists for a file, it's skipped.
@@ -849,7 +852,7 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
     media_dir = config.wiki_dir / "media" / slug
     pending_imgs = _find_uncaptioned_mineru_images(media_dir)
     if pending_imgs and config.caption_api_key:
-        _caption_mineru_images(pending_imgs, config, media_dir)
+        _caption_images(pending_imgs, config, media_dir, source_label="minerU")
 
     return full_text
 
@@ -874,55 +877,136 @@ def _find_uncaptioned_mineru_images(media_dir: Path) -> list[dict]:
     return imgs
 
 
-def _caption_mineru_images(images: list[dict], config: Config, media_dir: Path,
-                             batch_size: int = 8) -> int:
-    """Run minimax batch caption on minerU-extracted images. Saves .caption.txt."""
-    batches = [images[i:i + batch_size] for i in range(0, len(images), batch_size)]
-    print(f"[ocr-caption] {len(images)} images → {len(batches)} batches")
+# ---------- Stage 0.6/0.9: Unified image captioning (Path A + Path B merged) ----------
+
+CAPTION_BATCH_SIZE = int(os.environ.get("CAPTION_BATCH_SIZE", "8"))
+CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "6"))
+
+
+def _caption_images(images: list[dict], config: Config, media_dir: Path,
+                    source_label: str = "",
+                    batch_size: int = CAPTION_BATCH_SIZE,
+                    max_workers: int = CAPTION_MAX_WORKERS) -> int:
+    """Unified image captioning for both Path A (PyMuPDF) and Path B (minerU).
+
+    Images dict can come from either path:
+      - Path A: {"filename": "...", "page": N, "width": W, "height": H}
+        Image files are at media_dir / filename.
+      - Path B: {"filename": "...", "path": "/abs/path/to/img.jpg"}
+        Image files are at the absolute path.
+
+    Batches are processed in PARALLEL via ThreadPoolExecutor to minimize
+    total wall-clock time. Each batch sends multi-image API request to
+    the caption provider (MiniMax via Anthropic protocol).
+
+    Saves one .caption.txt per image."""
+    if not images:
+        return 0
+    if not config.caption_api_key:
+        print(f"[caption] Skipped — no API key for caption provider")
+        return 0
+
+    # Filter to pending (uncaptioned) images
+    pending = []
+    for img in images:
+        cap_path = media_dir / (img["filename"] + ".caption.txt")
+        if not cap_path.exists() or cap_path.stat().st_size < 20:
+            pending.append(img)
+    if not pending:
+        label = f" [{source_label}]" if source_label else ""
+        print(f"[caption]{label} (cached) All {len(images)} images already captioned")
+        return 0
+
+    batches = [pending[i:i + batch_size] for i in range(0, len(pending), batch_size)]
+    label = f" [{source_label}]" if source_label else ""
+    print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
+          f"→ {len(batches)} batches (parallel, max {max_workers} workers)")
+
+    # Parallel dispatch: all batches submitted at once, results collected as they complete
+    from concurrent.futures import as_completed
+
     captioned = 0
-    for bi, batch in enumerate(batches):
-        text, err = _caption_one_batch_mineru(batch, bi, len(batches), config, media_dir)
-        if err:
-            print(f"  batch {bi+1}: {err}")
-            continue
-        if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.startswith("json"):
-                text = text[4:]
-            if text.endswith("```"):
-                text = text[:-3]
-        try:
-            captions = json.loads(text.strip())
-        except json.JSONDecodeError:
-            print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
-            continue
-        for cap in captions:
-            idx = cap.get("idx", 0) - 1
-            if 0 <= idx < len(batch):
-                cap_path = media_dir / (batch[idx]["filename"] + ".caption.txt")
-                cap_path.write_text(cap.get("caption", "").strip(), encoding="utf-8")
-                captioned += 1
-        print(f"  [{bi+1}/{len(batches)}] {len(captions)} captions")
-    print(f"[ocr-caption] Done — {captioned} captions written")
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(batches))) as executor:
+        future_to_batch = {
+            executor.submit(_caption_one_batch, b, i, len(batches), config, media_dir): i
+            for i, b in enumerate(batches)
+        }
+        for future in as_completed(future_to_batch):
+            bi = future_to_batch[future]
+            batch = batches[bi]
+            try:
+                text, err = future.result()
+            except Exception as e:
+                print(f"  batch {bi+1}: unhandled {type(e).__name__}: {e}")
+                continue
+            if err:
+                print(f"  batch {bi+1}: {err}")
+                continue
+            # Parse JSON array from LLM response
+            if text.startswith("```"):
+                text = text.split("```", 2)[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                if text.endswith("```"):
+                    text = text[:-3]
+            try:
+                captions = json.loads(text.strip())
+            except json.JSONDecodeError:
+                print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
+                continue
+            for cap in captions:
+                idx = cap.get("idx", 0) - 1
+                if 0 <= idx < len(batch):
+                    cap_path = media_dir / (batch[idx]["filename"] + ".caption.txt")
+                    cap_path.write_text(cap.get("caption", "").strip(), encoding="utf-8")
+                    captioned += 1
+            print(f"  [{bi+1}/{len(batches)}] {len(captions)} captions")
+
+    print(f"[caption] Done — {captioned} captions written")
     return captioned
 
 
-def _caption_one_batch_mineru(batch: list[dict], batch_idx: int, total_batches: int,
-                               config: Config, media_dir: Path) -> tuple[str | None, str | None]:
-    """Caption minerU images via caption provider (MiniMax / Anthropic-protocol multi-image)."""
+def _caption_one_batch(batch: list[dict], batch_idx: int, total_batches: int,
+                       config: Config, media_dir: Path) -> tuple[str | None, str | None]:
+    """Call caption provider multi-image API for one batch. Returns (text, error).
+
+    Handles both Path A (filename + page/width/height in media_dir) and
+    Path B (absolute path in img['path']) images transparently."""
     import urllib.request, urllib.error, base64
 
-    content: list[dict] = [{"type": "text", "text": "请描述以下扫描版文档中提取的技术图表：\n\n"}]
+    # Build descriptive preamble
+    first = batch[0]
+    if first.get("page") is not None:
+        last_page = batch[-1].get("page", first["page"])
+        preamble = (f"这是第 {batch_idx+1}/{total_batches} 批（页 {first['page']}-{last_page}），"
+                    f"请按顺序描述每张图：\n\n")
+    else:
+        preamble = (f"这是第 {batch_idx+1}/{total_batches} 批扫描版文档中提取的技术图表，"
+                    f"请按顺序描述每张图：\n\n")
+
+    content: list[dict] = [{"type": "text", "text": preamble}]
     for i, img in enumerate(batch):
-        img_path = Path(img["path"])
+        # Resolve image path — Path B uses absolute path, Path A uses media_dir + filename
+        if "path" in img:
+            img_path = Path(img["path"])
+        else:
+            img_path = media_dir / img["filename"]
         if not img_path.exists():
             continue
         with open(img_path, "rb") as f:
             img_data = base64.standard_b64encode(f.read()).decode()
-        ext = img_path.suffix.lstrip(".")
+        ext = img_path.suffix.lstrip(".").lower()
         media_type = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext}"
-        content.append({"type": "text", "text": f"[图{i+1}]\n"})
+
+        # Annotation: page and size if available (Path A), or index only (Path B)
+        if img.get("page") is not None:
+            content.append({"type": "text",
+                "text": f"[图{i+1}] p{img['page']}, {img.get('width','?')}x{img.get('height','?')}\n"})
+        else:
+            content.append({"type": "text", "text": f"[图{i+1}]\n"})
         content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}})
+        if img.get("page") is not None:
+            content.append({"type": "text", "text": f"[/图{i+1}]\n"})
 
     url = f"{config.caption_base_url.rstrip('/')}/anthropic/v1/messages"
     body = json.dumps({
@@ -1208,62 +1292,25 @@ def _write_manifest(manifest_path: Path, source: str, raw_file: Path, images: li
 
 # ---------- Stage 0.6: Image captioning ----------
 
-def stage_0_6_caption_images(config: Config, stage_0_5_result: dict, batch_size: int = 8) -> dict:
-    """Caption extracted images using MiniMax M3 multi-image batch API.
+def stage_0_6_caption_images(config: Config, stage_0_5_result: dict, batch_size: int = CAPTION_BATCH_SIZE) -> dict:
+    """Caption extracted images using unified caption pipeline (Path A + Path B merged).
 
-    Requires LLM_API_KEY (MiniMax). Skipped if unavailable — the rest of the
-    pipeline (digest, chunks, synthesis, review) proceeds normally without captions.
-    """
+    Thin wrapper around _caption_images() for backward compatibility with the
+    Stage 0.6 pipeline checkpoint. Internal implementation delegates to the
+    unified function which supports both PyMuPDF-extracted images (Path A)
+    and minerU-extracted images (Path B), with parallel batch dispatch."""
     images = stage_0_5_result.get("images", [])
     if not images:
         print("[stage_0_6] No images to caption — skipping")
         return {"captioned": 0, "total": 0}
     if not config.caption_api_key:
-        print("[stage_0_6] Skipped — no API key for caption provider (image captioning requires MiniMax)")
+        print("[stage_0_6] Skipped — no API key for caption provider")
         return {"captioned": 0, "total": len(images), "skipped": True, "reason": "no-api-key"}
 
     media_dir = Path(stage_0_5_result["media_dir"])
-    # Find images without captions
-    pending = []
-    for img in images:
-        cap_path = media_dir / (img["filename"] + ".caption.txt")
-        if not cap_path.exists() or cap_path.stat().st_size < 20:
-            pending.append(img)
-    if not pending:
-        print(f"[stage_0_6] (cached) All {len(images)} images already captioned")
-        return {"captioned": 0, "total": len(images), "skipped": True}
-
-    total = len(pending)
-    batches = [pending[i:i + batch_size] for i in range(0, total, batch_size)]
-    print(f"[stage_0_6] Captioning {total}/{len(images)} pending images in {len(batches)} batches...")
-
-    captioned = 0
-    for bi, batch in enumerate(batches):
-        text, err = _caption_one_batch(batch, bi, len(batches), config, media_dir)
-        if err:
-            print(f"  batch {bi+1}/{len(batches)}: {err}")
-            continue
-        # Parse JSON array from response
-        if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.startswith("json"):
-                text = text[4:]
-            if text.endswith("```"):
-                text = text[:-3]
-        try:
-            captions = json.loads(text.strip())
-        except json.JSONDecodeError:
-            print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
-            continue
-        for cap in captions:
-            idx = cap.get("idx", 0) - 1
-            if 0 <= idx < len(batch):
-                cap_path = media_dir / (batch[idx]["filename"] + ".caption.txt")
-                cap_path.write_text(cap.get("caption", "").strip(), encoding="utf-8")
-                captioned += 1
-        print(f"  [{bi+1}/{len(batches)}] p{batch[0]['page']}-{batch[-1]['page']} — {len(captions)} captions")
-
-    print(f"[stage_0_6] Done — {captioned} new captions written")
+    captioned = _caption_images(images, config, media_dir,
+                                source_label="pyMuPDF",
+                                batch_size=batch_size)
     return {"captioned": captioned, "total": len(images)}
 
 
@@ -1275,51 +1322,6 @@ CAPTION_SYSTEM_PROMPT = (
     "  {\"idx\": 2, \"caption\": \"...\"},\n  ...\n]\n```\n\n"
     "每个对象都要有，idx 与图顺序一致。即使图不清楚也尽量给个最合理的简短描述。"
 )
-
-
-def _caption_one_batch(batch: list[dict], batch_idx: int, total_batches: int,
-                       config: Config, media_dir: Path) -> tuple[str | None, str | None]:
-    """Call caption provider (MiniMax) multi-image API for one batch. Returns (text, error)."""
-    import urllib.request, urllib.error, base64
-
-    content: list[dict] = [{"type": "text", "text":
-        f"这是第 {batch_idx+1}/{total_batches} 批（页 {batch[0]['page']}-{batch[-1]['page']}），请按顺序描述每张图：\n\n"}]
-    for i, img in enumerate(batch):
-        img_path = media_dir / img["filename"]
-        with open(img_path, "rb") as f:
-            img_data = base64.standard_b64encode(f.read()).decode()
-        ext = img.get("ext", img["filename"].split(".")[-1])
-        media_type = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext}"
-        content.append({"type": "text", "text": f"[图{i+1}] p{img['page']}, {img['width']}x{img['height']}\n"})
-        content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}})
-        content.append({"type": "text", "text": f"[/图{i+1}]\n"})
-
-    url = f"{config.caption_base_url.rstrip('/')}/anthropic/v1/messages"
-    body = json.dumps({
-        "model": config.caption_model,
-        "max_tokens": 8192,
-        "system": CAPTION_SYSTEM_PROMPT,
-        "messages": [{"role": "user", "content": content}],
-        "temperature": 0.3,
-    }).encode("utf-8")
-
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, data=body, method="POST", headers={
-                "Content-Type": "application/json",
-                "x-api-key": config.caption_api_key,
-                "anthropic-version": "2023-06-01",
-            })
-            with urllib.request.urlopen(req, timeout=300) as resp:
-                data = json.loads(resp.read())
-            text = "".join(c["text"] for c in data.get("content", []) if c.get("type") == "text")
-            return text.strip(), None
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-                continue
-            return None, f"{type(e).__name__}: {e}"
-    return None, "max-retries"
 
 
 # ---------- Stage 2.5: Review suggestions ----------
@@ -3393,6 +3395,453 @@ def stage_2_synthesis(
     return analysis, combined, file_blocks
 
 
+# ---------- Stage 2.3: Query generation ----------
+
+def build_query_generation_prompt(
+    global_digest: dict,
+    concept_titles: list[str],
+    entity_titles: list[str],
+    key_claims: list[dict],
+    file_path: Path,
+    config: Config,
+    current_domain: str = "general",
+) -> str:
+    """Build prompt for Stage 2.3: generate open questions from single-source analysis."""
+    digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
+    if len(digest_str) > 3000:
+        digest_str = digest_str[:3000] + "\n... (truncated)"
+
+    concepts_str = '\n'.join(f"- {c}" for c in concept_titles[:80])
+    entities_str = '\n'.join(f"- {e}" for e in entity_titles[:40])
+    claims_str = '\n'.join(
+        f"- [{c.get('confidence', '?')}] {c.get('claim', str(c))}"
+        for c in (key_claims or [])[:30]
+    )
+    existing_slugs = list_existing_slugs(config)
+    today_str = time.strftime("%Y-%m-%d")
+    try:
+        raw_rel = str(file_path.relative_to(config.raw_root))
+    except ValueError:
+        raw_rel = file_path.name
+
+    return f"""# Role
+You are maintaining a Karpathy-pattern knowledge base wiki. You have just finished generating source/concept/entity pages for a book.
+
+# Current Domain
+{current_domain}
+
+# Book Context
+- Title: {file_path.stem}
+- Canonical source path: raw/{raw_rel}
+- Global Digest (summary):
+```yaml
+{digest_str}
+```
+
+# Generated Concepts ({len(concept_titles)} total)
+{concepts_str if concepts_str else '(none)'}
+
+# Generated Entities ({len(entity_titles)} total)
+{entities_str if entities_str else '(none)'}
+
+# Key Claims from the Book
+{claims_str if claims_str else '(none)'}
+
+# Existing Wiki Pages (avoid referencing non-existent pages)
+{', '.join(existing_slugs[:200])}
+
+# Task
+Identify **0-5 open questions** this book raises but does NOT fully answer.
+A good query is:
+1. Grounded — stems from specific content in the book
+2. Explorable — can be advanced by reading more, experimenting, or deeper analysis
+3. Bounded — specific enough to have a clear exploration direction
+
+Bad examples (do NOT generate):
+- "What is voltage?" — book already answers this
+- "How to learn hardware design?" — too broad
+- "Will AI replace hardware engineers?" — unrelated to this book
+
+# Output Format
+---FILE:wiki/queries/{{slug}}.md---
+---
+type: query
+title: "{{question ending with ?}}"
+domain: {current_domain}
+tags: [{{2-4 tags}}]
+related: [{{2-4 wikilink stems from generated concepts/entities}}]
+sources: ["raw/{raw_rel}"]
+created: {today_str}
+updated: {today_str}
+---
+
+# {{question title}}
+
+## Background
+{{2-3 sentences: what specific content in the book prompted this question}}
+
+## Clues from the Book
+{{bullet points of partial answers/data/cases already in the book, each with chapter source}}
+
+## To Explore
+{{2-4 specific sub-questions the book left unanswered}}
+
+## See Also
+- [[{{related concept}}]] — {{one-line description}}
+---END FILE---
+
+If no worthwhile query exists, output exactly:
+---QUERIES: 0---
+(no open questions worth a standalone page)
+---END QUERIES---
+
+# Constraints
+- slug: English kebab-case, 3-6 words
+- title: complete question ending with ? or ？
+- related: ONLY wikilink stems from THIS ingest (see Generated Concepts/Entities above)
+- sources: ONLY this book
+- Each query body ≥200 chars (excluding frontmatter)
+- START IMMEDIATELY with ---FILE: or ---QUERIES: — no preamble
+"""
+
+
+def stage_2_3_query_generation(
+    global_digest: dict,
+    chunk_analyses: list[dict],
+    file_blocks: list[tuple[str, str]],
+    file_path: Path,
+    config: Config,
+    template: str = "",
+    verbose: bool = False,
+) -> tuple[list[tuple[str, str]], str]:
+    """Stage 2.3: Generate query pages (open questions) from single-source analysis.
+
+    Returns (new_query_blocks, raw_response).
+    Skips for datasheet/standard source types.
+    """
+    # Skip for datasheet/standard — pure fact listing, no meaningful open questions
+    try:
+        from _paths import detect_template_type
+        src_type = detect_template_type(file_path, config)
+    except Exception:
+        src_type = None
+    if src_type in ("datasheet", "standard"):
+        if verbose:
+            print(f"[stage_2_3] Skipped — {src_type} source type (no meaningful open questions)")
+        return [], ""
+
+    unique_concepts, unique_entities = _extract_concept_entity_names(chunk_analyses)
+
+    # Collect key claims from chunk analyses
+    key_claims = []
+    for ca in chunk_analyses:
+        claims = ca.get("claims", [])
+        if isinstance(claims, list):
+            key_claims.extend(claims)
+
+    # Get concept/entity titles from generated file blocks
+    concept_titles = []
+    entity_titles = []
+    for path, _ in file_blocks:
+        if path.startswith("concepts/"):
+            concept_titles.append(path.replace("concepts/", "").replace(".md", ""))
+        elif path.startswith("entities/"):
+            entity_titles.append(path.replace("entities/", "").replace(".md", ""))
+
+    # If no concepts generated, skip
+    if not concept_titles:
+        if verbose:
+            print("[stage_2_3] Skipped — no concepts generated")
+        return [], ""
+
+    # Detect domain
+    current_domain = global_digest.get("book_meta", {}).get("domain", "general") if isinstance(global_digest.get("book_meta"), dict) else "general"
+
+    prompt = build_query_generation_prompt(
+        global_digest, concept_titles, entity_titles,
+        key_claims, file_path, config, current_domain
+    )
+
+    query_tokens = config.compute_max_tokens(4096)
+    if verbose:
+        print(f"[stage_2_3] Query generation — {len(concept_titles)} concepts, "
+              f"{len(key_claims)} claims, prompt {len(prompt):,} chars...")
+
+    try:
+        response, stop_reason = _call_anthropic_api(prompt, config, query_tokens)
+    except Exception as e:
+        print(f"[stage_2_3] LLM call failed: {e}")
+        return [], ""
+
+    if verbose:
+        print(f"[stage_2_3] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
+
+    # Parse query FILE blocks
+    query_blocks = parse_file_blocks(response)
+    if query_blocks:
+        print(f"[stage_2_3] Generated {len(query_blocks)} query page(s)")
+        for path, _ in query_blocks:
+            print(f"  → {path}")
+    elif "---QUERIES: 0---" in response or "QUERIES: 0" in response:
+        print("[stage_2_3] No worthwhile queries (---QUERIES: 0---)")
+    else:
+        print("[stage_2_3] No query blocks parsed (may be implicit ---QUERIES: 0---)")
+
+    return query_blocks, response
+
+
+# ---------- Stage 2.5: Comparison generation ----------
+
+def build_comparison_disambiguation_prompt(
+    concept_titles: list[str],
+    entity_titles: list[str],
+    existing_slugs: list[str],
+    file_path: Path,
+    config: Config,
+    current_domain: str = "general",
+) -> str:
+    """Build prompt for Stage 2.5A: disambiguation comparisons."""
+    new_titles = concept_titles + entity_titles
+    new_str = '\n'.join(f"- {t} (domain: {current_domain})" for t in new_titles[:80])
+    existing_str = ', '.join(existing_slugs[:300])
+    today_str = time.strftime("%Y-%m-%d")
+
+    return f"""# Role
+You are maintaining a wiki knowledge base. You have just generated concept/entity pages for a book.
+
+# Current Domain
+{current_domain}
+
+# New Pages from This Book
+{new_str}
+
+# Existing Wiki Pages
+{existing_str}
+
+# Task
+Check if any NEW page title has an EXACT name match with an EXISTING wiki page from a DIFFERENT domain.
+ONLY create a disambiguation page when there is a genuine naming collision across domains.
+Do NOT create disambiguation for:
+- Similar-but-different names (e.g., "8b/10b encoding" vs "8b10b encoding bypass")
+- Terms that only exist in ONE domain
+- Terms where the domain distinction is already clear from the page title
+- Sub-topics or variations of the same concept
+
+A genuine collision example: "Switch" exists in BOTH circuit-fundamentals AND power-electronics with different meanings.
+
+# Output Format
+---FILE:wiki/comparisons/{{term-slug}}.md---
+---
+type: comparison
+title: "{{Term}} (disambiguation)"
+domain: general
+tags: [disambiguation]
+related: [{{domain-specific page stems}}]
+sources: []
+created: {today_str}
+updated: {today_str}
+---
+
+# {{Term}} (disambiguation)
+
+The term "{{Term}}" has different meanings across HardwareWiki domains:
+
+| Domain | Meaning | Page |
+|--------|---------|------|
+| {{domain-1}} | {{one-sentence definition}} | [[{{term}}-{{domain-1}}]] |
+| {{domain-2}} | {{one-sentence definition}} | [[{{term}}-{{domain-2}}]] |
+
+## How to Distinguish
+{{1-2 sentences on how to tell which domain based on context}}
+
+## See Also
+- [[{{term}}-{{domain-1}}]] — {{description}}
+- [[{{term}}-{{domain-2}}]] — {{description}}
+---END FILE---
+
+If no disambiguation is needed, output:
+---COMPARISONS_DISAMBIGUATION: 0---
+---END COMPARISONS_DISAMBIGUATION---
+
+START IMMEDIATELY with ---FILE: or ---COMPARISONS_DISAMBIGUATION: — no preamble.
+"""
+
+
+def build_comparison_in_source_prompt(
+    concept_titles: list[str],
+    file_path: Path,
+    config: Config,
+    current_domain: str = "general",
+) -> str:
+    """Build prompt for Stage 2.5B: in-source concept comparisons."""
+    concepts_with_desc = '\n'.join(f"- {c}" for c in concept_titles[:60])
+    today_str = time.strftime("%Y-%m-%d")
+    try:
+        raw_rel = str(file_path.relative_to(config.raw_root))
+    except ValueError:
+        raw_rel = file_path.name
+
+    return f"""# Role
+You are maintaining a wiki knowledge base. Review the concepts just generated for a book.
+
+# Current Domain
+{current_domain}
+
+# Source
+{file_path.stem} (raw/{raw_rel})
+
+# Generated Concepts
+{concepts_with_desc}
+
+# Task
+Identify pairs of concepts that are **naturally compared** — understanding one illuminates the other.
+Good candidates:
+- Two choices on the same dimension (CCM vs DCM, Buck vs Boost, Voltage Mode vs Current Mode)
+- Commonly confused pairs (EMI vs EMC, SNR vs SINAD, PSRR vs CMRR)
+- Explicitly contrasted in the book
+
+Bad candidates:
+- Upstream/downstream relationships (MOSFET → Gate Driver)
+- Parent/child relationships (DC-DC Converter → Buck Converter)
+- Three or more items → NOT a comparison
+
+Generate at most 2 comparisons. Output 0 if no good pair exists.
+
+# Output Format
+---FILE:wiki/comparisons/{{slug}}.md---
+---
+type: comparison
+title: "{{Concept A}} vs {{Concept B}}"
+domain: {current_domain}
+tags: [{{2-4 tags}}]
+related: [{{concept-A-stem}}, {{concept-B-stem}}]
+sources: ["raw/{raw_rel}"]
+created: {today_str}
+updated: {today_str}
+---
+
+# {{Concept A}} vs {{Concept B}}
+
+## Why Compare
+{{1-2 sentences: why these two benefit from side-by-side understanding}}
+
+## Comparison Table
+| Dimension | {{Concept A}} | {{Concept B}} |
+|-----------|---------------|---------------|
+| {{dim 1: e.g. operating principle}} | | |
+| {{dim 2: e.g. key characteristic}} | | |
+| {{dim 3: e.g. typical application}} | | |
+| {{dim 4: e.g. advantages/disadvantages}} | | |
+
+## Selection Guide
+{{When to choose A vs B — 2-3 specific recommendations}}
+
+## See Also
+- [[{{Concept A}}]] — {{one-line description}}
+- [[{{Concept B}}]] — {{one-line description}}
+---END FILE---
+
+If no good comparison pair exists, output:
+---COMPARISONS_IN_SOURCE: 0---
+---END COMPARISONS_IN_SOURCE---
+
+START IMMEDIATELY with ---FILE: or ---COMPARISONS_IN_SOURCE: — no preamble.
+"""
+
+
+def stage_2_5_comparison_generation(
+    global_digest: dict,
+    chunk_analyses: list[dict],
+    file_blocks: list[tuple[str, str]],
+    file_path: Path,
+    config: Config,
+    template: str = "",
+    verbose: bool = False,
+) -> tuple[list[tuple[str, str]], str]:
+    """Stage 2.5: Generate comparison pages (disambiguation + in-source contrast).
+
+    Returns (new_comparison_blocks, raw_response).
+    Skips when no concepts were generated.
+    """
+    unique_concepts, unique_entities = _extract_concept_entity_names(chunk_analyses)
+
+    # Get concept/entity titles from generated file blocks
+    concept_titles = []
+    entity_titles = []
+    for path, _ in file_blocks:
+        if path.startswith("concepts/"):
+            concept_titles.append(path.replace("concepts/", "").replace(".md", ""))
+        elif path.startswith("entities/"):
+            entity_titles.append(path.replace("entities/", "").replace(".md", ""))
+
+    if not concept_titles and not entity_titles:
+        if verbose:
+            print("[stage_2_5_comp] Skipped — no concepts/entities generated")
+        return [], ""
+
+    current_domain = global_digest.get("book_meta", {}).get("domain", "general") if isinstance(global_digest.get("book_meta"), dict) else "general"
+    existing_slugs = list_existing_slugs(config)
+    comp_tokens = config.compute_max_tokens(4096)
+    all_blocks: list[tuple[str, str]] = []
+
+    # 2.5A: Disambiguation
+    if verbose:
+        print(f"[stage_2_5_comp] 2.5A Disambiguation check — {len(concept_titles)} concepts vs {len(existing_slugs)} existing...")
+    prompt_25a = build_comparison_disambiguation_prompt(
+        concept_titles, entity_titles, existing_slugs, file_path, config, current_domain
+    )
+    try:
+        response_25a, stop_25a = _call_anthropic_api(prompt_25a, config, comp_tokens)
+    except Exception as e:
+        print(f"[stage_2_5_comp] 2.5A LLM call failed: {e}")
+        response_25a = ""
+    if response_25a:
+        blocks_25a = parse_file_blocks(response_25a)
+        if blocks_25a:
+            print(f"[stage_2_5_comp] 2.5A: {len(blocks_25a)} disambiguation page(s)")
+            all_blocks.extend(blocks_25a)
+        else:
+            print("[stage_2_5_comp] 2.5A: no disambiguation needed")
+
+    # 2.5B: In-source concept comparison
+    if len(concept_titles) >= 2:
+        if verbose:
+            print(f"[stage_2_5_comp] 2.5B In-source comparison — {len(concept_titles)} concepts...")
+        prompt_25b = build_comparison_in_source_prompt(
+            concept_titles, file_path, config, current_domain
+        )
+        try:
+            response_25b, stop_25b = _call_anthropic_api(prompt_25b, config, comp_tokens)
+        except Exception as e:
+            print(f"[stage_2_5_comp] 2.5B LLM call failed: {e}")
+            response_25b = ""
+        if response_25b:
+            blocks_25b = parse_file_blocks(response_25b)
+            if blocks_25b:
+                print(f"[stage_2_5_comp] 2.5B: {len(blocks_25b)} comparison page(s)")
+                for path, _ in blocks_25b:
+                    print(f"  → {path}")
+                all_blocks.extend(blocks_25b)
+            else:
+                print("[stage_2_5_comp] 2.5B: no comparison pairs found")
+    else:
+        if verbose:
+            print("[stage_2_5_comp] 2.5B skipped — fewer than 2 concepts")
+
+    if all_blocks:
+        print(f"[stage_2_5_comp] Total: {len(all_blocks)} comparison page(s)")
+    else:
+        print("[stage_2_5_comp] No comparisons generated (---COMPARISONS: 0---)")
+
+    combined_response = response_25a
+    if response_25a and response_25b:
+        combined_response = response_25a + "\n" + response_25b
+    elif response_25b:
+        combined_response = response_25b
+
+    return all_blocks, combined_response
+
+
 # ---------- File writing ----------
 
 # NashSU parity: isSafeIngestPath (ingest.ts L290-306)
@@ -4337,7 +4786,8 @@ def ingest_one(
     elif len(chunk_analyses) > 1:
         # Per-chunk generation: each chunk generates its own concept pages in parallel
         analysis, raw_response, file_blocks = stage_2_per_chunk_generation(
-            chunk_analyses, [], global_digest, raw_file, config, template_content, verbose=verbose,
+            chunk_analyses, [], global_digest, raw_file, config, template_content,
+            max_chunk_concurrent=_chunk_concurrency(), verbose=verbose,
         )
     else:
         analysis, raw_response, file_blocks = stage_2_synthesis(
@@ -4366,6 +4816,22 @@ def ingest_one(
         print(f"{'='*60}")
         print(raw_response[:10000])
         print(f"{'='*60}\n")
+
+    # ── Stage 2.3: Query generation ──
+    query_blocks, query_response = stage_2_3_query_generation(
+        global_digest, chunk_analyses, file_blocks, raw_file, config,
+        template=template_content, verbose=verbose
+    )
+    if query_blocks:
+        file_blocks = list(file_blocks) + query_blocks
+
+    # ── Stage 2.5: Comparison generation ──
+    comp_blocks, comp_response = stage_2_5_comparison_generation(
+        global_digest, chunk_analyses, file_blocks, raw_file, config,
+        template=template_content, verbose=verbose
+    )
+    if comp_blocks:
+        file_blocks = list(file_blocks) + comp_blocks
 
     # NOTE: Stage 3+ logic duplicated with _do_write()
     # 6. Write wiki files
@@ -4655,6 +5121,22 @@ def _do_prepare(
                 global_digest, chunk_analyses, raw_file, config, template_content, verbose=verbose
             )
         _verify_stage_2_file_blocks(file_blocks, raw_file)
+
+        # ── Stage 2.3: Query generation ──
+        query_blocks, query_response = stage_2_3_query_generation(
+            global_digest, chunk_analyses, file_blocks, raw_file, config,
+            template=template_content, verbose=verbose
+        )
+        if query_blocks:
+            file_blocks = list(file_blocks) + query_blocks
+
+        # ── Stage 2.5: Comparison generation ──
+        comp_blocks, comp_response = stage_2_5_comparison_generation(
+            global_digest, chunk_analyses, file_blocks, raw_file, config,
+            template=template_content, verbose=verbose
+        )
+        if comp_blocks:
+            file_blocks = list(file_blocks) + comp_blocks
 
         analysis["__source_hash"] = h
         analysis["__extract_method"] = method
