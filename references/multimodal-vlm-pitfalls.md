@@ -154,17 +154,15 @@ req = urllib.request.Request(
 
 | endpoint | 多图支持 | auth header | 适用 |
 |---|---|---|---|
-| `https://api.minimaxi.com/anthropic/v1/messages` | ✅ 单请求 content blocks 数组（Anthropic 协议原生）| `Authorization: Bearer<key>` | **OCR / caption 批量任务（首选）** |
-| `https://api.minimaxi.com/v1/coding_plan/vlm` | ❌ 只支持单图（`image_url` 必须是单字符串，不能传数组）| `Authorization: Bearer<key>` | mmx CLI 内部用，单图 sequential |
+| `https://api.minimaxi.com/anthropic/v1/messages` | ✅ 单请求 content blocks 数组（Anthropic 协议原生）| `Authorization: Bearer<key>` 或 `x-api-key: <key>`（均可用） | **OCR / caption 批量任务（首选）** |
+| `https://api.minimaxi.com/v1/coding_plan/vlm` | ❌ 只支持单图（`image_url` 必须是单字符串，不能传数组）| `Authorization: Bearer<key>` | mmx CLI 内部用 / 单图 sequential |
 
 **常见错配 → 错误对照**：
-- `anthropic/v1/messages` + `X-Api-Key` header → 1004（错误描述有误导性，实际 minimax 在这个 endpoint 用 Bearer）
-- `anthropic/v1/messages` + `Auth: <key>` 自定义 header → 1004（同上）
-- `v1/coding_plan/vlm` + `image_url=[img1, img2, ...]` 数组 → 2013 invalid_params
-- `v1/coding_plan/vlm` + `image` 字段 local path → 1004（这 endpoint 不接 local path）
+- `v1/coding_plan/vlm` + `image_url=[img1, img2, ...]` 数组 → 2013 invalid_params ✅ verified 2026-06-17
+- `v1/coding_plan/vlm` + `image` 字段 local path → 不接 local path
 
 **正解**：
-- **批量多图 OCR/caption**：`anthropic/v1/messages` + `Authorization: Bearer<key>` + `content=[{"type":"text","text":prompt}, {"type":"image","source":{"type":"base64","media_type":"image/png","data":b64}}, ...]`
+- **批量多图 OCR/caption**：`anthropic/v1/messages` + `Authorization: Bearer<key>` 或 `x-api-key: <key>`（两者均可用，2026-06-17 验证）+ `content=[{"type":"text","text":prompt}, {"type":"image","source":{"type":"base64","media_type":"image/png","data":b64}}, ...]`
 - **单图 sequential**（mmx CLI）：`v1/coding_plan/vlm` + `Authorization: Bearer<key>` + `image_url="data:image/png;base64,..."` 单字符串
 
 **实测 2026-06-11 无源器件篇**：
@@ -258,4 +256,4 @@ mmx vision describe \
 - **2026-06-11**：删除 Pitfall 1+2（minerU 1.2B 专属）以及所有 minerU 备份内容，按用户指令"删 minerU 备份"；Pitfall 重新编号 1=缺包/2=8 张批量/3=Batches/4=embedding
 - **2026-06-11**：Pitfall 2 加前置说明（mmx CLI 不适用 batching）；决策树 mmx 段加入 50-300 / >300 张阈值；canonical mmx invocation 加 `--region cn --output text --timeout 180` 三个 flag 解释
 - **2026-06-11**：新增 Pitfall 5 minimax 国内端 endpoint 矩阵（`anthropic/v1/messages` 多图 vs `v1/coding_plan/vlm` 单图）——无源器件篇 OCR 实战沉淀，避免下次在两条 endpoint 之间再试错
-- **2026-06-17**：新增 Pitfall 6 灰度图 VLM 拒绝问题 + `_preprocess_image_for_caption()` 修复 + HardwareWiki 1515 张图分布统计
+- **2026-06-17**：新增 Pitfall 6（历史 caption 解析失败可通过重试修复）；全量 pitfall 审计：P4/emob-01 格式仍旧有效；P5/x-api-key 现已支持（过时声明修正）；P5/vlm 数组拒绝仍旧有效；P6 灰度声明修正（A/B 测试证明灰度可正常处理）
