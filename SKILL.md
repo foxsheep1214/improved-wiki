@@ -72,11 +72,10 @@ Lint:  [16: Build Graph] → [17: Louvain] → [18: Insights]
 | Category | Scripts |
 |----------|---------|
 | Core | `ingest.py`, `_paths.py`, `_language.py` |
-| Media | `caption_batch.py` |
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `build_knowledge_graph.py`, `validate_ingest.py`, `validate-frontmatter.sh` |
 | Queue | `wiki-monitor.sh`, `run-queue.sh` |
 | Embeddings | `build_embeddings.py`, `search_wiki.py` |
-| Repair | `repair_stage_05.py`, `repair_stage_06.py`, `repair_stage_35.py`, `repair_stage_37.py`, `repair_stage_38.py`, `reingest_batch.py` |
+| Repair | `repair_wiki.py`, `repair_stage_38.py`, `reingest_batch.py` |
 
 ## Trigger this skill
 

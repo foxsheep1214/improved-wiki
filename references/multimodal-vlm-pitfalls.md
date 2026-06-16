@@ -178,7 +178,7 @@ req = urllib.request.Request(
 ```
 MiniMax M3 跑 OCR/caption?  (直接 HTTP，anthropic 协议)
 ├─ < 50 张 → 单图单请求即可
-├─ 50-1000 张 → 单请求 5-8 图批量（省 60%+ 时间，scripts/caption_batch.py）
+├─ 50-1000 张 → 单请求 5-8 图批量（省 60%+ 时间，ingest.py `_caption_images()` 自动并行）
 └─ > 1000 张 + 不急 → Anthropic Message Batches（50% 折扣）
 
 mmx CLI 跑 OCR/caption?  (MiniMax CN 国内端，sequential)
@@ -200,7 +200,7 @@ mmx CLI 在 OCR 任务上的细节见 `references/session-lessons.md` §16。
 **Skill venv 装好 4 包**（Pitfall 1）：`torch torchvision transformers accelerate` —— 一次装好，永久受益。
 
 **多模态脚本模板**：
-1. MiniMax 批量用 Pitfall 2 的 8 图/请求 + JSON 输出 prompt（`scripts/caption_batch.py`）
+1. MiniMax 批量用 Pitfall 2 的 8 图/请求 + JSON 输出 prompt（ingest.py `_caption_images()` 内置并行）
 2. Batches API 用 Pitfall 3 的模板
 3. MiniMax embedding 用 Pitfall 4 的字段规范（`scripts/build_embeddings.py`）
 
