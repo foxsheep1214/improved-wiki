@@ -883,6 +883,16 @@ CAPTION_BATCH_SIZE = int(os.environ.get("CAPTION_BATCH_SIZE", "8"))
 CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "6"))
 
 
+def _is_caption_failed(text: str) -> bool:
+    """Detect VLM failure responses that shouldn't be treated as valid captions."""
+    if not text or len(text) < 15:
+        return True
+    failure_markers = ["解析失败", "无法识别", "unable to", "cannot describe",
+                       "抱歉", "sorry", "I can't", "not clear", "无法描述"]
+    text_lower = text.lower()
+    return any(m.lower() in text_lower for m in failure_markers)
+
+
 def _caption_images(images: list[dict], config: Config, media_dir: Path,
                     source_label: str = "",
                     batch_size: int = CAPTION_BATCH_SIZE,
@@ -906,12 +916,22 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
         print(f"[caption] Skipped — no API key for caption provider")
         return 0
 
-    # Filter to pending (uncaptioned) images
+    # Filter to pending (uncaptioned or VLM-failed) images
     pending = []
     for img in images:
         cap_path = media_dir / (img["filename"] + ".caption.txt")
-        if not cap_path.exists() or cap_path.stat().st_size < 20:
+        if not cap_path.exists():
             pending.append(img)
+        elif cap_path.stat().st_size < 20:
+            pending.append(img)
+        else:
+            # Re-check: existing caption might be a VLM failure from previous run
+            try:
+                existing = cap_path.read_text(encoding="utf-8").strip()
+                if _is_caption_failed(existing):
+                    pending.append(img)
+            except Exception:
+                pending.append(img)
     if not pending:
         label = f" [{source_label}]" if source_label else ""
         print(f"[caption]{label} (cached) All {len(images)} images already captioned")
@@ -957,13 +977,44 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
             for cap in captions:
                 idx = cap.get("idx", 0) - 1
                 if 0 <= idx < len(batch):
+                    caption_text = cap.get("caption", "").strip()
+                    # VLM failure detection: if the LLM returns "解析失败" or similar,
+                    # write a retry-able fallback instead of a useless permanent caption
+                    if _is_caption_failed(caption_text):
+                        caption_text = f"[待重试] 图片 {batch[idx]['filename']}，尺寸 {batch[idx].get('width','?')}×{batch[idx].get('height','?')}"
                     cap_path = media_dir / (batch[idx]["filename"] + ".caption.txt")
-                    cap_path.write_text(cap.get("caption", "").strip(), encoding="utf-8")
+                    cap_path.write_text(caption_text, encoding="utf-8")
                     captioned += 1
             print(f"  [{bi+1}/{len(batches)}] {len(captions)} captions")
 
     print(f"[caption] Done — {captioned} captions written")
     return captioned
+
+
+def _preprocess_image_for_caption(img_path: Path, max_dim: int = 1568) -> str:
+    """Load image, convert grayscale→RGB, downscale if > max_dim, return base64.
+
+    MiniMax VLM struggles with: grayscale (mode L), oversized images (>4K).
+    This preprocessor fixes both before the image reaches the VLM.
+    """
+    import io, base64
+    from PIL import Image
+    im = Image.open(img_path)
+    w, h = im.size
+
+    # Grayscale → RGB (critical: VLM often rejects mode L images)
+    if im.mode in ('L', 'LA', 'P', 'PA'):
+        im = im.convert('RGB')
+
+    # Downscale oversized images (VLM context window limits)
+    if w > max_dim or h > max_dim:
+        im.thumbnail((max_dim, max_dim), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    fmt = 'JPEG' if img_path.suffix.lower() in ('.jpg', '.jpeg') else 'PNG'
+    im.save(buf, format=fmt, quality=85)
+    im.close()
+    return base64.standard_b64encode(buf.getvalue()).decode()
 
 
 def _caption_one_batch(batch: list[dict], batch_idx: int, total_batches: int,
@@ -993,8 +1044,8 @@ def _caption_one_batch(batch: list[dict], batch_idx: int, total_batches: int,
             img_path = media_dir / img["filename"]
         if not img_path.exists():
             continue
-        with open(img_path, "rb") as f:
-            img_data = base64.standard_b64encode(f.read()).decode()
+        # Preprocess: grayscale→RGB + downscale oversized images for VLM compatibility
+        img_data = _preprocess_image_for_caption(img_path)
         ext = img_path.suffix.lstrip(".").lower()
         media_type = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext}"
 
