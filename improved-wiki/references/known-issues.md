@@ -134,7 +134,7 @@ Original text (kept for historical record):
 
 ## `ingest.py` — `wiki_path_for_source` wrong path with type subfolder (FIXED 2026-06-10)
 
-**Status**: ✅ **FIXED** (2026-06-16: re-nested to mirror raw/). `wiki/sources/`, `wiki/media/`, `wiki/reviews/` now all mirror the `raw/` directory structure. Source-block matching updated to handle nested paths.
+**Status**: ✅ **FIXED** (2026-06-16: re-nested to mirror raw/). `wiki/sources/`, `wiki/media/`, `wiki/REVIEW/` now all mirror the `raw/` directory structure. Source-block matching updated to handle nested paths.
 
 **Fix**: Changed to `config.wiki_dir / "sources" / raw_file.with_suffix(".md").name` — flat, filename stem only.
 

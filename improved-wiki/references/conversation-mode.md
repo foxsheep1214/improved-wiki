@@ -199,7 +199,7 @@ digest_updates:
   severity: medium
 ```
 
-**输出**：保存为 `review-suggestions.json`（再通过 `run_review_suggestions.py` 或 ingest.py 写入 `wiki/reviews/`）
+**输出**：保存为 `review-suggestions.json`（再通过 `run_review_suggestions.py` 或 ingest.py 写入 `wiki/REVIEW/`）
 
 ---
 

@@ -1334,7 +1334,7 @@ def stage_2_5_review_suggestions(config: Config, file_blocks: list[tuple[str, st
       - >= 10K chars of generation output
       - Incomplete REVIEW block (opened but not closed)
 
-    Output: wiki/reviews/<date>-<source>-<NNN>.md — human-browsable review pages.
+    Output: wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md — human-browsable review pages.
     Each page has frontmatter `resolved: false`. When resolved, user changes to true.
     On next ingest, resolved pages are auto-cleaned.
     Also writes review-suggestions.json to runtime dir for tooling.
@@ -1437,22 +1437,14 @@ def stage_2_5_review_suggestions(config: Config, file_blocks: list[tuple[str, st
     if not isinstance(items, list):
         items = []
 
-    # Write review pages to wiki/reviews/<type>/ (mirrors raw/ structure)
-    type_subdir = _raw_type_subdir(raw_file, config)
-    reviews_dir = config.wiki_dir / "reviews" / type_subdir
-    reviews_dir.mkdir(parents=True, exist_ok=True)
+    # Write review pages to wiki/REVIEW/<review_type>/ (分子目录，一目了然)
     date_str = time.strftime("%Y-%m-%d")
-    # Clean source stem for filename
-    safe_stem = re.sub(r'[^\w\s-]', '', raw_file.stem).strip()[:60]
+    safe_source = re.sub(r'[^\w\s-]', '', raw_file.stem).strip()[:40]
 
     written = 0
     for it in items:
         if not isinstance(it, dict):
             continue
-        n = written + 1
-        filename = f"{date_str}-{safe_stem}-{n:03d}.md"
-        page_path = reviews_dir / filename
-
         rtype = it.get("type", "suggestion")
         title = it.get("title", "Untitled")
         desc = it.get("description", "")
@@ -1460,6 +1452,19 @@ def stage_2_5_review_suggestions(config: Config, file_blocks: list[tuple[str, st
         if isinstance(affected, str):
             affected = [affected]
         severity = it.get("severity", "medium")
+
+        # Build short-slug from title (kebab-case, English only, max 40 chars)
+        import unicodedata
+        slug_raw = unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode('ascii')
+        short_slug = re.sub(r'[^\w\s-]', '', slug_raw).strip().lower()
+        short_slug = re.sub(r'[-\s]+', '-', short_slug)[:50].strip('-')
+        if not short_slug:
+            short_slug = f"item-{written + 1}"
+
+        reviews_dir = config.wiki_dir / "REVIEW" / rtype
+        reviews_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{date_str}-{safe_source}-{short_slug}.md"
+        page_path = reviews_dir / filename
 
         # Build wikilinks for affected pages
         affected_links = "\n".join(f"- [[{p.replace('.md', '')}]]" for p in affected)
@@ -1489,7 +1494,7 @@ _待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 `resolv
         tmp.rename(page_path)
         written += 1
 
-    print(f"[stage_2_5] {written} review pages → {reviews_dir}")
+    print(f"[stage_2_5] {written} review pages → wiki/REVIEW/")
 
     # Also write JSON for tooling (backward compat)
     runtime_dir = config.runtime_dir
@@ -1515,7 +1520,7 @@ def cleanup_resolved_reviews(config: Config) -> int:
 
     Called at the start of each ingest run. Returns count of deleted pages.
     """
-    reviews_dir = config.wiki_dir / "reviews"
+    reviews_dir = config.wiki_dir / "REVIEW"
     if not reviews_dir.exists():
         return 0
 
@@ -1717,8 +1722,8 @@ def validate_stage_outputs(
         warnings.append("Stage 3.7: source page does not exist after ingest")
         print(f"  ❌ Stage 3.7: source page missing")
 
-    # Stage 2.5/4: review pages in wiki/reviews/ (recursive — mirrors raw/)
-    reviews_dir = config.wiki_dir / "reviews"
+    # Stage 4.5: review pages in wiki/REVIEW/<type>/ (分子目录)
+    reviews_dir = config.wiki_dir / "REVIEW"
     if reviews_dir.exists():
         unresolved = 0
         for rp in reviews_dir.rglob("*.md"):
@@ -1726,7 +1731,7 @@ def validate_stage_outputs(
             if "resolved: false" in content[:500]:
                 unresolved += 1
         if unresolved > 0:
-            print(f"  ℹ️  wiki/reviews/: {unresolved} unresolved review pages pending human triage")
+            print(f"  ℹ️  wiki/REVIEW/: {unresolved} unresolved review pages pending human triage")
 
     # Stage 5: cache will be written after this — just check cache_path dir exists
     config.cache_path.parent.mkdir(parents=True, exist_ok=True)

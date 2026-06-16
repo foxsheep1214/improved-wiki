@@ -1,6 +1,6 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——基于 NashSU v0.4.23 autoIngestImpl() 流水线的 17 Stage 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——基于 NashSU v0.4.23 autoIngestImpl() 流水线的 15 Stage 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
 tags: [ingest, mandatory, nashsu, pipeline]
 related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 ---
@@ -9,7 +9,7 @@ related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 
 ## 为什么需要"强制"？
 
-Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 流水线包含 **18 个 Stage**（2026-06-16 全面重编号为 Phase.序列 格式）。**任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。
+Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 流水线包含 **15 个 Stage**（2026-06-16 全面重编号为 Phase.序列 格式）。**任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。
 
 **跳过的代价**：
 1. **raw 是 sacred**（Layer 1 原则）—— PDF 里的图也是 raw 的一部分，跳过图片提取 = 丢了一半知识
@@ -19,7 +19,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
 
 **违反此清单的代价**已在 2026-06-11 HardwareWiki 第一次 ingest 中真实发生：漏掉 Stage 0.7/0.9 后，source 页面里没有任何图片引用——因为没强制流程就没人会回头补。
 
-## 强制 Stage 清单（18 步）
+## 强制 Stage 清单（15 步）
 
 每个 Stage 都标了：
 - **作用**：该 Stage 做什么
@@ -29,10 +29,10 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
 
 ### Stage 0.1 · 源页去重检查 ⭐ **任何文件选取前强制执行**
 
-- **作用**：检查候选文件是否已消化。**唯一判断依据：`wiki/sources/<raw-rel-path>.md` 是否存在。** `<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），镜像 `raw/` 的目录结构。源页是 Stage 3.1 写入的不可变记录，永远不会被 pipeline 删除或覆盖。源页存在 = 消化完成 → 跳过。不存在 → 进入 Stage 0.3。
+- **作用**：检查候选文件是否已消化。**唯一判断依据：`wiki/sources/<raw-rel-path>.md` 是否存在。** `<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），镜像 `raw/` 的目录结构。源页是 Stage 3.5 写入的不可变记录，永远不会被 pipeline 删除或覆盖。源页存在 = 消化完成 → 跳过。不存在 → 进入 Stage 0.3。
 - **跳过代价**：重复消化已完成的书籍，浪费 LLM token、OCR 时间，且并行场景下可能导致 index.md / log.md 竞态覆盖。
 - **为什么只用 `wiki/sources/`，不查 `ingest-cache.json`**：
-  - **`wiki/sources/` 是不可变记录**：每个成功的 ingest 在 Stage 3.1 写入一个源页，pipeline 永不删除或覆盖它。
+  - **`wiki/sources/` 是不可变记录**：每个成功的 ingest 在 Stage 3.5 写入一个源页，pipeline 永不删除或覆盖它。
   - **`ingest-cache.json` 不可靠**：2026-06-14 HardwareWiki 两次事故——(a) agent 忽略缓存选了已消化的书；(b) 10 本书源页存在但缓存缺失。缓存可以被手动删除、跨对话丢失、runtime 目录切换后找不到、并发写入损坏。它只适合作为 ingest.py 内部的性能优化（跳过哈希计算），**绝不用于去重判断**。
 - **产物**：过滤后的待消化文件列表（只含 `wiki/sources/` 中无对应源页的文件）。
 - **go/no-go 判断**：
@@ -63,8 +63,8 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
 - **go/no-go**：每页 chars >100；无幻觉（chars<100 且无中文字符 → 重跑）；确认 minerU 输出的 `images/` 目录包含图表
 - **关键实操**：扫描版 PDF 全本 OCR 使用本地 minerU（`~/.venv/bin/mineru -b vlm-auto-engine`），免费、自动提取图片、无需 API key。**并发限制**：系统级最多 2 个 minerU 实例并行（`MINERU_MAX_CONCURRENT=2`）。16GB 统一内存的 Mac 上同时跑 >2 个 VLM 模型实例会导致 SIGABRT 崩溃 + 僵尸进程死锁。`ingest.py` 在每次 minerU 调用前通过 `_wait_for_mineru_slot()` 自动排队，无需人工协调。
 
-**Stage 0.1 强制前置：pilot（5-10 页）验证 OCR 质量再启全本**
-- 不准直接 Stage 0.1 全本。**必须**先本地 minerU 切前 5-10 页 → OCR → 看输出质量（中文术语识别、公式 LaTeX 化、章节结构保留）→ 再决定全本路径
+**Stage 0.3 Pilot 强制前置：pilot（5-10 页）验证 OCR 质量再启全本**
+- 不准直接 Stage 0.5 全本。**必须**先本地 minerU 切前 5-10 页 → OCR → 看输出质量（中文术语识别、公式 LaTeX 化、章节结构保留）→ 再决定全本路径
 - 跳过 pilot 的代价：全本跑到一半才发现质量不行 → 浪费数小时
 
 ### Stage 0.7 · 图片提取 ⭐ **永远不能跳**
@@ -78,7 +78,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
   - 尺寸过滤（< 100×100 像素的装饰/logo 剔除）
   - manifest.json 记录：图路径 / 来源页 / 尺寸 / sha256
   - **方向修正**（2026-06-15）：使用 `fitz.Pixmap(doc, xref)` 而非 `doc.extract_image(xref).raw_bytes`。Pixmap 会应用 PDF 图像变换矩阵，自动纠正旋转/翻转——`extract_image()` 只给原始字节，不处理 PDF 层对图像施加的旋转。CMYK 色彩空间自动转 RGB。如果 Pixmap 对 JBIG2/JPEG2000 等特殊编码失败，fallback 回原始字节。
-- **扫描版 PDF 特殊说明**：扫描版的"图"是整页 PNG（不是嵌入 raster），Stage 0.7 在扫描版路径下不走 PyMuPDF `get_images()`，由 Stage 0.5 的页图天然承担。Stage 3.3 注入 source 页时直接引用 page-level PNG 即可
+- **扫描版 PDF 特殊说明**：扫描版的"图"是整页 PNG（不是嵌入 raster），Stage 0.7 在扫描版路径下不走 PyMuPDF `get_images()`，由 Stage 0.5 的页图天然承担。Stage 3.8 注入 source 页时直接引用 page-level PNG 即可
 
 ### Stage 0.9 · 图片 captioning ⭐ **永远不能跳**
 - **作用**：对每张抽出的图，用 VLM 生成 1-3 句描述（中文优先）
@@ -138,9 +138,9 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
   - 由 chunk 分析中的 `importance` 字段驱动（LLM 自行判断 core/supporting/mentioned）
   - 未达标时自动继续追问未覆盖概念
 
-### Stage 4.1 · Query Auto-Generation ⭐ **新增 2026-06-16**
+### Stage 2.3 · Query Auto-Generation ⭐ **新增 2026-06-16**
 
-- **作用**：识别书中**提出但未完全解答**的开放问题，生成 `wiki/queries/<slug>.md` 页面。query 是知识演化链中"从已知到未知"的第一跳——把书中隐含的认知边界显式化为可追问的问题。
+- **作用**：基于 Stage 2.1 已生成的 concept/entity 列表，识别书中**提出但未完全解答**的开放问题，生成 `wiki/queries/<slug>.md` 页面。query 是知识演化链中"从已知到未知"的第一跳——把书中隐含的认知边界显式化为可追问的问题。这是纯知识产出（内存中的 FILE blocks），由 Stage 3.5 统一写盘。
 - **跳过条件**：source 类型为 `datasheet` 或 `standard` 时自动跳过（纯事实罗列，不产生有意义的开放问题）。
 - **产物**：0-5 个 `wiki/queries/<slug>.md` 页面，或 `---QUERIES: 0---` 标记。
 - **go/no-go**：
@@ -149,12 +149,12 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
   - 每个 query body ≥200 字符（不含 frontmatter）
 - **prompt 模板**：见 `references/query-generation.md`
 
-### Stage 4.3 · Comparison Auto-Generation ⭐ **新增 2026-06-16**
+### Stage 2.5 · Comparison Auto-Generation ⭐ **新增 2026-06-16**
 
 - **作用**：生成对比分析页面，分三种场景：
-  - **4.3A 域内消歧义**：新 concept 名称与 wiki 已有 concept 同名但不同 domain → 创建/更新消歧义页（`type: comparison`, `domain: general`）。对齐 NashSU `domains.md` 消歧义规则。
-  - **4.3B 源内概念对比**：同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM、EMI vs EMC）→ 生成对比页（对比维度 ≥4）。
-  - **4.3C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 4.5 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
+  - **2.5A 域内消歧义**：新 concept 名称与 wiki 已有 concept 同名但不同 domain → 创建/更新消歧义页（`type: comparison`, `domain: general`）。对齐 NashSU `domains.md` 消歧义规则。
+  - **2.5B 源内概念对比**：同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM、EMI vs EMC）→ 生成对比页（对比维度 ≥4）。
+  - **2.5C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 4.5 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
 - **跳过条件**：本次无 concept 产出（纯 stub source）时自动跳过。
 - **产物**：0-2 个 `wiki/comparisons/<slug>.md` 页面（消歧义 + 源内对比），或 `---COMPARISONS: 0---` 标记。
 - **go/no-go**：
@@ -162,16 +162,18 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
   - 每个 comparison frontmatter 含 `type: comparison` + `title:` + `domain:` 三必填字段
 - **prompt 模板**：见 `references/comparison-generation.md`
 
-### Stage 4.5 · Review suggestions ⭐ **永远不能跳**（但低于阈值时自动 skip）
-- **作用**：当满足以下 **任一** 条件时（NashSU 3 条件触发，与 `ingest.ts` 一致），跑一次 LLM 调用输出 5 类 review items：
-  1. ≥ 4 FILE 块
-  2. ≥ 10K 字符的 generation 输出
-  3. 末尾有不完整的 REVIEW 块（已打开但未关闭）
-- **自动跳过条件**：以上 3 条件全不满足时跳过
-- **产物**：`review-suggestions.json`（runtime dir）+ `wiki/reviews/<type>/<date>-<source>-<NNN>.md` 每项一个 md 文件
-- **go/no-go**：review items 数量 ≥ 0（即使 0 也要记"LLM 主动认为无问题"）
+### Stage 4.5 · Review ⭐ **永远不能跳**（但低于阈值时自动 skip）
 
-### Stage 4.7 · Aggregate repair ⚠️ **程序化 append + LLM 重写**
+- **作用**：Phase 4 的 LLM 质量审查，分两步：
+  1. **生成 review items**：当满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时，跑一次 LLM 调用输出 5 类 review items：confirm / suggestion / missing-page / contradiction / duplicate。
+  2. **解析并写入**：把 LLM 输出的 review items 解析并写入 `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md`（按 review type 分子目录，文件名含动作简述，含 frontmatter `resolved: false`），同时写入 `review-suggestions.json` 到 runtime dir。
+- **自动跳过条件**：NashSU 3 条件全不满足时跳过。但即使跳过，仍记录"LLM 主动认为无问题"。
+- **产物**：`wiki/REVIEW/<type>/` 子目录下的 .md 文件 + `review-suggestions.json`（runtime dir）
+- **go/no-go**：review items 数量 ≥ 0（即使 0 也要记）；`wiki/REVIEW/` 目录结构存在且合法
+
+> **高层知识空缺检测（synthesis / finding / thesis / methodology）已移至 lint 系统。** 这些检测扫描的是 wiki 整体健康状态而非单次 ingest 的产物质量，语义上属于 lint 范畴。触发条件和输出格式见 `references/knowledge-gap-lint.md`。
+
+### Stage 4.5 · Review & Repair ⚠️ **程序化 append + LLM 质量审查 + LLM 重写**
 - **作用**：
   - `index.md`：程序化 append 新 source 链接到 `## Sources` 段
   - `log.md`：程序化 append ingest 记录（时间戳、source、hash、method）
@@ -205,35 +207,28 @@ if "## Sources" in index_text and new_link not in index_text:
 
 **修复已损坏的 index.md / log.md（如果事故已发生）**：用 `stage47_aggregate_repair.py` 反向重建 —— 从现存 `wiki/sources/*.md` 文件列表 + `ingest-cache.json` 的 `timestamp` / `hash` 字段拼回完整 log.md，扫 `wiki/sources/concepts/entities/` 重建 index.md。**不能用 LLM 修复**（同一事故会再次发生）。
 
-### Stage 3.1 · Write files
-- **作用**：解析 FILE 块 → 原子写盘（先 .tmp 再 rename）
-- **产物**：所有 wiki/ 下的页面
-- **go/no-go**：解析出的 page_blocks 数 == 写盘成功数
+### Stage 3.5 · Write files（含 source page gate）
 
-### Stage 3.3 · 图片安全网注入 ⭐ **永远不能跳**（依赖 0.5/0.6）
+- **作用**：Phase 3 唯一的磁盘写入入口。分两步：
+  1. **Source page gate**（内存）：扫描 Phase 2 产出的所有 FILE blocks，检查是否包含 source 页。如果没有，从 Global Digest 自动生成一个 stub 追加到 blocks 列表。
+  2. **原子写盘**：解析所有 FILE 块 → 先 .tmp 再 rename。
+- **产物**：所有 wiki/ 下的页面（sources/concepts/entities/queries/comparisons），确保 `wiki/sources/` 与 `raw/` 1:1 对应。
+- **go/no-go**：解析出的 page_blocks 数 == 写盘成功数；source page 已落盘
+
+### Stage 3.8 · 图片安全网注入 ⭐ **永远不能跳**（依赖 0.7/0.9）
 - **作用**：在 source 页末尾追加 `## Embedded Images` 段，列出所有抽出的图 + caption
 - **跳过代价**：图存在但没在 wiki 里被引用 → 用户的 wiki 等于没图
 - **产物**：source 页有 `## Embedded Images` 段
 - **go/no-go**：source 页包含 `## Embedded Images` 标题 + ≥ 1 行图引用
 
-### Stage 3.5 · Source-summary fallback
-- **作用**：如果 LLM 忘记写 `wiki/sources/<slug>.md`，从 analysis 里自动生成一个 stub
-- **产物**：保证 sources/ 1:1 对应 raw/
-- **go/no-go**：每个 raw/ 下的文件都有对应 wiki/sources/ 页面
-
-### Stage 4.9 · Parse review items
-- **作用**：把 LLM 输出的 review items 解析并写入 `wiki/reviews/` 目录（每个 review item 一个 .md 文件，含 frontmatter `resolved: false`），同时写入 `review-suggestions.json` 到 runtime dir
-- **产物**：`wiki/reviews/<type>/<date>-<source>-<NNN>.md` + `review-suggestions.json`
-- **go/no-go**：`wiki/reviews/` 目录存在且含 ≥1 个 .md 文件；或 `review.json`（`run_review_suggestions.py` 独立输出）合法
-
-### Stage 5.1 · Save cache ⭐ **永远不能跳**
+### Stage 4.7 · Save cache ⭐ **永远不能跳**
 - **作用**：写 `<sha256(raw)>` → `[filesWritten...]` 映射到 `ingest-cache.json`
 - **跳过代价**：下次跑同一文件会重做所有 stage，浪费时间
 - **产物**：`ingest-cache.json`，含本次所有 raw 文件的 sha256
 - **go/no-go**：每个本次处理的 raw 文件都有 hash 记录
 - **2026-06-11 重要发现**：app 的 `cache entry ≠ 产物`。cache 里 `filesWritten=[]` 也会出现"已 ingest"假象。**必须用 `scripts/validate_ingest.py` 验产物侧**，不能只看 cache schema
 
-### Stage 5.3 · Embeddings
+### Stage 4.9 · Embeddings
 - **作用**：把 wiki/ 下的页面 chunk 化 + embed，写到 LanceDB
 - **跳过代价**：检索只能用纯关键词（wiki < 100 页可接受，> 100 页必须 embeddings）
 - **产物**：`lancedb/` 表 + `embed-cache.json`
@@ -244,29 +239,27 @@ if "## Sources" in index_text and new_link not in index_text:
 ## 强制顺序（不能乱）
 
 ```
-0.1 → 0.3 → 0.5 → 0.7 → 0.9 → 1.1 → 1.3 → 2.1 → 3.1 → [3.3] → [3.5] → 4.1 → 4.3 → 4.5 → 4.7 → 4.9 → 5.1 → [5.3]
+0.1 → 0.3 → 0.5 → 0.7 → 0.9 → 1.1 → 1.3 → 2.1 → 2.3 → 2.5 → 3.5 → [3.8] → 4.5 → 4.7 → 4.7 → [4.9]
 ```
 
 - **Stage 0.3 Pilot 是新强制前置**（2026-06-11）：任何 PDF 走 Stage 0.5 之前必须先 5-10 页 pilot 验证
 - 0.7 **必须先于** 0.9（先有图才能 caption）
-- 0.7/0.9 **必须先于** 3.3（3.3 注入图引用）
+- 0.7/0.9 **必须先于** 3.8（3.8 注入图引用）
 - Stage 1.1 / 1.3 **永远不能跳过**（短源 1 chunk / 长源 N chunk，都是 1.3 内部逻辑，不是 skip）
-- **Stage 2.1（source/concept/entity）是 Phase 2 的唯一生成步骤**（2026-06-16 新增）：
+（2026-06-16 新增）：
   
   
   
-- **Phase 4（Reflect & Review）在 Phase 3（Write & Enrich）之后执行**（2026-06-16 订正）：
-  - **Stage 4.1/4.3（query/comparison）在写盘后执行**——需要看到已落盘的页面内容才能做反思和对比
-  - **Stage 4.5（review）运行在已写盘的文件上**，这样 human reviewer 可以直接看到实际页面内容（包括 4.1/4.3 产出的 query/comparison 页面）
+- **Phase 3 内部顺序**（2026-06-17 订正）：3.5（写盘，含 source page gate 前置检查）→ 3.8（图片注入，程序化追加）
+- **Phase 2（Generation）全部在内存中完成**——2.1（source/concept/entity）→ 2.3（query）→ 2.5（comparison）。三个步骤串行执行：2.3 依赖 2.1 的 concept 列表，2.5 依赖 2.1 的 concept 列表 + wiki 已有页面列表。所有产出统一由 Stage 3.5 写盘。
+  - **Stage 4.5（review）运行在已写盘的文件上**，这样 human reviewer 可以直接看到实际页面内容（包括 2.3/2.5 产出的 query/comparison 页面）
   - **Stage 4.7（aggregate repair）在所有页面写盘后运行**，确保 index/log/overview 基于完整的磁盘状态
-- 4.1 是 conditional（datasheet/standard 自动跳过）
-- 4.3 是 conditional（无 concept 产出时自动跳过）
-- 4.5 是 conditional（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）
+- 2.3 是 conditional（datasheet/standard 自动跳过）
+- 2.5 是 conditional（无 concept 产出时自动跳过）
+- 4.5 是 conditional（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW；parse review items 已合并入 4.5）（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）
 - 4.7 程序化 append index/log + LLM 重写 overview（喂入现有内容防丢失）
-- **Stage 4.9（Parse review items）无独立函数** — 其产物在 Stage 4.5 的函数内部产出
-- 3.5 在 3.1 之后（write 完才发现缺 stub 才补）
-- 5.1 在所有 stage 之后（写最终缓存）；hard error（磁盘满/权限）阻止 cache save
-- 5.3 auto-run 当 `EMBEDDING_BASE_URL` 已设置时；否则手动 `build_embeddings.py`
+- 4.7 在所有 stage 之后（写最终缓存）；hard error（磁盘满/权限）阻止 cache save
+- 4.9 auto-run 当 `EMBEDDING_BASE_URL` 已设置时；否则手动 `build_embeddings.py`
 
 ---
 
@@ -281,26 +274,23 @@ if "## Sources" in index_text and new_link not in index_text:
 - [ ] Stage 1.1：global-digest.yaml 合法
 - [ ] Stage 1.3：所有 chunk analysis 合法
 - [ ] Stage 2.1：generation_response.txt 的 stop_reason == end_turn（**不是 max_tokens**）
-- [ ] **Stage 4.1：query 页面已生成或 `---QUERIES: 0---` 已记录**（datasheet/standard 自动跳过）
-- [ ] **Stage 4.3：comparison 页面已生成或 `---COMPARISONS: 0---` 已记录**（无 concept 时自动跳过）
-- [ ] **Stage 4.5：review-suggestions.json 存在（即使 0 items）**
-- [ ] Stage 4.7：index/log/overview 三页存在
-- [ ] Stage 3.1：所有 FILE 块写盘成功
-- [ ] **Stage 3.3：source 页含 `## Embedded Images` 段**
-- [ ] Stage 3.5：所有 raw 文件有对应 source 页
-- [ ] Stage 4.9：review.json 合法
-- [ ] **Stage 5.1：ingest-cache.json 含本次所有 raw 文件 hash**（且 `validate_ingest.py` 通过；ingest.py 末尾自动运行）
-- [ ] Stage 5.3：lancedb 表已更新（如启用 embeddings）
+- [ ] **Stage 2.3：query 页面已生成或 `---QUERIES: 0---` 已记录**（datasheet/standard 自动跳过）
+- [ ] **Stage 2.5：comparison 页面已生成或 `---COMPARISONS: 0---` 已记录**（无 concept 时自动跳过）
+- [ ] **Stage 4.5：review items 已生成并写入 wiki/REVIEW/（即使 0 items）**
+- [ ] Stage 3.5：所有 FILE 块写盘成功
+- [ ] **Stage 3.8：source 页含 `## Embedded Images` 段**
+- [ ] **Stage 4.7：ingest-cache.json 含本次所有 raw 文件 hash**（且 `validate_ingest.py` 通过；ingest.py 末尾自动运行）
+- [ ] Stage 4.9：lancedb 表已更新（如启用 embeddings）
 
 **加粗的 9 个 stage 是最容易跳过的**（也是历史上最容易出事的）：
 - Stage 0.3 Pilot（2026-06-11 新增）—— 没 pilot 直接全本 = 浪费数小时
 - 0.7（图提取）— 看似 optional，实际丢一半知识
 - 0.9（图 caption）— 看似 optional，实际让图无法检索
-- 4.1（query 生成）— **2026-06-16 新增**；看似 optional，实际让知识库只有事实没有追问
-- 4.3（comparison 生成）— **2026-06-16 新增**；看似 optional，实际让跨概念理解和消歧义缺失
+- 2.3（query 生成）— **2026-06-16 新增**；看似 optional，实际让知识库只有事实没有追问
+- 2.5（comparison 生成）— **2026-06-16 新增**；看似 optional，实际让跨概念理解和消歧义缺失
 - 4.5（review suggestions）— 看似 optional，实际让错误内容永久残留
-- 3.3（图注入 source 页）— 看似 optional，实际让图与 wiki 脱节
-- 5.1（cache 写入）— 看似 optional，实际下次跑会重做所有 stage
+- 3.8（图注入 source 页）— 看似 optional，实际让图与 wiki 脱节
+- 4.7（cache 写入）— 看似 optional，实际下次跑会重做所有 stage
 
 ---
 
@@ -330,7 +320,7 @@ if "## Sources" in index_text and new_link not in index_text:
 | Stage 1.1 | Global Digest 含 5 个必需 key；≥ 1 个 concept | RuntimeError |
 | Stage 1.3 | chunk 分析非空 | RuntimeError |
 | Stage 2.1 | ≥ 1 个 FILE block；source page 存在；路径正确 | RuntimeError |
-| Stage 3.1 | source page 落盘 | RuntimeError |
+| Stage 3.5 | source page 落盘 | RuntimeError |
 
 **Ingest 末尾自动运行 `validate_ingest.py`**（全阶段验证），结果打印到 stdout。
 
@@ -342,7 +332,7 @@ if "## Sources" in index_text and new_link not in index_text:
 # 结构性 lint（覆盖 wikilink 健康）
 ./scripts/wiki-lint.sh --summary
 
-# 图存在性（覆盖 Stage 0.7 / 0.9 / 3.3）
+# 图存在性（覆盖 Stage 0.7 / 0.9 / 3.8）
 test -d wiki/media/*/<slug> && \
   find wiki/media/<type>/<slug> \( -name '*.jpeg' -o -name '*.png' \) | \
     while read f; do
@@ -363,14 +353,66 @@ for k, v in cache['entries'].items():
 
 ## 修订记录
 
-- **2026-06-11**：初版，源于 HardwareWiki 第一次 ingest 漏掉 Stage 0.7/0.9 的事故
-- **2026-06-13**：**Stage 4.7 大改版**（原 Stage 2.6）——加 ⚠️ "LLM 永远不重写 index/log/overview"
-- **2026-06-14**：**Stage 0.1 新增**（原 Pre-Stage / Stage 0）——缓存去重检查，源于《硬件十万个为什么 开发流程篇》重复选取事故
-- **2026-06-14**：**Stage 0.5 检测升级为三信号**（原 Stage 0.1）（原双信号）——增加非白像素占比检测。源于 Johnson《High-Speed Signal Propagation》事故：100% 全页大图 + OCR 文字层达标，但 PyMuPDF `get_images()` 无法枚举背景扫描图，误判为路径 A，全本波形图/眼图丢失。
-- **2026-06-11**：初版，源于 HardwareWiki 第一次 ingest 漏掉 Stage 0.7/0.9 的事故
-- **2026-06-16**：**全面重编号为 Phase.序列 格式**——Phase 0 (Pre-processing): 0.1/0.3/0.5/0.7/0.9; Phase 1 (Analysis): 1.1/1.3; Phase 2 (Generation): 2.1; Phase 3 (Write & Enrich): 3.1/3.3/3.5; Phase 4 (Reflect & Review): 4.1/4.3/4.5/4.7/4.9; Phase 5 (Finalize): 5.1/5.3。Query/Comparison 从 Phase 2 移到 Phase 4。
-- **2026-06-16**：**P0：阶段间实时验证门禁**——每个 Stage 完成后增加 `_verify_stage_N()` 检查，不通过则 `RuntimeError` 中止。**ingest 末尾自动运行 `validate_ingest.py`**。遵循 superpowers `verification-before-completion` Iron Law。**P2：runtime 文件迁移**——`wiki-lint.sh` 的 `lint-cache.json`/`lint-lock` 从硬编码 `wiki/` 改为 `$RUNTIME_DIR`；`_paths.py` 增加 `_migrate_lint_cache_out_of_wiki()` 自动迁移。
-- **2026-06-14**：**NashSU parity audit**——对比 `ingest.ts` (2993 行) + `lint.ts` (299 行) 完成全面对齐。Runtime dir `.iwiki-runtime/` → `.llm-wiki/`；状态文件去点号前缀（`ingest-cache.json` 等）；`purpose.md` → `schema.md`；Stage 2.5 阈值对齐 NashSU 3 条件；新增 Stage 2.6b (LLM overview 更新)；页面合并（已有页 LLM merge 而非覆盖）；路径安全校验（`is_safe_ingest_path` 8 项检查）；CRLF 规范化 + 栅栏感知解析；错误分类（hard/soft）；页面历史备份（`.llm-wiki/page-history/`）；内容清理（`sanitize_ingested_content`）；动态 token 预算；内联 embedding；lint orphan/no-outlinks 对齐 NashSU 无条件检测；slug 优先级 last-write-wins。
-- **2026-06-13**：**Stage 1.1 / 1.3 YAML schema 与 SKILL.md spec 对齐**——Stage 1 改用 ingest.py `build_global_digest_prompt()` 的实际 6 keys (`book_meta` / `outline` / `key_entities` / `key_concepts` / `key_claims` / `chunk_plan`)。Stage 1.3 用上面那组。修复原因: 之前 SKILL.md spec 写的 `part_meta` / `key_specs` 是 datasheet 专属 schema,不能用于 book/paper 等其他类型。
-- **2026-06-13**：**Stage 4.5 触发阈值修正**（原 Stage 2.5）——从旧的 "≥10K 字符或 ≥4 FILE 块" 改成 **"≥4 FILE 块"** (ingest.py 第 1136 行)。原因: ≥10K 字符阈值对 datasheet 太小,绝大多数 datasheet ingest 都会触发,产生过多 noise review; 应该按 FILE 块数判定。
-- **2026-06-13**：**Stage 1.3 LLM YAML 输出 pitfall**（原 Stage 1.5）——LLM 经常会忘在 `key_details:` / `claims:` 等 list 子项加 `- ` 前缀(典型错例:`key_details:\n  "小信号增益 14.0 dB"` 应为 `key_details:\n  - "小信号增益 14.0 dB"`)。`yaml.safe_load()` 会报 `expected <block end>, but found '<scalar>'`。**修复**: 启发式 fix 脚本 `stage15_yaml_fix.py`(见 ADL8113 示例)——遍历行,当 `indent ≥ 4` + `stripped` 是带引号 scalar + 上下文是 list(`prev 是 "xxx:" 或 "- xxx:"`)**且当前行不以 `- ` 开头** 时,补 `- ` 前缀。**关键**: 用 `prev = fixed_lines[-1]` 而非 `lines[i-1]`,否则 fix 后的行不能传播 list context 给后续行。
+- **2026-06-11**：初版（源于 HardwareWiki 第一次 ingest 漏掉 Stage 0.7/0.9 事故）
+- **2026-06-13**：Stage 4.7 从 LLM 重写改为程序化 append（ADL8113 事故教训）；Stage 1.1/1.3 YAML schema 对齐；Stage 4.5 触发阈值修正（≥4 FILE 块）
+- **2026-06-14**：Stage 0.1 去重检查新增；Stage 0.5 三信号检测升级（Johnson 事故）；NashSU v0.4.23 parity audit 完成
+- **2026-06-16**：全面重编号为 Phase.序列 格式（15-Stage 4-Phase）；新增 Stage 2.3 Query + 2.5 Comparison；阶段间实时验证门禁
+- **2026-06-17**：高层知识空缺检测移至 lint 系统（`knowledge-gap-lint.md`）；REVIEW 目录分子目录；Phase 4+5 合并；Stage 3.1 合并入 3.5；Stage 4.9 合并入 4.5
+- **2026-06-17**：新增 **Stage 16-18 知识图谱后处理**（Lint 阶段，不在 ingest 管线内）。四信号加权图构建 + Louvain 社区检测 + 图谱洞察输出。脚本：`scripts/build_knowledge_graph.py`。触发时机：批量 ingest 后按需运行，不在单次 ingest 中自动执行。
+
+
+## Lint 阶段：知识图谱（Stage 16-18）
+
+> **定位**：Lint 阶段（不在单次 ingest 管线中）。Ingest 管线的 15 Stage 不碰图——图建在 lint，图用在 ingest（Stage 2.1 可通过 `--mode query` 查询已有图为新页面建议 wikilinks）。触发时机：完成一批 ingest（≥10 本新书）后手动运行，或 cron 定期执行。
+
+### Stage 16 · 四信号知识图谱构建
+
+- **作用**：解析 `wiki/` 下所有页面的 wikilinks + frontmatter（type/domain/sources），构建 networkx 加权无向图。四个信号权重（NashSU v0.4.24 parity）：
+  - **Direct link（×3.0）**：`[[wikilinks]]` 直接连接
+  - **Source overlap（×4.0）**：共享同一 raw source（`sources[]` frontmatter）
+  - **Adamic-Adar（×1.5）**：共同邻居 / log(邻居度)——只对已有边做 refinemnt，不做 O(n²) 全量发现
+  - **Type affinity（×1.0）**：相同 `type`（0.6）+ 相同 `domain`（0.4，general 不计）——只对已有边做 refinemnt
+- **跳过代价**：无法发现知识聚类、知识缺口、桥接节点——wiki 永远只是松散页面集合
+- **产物**：`graph.json`（nodes + edges + weights + communities）
+- **go/no-go**：节点数 == wiki 页面数（排除 index/log/schema/overview + 状态文件）；边数 ≥ N 条（至少 wikilink 网络连接了部分页面）
+- **性能考量**：7594 页 HardwareWiki 实测约 30 秒（AA + type affinity 仅 edge-refinement，不做全量 pair 遍历）
+
+### Stage 17 · Louvain 社区检测 + Cohesion 评分
+
+- **作用**：对 Stage 16 构建的加权图运行 Louvain 社区检测，自动发现知识簇。对每个社区计算 cohesion score（簇内实际边数 / 可能边数）。标记 cohesion < 0.15 的低质量社区。
+- **跳过代价**：无法识别主题聚类、跨域桥接、孤立页面
+- **产物**：`graph.json` 中的 communities 段（含每个社区的 size/cohesion/warning 标记）
+- **go/no-go**：社区数 ≤ 节点数（极端：每节点一社区说明图太稀疏）；低 cohesion 社区数合理（< 10% 为健康）
+
+### Stage 18 · 图谱洞察输出
+
+- **作用**：基于 Stage 16-17 结果生成三类实用产物：
+  1. **`knowledge-gaps.md`**：知识缺口报告——孤立节点、低 cohesion 社区、桥接节点（跨社区枢纽）、建议的缺失链接
+  2. **`clusters/cluster-NNN.md`**：每个 ≥3 节点的社区生成一个 hub 页面（含核心页面、关键主题、建议动作）
+  3. **Ingest 联动**：`--mode query --slug <page>` 为 ingest 中的新页面建议 wikilinks（只读查询，不重建图）
+- **跳过代价**：图构建了但没人看——等于没建
+- **产物**：`knowledge-gaps.md` + `clusters/` 下 N 个 .md 文件
+- **go/no-go**：`knowledge-gaps.md` 存在且含 "## Isolated Nodes" / "## Bridge Nodes" / "## Suggested Missing Links" 三段；`clusters/` 不为空
+- **门禁**：孤立节点数 < wiki 总页面的 10%（> 10% 说明 wikilink 覆盖率不足，应在 ingest 时补）；HardwareWiki 当前 1613/7594 ≈ 21%，大部分为 `REVIEW/` 和旧 ingest 页面
+
+### Stage 16-18 使用方式
+
+```bash
+# 全量分析（lint 阶段，批处理）
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py
+
+# 仅查看统计（不写文件）
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py --dry-run
+
+# 大 wiki 先小规模测试
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py --dry-run --limit 500
+
+# ingest 时查询：给新页面推荐 wikilinks
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py \
+  --mode query --slug "my-new-page"
+
+# 调整 cohesion 告警阈值（默认 0.15）
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py --min-cohesion 0.10
+```
+
+**依赖**：`pip install networkx python-louvain pyyaml`

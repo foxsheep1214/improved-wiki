@@ -327,11 +327,11 @@ def main():
     # Stage 4: Review items
     # ═══════════════════════════════════════════════
     print("\n[Stage 4] Review items")
-    reviews_dir = WIKI / "reviews"
+    reviews_dir = WIKI / "REVIEW"
     review_files = list(reviews_dir.rglob("*.md")) if reviews_dir.is_dir() else []
     review_json = RUNTIME / "review.json"
     if review_files:
-        check(f"wiki/reviews/ has per-item .md files (recursive search)",
+        check(f"wiki/REVIEW/ has per-item .md files (recursive search)",
               len(review_files) >= 1,
               f"{len(review_files)} files")
     elif review_json.exists():

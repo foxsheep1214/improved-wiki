@@ -1,6 +1,6 @@
-# Stage 4.3 · Comparison Auto-Generation
+# Stage 2.5 · Comparison Auto-Generation
 
-> **触发**：Stage 4.1（query generation）完成后自动执行。
+> **触发**：Stage 2.3（query generation）完成后自动执行。产物为内存中的 FILE blocks，由 Stage 3.5 统一写盘。。
 > **跳过条件**：本次无 concept 产出（纯 stub source）时自动跳过。
 > **产物**：0-2 个 `wiki/comparisons/<slug>.md` 页面（消歧义 + 源内对比），或 `---COMPARISONS: 0---` 标记。
 
@@ -14,13 +14,13 @@ comparison 分三种触发场景：
 
 | 场景 | 触发条件 | 执行方式 | 编号 |
 |------|---------|---------|------|
-| **域内消歧义** | 新 concept 名称与 wiki 中已有 concept 同名但不同 domain | 本次自动生成 | 4.3A |
-| **源内概念对比** | 同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM） | 本次自动生成 | 4.3B |
-| **跨源对比** | 新 source 的概念与已有 wiki 概念有可比性 | 标记 suggestion，人工触发 | 4.3C |
+| **域内消歧义** | 新 concept 名称与 wiki 中已有 concept 同名但不同 domain | 本次自动生成 | 2.5A |
+| **源内概念对比** | 同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM） | 本次自动生成 | 2.5B |
+| **跨源对比** | 新 source 的概念与已有 wiki 概念有可比性 | 标记 suggestion，人工触发 | 2.5C |
 
 ---
 
-## 4.3A · 域内消歧义
+## 2.5A · 域内消歧义
 
 ### 触发条件
 
@@ -33,7 +33,7 @@ NashSU `domains.md` 规定：消歧义页面使用 `type: comparison`。
 ### Prompt 模板
 
 ```
-你已经为《{title}》完成了 concept/entity 页面的生成与写盘（Stage 2.1 + Stage 3.1）。
+你已经为《{title}》完成了 concept/entity 页面的生成（Stage 2.1 + Stage 2.3）。现在基于已生成的 concept 列表做对比分析。。
 
 现在检查：本次生成的所有页面中，是否有名称与 **wiki 已有页面** 重名但属于不同 domain 的？
 
@@ -91,7 +91,7 @@ updated: {today}
 
 ---
 
-## 4.3B · 源内概念对比
+## 2.5B · 源内概念对比
 
 ### 触发条件
 
@@ -177,7 +177,7 @@ updated: {today}
 
 ---
 
-## 4.3C · 跨源对比（仅标记，不自动生成）
+## 2.5C · 跨源对比（仅标记，不自动生成）
 
 ### 触发条件
 
@@ -303,7 +303,7 @@ updated: {today}
 ## go/no-go 判断
 
 - **go**：生成了消歧义页 + 源内对比页（合计 0-2 个 FILE block），或输出 `---COMPARISONS: 0---` 标记
-- **no-go**：未输出任何 comparison block 也未输出 `---COMPARISONS: 0---` 标记 → Stage 2.3 未完成，重跑
+- **no-go**：未输出任何 comparison block 也未输出 `---COMPARISONS: 0---` 标记 → Stage 2.5 未完成，重跑
 - 每个 comparison 的 frontmatter 包含 `type: comparison` + `title:` + `domain:` 三必填字段
 
 ## 验证命令

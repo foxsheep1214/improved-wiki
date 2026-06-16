@@ -20,7 +20,16 @@ wiki/
 ├── findings/      # type: finding    — 研究发现
 ├── thesis/        # type: thesis     — 工作假说
 ├── media/         # 提取的图片 (镜像 raw/ 结构: book/<slug>/ 等)
-├── reviews/       # review items (improved-wiki 扩展)
+├── REVIEW/        # pipeline↔人类握手点 (improved-wiki 扩展)
+│   ├── confirm/       # 需要确认的可疑内容
+│   ├── suggestion/     # 改进建议
+│   ├── missing-page/   # 缺少的重要页面
+│   ├── contradiction/  # 内容矛盾
+│   ├── duplicate/      # 重复内容
+│   ├── missing-synthesis/   # lint: 可以合成综述了
+│   ├── missing-finding/     # lint: 可以提炼发现了
+│   ├── missing-thesis/      # lint: 可以提出假说了
+│   └── missing-methodology/ # lint: 可以蒸馏方法论了
 ├── lint/          # lint findings (improved-wiki 扩展)
 ├── index.md       # 聚合页：索引
 ├── overview.md    # 聚合页：概述
@@ -361,7 +370,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 | 文件 | 来源 |
 |------|------|
-| `wiki/reviews/<type>/<date>-<safe_stem>-<NNN>.md` | `ingest.py` Stage 2.5 每项一个 md |
+| `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 2.5 每项一个 md |
 | `<runtime>/review-suggestions.json` | Stage 2.5 汇总 JSON |
 | `<runtime>/review.json` | `run_review_suggestions.py` Stage 4 产物 |
 
@@ -413,7 +422,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | 聚合页排除 | `index.md` + `log.md` | 额外排除 `schema.md` + `overview.md` | NashSU 无 schema.md |
 | Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 0.5 独有产物 |
 | Lint 页面 | app UI 直接展示 | `wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出 |
-| Review 页面 | `review.json`（app UI） | `wiki/reviews/<type>/<date>-<stem>-<NNN>.md` + `review.json` | 人类可浏览 + 机器可读双输出 |
+| Review 页面 | `review.json`（app UI） | `wiki/REVIEW/<type>/<date>-<stem>-<NNN>.md` + `review.json` | 人类可浏览 + 机器可读双输出 |
 | 页面合并 | 3-layer LLM merge | 同 NashSU（2026-06-14 实现） | — |
 | 路径安全 | 8 项 `isSafeIngestPath` | 同 NashSU（2026-06-14 实现） | — |
 | 栅栏感知解析 | CommonMark fence tracking | 同 NashSU（2026-06-14 实现） | — |
