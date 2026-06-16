@@ -26,11 +26,13 @@ Lint:  [16: Build Graph] → [17: Louvain] → [18: Insights]
 ## Reference map
 
 **Pipeline core**:
-- `references/ingest-stages-mandatory.md` — 15 ingest + 3 lint stages checklist (Phase 0-4 + Lint, ⭐ easy-to-skip stages marked)
+- `references/ingest-stages-mandatory.md` — 15 ingest + 3 lint stages checklist (Phase 0-4 + Lint, ⭐ easy-to-skip stages marked; **Stage 16-18** knowledge graph section)
 - `references/query-generation.md` — Stage 2.3: auto-generate `wiki/queries/`
 - `references/comparison-generation.md` — Stage 2.5: auto-generate `wiki/comparisons/` (2.5A disambiguation, 2.5B in-source, 2.5C cross-source)
 - `references/knowledge-gap-lint.md` — lint system: synthesis/finding/thesis/methodology formation triggers
-- `references/ingest-stages-mandatory.md` — **Stage 16-18**: knowledge graph build + Louvain + insights (see Lint-Phase section)
+- `references/scanned-pdf-ocr-pipeline.md` — minerU scanned PDF OCR pipeline (Path B)
+- `references/conversation-mode.md` — direct LLM execution mode for ingest
+- `references/delegate-mode.md` — agent orchestration for batch ingest
 
 **Conventions**:
 - `references/naming-conventions.md` — file naming, frontmatter, wikilink, directory conventions (NashSU-aligned)
@@ -74,7 +76,7 @@ Lint:  [16: Build Graph] → [17: Louvain] → [18: Insights]
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `build_knowledge_graph.py`, `validate_ingest.py`, `validate-frontmatter.sh` |
 | Queue | `wiki-monitor.sh`, `run-queue.sh` |
 | Embeddings | `build_embeddings.py`, `search_wiki.py` |
-| Repair | `repair_stage_05.py`, `repair_stage_06.py`, `repair_stage_35.py`, `repair_stage_37.py`, `reingest_batch.py` |
+| Repair | `repair_stage_05.py`, `repair_stage_06.py`, `repair_stage_35.py`, `repair_stage_37.py`, `repair_stage_38.py`, `reingest_batch.py` |
 
 ## Trigger this skill
 

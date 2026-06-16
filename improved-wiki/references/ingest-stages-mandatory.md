@@ -1,6 +1,6 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——基于 NashSU v0.4.23 autoIngestImpl() 流水线的 15 Stage 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——基于 NashSU v0.4.24 autoIngestImpl() 流水线的 15 ingest + 3 lint Stage 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
 tags: [ingest, mandatory, nashsu, pipeline]
 related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 ---
@@ -9,7 +9,7 @@ related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 
 ## 为什么需要"强制"？
 
-Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 流水线包含 **15 个 Stage**（2026-06-16 全面重编号为 Phase.序列 格式）。**任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。
+Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.24) 的 `autoIngestImpl()` 流水线包含 **15 个 ingest Stage + 3 个 lint Stage**（2026-06-16 全面重编号为 Phase.序列 格式）。**任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。
 
 **跳过的代价**：
 1. **raw 是 sacred**（Layer 1 原则）—— PDF 里的图也是 raw 的一部分，跳过图片提取 = 丢了一半知识
@@ -173,40 +173,6 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.23) 的 `autoIngestImpl()` 
 
 > **高层知识空缺检测（synthesis / finding / thesis / methodology）已移至 lint 系统。** 这些检测扫描的是 wiki 整体健康状态而非单次 ingest 的产物质量，语义上属于 lint 范畴。触发条件和输出格式见 `references/knowledge-gap-lint.md`。
 
-### Stage 4.5 · Review & Repair ⚠️ **程序化 append + LLM 质量审查 + LLM 重写**
-- **作用**：
-  - `index.md`：程序化 append 新 source 链接到 `## Sources` 段
-  - `log.md`：程序化 append ingest 记录（时间戳、source、hash、method）
-  - `overview.md`：**LLM 重写**——传入当前 overview.md 全文 + 新 source 页 + 最近 10 个 source 摘要，LLM 在旧内容基础上融入新源，输出 2-5 段综合概述
-- **产物**：3 个 aggregate 页面更新
-- **go/no-go**：旧有条目全部保留 + 新条目已追加 + overview LLM 响应以 `# Overview` 开头
-
-**🚨 2026-06-13 ADL8113 事故：LLM 整文件重写 → 静默丢失所有历史**
-
-NashSU 原生让 LLM 在 Stage 2 同时输出 index/log/overview，但 LLM **不会读到旧的 wiki 文件内容**（prompt 太大塞不下），只会生成一份"干净的从零开始"版本。improved-wiki 的对策：
-- `index.md` / `log.md`：**纯程序化 append**，LLM 完全不参与
-- `overview.md`：**LLM 重写**，但把**当前 overview.md 全文**喂给 LLM 作上下文——与 ADL8113 事故的关键区别是 LLM **看到了现有内容**
-
-```python
-# Stage 2.1 prompt：只让 LLM 输出 source + entities + concepts + Round2 的余下部分
-# 永远**不要**让 LLM 生成 index.md / log.md / overview.md 块
-
-# Stage 4.7 单独的程序化 append
-log_path = wiki_dir / "log.md"
-log_text = log_path.read_text() if log_path.exists() else "# Log\n"
-log_text += f"\n## {ts} — INGEST\n- Source: `raw/{rel}`\n- Source page: `wiki/{source_rel}`\n- Hash: {sha[:16]}\n- Method: {method}\n"
-write_wiki_file(log_path, log_text)
-
-index_path = wiki_dir / "index.md"
-index_text = index_path.read_text() if index_path.exists() else "# Index\n\n## Sources\n\n"
-new_link = f"- [[{source_path.stem}]]\n"
-if "## Sources" in index_text and new_link not in index_text:
-    index_text = index_text.replace("## Sources\n", f"## Sources\n\n{new_link}", 1)
-    write_wiki_file(index_path, index_text)
-```
-
-**修复已损坏的 index.md / log.md（如果事故已发生）**：用 `stage47_aggregate_repair.py` 反向重建 —— 从现存 `wiki/sources/*.md` 文件列表 + `ingest-cache.json` 的 `timestamp` / `hash` 字段拼回完整 log.md，扫 `wiki/sources/concepts/entities/` 重建 index.md。**不能用 LLM 修复**（同一事故会再次发生）。
-
 ### Stage 3.5 · Write files（含 source page gate）
 
 - **作用**：Phase 3 唯一的磁盘写入入口。分两步：
@@ -221,12 +187,17 @@ if "## Sources" in index_text and new_link not in index_text:
 - **产物**：source 页有 `## Embedded Images` 段
 - **go/no-go**：source 页包含 `## Embedded Images` 标题 + ≥ 1 行图引用
 
-### Stage 4.7 · Save cache ⭐ **永远不能跳**
-- **作用**：写 `<sha256(raw)>` → `[filesWritten...]` 映射到 `ingest-cache.json`
-- **跳过代价**：下次跑同一文件会重做所有 stage，浪费时间
-- **产物**：`ingest-cache.json`，含本次所有 raw 文件的 sha256
-- **go/no-go**：每个本次处理的 raw 文件都有 hash 记录
+### Stage 4.7 · Save cache + Aggregate Repair ⭐ **永远不能跳**
+
+- **作用**：两步：
+  1. **Aggregate repair**：程序化 append index.md / log.md + LLM 重写 overview.md
+  2. **Save cache**：写 `<sha256(raw)>` → `[filesWritten...]` 映射到 `ingest-cache.json`
+- **跳过代价**：下次跑同一文件会重做所有 stage；aggregate 页面不更新导致 wiki 导航缺失
+- **产物**：`ingest-cache.json`（含本次所有 raw 文件 hash）+ index.md / log.md / overview.md 更新
+- **go/no-go**：每个本次处理的 raw 文件都有 hash 记录；旧有条目全部保留 + 新条目已追加
 - **2026-06-11 重要发现**：app 的 `cache entry ≠ 产物`。cache 里 `filesWritten=[]` 也会出现"已 ingest"假象。**必须用 `scripts/validate_ingest.py` 验产物侧**，不能只看 cache schema
+
+**🚨 2026-06-13 ADL8113 事故**：NashSU 原生让 LLM 同时输出 index/log/overview，但 LLM 不会读到旧的 wiki 文件内容，静默丢失所有历史。improved-wiki 对策：index.md / log.md 纯程序化 append（LLM 不参与）；overview.md LLM 重写但喂入当前全文作上下文。
 
 ### Stage 4.9 · Embeddings
 - **作用**：把 wiki/ 下的页面 chunk 化 + embed，写到 LanceDB
@@ -239,7 +210,7 @@ if "## Sources" in index_text and new_link not in index_text:
 ## 强制顺序（不能乱）
 
 ```
-0.1 → 0.3 → 0.5 → 0.7 → 0.9 → 1.1 → 1.3 → 2.1 → 2.3 → 2.5 → 3.5 → [3.8] → 4.5 → 4.7 → 4.7 → [4.9]
+0.1 → 0.3 → 0.5 → 0.7 → 0.9 → 1.1 → 1.3 → 2.1 → 2.3 → 2.5 → 3.5 → 3.8 → 4.5 → 4.7 → [4.9]
 ```
 
 - **Stage 0.3 Pilot 是新强制前置**（2026-06-11）：任何 PDF 走 Stage 0.5 之前必须先 5-10 页 pilot 验证
