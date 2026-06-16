@@ -166,6 +166,11 @@ def rebuild_embedded_images(source_text: str, wiki_root: Path,
                 continue
 
             cap_path = media_dir / (filename + ".caption.txt")
+            img_exists = (media_dir / filename).exists()
+            if not img_exists:
+                # Image was deleted — drop this row entirely
+                changes += 1
+                continue
             if cap_path.exists():
                 new_caption = cap_path.read_text(encoding="utf-8").strip()
                 if "[待重试]" in new_caption or "解析失败" in new_caption:
