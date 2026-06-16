@@ -499,28 +499,30 @@ def extract_text(file_path: Path, config: Config, pilot_confirmed: bool = False)
             raise RuntimeError(f"Both PyMuPDF and minerU failed for {file_path.name}")
 
     elif pdf_type == "scanned":
-        # Path B: VLM OCR mandatory. Pilot required before full run.
-        if not pilot_confirmed:
-            pilot = stage_0_pilot(file_path, config)
-            if pilot.get("status") == "error":
-                raise RuntimeError(f"Pilot OCR failed: {pilot['error']}")
-            if not pilot.get("quality_ok"):
-                print(f"\n⚠️  Pilot OCR quality LOW ({pilot.get('ocr_chars', 0)} chars, stop={pilot.get('stop_reason')}).")
-                print(f"   Review the output above. If quality is acceptable, re-run with --pilot-confirmed.\n")
+        # Path B: VLM OCR required. Auto-fallback without interactive pilot gate.
+        # pilot_confirmed=True (rare, interactive only): run full OCR directly.
+        # pilot_confirmed=False (normal / batch): auto-fallback, don't block.
+        if pilot_confirmed:
+            print(f"[extract] Running local minerU OCR on scanned PDF (pilot confirmed)...")
+            text = extract_text_scanned_pdf(file_path, config)
+            return text, "mineru-local-ocr"
+        else:
+            print(f"[extract] Scanned PDF: auto-fallback to minerU OCR...")
+            try:
+                text = extract_text_scanned_pdf(file_path, config)
+                if len(text) > 2000:
+                    return text, "mineru-local-ocr"
+                print(f"[extract] ⚠️  Scanned PDF OCR returned only {len(text)} chars — quality may be poor")
+                return text, "mineru-local-ocr-low-quality"
+            except Exception as e:
                 raise RuntimeError(
-                    f"Stage 0 pilot quality insufficient. "
-                    f"Review pilot output above, then re-run with --pilot-confirmed if acceptable."
+                    f"Scanned PDF minerU OCR failed ({e}). "
+                    f"Re-run interactively with --pilot-confirmed to review."
                 )
-            print(f"\n[pilot] Quality OK ({pilot['ocr_chars']} chars, stop={pilot['stop_reason']}).")
-            print(f"[pilot] Re-run with --pilot-confirmed to proceed with full OCR.\n")
-            raise RuntimeError("Stage 0 pilot passed. Re-run with --pilot-confirmed to proceed with full OCR.")
-
-        print(f"[extract] Running local minerU OCR on scanned PDF...")
-        text = extract_text_scanned_pdf(file_path, config)
-        return text, "mineru-local-ocr"
 
     elif pdf_type == "mixed":
-        # Mixed: try PyMuPDF first, require pilot if text is sparse
+        # Mixed: try PyMuPDF first. If text layer is usable, take it.
+        # Otherwise auto-fallback to minerU OCR without blocking interactive pilot.
         try:
             text = extract_text_pymupdf(file_path)
             if text.strip() and len(text) > 2000:
@@ -528,22 +530,20 @@ def extract_text(file_path: Path, config: Config, pilot_confirmed: bool = False)
                 return text, "pymupdf-mixed"
         except Exception as e:
             print(f"[extract] Mixed PDF: PyMuPDF failed ({e})")
-        # Sparse text — try minerU, or require pilot for batch OCR
-        if not pilot_confirmed:
-            print(f"[extract] Mixed PDF with sparse text — running pilot OCR to assess quality...")
-            pilot = stage_0_pilot(file_path, config)
-            if pilot.get("status") == "error":
-                raise RuntimeError(f"Pilot OCR failed: {pilot['error']}")
-            if not pilot.get("quality_ok"):
-                raise RuntimeError(
-                    f"Stage 0 pilot quality insufficient for mixed PDF. "
-                    f"Review pilot output above, then re-run with --pilot-confirmed."
-                )
-            print(f"[pilot] Quality OK. Re-run with --pilot-confirmed to proceed.\n")
-            raise RuntimeError("Stage 0 pilot passed. Re-run with --pilot-confirmed to proceed with full OCR.")
-        print(f"[extract] Running local minerU OCR on mixed PDF...")
-        text = extract_text_scanned_pdf(file_path, config)
-        return text, "mineru-local-ocr"
+        # Sparse text — auto-fallback to minerU OCR.
+        # Previously required --pilot-confirmed which blocked batch ingest.
+        print(f"[extract] Mixed PDF: auto-fallback to minerU OCR (no interactive pilot)...")
+        try:
+            text = extract_text_scanned_pdf(file_path, config)
+            if len(text) > 2000:
+                return text, "mineru-local-ocr"
+            print(f"[extract] ⚠️  Mixed PDF OCR returned only {len(text)} chars — quality may be poor")
+            return text, "mineru-local-ocr-low-quality"
+        except Exception as e:
+            raise RuntimeError(
+                f"Mixed PDF minerU OCR failed ({e}). "
+                f"Re-run interactively with --pilot-confirmed to review."
+            )
 
     else:
         raise RuntimeError(f"Unknown PDF type: {pdf_type}")
@@ -558,6 +558,9 @@ def detect_pdf_type(file_path: Path, sample_pages: int = 10) -> tuple[str, float
     1. Text chars/page (PyMuPDF get_text())
     2. Presence of full-page images (scanned PDFs have one large image per page)
 
+    Pages are sampled evenly across the document to avoid bias from
+    TOC/intro pages at the front and index/bibliography at the back.
+
     Returns ("text", avg_chars) or ("scanned", avg_chars) or ("mixed", avg_chars).
     """
     try:
@@ -566,12 +569,25 @@ def detect_pdf_type(file_path: Path, sample_pages: int = 10) -> tuple[str, float
         return ("text", 0)
     doc = fitz.open(file_path)
     try:
-        total = 0
+        total_chars = 0
+        text_pages = 0
         img_pages = 0
         n = min(sample_pages, len(doc))
-        for i in range(n):
-            page = doc[i]
-            total += len(page.get_text())
+        # Evenly-spaced sampling across the full document (avoid TOC bias)
+        if len(doc) <= n:
+            sample_indices = list(range(len(doc)))
+        else:
+            step = len(doc) / n
+            sample_indices = [int(i * step) for i in range(n)]
+
+        for idx in sample_indices:
+            page = doc[idx]
+            chars = len(page.get_text())
+            # Skip pages that are effectively blank (navigable content might be images)
+            if chars < 10:
+                continue
+            total_chars += chars
+            text_pages += 1
             # Check for full-page scan image: >50% of page area
             rect = page.rect
             page_area = rect.width * rect.height
@@ -581,10 +597,20 @@ def detect_pdf_type(file_path: Path, sample_pages: int = 10) -> tuple[str, float
                 if img_area > page_area * 0.5:
                     img_pages += 1
                     break
-        avg = total / max(n, 1)
-        # If most sample pages have full-page images, it's scanned regardless of text
-        if img_pages > n * 0.6:
+
+        if text_pages == 0:
+            # All sampled pages were blank — assume scanned
+            return ("scanned", 0.0)
+
+        avg = total_chars / text_pages
+        img_ratio = img_pages / text_pages
+
+        # If most pages have full-page images, it's scanned regardless of text
+        if img_ratio > 0.6:
             return ("scanned", avg)
+        # Hidden OCR layer: significant text BUT also many full-page images
+        if avg > 500 and img_ratio > 0.3:
+            return ("mixed", avg)
         if avg > 500:
             return ("text", avg)
         elif avg < 50:
@@ -4819,10 +4845,28 @@ def ingest_one(
     if pending_tasks:
         print(f"[conversation] {len(pending_tasks)} pending task(s) — resuming pipeline")
 
-    # Check wiki/sources/ — immutable record of a completed ingest
+    # Check wiki/sources/ — immutable record of a completed ingest.
+    # Also verify completeness: a source page alone isn't enough — the
+    # ingest may have crashed after writing sources/ but before concepts/entities/.
     if source_page.exists() and not pending_tasks:
-        print(f"[skip] Source page exists ({source_page.name})")
-        return {"status": "skipped", "reason": "source-page-exists"}
+        # Read source page to find which concept/entity pages it references
+        try:
+            source_text = source_page.read_text(encoding="utf-8")
+        except Exception:
+            source_text = ""
+        refs = re.findall(r'\[\[([^\]]+)\]\]', source_text)
+        missing = []
+        for slug in refs:
+            slug = slug.split("|")[0].strip()
+            concept_path = config.wiki_dir / "concepts" / f"{slug}.md"
+            entity_path = config.wiki_dir / "entities" / f"{slug}.md"
+            if not concept_path.exists() and not entity_path.exists():
+                missing.append(slug)
+        if not refs or len(missing) > len(refs) * 0.8:
+            print(f"[skip] Source page exists + {len(refs)-len(missing)}/{len(refs)} linked pages found ({source_page.name})")
+            return {"status": "skipped", "reason": "source-page-exists"}
+        else:
+            print(f"[skip:warn] Source page exists but {len(missing)}/{len(refs)} linked pages missing — re-ingesting")
 
     # Cache hit (hash match) is NOT a skip reason — it only means we can
     # resume from a partial run. Full digest always checks (a) and (b) first.
@@ -5201,11 +5245,26 @@ def _do_prepare(
     _set_current_file(raw_file.name)
     print(f"\n=== [prepare] {raw_file.name} ===")
     try:
-        # Dedup check
+        # Dedup check — verify completeness, not just source page existence
         source_page = wiki_path_for_source(raw_file, config)
         if source_page.exists():
-            print(f"  [skip] Source page exists")
-            return None
+            try:
+                source_text = source_page.read_text(encoding="utf-8")
+            except Exception:
+                source_text = ""
+            refs = re.findall(r'\[\[([^\]]+)\]\]', source_text)
+            missing = []
+            for slug in refs:
+                slug = slug.split("|")[0].strip()
+                concept_path = config.wiki_dir / "concepts" / f"{slug}.md"
+                entity_path = config.wiki_dir / "entities" / f"{slug}.md"
+                if not concept_path.exists() and not entity_path.exists():
+                    missing.append(slug)
+            if not refs or len(missing) > len(refs) * 0.8:
+                print(f"  [skip:warn] Source page exists but {len(missing)}/{len(refs)} linked pages missing — re-ingesting")
+            else:
+                print(f"  [skip] Source page exists ({len(refs)-len(missing)}/{len(refs)} linked pages found)")
+                return None
 
         h = file_sha256(raw_file)
         progress = load_progress(config, h)

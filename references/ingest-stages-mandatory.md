@@ -34,15 +34,16 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.24) 的 `autoIngestImpl()` 
 - **为什么只用 `wiki/sources/`，不查 `ingest-cache.json`**：
   - **`wiki/sources/` 是不可变记录**：每个成功的 ingest 在 Stage 3.5 写入一个源页，pipeline 永不删除或覆盖它。
   - **`ingest-cache.json` 不可靠**：2026-06-14 HardwareWiki 两次事故——(a) agent 忽略缓存选了已消化的书；(b) 10 本书源页存在但缓存缺失。缓存可以被手动删除、跨对话丢失、runtime 目录切换后找不到、并发写入损坏。它只适合作为 ingest.py 内部的性能优化（跳过哈希计算），**绝不用于去重判断**。
-- **产物**：过滤后的待消化文件列表（只含 `wiki/sources/` 中无对应源页的文件）。
-- **go/no-go 判断**：
-  - `wiki/sources/<raw-rel-path>.md` 存在 → 跳过。例如 `raw/book/xxx.pdf` → 检查 `wiki/sources/book/xxx.md`。
+- **产物**：过滤后的待消化文件列表（过滤残缺 ingest：源页存在但引用的 concepts/entities >80% 丢失的会重新消化）。
+- **go/no-go 判断**（2026-06-17 改为完整性校验，不只是检查源页存在）：
+  - `wiki/sources/<raw-rel-path>.md` 存在 **且** 解析 `[[wikilinks]]` 验证 >80% 的 concepts/entities 页面存在 → 跳过。
+  - 源页存在但引用的 concepts/entities 丢失 >80%（或源页无任何 wikilinks）→ 不跳过，重新消化。**防止上次 ingest 中途崩溃后留下残缺源页。**
   - `wiki/sources/<raw-rel-path>.md` 不存在 → 未消化，进入 Stage 0.3。
   - **不依赖对话历史、agent 记忆、`ingest-cache.json`、或文件名猜测。**
 
 ### Stage 0.5 · PDF 文本提取（按 PDF 类型分两路径）
 
-**先判断 PDF 类型**（三信号检测：① PyMuPDF `get_text()` 字符数 ② 全页大图占比 ③ `get_images()` 嵌入图数量），按结果走不同路径：
+**先判断 PDF 类型**（2026-06-17 改为均匀采样 + 四信号检测：① PyMuPDF `get_text()` 字符数 ② 全页大图占比 ③ `get_images()` 嵌入图数量 ④ 隐藏 OCR 层检测），采样方式从"前 10 页"改为"全书均匀间隔取 10 页"以避免 TOC/前言偏斜。空白页（<10 chars）自动跳过不计入统计。按结果走不同路径：
 
 - **信号 ①**：`get_text()` 平均 chars/page
 - **信号 ②**：渲染页面低分 Pixmap，检查非白像素占比（>80% 即视为全页扫描图）。这是 **2026-06-14 Johnson《High-Speed Signal Propagation》教训**引入的补充检测——OCR 处理的扫描版 PDF，其背景扫描图可能以 PyMuPDF `get_images()` 无法枚举的形式存储（form XObject / masked image / inline image），导致信号 ③ 漏检。仅靠 `get_images()` 是不够的。
@@ -57,15 +58,16 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.24) 的 `autoIngestImpl()` 
 
 #### 路径 B：扫描版 PDF（chars/page <50，或抽样页中 >60% 有全页大图，或图表密集型书籍）
 
-- **作用**：强制走本地 minerU VLM OCR，同时提取文字和图片。**⚠️ OCR 处理的扫描版 PDF 会有高质量文字层（chars/page 可达数百甚至上千），`detect_pdf_type` 使用三信号检测来纠正这个误判：① 文字量 ② 全页大图占比（非白像素 >80%）③ `get_images()` 嵌入图数量。缺少任何一个信号都可能导致误判为路径 A。**
-- **跳过代价**：扫描版 PDF 仅走 PyMuPDF → 全页波形图/眼图/示意图丢失 → 对于信号完整性、电路设计等图表密集型书籍，丢失了一半以上的知识价值。**2026-06-14 Johnson《High-Speed Signal Propagation》实际发生**：100% 页面有全页大图，但 OCR 文字层字符数达标，PyMuPDF `get_images()` 无法枚举背景扫描图，最终走了路径 A，全本图表丢失。
+- **作用**：强制走本地 minerU VLM OCR，同时提取文字和图片。**⚠️ OCR 处理的扫描版 PDF 会有高质量文字层（chars/page 可达数百甚至上千），2026-06-17 新增第四信号"隐藏 OCR 层检测"：即使 chars/page >500，如果 >30% 抽样页有全页大图，判定为 `mixed` 走 OCR 路径，防止 Johnson 事故（文本达标但图表全丢）再次发生。**
+- **跳过代价**：扫描版 PDF 仅走 PyMuPDF → 全页波形图/眼图/示意图丢失 → 对于信号完整性、电路设计等图表密集型书籍，丢失了一半以上的知识价值。**2026-06-14 Johnson《High-Speed Signal Propagation》实际发生**：100% 页面有全页大图，但 OCR 文字层字符数达标，最终走了路径 A，全本图表丢失。
 - **产物**：每页一个 `p<NNN>.txt`（与页号 1:1 对应）+ minerU 自动提取的图片
 - **go/no-go**：每页 chars >100；无幻觉（chars<100 且无中文字符 → 重跑）；确认 minerU 输出的 `images/` 目录包含图表
 - **关键实操**：扫描版 PDF 全本 OCR 使用本地 minerU（`~/.venv/bin/mineru -b vlm-auto-engine`），免费、自动提取图片、无需 API key。**并发限制**：系统级最多 2 个 minerU 实例并行（`MINERU_MAX_CONCURRENT=2`）。16GB 统一内存的 Mac 上同时跑 >2 个 VLM 模型实例会导致 SIGABRT 崩溃 + 僵尸进程死锁。`ingest.py` 在每次 minerU 调用前通过 `_wait_for_mineru_slot()` 自动排队，无需人工协调。
 
-**Stage 0.3 Pilot 强制前置：pilot（5-10 页）验证 OCR 质量再启全本**
-- 不准直接 Stage 0.5 全本。**必须**先本地 minerU 切前 5-10 页 → OCR → 看输出质量（中文术语识别、公式 LaTeX 化、章节结构保留）→ 再决定全本路径
-- 跳过 pilot 的代价：全本跑到一半才发现质量不行 → 浪费数小时
+**Stage 0.3 Pilot：OCR 质量验证（2026-06-17 改为 auto-fallback，不再阻塞）**
+- **交互模式**（`--pilot-confirmed`）：先本地 minerU 切 5-10 页 → OCR → 人工看输出质量 → 确认后全本。适用于调试/单本消化时希望先看质量。
+- **批处理/默认模式**（无 `--pilot-confirmed`）：自动 OCR 降级，不阻塞。OCR 输出 <2000 chars 时标记 `low-quality` 警告但不中断。**避免批处理被 pilot 阻塞数小时无人看管。**
+- **仍会运行**：`scanned` 和 `mixed` PDF 始终走 minerU OCR 路径，只是不再需要人工确认 gate。
 
 ### Stage 0.7 · 图片提取 ⭐ **永远不能跳**
 - **作用**：用 PyMuPDF `get_images()` 抽取 PDF 每页的嵌入图，存到 `wiki/media/<type>/<pdf-stem>/`。**`<pdf-stem>` = PDF 文件名去 `.pdf` 后缀，与 `wiki/sources/<pdf-stem>.md` 共用同一个 stem。2026-06-15: 出现同一 PDF 被两次 Stage 0.5 用不同 slug 命名产生两个 media 目录的 bug，根因是 `source-slug` 未强制等于 PDF stem。**
