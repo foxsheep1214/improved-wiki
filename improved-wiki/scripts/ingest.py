@@ -973,10 +973,8 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
             try:
                 captions = json.loads(text)
             except json.JSONDecodeError:
-                # Recovery: try to salvage individual captions from truncated JSON
-                # Common pattern: LLM output hit max_tokens, JSON array is truncated.
-                # Each valid caption is {"idx": N, "caption": "..."} — extract them
                 import re
+                # Recovery 1: salvage complete {"idx": N, "caption": "..."} objects
                 salvaged = re.findall(
                     r'\{\s*"idx"\s*:\s*(\d+)\s*,\s*"caption"\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}',
                     text
@@ -985,8 +983,19 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
                     captions = [{"idx": int(idx), "caption": cap} for idx, cap in salvaged]
                     print(f"  batch {bi+1}: JSON truncated — salvaged {len(captions)} captions")
                 else:
-                    print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
-                    continue
+                    # Recovery 2: single caption truncated mid-string (no closing quote)
+                    m = re.search(r'"caption"\s*:\s*"((?:[^"\\]|\\.)*)$', text)
+                    if m and text.count('"idx"') == 1:
+                        cap_text = m.group(1).rstrip('，、, \t')
+                        if len(cap_text) >= 15:
+                            captions = [{"idx": 1, "caption": cap_text}]
+                            print(f"  batch {bi+1}: JSON truncated mid-caption — salvaged 1 caption")
+                        else:
+                            print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
+                            continue
+                    else:
+                        print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
+                        continue
             for cap in captions:
                 idx = cap.get("idx", 0) - 1
                 if 0 <= idx < len(batch):
