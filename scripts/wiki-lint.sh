@@ -271,7 +271,27 @@ VALID_DOMAINS = {
     "emc", "signal-integrity", "digital-circuits", "pcb-design",
     "rf-microwave", "radar-systems", "analog-circuits",
     "semiconductor-devices", "reliability-engineering", "general",
+    "computer-architecture", "manufacturing", "packaging",
+    "electronics", "hardware", "organization",
 }
+
+def _normalize_domain(d: str) -> str:
+    """Normalize domain strings: lowercase, spaces→dashes, common aliases."""
+    d = d.strip().strip('"').strip("'").lower()
+    d = d.replace(" ", "-").replace("_", "-")
+    # Common LLM-generated aliases → canonical
+    aliases = {
+        "rf-and-microwave-engineering": "rf-microwave",
+        "analog-electronics": "analog-circuits",
+        "digital-electronics": "digital-circuits",
+        "people": "general",
+        "person": "general",
+        "power": "power-electronics",
+        "thermal": "thermal-management",
+        "signal": "signal-integrity",
+        "pcb": "pcb-design",
+    }
+    return aliases.get(d, d)
 DOMAIN_APPLICABLE_DIRS = {"concepts", "entities"}
 for stem, path in pages.items():
     # Determine page directory from relative path
@@ -311,7 +331,7 @@ for stem, path in pages.items():
             "id": f"lint-md-{stem}",
             "createdAt": now_ms,
         })
-    elif domain_found not in VALID_DOMAINS:
+    elif _normalize_domain(domain_found) not in VALID_DOMAINS:
         findings.append({
             "type": "invalid-domain",
             "severity": "warning",
