@@ -25,21 +25,24 @@
 
 ### 用户把新文件放入 raw/ 时
 
-当用户在对话中提到"放文件到 raw/"、"新增资料"、"添加 datasheet"等，skill 应：
+**标准工作流**：用户先把文件放入 `raw/` 对应子目录，然后提示 Claude 按规则改名。Claude 应该：
 
-1. **识别文件类型**（根据所在子目录：book/datasheet/paper 等）
+1. **找最新文件**：用 `find raw/ -type f -mmin -<N>` 或 `normalize_raw_names.py --recent <N>` 定位最近放入的文件
 2. **对照 `raw/NAMING.md` 检查命名**
-3. **不符合 → 建议改名**（给出改名前后的对比）
+3. **不符合 → 建议改名**（给出改名前后的对比），用户确认后执行
 4. **规则不存在 → 提醒制定规则**
+
+不要全量扫描整个 `raw/`，只关注用户刚放入的文件。
 
 ### 示例对话流
 
 ```
-用户: 我加了几个 datasheet 到 raw/datasheet/05_放大器/
-Skill: 检查 raw/NAMING.md... 存在。
-      3 个新文件中 2 个符合规范，1 个缺少 Vendor 前缀：
-        ❌ LM358.pdf → 应为 TI - LM358.pdf
-      要修正吗？
+用户: 我加了几个文件到 raw/datasheet/05_放大器/，帮我改名
+Skill: 检查最近 30 分钟内新增的文件... 找到 3 个：
+        ❌ LM358.pdf → TI - LM358.pdf
+        ❌ opa2134.pdf → TI - OPA2134.pdf
+        ✅ TI - TLV9301.pdf（已符合规则）
+      要执行改名吗？
 ```
 
 ```
