@@ -273,6 +273,13 @@ VALID_DOMAINS = {
     "semiconductor-devices", "reliability-engineering", "general",
     "computer-architecture", "manufacturing", "packaging",
     "electronics", "hardware", "organization",
+    # Expanded from HardwareWiki lint analysis (2026-06-17)
+    "physics", "analog", "mathematics", "electrical-engineering",
+    "analog-circuit-design", "digital-design", "hardware-design",
+    "power-integrity", "signals-and-systems", "control-systems",
+    "high-speed-serial-io", "standards", "system", "systems",
+    "engineering", "organizations", "test-and-measurement",
+    "embedded-systems", "motor-control", "magnetic-design",
 }
 
 def _normalize_domain(d: str) -> str:
