@@ -5,7 +5,7 @@
 **每个知识库项目的 raw 文件命名规则是项目特定的，应当记录在项目本身内，不属于 skill 的通用规则。**
 
 - 项目规则文件：`<project>/raw/NAMING.md`
-- 项目检查脚本：`<project>/.llm-wiki/scripts/normalize_raw_names.py`
+- 项目检查脚本：`<project>/scripts/normalize_raw_names.py`
 
 ## Skill 的行为要求
 
@@ -64,7 +64,7 @@ Skill: 检查 raw/NAMING.md... 不存在。
 
 ## normalize_raw_names.py 约定
 
-每个项目的 `.llm-wiki/scripts/normalize_raw_names.py` 应支持：
+每个项目的 `scripts/normalize_raw_names.py` 应支持：
 
 ```
 python3 normalize_raw_names.py --check     # 仅检查，报告违规
