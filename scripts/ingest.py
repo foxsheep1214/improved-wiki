@@ -971,7 +971,7 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
     media_dir = config.wiki_dir / "media" / slug
     pending_imgs = _find_uncaptioned_mineru_images(media_dir)
     if pending_imgs and config.caption_api_key:
-        _caption_images(pending_imgs, config, media_dir, source_label="minerU")
+        _caption_images(pending_imgs, config, media_dir, source_label="minerU", batch_size=6)
 
     return full_text
 
