@@ -747,7 +747,7 @@ def _count_running_mineru() -> int:
         return 0
 
 
-def _wait_for_mineru_slot(poll_interval: int = 30) -> None:
+def _wait_for_mineru_slot(poll_interval: int = 120) -> None:
     """Block until a minerU concurrency slot is available. Prints prominent status updates.
 
     When all slots are busy, identifies which file(s) currently occupy them and
@@ -5746,7 +5746,7 @@ def _queue_entry_to_file(entry: dict, config: Config) -> Path | None:
 
 def ingest_watch(
     config: Config,
-    poll_interval: int = 30,
+    poll_interval: int = 120,
     drain: bool = False,
     max_concurrent: int = BATCH_MAX_CONCURRENT,
     max_retries: int = 3,
