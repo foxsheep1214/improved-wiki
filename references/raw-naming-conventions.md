@@ -5,7 +5,7 @@
 **每个知识库项目的 raw 文件命名规则是项目特定的，应当记录在项目本身内，不属于 skill 的通用规则。**
 
 - 项目规则文件：`<project>/raw/NAMING.md`
-- 项目检查脚本：`<project>/scripts/normalize_raw_names.py`
+- 项目检查脚本：`~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py`
 
 ## Skill 的行为要求
 
@@ -64,12 +64,18 @@ Skill: 检查 raw/NAMING.md... 不存在。
 
 ## normalize_raw_names.py 约定
 
-每个项目的 `scripts/normalize_raw_names.py` 应支持：
+脚本位于 skill 内：`~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py`
 
 ```
-python3 normalize_raw_names.py --check     # 仅检查，报告违规
-python3 normalize_raw_names.py --fix       # 自动修正
-python3 normalize_raw_names.py --verbose   # 显示所有文件状态
+# 自动检测项目（从 CWD 向上找 raw/NAMING.md）
+python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --check
+
+# 指定项目
+python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --project <path> --check
+
+# 只检查最近文件
+python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --recent 30 --fix
 ```
 
-脚本可复用 HardwareWiki 的版本作为起点，但 Vendor 前缀表等项目特定数据需根据实际项目调整。
+规则来源：各项目 `raw/NAMING.md` 中的 ` ```yaml rules ``` ` 块。
+脚本不包含项目特定数据（Vendor 前缀等），全部从 NAMING.md 解析。

@@ -35,10 +35,10 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.24) 的 `autoIngestImpl()` 
 - **跳过代价**：不规范的文件名导致 source 页面路径混乱、wikilink 不可解析，且一旦 ingest 完成后再改 raw 文件名会导致已有 wiki 页面变孤儿。
 - **检查流程**：
   1. 检查 `<project>/raw/NAMING.md` 是否存在
-     - **不存在** → 🛑 **阻止 ingest，提醒用户先制定规则。** 列出 raw/ 下的文件夹和文件样本，帮用户起草 `raw/NAMING.md` 和 `normalize_raw_names.py`。参考 `references/raw-naming-conventions.md`。
+     - **不存在** → 🛑 **阻止 ingest，提醒用户先制定规则。** 列出 raw/ 下的文件夹和文件样本，帮用户起草 `raw/NAMING.md`（含 `yaml rules` 块）。参考 `references/raw-naming-conventions.md`。
      - **存在** → 继续步骤 2
   2. 检查候选文件是否符合规则
-     - 如果有 `normalize_raw_names.py` → `python3 scripts/normalize_raw_names.py --check`
+     - 运行共享脚本 → `python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --check`
      - 如果只有 `NAMING.md` 没有脚本 → 手动对照规则检查
   3. 不符合 → 🛑 **阻止 ingest**，列出违规文件和修正建议
   4. 全部符合 → ✅ 进入 Stage 0.1
