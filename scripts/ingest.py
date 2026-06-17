@@ -1942,7 +1942,13 @@ def validate_stage_outputs(
 
 
 def _run_post_ingest_lint(config: Config) -> None:
-    """Run wiki-lint.sh after ingest (structural lint only; semantic lint via standalone command)."""
+    """Run wiki-lint.sh after ingest (structural lint only; semantic lint via standalone command).
+
+    Set SKIP_POST_INGEST_LINT=1 to skip during batch runs (lint once at end).
+    """
+    if os.environ.get("SKIP_POST_INGEST_LINT") == "1":
+        print("[lint] Skipped (SKIP_POST_INGEST_LINT=1)")
+        return
     lint_script = Path(__file__).parent / "wiki-lint.sh"
     if not lint_script.exists():
         print("[lint] wiki-lint.sh not found — skipping")
@@ -1952,7 +1958,7 @@ def _run_post_ingest_lint(config: Config) -> None:
     cmd = ["bash", str(lint_script), "--summary"]
     try:
         result = subprocess.run(
-            cmd, cwd=config.wiki_root, capture_output=True, text=True, timeout=120,
+            cmd, cwd=config.wiki_root, capture_output=True, text=True, timeout=600,
         )
         if result.returncode == 0:
             for line in result.stdout.strip().split("\n"):
