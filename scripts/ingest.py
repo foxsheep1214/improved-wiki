@@ -1972,13 +1972,14 @@ def _run_post_ingest_lint(config: Config) -> None:
         print(f"[lint] Lint failed ({e}) — continuing")
 
 
-def _run_post_batch_graph(config: Config) -> None:
-    """Run build_knowledge_graph.py once after batch ingest completes.
+def _run_post_ingest_graph(config: Config) -> None:
+    """Rebuild knowledge graph after ingest (once per session, stale-guarded).
 
-    Controlled by AUTO_BUILD_GRAPH=1 (off by default). The knowledge graph
-    needs the full wiki state, so it's called once at the end of a batch
-    run, not per-book. This mirrors NashSU's desktop app behavior where
-    the graph auto-updates when you open the app.
+    Controlled by AUTO_BUILD_GRAPH=1. The graph needs the full wiki state,
+    but rebuilding after every book in a batch would be wasteful. Uses a
+    staleness guard: skips if graph.json was rebuilt < 30 minutes ago.
+
+    Mirrors NashSU's desktop app: the graph auto-refreshes when you view it.
     """
     if os.environ.get("AUTO_BUILD_GRAPH") != "1":
         return
@@ -1986,15 +1987,24 @@ def _run_post_batch_graph(config: Config) -> None:
     if not graph_script.exists():
         print("[graph] build_knowledge_graph.py not found — skipping")
         return
+
+    # Staleness guard: don't rebuild more than once per 30 minutes
+    graph_json = config.runtime_dir / "graph.json"
+    if graph_json.exists():
+        age_min = (time.time() - graph_json.stat().st_mtime) / 60
+        if age_min < 30:
+            print(f"[graph] Skipped — graph rebuilt {age_min:.0f}m ago (staleness guard)")
+            return
+
     import subprocess
-    print("[graph] Building knowledge graph (post-batch)...")
+    print("[graph] Rebuilding knowledge graph...")
     try:
         result = subprocess.run(
             [sys.executable, str(graph_script)],
             cwd=config.wiki_root, capture_output=True, text=True, timeout=600,
         )
         if result.returncode == 0:
-            for line in result.stdout.strip().split("\n")[-5:]:
+            for line in result.stdout.strip().split("\n")[-3:]:
                 print(f"[graph] {line.strip()}")
         else:
             print(f"[graph] Failed ({result.returncode}): {result.stderr[:200]}")
@@ -5424,6 +5434,8 @@ def ingest_one(
 
     # ── Post-ingest lint (NashSU: structural lint after every ingest) ──
     _run_post_ingest_lint(config)
+    # ── Post-ingest graph (staleness-guarded, <30min) ──
+    _run_post_ingest_graph(config)
 
     # 7. Stage 2.6: Aggregate repair (index/log/overview)
     index_log_files = stage_2_6_aggregate_repair(source_path, raw_file, analysis, h, method, config)
@@ -5976,9 +5988,9 @@ def batch_ingest(
     print(f"Batch complete: {ok}/{len(results)} books processed successfully")
     print(f"{'='*60}")
 
-    # Post-batch: run knowledge graph (once, not per-book)
+    # Staleness-guarded: rebuild graph after batch (no-op if <30min since last rebuild)
     if ok > 0:
-        _run_post_batch_graph(config)
+        _run_post_ingest_graph(config)
 
     return results
 
