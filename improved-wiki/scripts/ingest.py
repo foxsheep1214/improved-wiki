@@ -3627,6 +3627,7 @@ The 5-10 most important claims, formulas, design rules, or conclusions. Each ONE
 # Instructions
 - The frontmatter MUST be exactly as shown above with real data from the digest
 - ⚠️ CRITICAL: DO NOT wrap the YAML frontmatter in ```yaml fences. The first line MUST be `---`, the frontmatter ends with `---`, then the body follows immediately. No code blocks anywhere.
+- ⚠️ The source page MUST contain ONLY these 3 sections: ## Book Summary, ## Table of Contents & Key Concepts, ## Key Takeaways. Do NOT add extra sections (no 核心概念 list, no 关键实体 list, no 相关器件, no 关联知识点, no 来源说明). Link to concept/entity pages with [[wikilinks]] instead.
 - Chapter outline: list ALL key topics per chapter (aim for 5-15 items). Be comprehensive — this is the wiki's authoritative reference for what the book covers.
 - Key Takeaways: extract the most impactful claims from the digest's key_claims
 - tags: Generate 3-8 relevant tags from the book's content (e.g. [dc-dc-converter, power-electronics, magnetics]). Do NOT leave tags: [] empty.
