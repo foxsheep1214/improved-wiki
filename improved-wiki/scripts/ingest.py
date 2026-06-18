@@ -3378,34 +3378,9 @@ This source belongs to the **{current_domain}** domain. Tag all generated concep
 # Extracted Images
 {_build_image_reference_section(file_path, config)}
 # Task
-Generate wiki pages for this source. Create:
-1. A **source page** at wiki/sources/{source_rel}.md — this is the MOST IMPORTANT page.
-   **Required format for source page body:**
-   ```
-   ---
-   type: source
-   title: "完整书名"
-   domain: {current_domain}
-   created: {time.strftime('%Y-%m-%d')}
-   updated: {time.strftime('%Y-%m-%d')}
-   tags: [tag1, tag2]
-   sources: ["raw/{source_rel}.pdf"]
-   ---
-
-   # 书名
-
-   **Book Summary:** 2-4句概括全书内容和定位。
-
-   ## Table of Contents & Key Concepts
-   1. **第1章标题** — 本章3-5个关键概念
-   2. **第2章标题** — 本章3-5个关键概念
-   ...
-
-   ## Key Takeaways
-   - 全书最重要的3-8条论断/结论/公式，每条一句话
-   ```
-2. Concept pages at wiki/concepts/<slug>.md for EVERY concept
-3. Entity pages at wiki/entities/<slug>.md for key entities
+The source page has already been generated separately. Now create:
+1. Concept pages at wiki/concepts/<slug>.md for EVERY concept in the list above
+2. Entity pages at wiki/entities/<slug>.md for key entities
 
 **Every concept page frontmatter MUST include: `domain: {current_domain}`**
 
@@ -3466,6 +3441,110 @@ Generate wiki pages using the EXACT format: ---FILE:wiki/<path>.md---...---END F
 START IMMEDIATELY with the first FILE block. No preamble.
 Focus on the UNCOVERED concepts listed above. Do NOT repeat previous pages.
 """
+
+
+def stage_2_0_source_page(
+    global_digest: dict,
+    file_path: Path,
+    config: Config,
+    template: str = "",
+    current_domain: str = "general",
+    verbose: bool = False,
+) -> tuple[str, str]:
+    """Stage 2.0: Dedicated source page generation (NashSU two-step).
+
+    Separated from concept/entity generation so the LLM can focus entirely
+    on producing a high-quality source page from the global digest.
+    This matches NashSU ingest.ts which generates the source page first,
+    then concept/entity pages in a separate pass.
+    """
+    try:
+        source_rel = str(file_path.relative_to(config.raw_root).with_suffix(""))
+    except ValueError:
+        source_rel = file_path.stem
+
+    book_meta = global_digest.get("book_meta", {})
+    title = book_meta.get("title", file_path.stem)
+    authors = book_meta.get("authors", [])
+    year = book_meta.get("year", "")
+    publisher = book_meta.get("publisher", "")
+
+    digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
+    if len(digest_str) > 8000:
+        digest_str = digest_str[:8000] + "\n... (truncated)"
+
+    outline = global_digest.get("outline", [])
+    key_claims = global_digest.get("key_claims", [])
+    key_concepts = global_digest.get("key_concepts", [])
+    key_entities = global_digest.get("key_entities", [])
+
+    template_section = ""
+    if template:
+        template_section = f"\n# Document Type\n<template>\n{template[:2000]}\n</template>\n"
+
+    prompt = f"""# Role
+You are writing a **source page** for a Karpathy-pattern wiki knowledge base.
+This page will be the authoritative entry for a book in the wiki.
+{template_section}
+# Book Information (from Global Digest)
+```yaml
+{digest_str}
+```
+
+# Task
+Write a comprehensive source page at wiki/sources/{source_rel}.md.
+
+**Required structure:**
+
+```
+---
+type: source
+title: "{title}"
+domain: {current_domain}
+created: {time.strftime('%Y-%m-%d')}
+updated: {time.strftime('%Y-%m-%d')}
+tags: [tag1, tag2, tag3]
+related: []
+sources: ["raw/{source_rel}.pdf"]
+---
+
+# {title}
+
+**Authors:** {', '.join(str(a) for a in authors[:5]) if authors else 'See book info'}
+**Year:** {year}
+**Publisher:** {publisher}
+
+## Book Summary
+
+2-4 sentences summarizing what this book covers, its approach, and who it's for.
+
+## Table of Contents & Key Concepts
+
+For EACH chapter in the outline, write:
+1. **Chapter Title** — 2-3 key concepts with brief definitions
+
+## Key Takeaways
+
+The 5-10 most important claims, formulas, design rules, or conclusions from this book. Each as a bullet point.
+```
+
+# Instructions
+- The frontmatter MUST be exactly as shown above with real data from the digest
+- Chapter outline: use the outline from the digest. For each chapter, list 2-3 key concepts with ONE-SENTENCE definitions
+- Key Takeaways: extract the most impactful claims from the digest's key_claims
+- Use [[wikilink]] syntax to link to concept pages (slugs should be concept-name-slug format)
+- The response MUST start with `---\ntype: source\n` — NO preamble
+- Math: $inline$ $$display$$
+"""
+
+    gen_tokens = config.compute_max_tokens(8192)
+    response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens)
+    if verbose:
+        print(f"[stage_2_0] Source page generated ({len(response):,} chars, stop={stop_reason})")
+    else:
+        print(f"[stage_2_0] Source page ready ({len(response):,} chars)")
+
+    return response, stop_reason
 
 
 def stage_2_synthesis(
@@ -5061,9 +5140,21 @@ def ingest_one(
             "stage_0_6": stage_0_6_result,
         })
 
-    # ── Stage 2: Generation ──
-    # Per-chunk mode for multi-chunk books (better coverage), legacy synthesis for small books
-    _stage_begin("Stage 2: Synthesis + File blocks")
+    # ── Stage 2.0: Source page (NashSU two-step — dedicated LLM call) ──
+    _stage_begin("Stage 2.0: Source page generation")
+    if progress and progress.get("stage") in ("stage_2_0_done", "stage_2_done") and "source_page_response" in progress:
+        source_page_response = progress["source_page_response"]
+        print(f"[stage_2_0] (cached) Source page already generated")
+    else:
+        source_page_response, _ = stage_2_0_source_page(
+            global_digest, raw_file, config,
+            template=template_content, current_domain=current_domain, verbose=verbose
+        )
+    _stage_end("Stage 2.0: Source page generation")
+
+    # ── Stage 2: Concept/Entity Generation ──
+    # Per-chunk mode for multi-chunk books, legacy synthesis for small books
+    _stage_begin("Stage 2: Concept + Entity pages")
     if progress and progress.get("stage") == "stage_2_done" and "raw_response" in progress:
         analysis = progress["analysis"]
         raw_response = progress["raw_response"]
@@ -5080,6 +5171,17 @@ def ingest_one(
             global_digest, chunk_analyses, raw_file, config, template_content, verbose=verbose
         )
     _verify_stage_2_file_blocks(file_blocks, raw_file)
+
+    # Merge Stage 2.0 source page into file_blocks (NashSU two-step)
+    if source_page_response:
+        source_blocks = parse_file_blocks(source_page_response)
+        if source_blocks:
+            file_blocks = source_blocks + list(file_blocks)
+            print(f"[stage_2_0] Source page block merged into {len(file_blocks)} total blocks")
+        else:
+            print(f"[stage_2_0] ⚠️  No FILE block found in source page response — "
+                  f"response starts: {source_page_response[:100]}...")
+
     if not progress or progress.get("stage") != "stage_2_done":
         # Save synthesis checkpoint — expensive call, don't lose it
         save_progress(config, h, {
@@ -5088,6 +5190,7 @@ def ingest_one(
             "extract_method": method,
             "global_digest": global_digest,
             "chunk_analyses": chunk_analyses,
+            "source_page_response": source_page_response,
             "analysis": analysis,
             "raw_response": raw_response,
             "stage_0_5": stage_0_5_result,
@@ -5471,6 +5574,16 @@ def _do_prepare(
             chunk_analyses = stage_1_5_chunk_analysis(extracted_text, global_digest, raw_file, config, template_content, verbose=verbose)
             _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
 
+        # Stage 2.0: Source page generation (NashSU two-step — dedicated LLM call)
+        if progress and progress.get("stage") in ("stage_2_0_done", "stage_2_done") and "source_page_response" in progress:
+            source_page_response = progress["source_page_response"]
+            print(f"  [stage_2_0] (cached) Source page already generated")
+        else:
+            source_page_response, _ = stage_2_0_source_page(
+                global_digest, raw_file, config,
+                template=template_content, current_domain=current_domain, verbose=verbose
+            )
+
         # Stage 2: Generation (per-chunk for multi-chunk, legacy synthesis for single)
         if progress and progress.get("stage") == "stage_2_done" and "raw_response" in progress:
             analysis = progress["analysis"]
@@ -5488,6 +5601,13 @@ def _do_prepare(
                 global_digest, chunk_analyses, raw_file, config, template_content, verbose=verbose
             )
         _verify_stage_2_file_blocks(file_blocks, raw_file)
+
+        # Merge Stage 2.0 source page into file_blocks
+        if source_page_response:
+            source_blocks = parse_file_blocks(source_page_response)
+            if source_blocks:
+                file_blocks = source_blocks + list(file_blocks)
+                print(f"  [stage_2_0] Source page block merged ({len(file_blocks)} total)")
 
         # ── Stage 2.3: Query generation ──
         query_blocks, query_response = stage_2_3_query_generation(
