@@ -3533,6 +3533,8 @@ The 5-10 most important claims, formulas, design rules, or conclusions from this
 - ⚠️ CRITICAL: DO NOT wrap the YAML frontmatter in ```yaml fences. The first line MUST be `---`, the frontmatter ends with `---`, then the body follows immediately. No code blocks anywhere.
 - Chapter outline: use the outline from the digest. For each chapter, list 2-3 key concepts with ONE-SENTENCE definitions
 - Key Takeaways: extract the most impactful claims from the digest's key_claims
+- tags: Generate 3-8 relevant tags from the book's content (e.g. [dc-dc-converter, power-electronics, magnetics]). Do NOT leave tags: [] empty.
+- related: Link to 2-5 related wiki pages by slug (e.g. [power-electronics, buck-converter])
 - Use [[wikilink]] syntax to link to concept pages (slugs should be concept-name-slug format)
 - The response MUST start with `---` (three dashes on the first line) — NO preamble, NO ``` fences, NO commentary
 - Math: $inline$ $$display$$
