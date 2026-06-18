@@ -213,7 +213,7 @@ class Config:
             chunk_size=300_000,
             chunk_overlap=3_000,
             source_budget=200_000,
-            target_chars=60_000,
+            target_chars=100_000,
             max_tokens=16384,
         )
 
