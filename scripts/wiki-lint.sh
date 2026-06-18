@@ -162,6 +162,10 @@ for path in sorted(wiki_dir.rglob("*.md")):
     rel = path.relative_to(wiki_dir)
     if rel.name in STATE_SKIP or rel.name in ANCHOR_FILES:
         continue
+    # Skip lint/ directory — scanning lint pages creates infinite feedback
+    # (lint pages reference other lint pages via [[wikilinks]])
+    if rel.parts[0] == "lint":
+        continue
     rel_stem = str(rel.with_suffix(""))       # e.g. "entities/foo-bar"
     basename_stem = path.stem                  # e.g. "foo-bar"
     pages[rel_stem] = path
