@@ -667,262 +667,44 @@ def ingest_one(
     # 0. Clean up resolved review pages
     cleanup_resolved_reviews(config)
 
-    # 1. Dedup check: wiki/sources/ immutable record
-    #    Cache is NOT used for dedup — it is a volatile runtime optimization only.
+    # 0. Clean up resolved review pages
+    cleanup_resolved_reviews(config)
+
+    # 1. Dedup + Stage 0-2 (delegated to shared implementation)
     h = file_sha256(raw_file)
-    cache = load_cache(config)
     config.conversation_prefix = h[-8:]  # per-source conversation file isolation
     task_manifest = _load_task_manifest(config)
-    try:
-        rel = str(raw_file.relative_to(config.raw_root))
-    except ValueError:
-        rel = str(raw_file)
-    source_page = wiki_path_for_source(raw_file, config)
     pending_tasks = task_manifest.get("pending", [])
     if pending_tasks:
         print(f"[conversation] {len(pending_tasks)} pending task(s) — resuming pipeline")
 
-    # Check wiki/sources/ — immutable record of a completed ingest.
-    # Also verify completeness: a source page alone isn't enough — the
-    # ingest may have crashed after writing sources/ but before concepts/entities/.
-    if source_page.exists() and not pending_tasks:
-        # Read source page to find which concept/entity pages it references
-        try:
-            source_text = source_page.read_text(encoding="utf-8")
-        except Exception:
-            source_text = ""
-        refs = re.findall(r'\[\[([^\]]+)\]\]', source_text)
-        missing = []
-        for slug in refs:
-            slug = slug.split("|")[0].strip()
-            concept_path = config.wiki_dir / "concepts" / f"{slug}.md"
-            entity_path = config.wiki_dir / "entities" / f"{slug}.md"
-            if not concept_path.exists() and not entity_path.exists():
-                missing.append(slug)
-        if not refs or len(missing) > len(refs) * 0.8:
-            print(f"[skip] Source page exists + {len(refs)-len(missing)}/{len(refs)} linked pages found ({source_page.name})")
-            return {"status": "skipped", "reason": "source-page-exists"}
-        else:
-            print(f"[skip:warn] Source page exists but {len(missing)}/{len(refs)} linked pages missing — re-ingesting")
+    prepared = _do_prepare(raw_file, config, template_override, verbose, pilot_confirmed)
+    if prepared is None:
+        return {"status": "skipped", "reason": "source-page-exists"}
 
-    # Cache hit (hash match) is NOT a skip reason — it only means we can
-    # resume from a partial run. Full digest always checks (a) and (b) first.
+    # Unpack prepared state from Stage 0-2
+    method = prepared["method"]
+    extracted_text = prepared["extracted_text"]
+    global_digest = prepared["global_digest"]
+    chunk_analyses = prepared["chunk_analyses"]
+    analysis = prepared["analysis"]
+    raw_response = prepared["raw_response"]
+    file_blocks = prepared["file_blocks"]
+    stage_0_5_result = prepared["stage_0_5_result"]
+    stage_0_6_result = prepared["stage_0_6_result"]
+    template_name = prepared["template_name"]
 
-    # Check for partial progress (resume)
-    progress = load_progress(config, h)
-    resumed_from = None
-    if progress:
-        resumed_from = progress.get("stage", "unknown")
-        print(f"[resume] Found checkpoint at stage={resumed_from}")
+    # Check stop-after-stage (best-effort; _do_prepare runs all of Stage 0-2)
+    for stage_check in ("0", "0.5", "0.6", "1", "1.5", "2.0", "2", "2.3", "2.5"):
+        if _should_stop_after(config, stage_check, {"status": "ok"}):
+            return {"status": "ok", "stopped_after": stage_check}
 
-    # NOTE: Stage 0-2 logic duplicated with _do_prepare()
-    # 2. Extract text
-    if progress and "extracted_text" in progress:
-        extracted_text = progress["extracted_text"]
-        method = progress.get("extract_method", "cached")
-        print(f"[extract] (cached) {method}: {len(extracted_text)} chars")
-        _verify_stage_0_text(raw_file, extracted_text, method)
-    else:
-        _stage_begin("Stage 0: Text extraction")
-        extracted_text, method = extract_text(raw_file, config, pilot_confirmed=pilot_confirmed)
-        print(f"[extract] {method}: {len(extracted_text)} chars")
-        _verify_stage_0_text(raw_file, extracted_text, method)
-        save_progress(config, h, {
-            "stage": "stage_0_done",
-            "extracted_text": extracted_text,
-            "extract_method": method,
-        })
-        _stage_end("Stage 0: Text extraction")
-
-    if _should_stop_after(config, "0", {"status": "ok"}):
-        return {"status": "ok", "stopped_after": "0"}
-
-    # 3. Detect and load template (used in all 3 stages to guide LLM output)
-    template_name = detect_template_type(raw_file, config.raw_root, template_override)
-    template_content = load_template(template_name)
-    print(f"[template] {template_name}")
-
-    # ── Stage 0.5: Image extraction (text-layer PDFs only) ──
-    stage_0_5_result: dict = {"count": 0}
-    if progress and "stage_0_5" in progress:
-        stage_0_5_result = progress["stage_0_5"]
-        print(f"[stage_0_5] (cached) {stage_0_5_result.get('count', 0)} images")
-    elif raw_file.suffix.lower() in (".pdf", ".pptx", ".docx") and (
-            raw_file.suffix.lower() != ".pdf" or method == "pymupdf"):
-        stage_0_5_result = stage_0_5_extract_images(raw_file, config)
-        # Save progress with stage_0_5 data (preserve existing checkpoint data)
-        cp = {"stage": "stage_0_done", "extracted_text": extracted_text,
-              "extract_method": method, "stage_0_5": stage_0_5_result}
-        save_progress(config, h, cp)
-
-    # ── Stage 0.6 (Caption) ∥ Stage 1 (Global Digest) ──
-    # These two stages are independent: caption uses MiniMax VLM on images,
-    # digest uses LLM on text. Different API endpoints, no shared state.
-    # Run them in parallel to hide I/O latency.
-    needs_caption = (
-        not progress or "stage_0_6" not in progress
-    ) and stage_0_5_result.get("count", 0) > 0
-    needs_digest = (
-        not progress or progress.get("stage") not in ("stage_1_done", "stage_1_5_done", "stage_2_done")
-    )
-    stage_0_6_result = progress.get("stage_0_6", {"captioned": 0}) if progress and "stage_0_6" in progress else {"captioned": 0}
-
-    if needs_caption and needs_digest:
-        _stage_begin("Stage 0.6∥1: Caption + Global Digest (parallel)")
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            fut_cap = executor.submit(stage_0_6_caption_images, config, stage_0_5_result)
-            fut_dig = executor.submit(stage_1_global_digest, extracted_text, raw_file, config, template_content, verbose=verbose)
-            stage_0_6_result = fut_cap.result()
-            global_digest = fut_dig.result()
-        _verify_stage_1_digest(global_digest, raw_file)
-        _stage_end("Stage 0.6∥1: Caption + Global Digest (parallel)")
-        if "extracted_text" not in (progress or {}):
-            save_progress(config, h, {"stage": "stage_0_done", "extracted_text": extracted_text,
-                  "extract_method": method, "stage_0_5": stage_0_5_result, "stage_0_6": stage_0_6_result})
-        save_progress(config, h, {"stage": "stage_1_done", "extracted_text": extracted_text,
-            "extract_method": method, "global_digest": global_digest, "stage_0_5": stage_0_5_result,
-            "stage_0_6": stage_0_6_result})
-    else:
-        if needs_caption:
-            print(f"[stage_0_6] Captioning images...")
-            stage_0_6_result = stage_0_6_caption_images(config, stage_0_5_result)
-        elif progress and "stage_0_6" in progress:
-            stage_0_6_result = progress["stage_0_6"]
-            print(f"[stage_0_6] (cached) {stage_0_6_result.get('captioned', 0)} captions")
-
-        if needs_digest:
-            global_digest = stage_1_global_digest(extracted_text, raw_file, config, template_content, verbose=verbose)
-            _verify_stage_1_digest(global_digest, raw_file)
-        else:
-            global_digest = progress["global_digest"]
-            print(f"[stage_1] (cached) Global Digest — {len(global_digest)} keys")
-            _verify_stage_1_digest(global_digest, raw_file)
-
-        if needs_caption and "extracted_text" not in (progress or {}):
-            save_progress(config, h, {"stage": "stage_0_done", "extracted_text": extracted_text,
-                  "extract_method": method, "stage_0_5": stage_0_5_result, "stage_0_6": stage_0_6_result})
-        if needs_digest:
-            save_progress(config, h, {"stage": "stage_1_done", "extracted_text": extracted_text,
-                "extract_method": method, "global_digest": global_digest, "stage_0_5": stage_0_5_result,
-                "stage_0_6": stage_0_6_result})
-
-    if _should_stop_after(config, "1", {"status": "ok", "global_digest": global_digest}):
-        return {"status": "ok", "stopped_after": "1"}
-
-    # ── Stage 1.5: Chunk Analysis ──
-    if progress and progress.get("stage") in ("stage_1_5_done", "stage_2_done") and "chunk_analyses" in progress:
-        chunk_analyses = progress["chunk_analyses"]
-        print(f"[stage_1_5] (cached) Chunk Analysis — {len(chunk_analyses)} chunks")
-        _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
-    else:
-        _stage_begin("Stage 1.5: Chunk Analysis")
-        chunk_analyses = stage_1_5_chunk_analysis(extracted_text, global_digest, raw_file, config, template_content, verbose=verbose, source_hash=h)
-        _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
-        _stage_end("Stage 1.5: Chunk Analysis")
-        save_progress(config, h, {
-            "stage": "stage_1_5_done",
-            "extracted_text": extracted_text,
-            "extract_method": method,
-            "global_digest": global_digest,
-            "chunk_analyses": chunk_analyses,
-            "stage_0_5": stage_0_5_result,
-            "stage_0_6": stage_0_6_result,
-        })
-
-    if _should_stop_after(config, "1.5", {"status": "ok", "chunk_analyses": chunk_analyses}):
-        return {"status": "ok", "stopped_after": "1.5"}
-
-    # ── Stage 2.0: Source page (NashSU two-step — dedicated LLM call) ──
-    _stage_begin("Stage 2.0: Source page generation")
-    # Infer domain from book meta (same logic as single-book path)
-    current_domain = _detect_domain(raw_file, template_content, global_digest)
-    if progress and progress.get("stage") in ("stage_2_0_done", "stage_2_done") and "source_page_response" in progress:
-        source_page_response = progress["source_page_response"]
-        print(f"[stage_2_0] (cached) Source page already generated")
-    else:
-        source_page_response, _ = stage_2_0_source_page(
-            global_digest, raw_file, config,
-            template=template_content, current_domain=current_domain, verbose=verbose
-        )
-    _stage_end("Stage 2.0: Source page generation")
-
-    if _should_stop_after(config, "2.0", {"status": "ok", "source_page_response": source_page_response}):
-        return {"status": "ok", "stopped_after": "2.0"}
-
-    # ── Stage 2: Concept/Entity Generation ──
-    # Per-chunk mode for multi-chunk books, legacy synthesis for small books
-    _stage_begin("Stage 2: Concept + Entity pages")
-    if progress and progress.get("stage") == "stage_2_done" and "raw_response" in progress:
-        analysis = progress["analysis"]
-        raw_response = progress["raw_response"]
-        file_blocks = parse_file_blocks(raw_response)
-        print(f"[stage_2] (cached) Synthesis — {len(file_blocks)} file blocks from checkpoint")
-    elif len(chunk_analyses) > 1:
-        # Per-chunk generation: each chunk generates its own concept pages in parallel
-        analysis, raw_response, file_blocks = stage_2_per_chunk_generation(
-            chunk_analyses, [], global_digest, raw_file, config, template_content,
-            max_chunk_concurrent=_chunk_concurrency(), verbose=verbose,
-        )
-    else:
-        analysis, raw_response, file_blocks = stage_2_synthesis(
-            global_digest, chunk_analyses, raw_file, config, template_content, verbose=verbose
-        )
-    _verify_stage_2_file_blocks(file_blocks, raw_file)
-
-    # Merge Stage 2.0 source page into file_blocks (NashSU two-step)
-    if source_page_response:
-        source_blocks = parse_file_blocks(source_page_response)
-        if source_blocks:
-            file_blocks = source_blocks + list(file_blocks)
-            print(f"[stage_2_0] Source page block merged into {len(file_blocks)} total blocks")
-        else:
-            print(f"[stage_2_0] ⚠️  No FILE block found in source page response — "
-                  f"response starts: {source_page_response[:100]}...")
-
-    if not progress or progress.get("stage") != "stage_2_done":
-        # Save synthesis checkpoint — expensive call, don't lose it
-        save_progress(config, h, {
-            "stage": "stage_2_done",
-            "extracted_text": extracted_text,
-            "extract_method": method,
-            "global_digest": global_digest,
-            "chunk_analyses": chunk_analyses,
-            "source_page_response": source_page_response,
-            "analysis": analysis,
-            "raw_response": raw_response,
-            "stage_0_5": stage_0_5_result,
-            "stage_0_6": stage_0_6_result,
-        })
-    analysis["__source_hash"] = h
-    analysis["__extract_method"] = method
-
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"RAW LLM RESPONSE (Stage 2 — Synthesis):")
-        print(f"{'='*60}")
-        print(raw_response[:10000])
-        print(f"{'='*60}\n")
-
-    _stage_end("Stage 2: Synthesis + File blocks")
-
-    # ── Stage 2.3: Query generation ──
-    query_blocks, query_response = stage_2_3_query_generation(
-        global_digest, chunk_analyses, file_blocks, raw_file, config,
-        template=template_content, verbose=verbose
-    )
-    if query_blocks:
-        file_blocks = list(file_blocks) + query_blocks
-
-    # ── Stage 2.5: Comparison generation ──
-    comp_blocks, comp_response = stage_2_5_comparison_generation(
-        global_digest, chunk_analyses, file_blocks, raw_file, config,
-        template=template_content, verbose=verbose
-    )
-    if comp_blocks:
-        file_blocks = list(file_blocks) + comp_blocks
-
-    if _should_stop_after(config, "2", {"status": "ok", "file_blocks": file_blocks}):
-        return {"status": "ok", "stopped_after": "2"}
+    # ── Load cache for Stage 3+ writes (needed for update at end) ──
+    cache = load_cache(config)
+    try:
+        rel = str(raw_file.relative_to(config.raw_root))
+    except ValueError:
+        rel = str(raw_file)
 
     # NOTE: Stage 3+ logic duplicated with _do_write()
     # 6. Write wiki files
@@ -1200,8 +982,7 @@ def _do_prepare(
         h = file_sha256(raw_file)
         progress = load_progress(config, h)
 
-        # NOTE: Stage 0-2 logic duplicated with _do_prepare()
-        # Stage 0: Text extraction
+            # Stage 0: Text extraction
         if progress and "extracted_text" in progress:
             extracted_text = progress["extracted_text"]
             method = progress.get("extract_method", "cached")
