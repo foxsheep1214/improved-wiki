@@ -265,6 +265,12 @@ def is_safe_ingest_path(rel_path: str) -> bool:
             return False
         if segment.lower() in _WINDOWS_RESERVED:
             return False
+    # Reject garbage slugs from LLM empty/malformed titles
+    stem = Path(rel_path).stem
+    if stem in ("", "-", "--", "none", "null", "undefined", "n-a", "n/a"):
+        return False
+    if re.match(r'^\(.*\)$', stem):  # e.g. "(none)", "(empty)"
+        return False
     return True
 
 
