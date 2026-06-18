@@ -13,13 +13,10 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
-import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
 
 # Shared infrastructure
 _script_dir = Path(__file__).resolve().parent
@@ -42,8 +39,6 @@ from _core import (
     detect_template_type,
     load_template,
 )
-from _paths import detect_runtime_dir
-from _language import detect_language
 
 # Re-export for ingest.py
 __all__ = [
@@ -143,7 +138,7 @@ def extract_text_mineru(file_path: Path, config: Config) -> str:
     if not mineru_bin.exists():
         raise RuntimeError(f"mineru CLI not found at {mineru_bin}")
 
-    out_dir = config.wiki_root / ".ocr-tmp"
+    out_dir = config.extract_tmp_dir / "ocr"
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = file_path.stem
 
@@ -1412,5 +1407,6 @@ CAPTION_SYSTEM_PROMPT = (
     "  {\"idx\": 2, \"caption\": \"...\"},\n  ...\n]\n```\n\n"
     "每个对象都要有，idx 与图顺序一致。即使图不清楚也尽量给个最合理的简短描述。"
 )
+
 
 

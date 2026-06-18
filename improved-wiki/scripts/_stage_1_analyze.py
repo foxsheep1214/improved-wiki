@@ -18,7 +18,6 @@ from _core import (
     parse_yaml_block,
 )
 from _llm_api import _retry_jitter, _is_retryable_exception, call_anthropic_protocol
-from _stage_0_extract import extract_text, detect_pdf_type
 
 __all__ = ["chunk_text", "build_global_digest_prompt", "stage_1_global_digest", "build_chunk_analysis_prompt", "stage_1_5_chunk_analysis"]
 
@@ -585,5 +584,6 @@ def _checkpoint_1_5(config: Config, source_hash: str, chunk_total: int,
         "analyses": analyses,
     }
     save_progress(config, source_hash, progress)
+
 
 
