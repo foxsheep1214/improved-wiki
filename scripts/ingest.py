@@ -476,9 +476,85 @@ def extract_text_mineru(file_path: Path, config: Config) -> str:
     return md_out.read_text(encoding="utf-8")
 
 
+def _extract_text_from_office(file_path: Path) -> str:
+    """Extract readable text from PPTX/DOCX via zipfile + XML parsing.
+
+    NashSU parity: read non-PDF sources. Uses stdlib only — no external deps.
+    PPTX: parses <a:t> text runs from ppt/slides/slide*.xml.
+    DOCX: parses <w:t> text runs from word/document.xml (plus headers/footers/notes).
+    """
+    import zipfile as _zf
+    import xml.etree.ElementTree as _ET
+
+    suffix = file_path.suffix.lower()
+    chunks: list[str] = []
+
+    try:
+        with _zf.ZipFile(file_path, "r") as zf:
+            if suffix == ".pptx":
+                # Extract text from each slide
+                slides = sorted(
+                    [n for n in zf.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")],
+                    key=lambda n: int("".join(c for c in n if c.isdigit()) or "0")
+                )
+                ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+                for slide_name in slides:
+                    try:
+                        root = _ET.fromstring(zf.read(slide_name))
+                        slide_text: list[str] = []
+                        for t_elem in root.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}t"):
+                            if t_elem.text:
+                                slide_text.append(t_elem.text)
+                        if slide_text:
+                            slide_num = "".join(c for c in slide_name if c.isdigit()) or "?"
+                            chunks.append(f"\n## Slide {slide_num}\n" + " ".join(slide_text))
+                    except Exception:
+                        continue
+
+            elif suffix == ".docx":
+                # Extract from document.xml, headers, footers, endnotes, footnotes
+                ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+                xml_files = ["word/document.xml"]
+
+                # Add headers/footers if present
+                for n in zf.namelist():
+                    if n.startswith("word/header") or n.startswith("word/footer") or \
+                       n.startswith("word/endnote") or n.startswith("word/footnote"):
+                        if n.endswith(".xml"):
+                            xml_files.append(n)
+
+                for xml_file in xml_files:
+                    try:
+                        root = _ET.fromstring(zf.read(xml_file))
+                        parts: list[str] = []
+                        for p_elem in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
+                            para_parts = []
+                            for t_elem in p_elem.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"):
+                                if t_elem.text:
+                                    para_parts.append(t_elem.text)
+                            if para_parts:
+                                parts.append("".join(para_parts))
+                        if parts:
+                            label = xml_file.split("/")[-1].replace(".xml", "") if xml_file != "word/document.xml" else "Body"
+                            chunks.append(f"\n## {label}\n" + "\n".join(parts))
+                    except Exception:
+                        continue
+
+    except Exception as e:
+        raise RuntimeError(f"Failed to extract text from {file_path.name}: {e}")
+
+    text = "\n".join(chunks)
+    if not text.strip():
+        raise RuntimeError(f"No extractable text found in {file_path.name}")
+    print(f"[extract] {suffix.upper()}: {len(text):,} chars from {len(chunks)} sections")
+    return text
+
+
 def extract_text(file_path: Path, config: Config, pilot_confirmed: bool = False) -> tuple[str, str]:
     if file_path.suffix.lower() in {".txt", ".md"}:
         return file_path.read_text(encoding="utf-8"), "plain-text"
+    if file_path.suffix.lower() in {".pptx", ".docx"}:
+        return _extract_text_from_office(file_path), f"zipfile-{file_path.suffix.lower().lstrip('.')}"
     if file_path.suffix.lower() != ".pdf":
         raise ValueError(f"Unsupported file type: {file_path.suffix}")
 
@@ -1358,20 +1434,98 @@ def _assemble_ocr_text(out_dir: Path, page_nums: list[int]) -> str:
 
 # ---------- Stage 0.5: Image extraction ----------
 
-def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100) -> dict:
-    """Extract embedded images from PDF using PyMuPDF get_images().
+def _extract_images_from_office(raw_file: Path, media_dir: Path, manifest_path: Path,
+                                 min_size: int = 100) -> dict:
+    """Extract embedded images from PPTX/DOCX via zipfile.
 
-    Only runs for text-layer PDFs (pymupdf method). Scanned PDFs have
-    whole-page PNGs handled by Stage 0 OCR, not embedded raster extraction.
+    NashSU parity: extractAndSaveSourceImages handles PPTX/DOCX/PDF.
+    Uses Python stdlib zipfile — no external deps needed.
+    """
+    import zipfile as _zf
+    import io as _io
+
+    fmt = raw_file.suffix.lower().lstrip(".")
+    print(f"[stage_0_5] Extracting embedded images from {fmt.upper()}...")
+
+    # Image dir inside the ZIP
+    media_prefix = "ppt/media/" if fmt == "pptx" else "word/media/"
+    img_exts = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".svg"}
+
+    all_images: list[dict] = []
+    seen_hashes: set[str] = set()
+
+    try:
+        with _zf.ZipFile(raw_file, "r") as zf:
+            for name in zf.namelist():
+                if not name.startswith(media_prefix):
+                    continue
+                ext = Path(name).suffix.lower()
+                if ext not in img_exts:
+                    continue
+
+                data = zf.read(name)
+                if len(data) < min_size:
+                    continue
+
+                # Dedup by SHA-256
+                fhash = hashlib.sha256(data).hexdigest()
+                if fhash in seen_hashes:
+                    continue
+                seen_hashes.add(fhash)
+
+                # Determine page context if available (from slide/word numbering)
+                # PPTX: ppt/slides/slideN.xml → N; DOCX: no direct page mapping
+                page = 0
+                rel_parts = name.split("/")
+                # For PPTX, try to extract slide number from parent dir structure
+                if fmt == "pptx":
+                    # Images are in ppt/media/, referenced from ppt/slides/slideN.xml
+                    # We can't easily map back without parsing XML, so use 0
+                    pass
+
+                filename = Path(name).name
+                out_path = media_dir / filename
+                # Avoid overwriting: append hash prefix if collision
+                if out_path.exists():
+                    stem, ext2 = out_path.stem, out_path.suffix
+                    out_path = media_dir / f"{stem}_{fhash[:6]}{ext2}"
+
+                out_path.write_bytes(data)
+
+                all_images.append({
+                    "filename": out_path.name,
+                    "page": page,
+                    "size": len(data),
+                    "sha256": fhash,
+                    "format": ext.lstrip("."),
+                })
+
+    except Exception as e:
+        print(f"[stage_0_5] {fmt.upper()} image extraction failed: {e}")
+        return {"count": 0, "error": str(e)}
+
+    # Write manifest
+    manifest_data = {
+        "source": str(raw_file),
+        "format": fmt,
+        "total_images": len(all_images),
+        "images": all_images,
+    }
+    manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[stage_0_5] {fmt.upper()}: {len(all_images)} images → {media_dir}")
+    return {"count": len(all_images), "media_dir": str(media_dir),
+            "manifest": str(manifest_path), "images": all_images}
+
+
+def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100) -> dict:
+    """Extract embedded images from PDF / PPTX / DOCX.
+
+    PDF: PyMuPDF get_images().  PPTX/DOCX: zipfile internal media/ directory
+    (NashSU parity: extractAndSaveSourceImages covers all three formats).
 
     Returns: {"count": int, "media_dir": str, "manifest": str, "images": list}
     """
-    try:
-        import fitz
-    except ImportError:
-        print("[stage_0_5] PyMuPDF not installed — skipping image extraction")
-        return {"count": 0, "skipped": True, "reason": "pymupdf-not-installed"}
-
+    suffix = raw_file.suffix.lower()
     slug = _media_slug(raw_file, config)
     media_dir = config.wiki_dir / "media" / slug
 
@@ -1386,8 +1540,20 @@ def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100
         except Exception:
             pass  # corrupt manifest, re-extract
 
-    print(f"[stage_0_5] Extracting embedded images from PDF...")
     media_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── PPTX / DOCX extraction (NashSU parity) ──
+    if suffix in (".pptx", ".docx"):
+        return _extract_images_from_office(raw_file, media_dir, manifest_path, min_size)
+
+    # ── PDF extraction ──
+    try:
+        import fitz
+    except ImportError:
+        print("[stage_0_5] PyMuPDF not installed — skipping image extraction")
+        return {"count": 0, "skipped": True, "reason": "pymupdf-not-installed"}
+
+    print(f"[stage_0_5] Extracting embedded images from PDF...")
 
     doc = fitz.open(raw_file)
     all_images: list[dict] = []
@@ -2590,6 +2756,31 @@ def chunk_text(text: str, target_chars: int, overlap_chars: int) -> list[str]:
     return chunks
 
 
+def _resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> str:
+    """Find the heading hierarchy that a chunk falls under (NashSU parity).
+
+    Scans backwards from chunk_start to find the nearest H1-H6 heading, then
+    walks further back to build the full ancestor path. Returns a string like
+    "Chapter 3 > Section 3.2 > Subsection 3.2.1" or "" if no heading found.
+    """
+    _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+    _heading_stack: list[tuple[int, str]] = []  # (level, title)
+
+    for m in _HEADING_RE.finditer(text):
+        if m.start() > chunk_start:
+            break
+        level = len(m.group(1))
+        title = m.group(2).strip()
+        # Pop headings of same or deeper level
+        while _heading_stack and _heading_stack[-1][0] >= level:
+            _heading_stack.pop()
+        _heading_stack.append((level, title))
+
+    if _heading_stack:
+        return " > ".join(h[1] for h in _heading_stack)
+    return ""
+
+
 # ---------- Stage 1: Global Digest ----------
 
 def build_global_digest_prompt(
@@ -2709,12 +2900,21 @@ def build_chunk_analysis_prompt(
     config: Config,
     template: str = "",
     accumulated_digest: str = "",
+    overlap_before: str = "",
+    heading_path: str = "",
 ) -> str:
     """Build the prompt for Stage 1.5: Chunk Analysis.
 
     If accumulated_digest is provided (sequential mode), it replaces the
     static global_digest as the primary context — giving later chunks the
     benefit of all previous chunks' discoveries (NashSU parity).
+
+    If overlap_before is provided, it's the tail-end text from the previous
+    chunk that this chunk overlaps with — gives the LLM continuity context
+    when a sentence/concept spans a chunk boundary (NashSU parity).
+
+    If heading_path is provided, it tells the LLM which chapter/section
+    hierarchy this chunk belongs to (NashSU parity: chunk.headingPath).
     """
     if accumulated_digest:
         # Sequential mode: use accumulated digest from previous chunks
@@ -2743,6 +2943,41 @@ def build_chunk_analysis_prompt(
 
 """
 
+    # ── Overlap context (NashSU parity: overlapBefore + overlapSuffix) ──
+    overlap_section = ""
+    if overlap_before:
+        # NashSU parity: paragraph/sentence-aware boundary, not raw tail slice
+        overlap_for_boundary = overlap_before[-800:]  # search in last 800 chars
+        boundary = -1
+        # Priority 1: paragraph break in overlap window
+        boundary = overlap_for_boundary.rfind("\n\n")
+        # Priority 2: sentence boundary
+        if boundary == -1:
+            import re as _re2
+            m = _re2.search(r'[.!?。！？]\s+', overlap_for_boundary)
+            if m:
+                boundary = m.start() + 1
+        # Fallback: start at a word boundary
+        if boundary == -1:
+            boundary = max(0, len(overlap_for_boundary) - 500)
+        overlap_trimmed = overlap_for_boundary[boundary:][-500:]
+        overlap_section = f"""
+# Continuity: text right before this chunk (may span sentence boundary)
+<overlap>
+{overlap_trimmed}
+</overlap>
+
+"""
+
+    # ── Heading path (NashSU parity: chunk.headingPath) ──
+    heading_section = ""
+    if heading_path:
+        heading_section = f"""
+# Current location in the book
+You are analyzing content from: **{heading_path}**
+
+"""
+
     return f"""# Role
 You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
 You are performing **Stage 1.5: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
@@ -2756,7 +2991,7 @@ cross-reference rather than re-defining it.
 ```yaml
 {digest_str}
 ```
-
+{heading_section}{overlap_section}
 # Input
 - Source: {file_path.stem}
 - Chunk {chunk_index + 1} of {chunk_total}
@@ -2872,6 +3107,7 @@ def stage_1_5_chunk_analysis(
     config: Config,
     template: str = "",
     verbose: bool = False,
+    source_hash: str = "",
 ) -> list[dict]:
     """Stage 1.5: Split text into chunks and analyze each one SEQUENTIALLY.
 
@@ -2880,6 +3116,10 @@ def stage_1_5_chunk_analysis(
     Later chunks get richer context — concepts found in chunk 3 are available
     to chunk 8, preventing duplicate extraction and improving cross-chapter
     awareness.
+
+    Per-chunk checkpoint (NashSU parity): after each successful chunk, saves
+    accumulated digest + partial analyses to the progress file.  On resume,
+    completed chunks are skipped and processing resumes from the last checkpoint.
 
     Still supports per-chunk retries (LLM_CHUNK_RETRIES, default 2 → 3 total).
     """
@@ -2890,26 +3130,56 @@ def stage_1_5_chunk_analysis(
           f"(target {config.target_chars:,} chars/chunk, overlap {config.chunk_overlap:,}, "
           f"sequential NashSU mode, retries={max_retries})")
 
-    # Build initial digest string from Stage 1.1 global digest
-    digest_compact = {}
-    for key in ("book_meta", "outline", "key_entities", "key_concepts"):
-        if key in global_digest:
-            digest_compact[key] = global_digest[key]
-    accumulated_digest = json.dumps(digest_compact, ensure_ascii=False, indent=2)
-
     t0 = time.time()
     analyses: list[dict] = []
+    accumulated_digest = ""
+    start_chunk = 0
 
-    for i, chunk in enumerate(chunks):
+    # ── Resume from per-chunk checkpoint (NashSU parity: LongSourceCheckpoint) ──
+    if source_hash:
+        progress = load_progress(config, source_hash)
+        cp = (progress or {}).get("stage_1_5_cp") if progress else None
+        if cp and cp.get("chunk_total") == chunk_total:
+            analyses = cp.get("analyses", [])
+            accumulated_digest = cp.get("accumulated_digest", "")
+            start_chunk = len(analyses)
+            if start_chunk > 0:
+                print(f"[stage_1_5] Resuming from chunk {start_chunk + 1}/{chunk_total} "
+                      f"({start_chunk} completed, digest={len(accumulated_digest)} chars)")
+
+    # Build initial digest string from Stage 1.1 global digest (first chunk only)
+    if not accumulated_digest:
+        digest_compact = {}
+        for key in ("book_meta", "outline", "key_entities", "key_concepts"):
+            if key in global_digest:
+                digest_compact[key] = global_digest[key]
+        accumulated_digest = json.dumps(digest_compact, ensure_ascii=False, indent=2)
+
+    for i in range(start_chunk, chunk_total):
+        chunk = chunks[i]
         chunk_len = len(chunk)
         chunk_ok = False
         last_error = None
+        # NashSU parity: pass tail text from previous chunk as overlap context
+        overlap_before = chunks[i - 1] if i > 0 else ""
+        # NashSU parity: find heading hierarchy for this chunk
+        heading_path = ""
+        if i == 0:
+            chunk_pos = 0
+        else:
+            # Find this chunk's start position in extracted text
+            chunk_pos = extracted_text.find(chunk)
+            if chunk_pos == -1:
+                chunk_pos = i * config.target_chars  # fallback estimate
+        heading_path = _resolve_chunk_heading_path(extracted_text, chunk_pos, chunk_pos + chunk_len)
 
         for attempt in range(1 + max_retries):
             # Build prompt with current accumulated digest
             prompt = build_chunk_analysis_prompt(
                 chunk, i, chunk_total, global_digest, file_path, config,
                 template=template, accumulated_digest=accumulated_digest,
+                overlap_before=overlap_before,
+                heading_path=heading_path,
             )
 
             try:
@@ -2942,6 +3212,11 @@ def stage_1_5_chunk_analysis(
 
                 analyses.append(analysis)
                 chunk_ok = True
+
+                # ── Per-chunk checkpoint ──
+                if source_hash:
+                    _checkpoint_1_5(config, source_hash, chunk_total, accumulated_digest, analyses)
+
                 break
 
             except RuntimeError as e:
@@ -2962,9 +3237,11 @@ def stage_1_5_chunk_analysis(
                     "chunk_index": i + 1, "error": str(last_error),
                     "chunk_text_length": chunk_len, "_attempts": 1 + max_retries,
                 })
+                # Checkpoint even failed chunks (so we don't re-process them)
+                if source_hash:
+                    _checkpoint_1_5(config, source_hash, chunk_total, accumulated_digest, analyses)
 
         if not chunk_ok and last_error:
-            # Already recorded in analyses above
             pass
 
     total_concepts = sum(len(a.get("concepts_found") or []) for a in analyses)
@@ -2978,6 +3255,20 @@ def stage_1_5_chunk_analysis(
         failed_indices = [a.get("chunk_index", -1) for a in analyses if "error" in a]
         print(f"[stage_1_5] ⚠️  Failed chunks: {failed_indices} — Stage 2 synthesis may be incomplete")
     return analyses
+
+
+def _checkpoint_1_5(config: Config, source_hash: str, chunk_total: int,
+                    accumulated_digest: str, analyses: list[dict]) -> None:
+    """Save per-chunk checkpoint for Stage 1.5 resume (NashSU parity)."""
+    # Merge into existing progress to preserve other stage data
+    progress = load_progress(config, source_hash) or {}
+    progress["stage"] = "stage_1_5_partial"
+    progress["stage_1_5_cp"] = {
+        "chunk_total": chunk_total,
+        "accumulated_digest": accumulated_digest,
+        "analyses": analyses,
+    }
+    save_progress(config, source_hash, progress)
 
 
 # ---------- Stage 2: Per-Chunk Generation ----------
@@ -4262,6 +4553,45 @@ for _i in range(1, 10):
 _ILLEGAL_CHARS_RE = re.compile(r'[<>:"|?*\x00-\x1f]')
 
 
+def _contains_cjk(text: str) -> bool:
+    """Check if text contains CJK characters (NashSU parity: containsCjk)."""
+    for ch in text:
+        cp = ord(ch)
+        if (0x4E00 <= cp <= 0x9FFF or    # CJK Unified Ideographs
+            0x3400 <= cp <= 0x4DBF or    # CJK Extension A
+            0x20000 <= cp <= 0x2A6DF or  # CJK Extension B
+            0xF900 <= cp <= 0xFAFF or    # CJK Compatibility
+            0x3040 <= cp <= 0x309F or    # Hiragana
+            0x30A0 <= cp <= 0x30FF or    # Katakana
+            0xAC00 <= cp <= 0xD7AF):     # Hangul
+            return True
+    return False
+
+
+def _make_cjk_slug(title: str) -> str:
+    """Create a readable CJK slug from a page title.
+
+    Rules (NashSU parity):
+    - Keep CJK characters, alphanumeric, spaces, hyphens
+    - Replace special chars with hyphens
+    - Collapse multiple hyphens
+    - Trim to 120 chars
+    - Preserve proper nouns and technical identifiers in original form
+    """
+    import re as _re
+    # Keep CJK, alphanumeric, spaces, hyphens, parentheses (for units like "Cauer/Foster")
+    slug = _re.sub(r'[^\w\s\-\(\)一-鿿㐀-䶿豈-﫿぀-ゟ゠-ヿ가-힯]', '-', title, flags=_re.UNICODE)
+    # Collapse whitespace and hyphens
+    slug = _re.sub(r'[\s_]+', '-', slug)
+    slug = _re.sub(r'-{2,}', '-', slug)
+    slug = slug.strip('-')
+    # Replace problematic chars for macOS filenames
+    slug = slug.replace('/', '-').replace(':', '-').replace('\\', '-')
+    if len(slug) > 120:
+        slug = slug[:120].rstrip('-')
+    return slug if slug else ""
+
+
 def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None) -> str | None:
     """Auto-correct malformed wiki paths from LLM output.
 
@@ -4325,6 +4655,20 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
                     slug = new_slug
             except Exception:
                 pass  # can't read existing page, proceed with original slug
+
+    # ── CJK slug rewriting (NashSU parity: rewriteIngestPathFromTitleForTargetLanguage) ──
+    fm_title = None
+    if fm_match:
+        for line in fm_match.group(1).split("\n"):
+            tm = _re.match(r'title:\s*["\']?(.+?)["\']?\s*$', line)
+            if tm:
+                fm_title = tm.group(1).strip()
+                break
+    if fm_title and _contains_cjk(fm_title) and not _contains_cjk(slug):
+        cjk_slug = _make_cjk_slug(fm_title)
+        if cjk_slug and _contains_cjk(cjk_slug):
+            print(f"  ⚠️  [cjk] Slug '{slug}' → '{cjk_slug}' (CJK title detected)")
+            slug = cjk_slug
 
     # Case: bare filename (no path prefix) — LLM forgot wiki/concepts/ prefix
     # This is the most common correction: "ConceptName.md" → "concepts/ConceptName.md"
@@ -4390,6 +4734,28 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
                 return f"sources/{slug}.md"
             # Default: treat as concept (most common case for Chinese wiki)
             return f"concepts/{slug}.md"
+
+    # ── Schema routing validation (NashSU parity: validateWikiPageRouting) ──
+    # After all corrections, verify that frontmatter type matches directory.
+    # This catches LLM writing type:concept to entities/ or vice versa.
+    if rel_path and fm_type:
+        _TYPE_TO_DIR = {
+            "source": "sources", "concept": "concepts", "entity": "entities",
+            "query": "queries", "comparison": "comparisons",
+            "synthesis": "synthesis", "finding": "findings",
+            "thesis": "thesis", "methodology": "methodology",
+        }
+        expected_dir = _TYPE_TO_DIR.get(fm_type)
+        if expected_dir:
+            actual_dir = rel_path.split("/")[0] if "/" in rel_path else ""
+            if actual_dir and actual_dir != expected_dir:
+                print(f"  ⚠️  [schema] Type '{fm_type}' in '{actual_dir}/' → routing to '{expected_dir}/'")
+                if "/" in rel_path:
+                    rel_path = f"{expected_dir}/{rel_path.split('/', 1)[1]}"
+                else:
+                    rel_path = f"{expected_dir}/{rel_path}"
+            elif not actual_dir:
+                rel_path = f"{expected_dir}/{rel_path}"
 
     return None
 
@@ -4569,7 +4935,12 @@ with duplicates consolidated and new information integrated.
 
 
 def canonicalize_sources_field(content: str, canonical_source: str) -> str:
-    """NashSU parity (ingest.ts L1254-1280): ensure sources[] contains canonical path."""
+    """NashSU parity (ingest.ts L1298-1324): union-merge sources[] with dedup.
+
+    Preserves existing sources from prior ingests. Only adds the canonical
+    source if it's not already present (matched by full path or basename).
+    Removes duplicate entries.
+    """
     if not content.startswith("---"):
         return content
     end = content.find("\n---", 3)
@@ -4577,13 +4948,46 @@ def canonicalize_sources_field(content: str, canonical_source: str) -> str:
         return content
     fm = content[3:end]
     body = content[end + 4:]
-    # Find and fix sources line
+
+    # Parse existing sources
+    existing_sources: list[str] = []
+    src_match = re.search(r'^sources:\s*\[(.*?)\]', fm, re.MULTILINE)
+    if src_match:
+        src_text = src_match.group(1)
+        # Extract individual source strings (quoted or unquoted)
+        existing_sources = [s.strip().strip('\'"') for s in src_text.split(",") if s.strip()]
+
+    # Normalize canonical source for comparison
+    canon_norm = canonical_source.lower().replace("\\", "/").rstrip("/")
+    canon_base = Path(canon_norm).name.lower()
+
+    # Check if canonical source already present (full path or basename match)
+    already_present = False
+    for s in existing_sources:
+        sn = s.lower().replace("\\", "/").rstrip("/")
+        if sn == canon_norm or Path(sn).name == canon_base:
+            already_present = True
+            break
+
+    if not already_present:
+        existing_sources.append(canonical_source)
+
+    # Dedup (keep order, remove case-duplicates)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for s in existing_sources:
+        key = s.lower().replace("\\", "/").rstrip("/")
+        if key not in seen:
+            seen.add(key)
+            deduped.append(s)
+
+    # Rebuild sources line
+    items = ", ".join(f'"{s}"' for s in deduped)
     lines = fm.split("\n")
     new_lines = []
     for line in lines:
         if line.strip().startswith("sources:"):
-            # Replace with canonical source
-            new_lines.append(f'sources: ["{canonical_source}"]')
+            new_lines.append(f"sources: [{items}]")
         else:
             new_lines.append(line)
     return "---\n" + "\n".join(new_lines) + "\n---" + body
@@ -4679,12 +5083,23 @@ def stage_2_6_aggregate_repair(
     overview_path = config.wiki_dir / "overview.md"
     if overview_path.exists():
         current_overview = overview_path.read_text(encoding="utf-8")
-        # NashSU parity (ingest.ts L1242-1252): safety cap — skip if too large
-        OVERVIEW_MAX_CHARS = 24000  # ~12% of 200K context
+        # NashSU parity (ingest.ts L1281-1296): proportional safety caps.
+        # Section cap = max(4K, 12% of context window) for both index and overview.
+        _AGGREGATE_CAP = max(4096, int(config.source_budget * 0.12))
+        OVERVIEW_MAX_CHARS = min(24000, _AGGREGATE_CAP)
+        INDEX_MAX_CHARS = _AGGREGATE_CAP
         if len(current_overview) > OVERVIEW_MAX_CHARS:
             print(f"[stage_2_6] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
                   f"skipping LLM rewrite to avoid truncation")
             return files_written
+
+        # Index size check (NashSU parity: isAggregateRepairSafe)
+        if index_path.exists():
+            index_size = index_path.stat().st_size
+            if index_size > INDEX_MAX_CHARS:
+                print(f"[stage_2_6] Index too large ({index_size} > {INDEX_MAX_CHARS}) — "
+                      f"skipping aggregate repair to avoid context overflow")
+                return files_written
         source_content = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
 
         sources_lines: list[str] = []
@@ -5153,7 +5568,8 @@ def ingest_one(
     if progress and "stage_0_5" in progress:
         stage_0_5_result = progress["stage_0_5"]
         print(f"[stage_0_5] (cached) {stage_0_5_result.get('count', 0)} images")
-    elif raw_file.suffix.lower() == ".pdf" and method == "pymupdf":
+    elif raw_file.suffix.lower() in (".pdf", ".pptx", ".docx") and (
+            raw_file.suffix.lower() != ".pdf" or method == "pymupdf"):
         stage_0_5_result = stage_0_5_extract_images(raw_file, config)
         # Save progress with stage_0_5 data (preserve existing checkpoint data)
         cp = {"stage": "stage_0_done", "extracted_text": extracted_text,
@@ -5218,7 +5634,7 @@ def ingest_one(
         _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
     else:
         _stage_begin("Stage 1.5: Chunk Analysis")
-        chunk_analyses = stage_1_5_chunk_analysis(extracted_text, global_digest, raw_file, config, template_content, verbose=verbose)
+        chunk_analyses = stage_1_5_chunk_analysis(extracted_text, global_digest, raw_file, config, template_content, verbose=verbose, source_hash=h)
         _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
         _stage_end("Stage 1.5: Chunk Analysis")
         save_progress(config, h, {
@@ -5233,6 +5649,8 @@ def ingest_one(
 
     # ── Stage 2.0: Source page (NashSU two-step — dedicated LLM call) ──
     _stage_begin("Stage 2.0: Source page generation")
+    # Infer domain from book meta (same logic as single-book path)
+    current_domain = _detect_domain(file_path, template_content, global_digest)
     if progress and progress.get("stage") in ("stage_2_0_done", "stage_2_done") and "source_page_response" in progress:
         source_page_response = progress["source_page_response"]
         print(f"[stage_2_0] (cached) Source page already generated")
@@ -5664,10 +6082,11 @@ def _do_prepare(
             print(f"  [stage_1_5] (cached) Chunk Analysis — {len(chunk_analyses)} chunks")
             _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
         else:
-            chunk_analyses = stage_1_5_chunk_analysis(extracted_text, global_digest, raw_file, config, template_content, verbose=verbose)
+            chunk_analyses = stage_1_5_chunk_analysis(extracted_text, global_digest, raw_file, config, template_content, verbose=verbose, source_hash=h)
             _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
 
         # Stage 2.0: Source page generation (NashSU two-step — dedicated LLM call)
+        current_domain = _detect_domain(file_path, template_content, global_digest)
         if progress and progress.get("stage") in ("stage_2_0_done", "stage_2_done") and "source_page_response" in progress:
             source_page_response = progress["source_page_response"]
             print(f"  [stage_2_0] (cached) Source page already generated")

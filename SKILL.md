@@ -15,6 +15,9 @@ Ingest: 0.1→0.3→0.5→0.7→0.9→1.1→1.3→2.0→2.1→2.3→2.5→3.5→
 Phase 0: Pre-processing     Phase 2: Generation (2.0 source page + 2.1 concept/entity)
 Phase 1: Analysis            Phase 3: Write & Enrich      Phase 4: Reflect & Finalize
 
+Sequential (NashSU parity): 1.3 chunk analysis + 2.1 per-chunk generation
+Parallel (I/O only):        0.6∥1.1 caption∥digest + 0.9 caption batch dispatch
+
 Lint:  [16: Build Graph] → [17: Louvain] → [18: Insights]
        (post-ingest auto-triggered via AUTO_BUILD_GRAPH=1, 30min staleness guard)
 ```
@@ -60,15 +63,23 @@ Lint:  [16: Build Graph] → [17: Louvain] → [18: Insights]
 ## Key features
 
 - **16-stage auto-ingest**: `python3 scripts/ingest.py file.pdf [file2.pdf ...]` — NashSU two-step: Stage 2.0 dedicated source page LLM call + Stage 2.1 concept/entity generation
+- **Batch ingest**: `python3 scripts/ingest.py f1.pdf f2.pdf ...` — parallel Stage 0-2 per book, serial Stage 3+ write
 - **3-stage knowledge graph**: `AUTO_BUILD_GRAPH=1` auto-rebuilds graph after ingest; manual: `python3 scripts/build_knowledge_graph.py`
-- **Parallel pipeline**: 3 levels — caption batch ∥ digest (Stage 0.9∥1.1), caption batch dispatch (×6 workers), chunk analysis (×8 workers). Chunk generation is sequential for NashSU dedup parity.
-- **Page merge** (NashSU v0.4.25): three-layer merge on re-ingest — frontmatter array union + LLM body merge + locked fields
+- **Sequential Stage 1.5 + 2.1** (NashSU parity): chunk analysis (Stage 1.5) and per-chunk generation (Stage 2.1) run sequentially with accumulating context — each chunk builds on all previous chunks' discoveries. Per-chunk checkpoint for crash recovery.
+- **Parallel I/O**: caption ∥ digest (Stage 0.6∥1.1), caption batch dispatch (×6 workers). Pure I/O-bound parallelism only — no quality impact.
+- **Heading path tracking** (NashSU parity): each chunk analysis prompt includes full heading hierarchy (`Chapter 3 > Section 3.2 > Subsec 3.2.1`)
+- **Overlap context** (NashSU parity): paragraph/sentence-aware overlap text passed between chunks for continuity
+- **Page merge** (NashSU v0.4.25): three-layer merge on re-ingest — frontmatter array union + LLM body merge + locked fields. Sources field uses union-merge (preserves multi-source provenance).
+- **CJK slug rewriting** (NashSU parity): auto-detects Chinese/Japanese/Korean titles and generates readable CJK slugs
+- **PPTX/DOCX support** (NashSU parity): text extraction + image extraction from Office formats via stdlib zipfile
+- **Schema routing validation** (NashSU parity): validates frontmatter `type:` against file path directory, auto-corrects mismatches
+- **Aggregate repair safety** (NashSU parity): proportional size caps for index + overview, FILE block output filtering
 - **Wikilink enrichment**: auto-adds `[[wikilinks]]` after page write (NashSU enrich-wikilinks parity)
 - **Source lifecycle**: `--delete` removes source page + cache + orphan concepts/entities + media
 - **Lint auto-fix**: `wiki-lint.sh --fix` repairs missing-domain and missing-frontmatter
 - **Queue watch**: `--watch --drain` daemon mode consuming `ingest-queue.json`
 - **Auto-validation**: `validate_ingest.py` runs at end of every ingest; per-stage `_verify_stage_N()` gates
-- **NashSU parity**: aligned with `ingest.ts` v0.4.25 (page merge, wikilink enrichment, source lifecycle, sequential chunk gen)
+- **NashSU parity**: aligned with `ingest.ts` v0.4.25 (sequential chunk gen, heading path, overlap suffix, CJK slug, PPTX/DOCX, sources union merge, schema routing, aggregate repair caps, page merge, wikilink enrichment, source lifecycle)
 - **Local OCR**: minerU VLM via `~/.venv/bin/mineru -b vlm-auto-engine` (free, serial, `MINERU_MAX_CONCURRENT=1`)
 
 ## Scripts
