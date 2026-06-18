@@ -1972,6 +1972,36 @@ def _run_post_ingest_lint(config: Config) -> None:
         print(f"[lint] Lint failed ({e}) — continuing")
 
 
+def _run_post_batch_graph(config: Config) -> None:
+    """Run build_knowledge_graph.py once after batch ingest completes.
+
+    Controlled by AUTO_BUILD_GRAPH=1 (off by default). The knowledge graph
+    needs the full wiki state, so it's called once at the end of a batch
+    run, not per-book. This mirrors NashSU's desktop app behavior where
+    the graph auto-updates when you open the app.
+    """
+    if os.environ.get("AUTO_BUILD_GRAPH") != "1":
+        return
+    graph_script = Path(__file__).parent / "build_knowledge_graph.py"
+    if not graph_script.exists():
+        print("[graph] build_knowledge_graph.py not found — skipping")
+        return
+    import subprocess
+    print("[graph] Building knowledge graph (post-batch)...")
+    try:
+        result = subprocess.run(
+            [sys.executable, str(graph_script)],
+            cwd=config.wiki_root, capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n")[-5:]:
+                print(f"[graph] {line.strip()}")
+        else:
+            print(f"[graph] Failed ({result.returncode}): {result.stderr[:200]}")
+    except Exception as e:
+        print(f"[graph] Failed ({e}) — continuing")
+
+
 
 def stage_3_5_inject_images(config: Config, raw_file: Path, source_path: Path,
                               method: str = "") -> dict:
@@ -5945,6 +5975,11 @@ def batch_ingest(
     print(f"\n{'='*60}")
     print(f"Batch complete: {ok}/{len(results)} books processed successfully")
     print(f"{'='*60}")
+
+    # Post-batch: run knowledge graph (once, not per-book)
+    if ok > 0:
+        _run_post_batch_graph(config)
+
     return results
 
 
