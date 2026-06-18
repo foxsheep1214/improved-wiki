@@ -88,6 +88,7 @@ from _stage_0_extract import (
 from _stage_1_analyze import (
     chunk_text, stage_1_global_digest, stage_1_5_chunk_analysis,
     build_global_digest_prompt, build_chunk_analysis_prompt,
+    _chunk_concurrency,
 )
 from _stage_2_generate import (
     stage_2_5_review_suggestions,
@@ -646,119 +647,11 @@ def _infer_stage(prompt: str) -> str:
     return "LLM-task"
 
 
-# ---------- Chunking ----------
 
 
-# ---------- Stage 1: Global Digest ----------
-
-
-# ---------- Stage 1.5: Chunk Analysis ----------
-
-
-# Rate-limit tracker shared across chunk workers (thread-safe via lock)
-_RLOCK = __import__('threading').Lock()
-_RATE_LIMIT_HIT_AT: float = 0.0
-
-
-# ---------- Stage 2: Per-Chunk Generation ----------
-
-
-# ---------- Stage 2: Synthesis (legacy, for small books) ----------
-
-
-# Coverage targets by importance level (NashSU-aligned: not every concept needs a page).
-# "mentioned" concepts are typically covered inline in other pages.
-COVERAGE_TARGETS = {
-    "core": 0.80,        # Core concepts should have dedicated pages
-    "supporting": 0.50,  # Supporting concepts should mostly be covered
-    "mentioned": 0.20,   # Mentioned can be inline — low bar to catch egregious gaps
-}
-
-
-# ---------- Stage 2.3: Query generation ----------
-
-
-# ---------- Stage 2.5: Comparison generation ----------
-
-
-# ---------- File writing ----------
-
-# NashSU parity: isSafeIngestPath (ingest.ts L290-306)
-_WINDOWS_RESERVED = {"con", "prn", "aux", "nul"}
-for _i in range(1, 10):
-    _WINDOWS_RESERVED.add(f"com{_i}")
-    _WINDOWS_RESERVED.add(f"lpt{_i}")
-
-_ILLEGAL_CHARS_RE = re.compile(r'[<>:"|?*\x00-\x1f]')
-
-
-# ---------- Existing wiki context ----------
-
-# ---------- Domain detection & slug disambiguation ----------
-
-# Domain detection keywords: title/subtitle → domain slug
-_DOMAIN_KEYWORDS: dict[str, str] = {
-    "thermal": "thermal-management",
-    "cooling": "thermal-management",
-    "heat transfer": "thermal-management",
-    "heat sink": "thermal-management",
-    "power electronic": "power-electronics",
-    "switching converter": "power-electronics",
-    "converter": "power-electronics",
-    "dc-dc": "power-electronics",
-    "electromagnetic compatibility": "emc",
-    "emc": "emc",
-    "emi": "emc",
-    "signal integrity": "signal-integrity",
-    "high-speed digital": "signal-integrity",
-    "high speed digital": "signal-integrity",
-    "transmission line": "signal-integrity",
-    "crosstalk": "signal-integrity",
-    "art of electronics": "circuit-fundamentals",
-    "electronic": "circuit-fundamentals",
-    "digital circuit": "digital-circuits",
-    "digital logic": "digital-circuits",
-    "pcb design": "pcb-design",
-    "printed circuit": "pcb-design",
-    "rf ": "rf-microwave",
-    "microwave": "rf-microwave",
-    "antenna": "rf-microwave",
-    "radar": "radar-systems",
-    "phased array": "radar-systems",
-    "operational amplifier": "analog-circuits",
-    "op-amp": "analog-circuits",
-    "analog circuit": "analog-circuits",
-    "filter design": "analog-circuits",
-    "mosfet": "semiconductor-devices",
-    "igbt": "semiconductor-devices",
-    "gan": "semiconductor-devices",
-    "sic": "semiconductor-devices",
-    "semiconductor": "semiconductor-devices",
-    "reliability": "reliability-engineering",
-    "failure analysis": "reliability-engineering",
-    "circuit": "circuit-fundamentals",
-    "electric circuit": "circuit-fundamentals",
-    "ohm": "circuit-fundamentals",
-    "kirchhoff": "circuit-fundamentals",
-}
-
-# Template type → domain mapping (datasheets are almost always semiconductor-devices)
-_TEMPLATE_DOMAIN: dict[str, str] = {
-    "digest-datasheet.md": "semiconductor-devices",
-    "digest-applicationnote.md": "general",    # application notes span multiple domains
-    "digest-designexample.md": "general",
-    "digest-standard.md": "general",
-    "digest-news.md": "general",
-}
-
-
-# ---------- Checkpoint / Resume ----------
-
-
-# ---------- Project-level lock (NashSU parity: withProjectLock) ----------
-
-
-# ---------- Main pipeline ----------
+# ═════════════════════════════════════════════════════════
+# Main pipeline — ingest_one, batch, queue, CLI
+# ═════════════════════════════════════════════════════════
 
 def ingest_one(
     raw_file: Path,
@@ -1407,7 +1300,8 @@ def _do_prepare(
             # Passing [] for chunks: the chunk-text-aware path is not yet wired;
             # chunk_analyses carry all structured data the LLM needs per chunk.
             analysis, raw_response, file_blocks = stage_2_per_chunk_generation(
-                chunk_analyses, [], global_digest, raw_file, config, template_content, verbose=verbose,
+                chunk_analyses, [], global_digest, raw_file, config, template_content,
+                max_chunk_concurrent=_chunk_concurrency(), verbose=verbose,
             )
         else:
             analysis, raw_response, file_blocks = stage_2_synthesis(

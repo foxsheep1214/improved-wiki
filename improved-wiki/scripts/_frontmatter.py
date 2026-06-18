@@ -17,6 +17,7 @@ Usage:
     # Write
     new_text = write_frontmatter({"type": "concept", "title": "Foo", ...}, body)
 """
+from __future__ import annotations
 
 import re
 import time

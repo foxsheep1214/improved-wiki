@@ -1220,7 +1220,7 @@ def stage_2_3_query_generation(
               f"{len(key_claims)} claims, prompt {len(prompt):,} chars...")
 
     try:
-        response, stop_reason = _call_anthropic_api(prompt, config, query_tokens)
+        response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=query_tokens)
     except Exception as e:
         print(f"[stage_2_3] LLM call failed: {e}")
         return [], ""
@@ -1443,7 +1443,7 @@ def stage_2_5_comparison_generation(
         concept_titles, entity_titles, existing_slugs, file_path, config, current_domain
     )
     try:
-        response_25a, stop_25a = _call_anthropic_api(prompt_25a, config, comp_tokens)
+        response_25a, stop_25a = call_anthropic_protocol(prompt_25a, config, max_tokens=comp_tokens)
     except Exception as e:
         print(f"[stage_2_5_comp] 2.5A LLM call failed: {e}")
         response_25a = ""
@@ -1463,7 +1463,7 @@ def stage_2_5_comparison_generation(
             concept_titles, file_path, config, current_domain
         )
         try:
-            response_25b, stop_25b = _call_anthropic_api(prompt_25b, config, comp_tokens)
+            response_25b, stop_25b = call_anthropic_protocol(prompt_25b, config, max_tokens=comp_tokens)
         except Exception as e:
             print(f"[stage_2_5_comp] 2.5B LLM call failed: {e}")
             response_25b = ""

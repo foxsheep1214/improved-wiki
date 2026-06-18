@@ -12,9 +12,10 @@ Usage:
     enriched = enrich_wikilinks(content, existing_slugs, config)
 """
 
-import json, re, urllib.request, urllib.error, time
+import json, re
 from pathlib import Path
 from _frontmatter import parse_frontmatter, write_frontmatter
+from _llm_api import call_anthropic_protocol
 
 
 def enrich_wikilinks(
@@ -93,23 +94,3 @@ with an EXACT slug match below. Output ONLY a JSON array:
     if changed:
         return write_frontmatter(fm, body)
     return content
-
-
-def call_anthropic_protocol(prompt: str, config, max_tokens: int = 2048) -> tuple[str, str]:
-    """Thin LLM call wrapper matching ingest.py's convention."""
-    url = f"{config.llm_base_url.rstrip('/')}/anthropic/v1/messages"
-    body = json.dumps({
-        "model": config.llm_model,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST", headers={
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {config.llm_api_key}",
-        "anthropic-version": "2023-06-01",
-    })
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
-    text = "".join(c["text"] for c in data.get("content", []) if c.get("type") == "text")
-    return text.strip(), data.get("stop_reason", "end_turn")
