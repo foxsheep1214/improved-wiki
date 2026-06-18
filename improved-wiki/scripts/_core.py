@@ -1,0 +1,639 @@
+"""Shared core for improved-wiki ingest pipeline — verbatim copies from ingest.py.
+
+These are the ACTUAL running implementations, copied line-for-line from
+ingest.py on 2026-06-18. They are kept in sync manually until ingest.py's
+local duplicates are fully removed.
+
+All stage modules import from here. ingest.py imports from here too (aliased
+with _ prefix), but its local definitions currently shadow the imports —
+behavior is unchanged. Once every caller has been verified, the local
+definitions in ingest.py will be deleted.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import sys
+import threading
+import time
+from collections import defaultdict
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any
+
+# Runtime dir detection — delegated to _paths.py (shared with all scripts)
+_script_dir = Path(__file__).resolve().parent
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
+from _paths import detect_runtime_dir  # noqa: E402
+
+
+# ── Progress / UI helpers ──
+
+_current_file_local = threading.local()
+_stage_start_times: dict[str, float] = {}
+
+
+def set_current_file(name: str) -> None:
+    _current_file_local.value = name
+
+
+def get_current_file() -> str:
+    return getattr(_current_file_local, "value", "")
+
+
+def file_tag() -> str:
+    f = get_current_file()
+    if not f:
+        return ""
+    if len(f) > 50:
+        return f"[{f[:40]}...{f[-6:]}] "
+    return f"[{f}] "
+
+
+def stage_begin(name: str) -> None:
+    _stage_start_times[name] = time.time()
+    tag = file_tag()
+    print(f"\n{'─'*40}\n{tag}[{name}] Starting...\n{'─'*40}", flush=True)
+
+
+def stage_end(name: str) -> None:
+    t0 = _stage_start_times.pop(name, None)
+    elapsed = time.time() - t0 if t0 else 0.0
+    tag = file_tag()
+    if elapsed >= 60:
+        print(f"{tag}[{name}] Done ({elapsed/60:.1f}m)", flush=True)
+    else:
+        print(f"{tag}[{name}] Done ({elapsed:.0f}s)", flush=True)
+
+
+def heartbeat(msg: str = "") -> None:
+    ts = time.strftime("%H:%M:%S")
+    tag = file_tag()
+    suffix = f" — {msg}" if msg else ""
+    print(f"  {ts}  {tag}… {suffix}", flush=True)
+
+
+def llm_call_progress(label: str, attempt: int = 1, retries: int = 0) -> None:
+    tag = file_tag()
+    retry_hint = f" (retry {attempt}/{retries+1})" if retries else ""
+    print(f"  {tag}→ {label}{retry_hint}...", end=" ", flush=True)
+
+
+def llm_call_done(elapsed: float, chars: int | None = None) -> None:
+    size_hint = f", {chars:,} chars" if chars else ""
+    print(f"OK ({elapsed:.0f}s{size_hint})", flush=True)
+
+
+# Rate-limit tracking (shared across workers)
+_RATE_LIMIT_HIT_AT = 0.0
+_RLOCK = threading.Lock()
+
+
+def record_rate_limit() -> None:
+    global _RATE_LIMIT_HIT_AT
+    with _RLOCK:
+        _RATE_LIMIT_HIT_AT = time.time()
+
+
+def rate_limit_cooldown_remaining() -> float:
+    with _RLOCK:
+        elapsed = time.time() - _RATE_LIMIT_HIT_AT
+        return max(0.0, 60.0 - elapsed)
+
+
+class ConversationPending(Exception):
+    """Raised in --conversation mode when a prompt is written and awaits agent."""
+
+
+# ── Configuration ──
+
+def load_provider_config(name: str | None = None) -> dict:
+    config_path = Path.home() / ".agents" / "config.json"
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            if name is None:
+                default = cfg.get("default", "minimax")
+                name = os.environ.get("LLM_PROVIDER", default)
+            provider = cfg.get("providers", {}).get(name)
+            if provider:
+                models = provider.get("models", {})
+                return {
+                    "api_key": os.environ.get("LLM_API_KEY") or provider.get("api_key", ""),
+                    "base_url": os.environ.get("LLM_BASE_URL") or provider.get("base_url", "https://api.minimaxi.com"),
+                    "model": os.environ.get("LLM_MODEL") or models.get("text", provider.get("model", "MiniMax-M3")),
+                    "protocol": provider.get("protocol", "anthropic"),
+                    "provider": name,
+                }
+        except Exception:
+            pass
+    return {
+        "api_key": os.environ.get("LLM_API_KEY", "") or os.environ.get("MINIMAX_CN_API_KEY", ""),
+        "base_url": os.environ.get("LLM_BASE_URL", "https://api.minimaxi.com"),
+        "model": os.environ.get("LLM_MODEL", "MiniMax-M3"),
+        "protocol": "anthropic",
+        "provider": "env",
+    }
+
+
+def load_caption_provider() -> dict:
+    config_path = Path.home() / ".agents" / "config.json"
+    if config_path.exists():
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            caption_name = cfg.get("caption_provider") or cfg.get("default", "minimax")
+            provider = cfg.get("providers", {}).get(caption_name)
+            if provider:
+                models = provider.get("models", {})
+                return {
+                    "api_key": provider.get("api_key", ""),
+                    "base_url": provider.get("base_url", "https://api.minimaxi.com"),
+                    "model": models.get("caption") or models.get("vision") or provider.get("model", "MiniMax-M3"),
+                    "protocol": provider.get("protocol", "anthropic"),
+                    "provider": caption_name,
+                }
+        except Exception:
+            pass
+    return {
+        "api_key": os.environ.get("CAPTION_API_KEY") or os.environ.get("LLM_API_KEY", ""),
+        "base_url": "https://api.minimaxi.com",
+        "model": "MiniMax-M3",
+        "protocol": "anthropic",
+        "provider": "minimax",
+    }
+
+
+@dataclass
+class Config:
+    wiki_root: Path
+    raw_root: Path
+    wiki_dir: Path
+    runtime_dir: Path
+    cache_path: Path
+    progress_dir: Path
+    extract_tmp_dir: Path
+    llm_base_url: str
+    llm_model: str
+    llm_api_key: str
+    llm_protocol: str
+    caption_api_key: str
+    caption_base_url: str
+    caption_model: str
+    chunk_size: int
+    chunk_overlap: int
+    source_budget: int
+    target_chars: int
+    max_tokens: int
+    conversation_mode: bool = False
+    conversation_prefix: str = ""
+
+    @classmethod
+    def from_env(cls) -> "Config":
+        wiki_root = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd())).expanduser()
+        provider = load_provider_config()
+        caption = load_caption_provider()
+        runtime_dir = detect_runtime_dir(wiki_root)
+        return cls(
+            wiki_root=wiki_root,
+            raw_root=wiki_root / "raw",
+            wiki_dir=wiki_root / "wiki",
+            runtime_dir=runtime_dir,
+            cache_path=runtime_dir / "ingest-cache.json",
+            progress_dir=runtime_dir / "ingest-progress",
+            extract_tmp_dir=runtime_dir / "extract-tmp",
+            llm_base_url=provider["base_url"],
+            llm_model=provider["model"],
+            llm_api_key=provider["api_key"],
+            llm_protocol=provider.get("protocol", "anthropic"),
+            caption_api_key=caption["api_key"],
+            caption_base_url=caption["base_url"],
+            caption_model=caption["model"],
+            chunk_size=300_000,
+            chunk_overlap=3_000,
+            source_budget=200_000,
+            target_chars=60_000,
+            max_tokens=16384,
+        )
+
+    def compute_max_tokens(self, base_tokens: int = 16384) -> int:
+        env_override = os.environ.get("LLM_MAX_TOKENS")
+        if env_override:
+            return int(env_override)
+        model = self.llm_model.lower()
+        if "512k" in model or "1m" in model:
+            return min(base_tokens * 2, 32768)
+        if "256k" in model or "200k" in model:
+            return base_tokens
+        if "128k" in model or "100k" in model:
+            return max(base_tokens // 2, 8192)
+        return base_tokens
+
+
+# ── File-type detection ──
+
+FOLDER_TO_TEMPLATE = {
+    "book": "digest-book",
+    "paper": "digest-paper",
+    "datasheet": "digest-datasheet",
+    "applicationnote": "digest-applicationnote",
+    "designexample": "digest-designexample",
+    "presentation": "digest-presentation",
+    "standard": "digest-standard",
+    "news": "digest-news",
+}
+
+
+def str_distance(a: str, b: str) -> int:
+    if len(a) < len(b):
+        a, b = b, a
+    if len(b) == 0:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            curr.append(min(
+                prev[j + 1] + 1, curr[j] + 1,
+                prev[j] + (0 if ca == cb else 1),
+            ))
+        prev = curr
+    return prev[-1]
+
+
+def detect_template_type(raw_file: Path, raw_root: Path, override: str | None) -> str:
+    if override:
+        return override
+    try:
+        rel = raw_file.relative_to(raw_root)
+    except ValueError:
+        return "digest-book"
+    parts = rel.parts
+    if len(parts) == 1:
+        return "digest-book"
+    folder = parts[0]
+    if folder == "sources":
+        if len(parts) >= 3:
+            type_part = parts[1]
+            if type_part in FOLDER_TO_TEMPLATE:
+                return FOLDER_TO_TEMPLATE[type_part]
+        return "digest-book"
+    if folder in FOLDER_TO_TEMPLATE:
+        return FOLDER_TO_TEMPLATE[folder]
+    available = sorted(FOLDER_TO_TEMPLATE.keys())
+    match = min(available, key=lambda a: str_distance(folder, a))
+    print(f"[detect] Unknown raw folder '{folder}' — treating as '{match}' "
+          f"(pass --type to override)", flush=True)
+    return FOLDER_TO_TEMPLATE[match]
+
+
+def load_template(template_name: str) -> str:
+    skill_dir = Path(__file__).resolve().parent.parent
+    tmpl_path = skill_dir / "templates" / f"{template_name}.md"
+    if tmpl_path.exists():
+        return tmpl_path.read_text(encoding="utf-8")
+    return ""
+
+
+# ── Hashing & cache ──
+
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_cache(config: Config) -> dict:
+    if config.cache_path.exists():
+        try:
+            return json.loads(config.cache_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {"version": "2", "entries": {}}
+
+
+def save_cache(config: Config, cache: dict) -> None:
+    config.cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config.cache_path.with_suffix(config.cache_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(config.cache_path)
+
+
+# ── Checkpoint / Resume ──
+
+def progress_path(config: Config, source_hash: str) -> Path:
+    config.progress_dir.mkdir(parents=True, exist_ok=True)
+    return config.progress_dir / f"{source_hash[:16]}.json"
+
+
+def load_progress(config: Config, source_hash: str) -> dict | None:
+    pp = progress_path(config, source_hash)
+    if pp.exists():
+        return json.loads(pp.read_text(encoding="utf-8"))
+    return None
+
+
+def save_progress(config: Config, source_hash: str, data: dict) -> None:
+    pp = progress_path(config, source_hash)
+    tmp = pp.with_suffix(".tmp")
+    data["_updated_at"] = int(time.time() * 1000)
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(pp)
+
+
+def clear_progress(config: Config, source_hash: str) -> None:
+    pp = progress_path(config, source_hash)
+    if pp.exists():
+        pp.unlink()
+
+
+# ── Project-level lock ──
+
+class ProjectLock:
+    """PID-file based mutual exclusion for a wiki project."""
+
+    def __init__(self, config: Config, owner_id: str = ""):
+        self._lock_path = config.runtime_dir / "ingest.lock"
+        self._owner = owner_id or str(os.getpid())
+
+    def _pid_alive(self, pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+
+    def __enter__(self):
+        if self._lock_path.exists():
+            try:
+                content = self._lock_path.read_text().strip()
+                parts = content.split()
+                pid_str = ""
+                for p in parts:
+                    if p.startswith("pid="):
+                        pid_str = p[4:]
+                if pid_str:
+                    pid = int(pid_str)
+                    if self._pid_alive(pid):
+                        raise RuntimeError(
+                            f"Another ingest is running (PID {pid}). "
+                            f"Wait for it to finish or remove {self._lock_path}"
+                        )
+            except RuntimeError:
+                raise
+            except Exception:
+                pass
+            self._lock_path.unlink(missing_ok=True)
+        self._lock_path.write_text(f"owner={self._owner} pid={os.getpid()}")
+        return self
+
+    def __exit__(self, *args):
+        if self._lock_path.exists():
+            self._lock_path.unlink(missing_ok=True)
+
+    # Backward-compatible acquire/release for non-context-manager usage
+    def acquire(self, timeout: float = 0) -> bool:
+        """Acquire the lock. Returns True on success, False if already held.
+        timeout: seconds to wait for a stale lock (ignored — stale locks auto-release).
+        """
+        try:
+            self.__enter__()
+            return True
+        except RuntimeError:
+            return False
+
+    def release(self) -> None:
+        """Release the lock."""
+        self.__exit__(None, None, None)
+
+
+# ── Domain detection ──
+
+_DOMAIN_KEYWORDS: dict[str, str] = {
+    "rf": "rf", "radio": "rf", "antenna": "rf", "microwave": "rf",
+    "radar": "rf", "waveguide": "rf",
+    "power": "power", "converter": "power", "inverter": "power",
+    "rectifier": "power", "switching": "power", "buck": "power",
+    "boost": "power", "ldo": "power",
+    "analog": "analog", "op-amp": "analog", "operational amplifier": "analog",
+    "adc": "analog", "dac": "analog", "pll": "analog",
+    "digital": "digital", "fpga": "digital", "verilog": "digital",
+    "vhdl": "digital", "cmos digital": "digital", "microcontroller": "digital",
+    "signal-integrity": "signal-integrity", "signal integrity": "signal-integrity",
+    "si ": "signal-integrity", "crosstalk": "signal-integrity",
+    "eye diagram": "signal-integrity", "jitter": "signal-integrity",
+    "emc": "emc", "emi": "emc", "electromagnetic compatibility": "emc",
+    "shielding": "emc",
+    "thermal": "thermal", "heat": "thermal", "cooling": "thermal",
+    "heatsink": "thermal", "temperature": "thermal",
+    "battery": "battery", "lithium": "battery", "soc": "battery",
+    "state of charge": "battery", "bms": "battery",
+    "semiconductor": "semiconductor", "mosfet": "semiconductor",
+    "igbt": "semiconductor", "gan": "semiconductor", "sic": "semiconductor",
+    "wafer": "semiconductor",
+    "embedded": "embedded", "arm": "embedded", "cortex": "embedded",
+    "rtos": "embedded", "firmware": "embedded",
+}
+
+_TEMPLATE_DOMAIN: dict[str, str] = {
+    "digest-datasheet": "semiconductor",
+    "digest-applicationnote": "semiconductor",
+}
+
+
+def detect_domain(file_path: Path, template: str,
+                  global_digest: dict | None = None) -> str:
+    title_lower = file_path.stem.lower()
+    template_name = Path(template).name if template else ""
+    if template_name in _TEMPLATE_DOMAIN:
+        return _TEMPLATE_DOMAIN[template_name]
+    for keyword, domain in _DOMAIN_KEYWORDS.items():
+        if keyword in title_lower:
+            return domain
+    if global_digest:
+        outline = global_digest.get("outline", [])
+        outline_str = " ".join(
+            (c.get("title", "") + " " + str(c.get("key_topics", ""))
+             if isinstance(c, dict) else str(c))
+            for c in outline
+        ).lower()
+        for keyword, domain in _DOMAIN_KEYWORDS.items():
+            if keyword in outline_str:
+                return domain
+    return "general"
+
+
+def list_existing_slugs(config: Config) -> list[str]:
+    if not config.wiki_dir.exists():
+        return []
+    return [f.stem for f in config.wiki_dir.rglob("*.md")]
+
+
+# ── Parse helpers (moved from ingest.py) ──
+
+def parse_yaml_block(response: str) -> dict:
+    """Extract the first YAML block from the LLM response."""
+    m = re.search(r"```yaml\s*\n(.*?)\n```", response, re.DOTALL)
+    yaml_text = m.group(1) if m else response
+    try:
+        import yaml
+        return yaml.safe_load(yaml_text) or {}
+    except ImportError:
+        return parse_simple_yaml(yaml_text)
+    except Exception:
+        print(f"[parse] yaml.safe_load failed — falling back to simple parser")
+        return parse_simple_yaml(yaml_text)
+
+
+def parse_simple_yaml(text: str) -> dict:
+    result: dict[str, Any] = {}
+    current_list_key: str | None = None
+    for line in text.split("\n"):
+        if not line.strip() or line.strip().startswith("#"):
+            continue
+        if line.startswith("  - ") and current_list_key:
+            # Use unwrapped value since we always set current_list_key
+            result[current_list_key].append(line[4:].strip())
+            continue
+        m = re.match(r"^(\w[\w_]*):\s*(.*)", line)
+        if m:
+            key, value = m.group(1), m.group(2).strip()
+            if value == "":
+                result[key] = []
+                current_list_key = key
+            else:
+                result[key] = value
+                current_list_key = None
+    return result
+
+
+def parse_file_blocks(response: str) -> list[tuple[str, str]]:
+    """Extract wiki page blocks from the LLM response.
+
+    Supports two formats:
+    1. NashSU native:  ---FILE:wiki/<path>--- ... ---END FILE---
+    2. Legacy:         ### File N: <path>.md ...
+    """
+    # NashSU parity: normalize CRLF before parsing (ingest.ts L361)
+    response = response.replace("\r\n", "\n")
+    blocks: list[tuple[str, str]] = []
+
+    # Format 1: NashSU-style ---FILE:wiki/<path>--- ... ---END FILE---
+    # NashSU parity: fence-aware parsing (ingest.ts L377-400) — track CommonMark
+    # code fences so ---END FILE--- inside a code block doesn't close the outer block.
+    # Accept both ---FILE:wiki/concepts/X.md--- (correct) and
+    # ---FILE:concepts/X.md--- (LLM forgot wiki/ prefix; auto-correct strips it either way)
+    FILE_HEADER_RE = re.compile(r'^---FILE:\s*(wiki/)?(.+?)\s*---\s*$')
+    END_FILE_RE = re.compile(r'^---END FILE---\s*$')
+    FENCE_RE = re.compile(r'^(```|~~~)')
+
+    # Known wiki subdirectories (must match WIKI_TYPE_DIRS)
+    _KNOWN_SUBDIRS = (
+        "sources", "concepts", "entities", "queries", "comparisons",
+        "synthesis", "findings", "thesis",
+    )
+
+    lines = response.split("\n")
+    fence_stack: list[str] = []  # track open fence markers
+    current_path: str | None = None
+    current_lines: list[str] = []
+
+    for line in lines:
+        # Track CommonMark code fences (still add the line to content)
+        is_fence_line = False
+        fm = FENCE_RE.match(line)
+        if fm:
+            marker = fm.group(1)
+            if not fence_stack:
+                fence_stack.append(marker)
+            elif fence_stack[-1] == marker:
+                fence_stack.pop()
+            is_fence_line = True
+
+        # Only match FILE/END FILE headers outside fences
+        if not fence_stack and not is_fence_line:
+            end_match = END_FILE_RE.match(line)
+            if end_match and current_path is not None:
+                content = "\n".join(current_lines).rstrip() + "\n"
+                blocks.append((current_path, content))
+                current_path = None
+                current_lines = []
+                continue
+
+            file_match = FILE_HEADER_RE.match(line)
+            if file_match:
+                if current_path is not None:
+                    # Unclosed previous block — flush it
+                    content = "\n".join(current_lines).rstrip() + "\n"
+                    blocks.append((current_path, content))
+                # group(1) = optional "wiki/" prefix, group(2) = actual path
+                path = file_match.group(2).strip()
+                if not path.endswith(".md"):
+                    current_path = None
+                    current_lines = []
+                    continue
+                # Normalize: if path has more than 2 segments (subdir/.../file.md),
+                # merge extra segments into filename by replacing / with -.
+                # Exception: sources/ keeps its category subdirectory (e.g. sources/book/x.md)
+                parts = path.split("/")
+                if len(parts) > 2:
+                    subdir = parts[0]
+                    if subdir == "sources":
+                        # Preserve: sources/book/slug.md → keep as-is
+                        pass
+                    else:
+                        merged_slug = "-".join(parts[1:])
+                        corrected = f"{subdir}/{merged_slug}"
+                        print(f"  [parse] merged / in slug: {path} → {corrected}")
+                        path = corrected
+                # Auto-correct LLM hyphen-for-slash error (subdir-slug → subdir/slug)
+                for subdir in _KNOWN_SUBDIRS:
+                    prefix = f"{subdir}-"
+                    if path.startswith(prefix):
+                        corrected = f"{subdir}/{path[len(prefix):]}"
+                        print(f"  [parse] corrected path: {path} → {corrected}")
+                        path = corrected
+                        break
+                # Validate path safety (NashSU parity)
+                if not is_safe_ingest_path(path):
+                    print(f"  [parse] unsafe path rejected: {path}")
+                    current_path = None
+                    current_lines = []
+                    continue
+                current_path = path
+                current_lines = []
+                continue
+
+        # Collect content lines for current block
+        if current_path is not None:
+            current_lines.append(line)
+
+    # Flush last unclosed block (tolerant of missing END FILE)
+    if current_path is not None and current_lines:
+        content = "\n".join(current_lines).rstrip() + "\n"
+        blocks.append((current_path, content))
+
+    if blocks:
+        return blocks
+
+    # Format 2: Legacy ### File N: <path>.md
+    HEADER_RE = re.compile(r"^###\s+File\s+(\d+):\s*([^\n]+\.md)\s*$", re.MULTILINE)
+    matches = list(HEADER_RE.finditer(response))
+    for i, m in enumerate(matches):
+        path = m.group(2).strip()
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(response)
+        content = response[start:end].rstrip() + "\n"
+        if path.startswith("wiki/"):
+            path = path[len("wiki/"):]
+        if not path.endswith(".md"):
+            continue
+        if not is_safe_ingest_path(path):
+            print(f"  [parse] unsafe path rejected: {path}")
+            continue
+        blocks.append((path, content))
+    return blocks

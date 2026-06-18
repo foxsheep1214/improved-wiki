@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 # === Per-project constants ===
 PROJECT_ROOT = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
@@ -36,7 +37,7 @@ SOURCES_DIR = WIKI / "sources"
 CACHE_KEY = os.environ.get("CACHE_KEY", "")
 
 
-def find_cache_entry(slug: str) -> dict | None:
+def find_cache_entry(slug: str) -> Optional[dict]:
     """Find the cache entry whose key or filesWritten contains *slug*.
 
     Matching strategy (in order):
@@ -80,7 +81,7 @@ def find_cache_entry(slug: str) -> dict | None:
     return None
 
 
-def find_media_dir(slug: str) -> Path | None:
+def find_media_dir(slug: str) -> Optional[Path]:
     """Find media directory matching slug (recursive search — media/ mirrors raw/)."""
     if not MEDIA_DIR.is_dir():
         return None
