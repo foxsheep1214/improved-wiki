@@ -2708,17 +2708,27 @@ def build_chunk_analysis_prompt(
     file_path: Path,
     config: Config,
     template: str = "",
+    accumulated_digest: str = "",
 ) -> str:
-    """Build the prompt for Stage 1.5: Chunk Analysis."""
-    # Crop global digest to essentials only (outline + metadata), not the full raw dict.
-    digest_compact = {}
-    for key in ("book_meta", "outline", "key_entities", "key_concepts"):
-        if key in global_digest:
-            digest_compact[key] = global_digest[key]
-    digest_str = json.dumps(digest_compact, ensure_ascii=False, indent=2)
-    # cap at 4000 chars to keep chunk prompts lean
-    if len(digest_str) > 4000:
-        digest_str = digest_str[:4000] + "\n... (truncated)"
+    """Build the prompt for Stage 1.5: Chunk Analysis.
+
+    If accumulated_digest is provided (sequential mode), it replaces the
+    static global_digest as the primary context — giving later chunks the
+    benefit of all previous chunks' discoveries (NashSU parity).
+    """
+    if accumulated_digest:
+        # Sequential mode: use accumulated digest from previous chunks
+        digest_str = accumulated_digest
+    else:
+        # Legacy / first-chunk mode: crop global digest to essentials
+        digest_compact = {}
+        for key in ("book_meta", "outline", "key_entities", "key_concepts"):
+            if key in global_digest:
+                digest_compact[key] = global_digest[key]
+        digest_str = json.dumps(digest_compact, ensure_ascii=False, indent=2)
+    # cap to keep prompts lean
+    if len(digest_str) > 6000:
+        digest_str = digest_str[:6000] + "\n... (truncated)"
     existing_slugs = list_existing_slugs(config)
 
     # Inject type-specific template for concept/entity extraction guidance (first 2000 chars)
@@ -2737,7 +2747,12 @@ def build_chunk_analysis_prompt(
 You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
 You are performing **Stage 1.5: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
 {template_section}
-# Context: Global Digest of the book
+# Context: Accumulated Global Digest
+This digest includes discoveries from all PREVIOUS chunks. Use it to avoid
+re-extracting the same concepts and to build on what earlier chunks found.
+If a concept was already defined in a prior chunk, note it as a
+cross-reference rather than re-defining it.
+
 ```yaml
 {digest_str}
 ```
@@ -2755,11 +2770,15 @@ You are performing **Stage 1.5: Chunk Analysis** (chunk {chunk_index + 1}/{chunk
 # Task
 Analyze THIS CHUNK of the book. Extract:
 
-1. All concepts defined or heavily used in this chunk
+1. All concepts defined or heavily used in this chunk (skip if already in the
+   Accumulated Global Digest — just cross-reference instead)
 2. All entities (people, organizations, systems, models, standards) mentioned
 3. Key claims, formulas, data points
 4. Connections to existing wiki pages (if any)
-5. Any contradictions with the global digest (if the chunk contains info that conflicts with or extends the digest)
+5. An **Updated Global Digest** — merge this chunk's key discoveries into the
+   Accumulated Global Digest above, so the next chunk benefits from everything
+   learned so far. Keep it concise but cumulative: add new concepts, entities,
+   and key claims. Do NOT remove anything from the existing digest.
 
 # Output (YAML only, in ```yaml block)
 ```yaml
@@ -2790,10 +2809,11 @@ connections_to_existing_wiki:
   - existing_page: "..."
     relationship: "extends" | "contrasts" | "applies" | "cites"
 
-digest_updates:
-  # Any conflicts with or extensions to the global digest?
-  - type: "correction" | "extension" | "contradiction"
-    detail: "..."
+updated_global_digest: |
+  # Accumulated Global Digest (after chunk {chunk_index + 1}/{chunk_total})
+  # Merge this chunk's key concepts, entities, and claims into the prior digest.
+  # Be cumulative — keep everything from before, add only what's new.
+  ...
 
 # Do NOT propose new wiki pages — that's Stage 2
 ```
@@ -2801,10 +2821,10 @@ digest_updates:
 
 
 def _chunk_concurrency() -> int:
-    """Max concurrent chunk analysis workers. Configurable via env var, default 8.
+    """Max concurrent workers for Stage 2.1 per-chunk generation (default 8).
 
-    MiniMax M3 / DeepSeek can comfortably handle 8-16 concurrent calls.
-    Set LLM_CHUNK_CONCURRENCY=1 to force serial (debug / low-rate-limit keys).
+    Stage 1.5 (chunk analysis) is now sequential (NashSU parity).
+    This env var only affects Stage 2.1 parallel page generation.
     """
     env = os.environ.get("LLM_CHUNK_CONCURRENCY", "")
     if env:
@@ -2853,102 +2873,99 @@ def stage_1_5_chunk_analysis(
     template: str = "",
     verbose: bool = False,
 ) -> list[dict]:
-    """Stage 1.5: Split text into chunks and analyze each one (parallel).
+    """Stage 1.5: Split text into chunks and analyze each one SEQUENTIALLY.
 
-    Parallelism is controlled by:
-      LLM_CHUNK_CONCURRENCY  — max concurrent chunk workers (default 8)
-      LLM_CHUNK_RETRIES      — extra attempts per failed chunk (default 2 → 3 total)
+    NashSU parity: each chunk builds on the accumulated discoveries of all
+    previous chunks via an "Updated Global Digest" that grows with each step.
+    Later chunks get richer context — concepts found in chunk 3 are available
+    to chunk 8, preventing duplicate extraction and improving cross-chapter
+    awareness.
 
-    Rate-limit awareness: if any worker hits a 429 / 503, all workers
-    pause for a 3-second cooldown before resuming.
+    Still supports per-chunk retries (LLM_CHUNK_RETRIES, default 2 → 3 total).
     """
     chunks = chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
     chunk_total = len(chunks)
-    max_workers = min(_chunk_concurrency(), chunk_total)
     max_retries = _chunk_retries()
     print(f"[stage_1_5] Chunk Analysis — {chunk_total} chunks "
           f"(target {config.target_chars:,} chars/chunk, overlap {config.chunk_overlap:,}, "
-          f"workers={max_workers}, retries={max_retries})")
+          f"sequential NashSU mode, retries={max_retries})")
 
-    # Build prompts upfront
-    prompts: list[tuple[int, str, int]] = []  # (idx, prompt, chunk_len)
-    for i, chunk in enumerate(chunks):
-        prompt = build_chunk_analysis_prompt(chunk, i, chunk_total, global_digest, file_path, config, template)
-        prompts.append((i, prompt, len(chunk)))
+    # Build initial digest string from Stage 1.1 global digest
+    digest_compact = {}
+    for key in ("book_meta", "outline", "key_entities", "key_concepts"):
+        if key in global_digest:
+            digest_compact[key] = global_digest[key]
+    accumulated_digest = json.dumps(digest_compact, ensure_ascii=False, indent=2)
 
     t0 = time.time()
-    done_count = [0]  # mutable counter for progress (shared across threads)
+    analyses: list[dict] = []
 
-    def _analyze_one(idx: int, prompt: str, chunk_len: int) -> dict:
-        """Analyze one chunk with retry and rate-limit awareness."""
+    for i, chunk in enumerate(chunks):
+        chunk_len = len(chunk)
+        chunk_ok = False
         last_error = None
-        for attempt in range(1 + max_retries):  # 1 initial + N retries
-            # If another worker hit a rate-limit, wait out the cooldown
-            cooldown = _rate_limit_cooldown_remaining()
-            if cooldown > 0:
-                time.sleep(cooldown)
+
+        for attempt in range(1 + max_retries):
+            # Build prompt with current accumulated digest
+            prompt = build_chunk_analysis_prompt(
+                chunk, i, chunk_total, global_digest, file_path, config,
+                template=template, accumulated_digest=accumulated_digest,
+            )
 
             try:
                 t_chunk = time.time()
                 response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192)
                 analysis = parse_yaml_block(response)
-                analysis["_chunk_index"] = idx + 1
+                analysis["_chunk_index"] = i + 1
                 analysis["_chunk_size"] = chunk_len
                 analysis["_attempts"] = attempt + 1
                 dt = time.time() - t_chunk
                 n_c = len(analysis.get("concepts_found") or [])
                 n_e = len(analysis.get("entities_found") or [])
-                with _RLOCK:
-                    done_count[0] += 1
                 elapsed = time.time() - t0
-                eta = (elapsed / done_count[0]) * (chunk_total - done_count[0]) if done_count[0] > 0 else 0
-                pct = done_count[0] * 100 // chunk_total
+                done_count = i + 1
+                eta = (elapsed / done_count) * (chunk_total - done_count) if done_count > 0 else 0
+                pct = done_count * 100 // chunk_total
                 tag = f" (retry #{attempt})" if attempt > 0 else ""
-                print(f"  [stage_1_5] chunk {idx+1}/{chunk_total} OK{tag} — "
+                print(f"  [stage_1_5] chunk {i+1}/{chunk_total} OK{tag} — "
                       f"{n_c} concepts, {n_e} entities, {dt:.0f}s "
                       f"[{pct}% ETA {eta:.0f}s]")
-                return analysis
+
+                # Extract updated global digest from this chunk's analysis
+                updated_digest = analysis.get("updated_global_digest", "")
+                if isinstance(updated_digest, str) and len(updated_digest.strip()) > 50:
+                    accumulated_digest = updated_digest.strip()
+                elif isinstance(updated_digest, dict):
+                    # Some LLMs return nested dict instead of string
+                    accumulated_digest = json.dumps(updated_digest, ensure_ascii=False, indent=2)
+                # else: keep the previous accumulated_digest unchanged
+
+                analyses.append(analysis)
+                chunk_ok = True
+                break
+
             except RuntimeError as e:
                 err_str = str(e)
                 last_error = RuntimeError(f"{type(e).__name__}: {err_str[:200]}")
-                # Rate-limit: back off globally
                 if "429" in err_str or "503" in err_str or "rate" in err_str.lower():
                     _record_rate_limit()
                 if attempt < max_retries:
                     wait = (2 ** attempt) + (time.time() % 2)
-                    print(f"  [stage_1_5] chunk {idx+1}/{chunk_total} attempt {attempt+1} failed "
+                    print(f"  [stage_1_5] chunk {i+1}/{chunk_total} attempt {attempt+1} failed "
                           f"(HTTP {err_str[:80]}) — retrying in {wait:.1f}s...")
                     time.sleep(wait)
                     continue
                 # Last attempt failed
-                with _RLOCK:
-                    done_count[0] += 1
-                print(f"  [stage_1_5] chunk {idx+1}/{chunk_total} FAILED after "
+                print(f"  [stage_1_5] chunk {i+1}/{chunk_total} FAILED after "
                       f"{1 + max_retries} attempts: {err_str[:120]}")
-                return {"chunk_index": idx + 1, "error": str(last_error),
-                        "chunk_text_length": chunk_len, "_attempts": 1 + max_retries}
+                analyses.append({
+                    "chunk_index": i + 1, "error": str(last_error),
+                    "chunk_text_length": chunk_len, "_attempts": 1 + max_retries,
+                })
 
-        # Should not reach here, but defensive
-        with _RLOCK:
-            done_count[0] += 1
-        return {"chunk_index": idx + 1, "error": str(last_error),
-                "chunk_text_length": chunk_len, "_attempts": 1 + max_retries}
-
-    # Run chunks in parallel
-    results: dict[int, dict] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_analyze_one, i, p, cl): i for i, p, cl in prompts}
-        for future in as_completed(futures):
-            idx = futures[future]
-            try:
-                results[idx] = future.result()
-            except Exception as e:
-                # Catastrophic failure (e.g., thread crash) — don't lose this chunk
-                results[idx] = {"chunk_index": idx + 1, "error": f"thread crash: {e}",
-                                "chunk_text_length": prompts[idx][2]}
-
-    # Restore original order
-    analyses = [results[i] for i in range(chunk_total)]
+        if not chunk_ok and last_error:
+            # Already recorded in analyses above
+            pass
 
     total_concepts = sum(len(a.get("concepts_found") or []) for a in analyses)
     total_entities = sum(len(a.get("entities_found") or []) for a in analyses)
@@ -2973,16 +2990,21 @@ def build_per_chunk_gen_prompt(
     file_path: Path,
     config: Config,
     template: str = "",
+    generated_slugs: list[str] | None = None,
 ) -> str:
     """Build prompt to generate concept/entity pages from ONE chunk's analysis.
 
-    This is a lightweight task — the chunk already has concepts_found
-    with definitions, key_details, etc. The LLM just needs to format them
-    as FILE blocks.
+    Accepts generated_slugs from previously-processed chunks so the LLM can:
+      - Skip concepts already covered by earlier chunks
+      - Use [[wikilinks]] to reference existing pages
+      - Avoid duplicate slug generation
+    (NashSU parity: sequential, accumulating context.)
     """
     concepts = chunk_analysis.get("concepts_found", [])
     entities = chunk_analysis.get("entities_found", [])
     existing_slugs = list_existing_slugs(config)
+    if generated_slugs is None:
+        generated_slugs = []
 
     concept_lines = []
     for c in concepts:
@@ -2991,9 +3013,13 @@ def build_per_chunk_gen_prompt(
             imp = c.get("importance", "core")
             defn = c.get("definition", "")
             details = c.get("key_details", [])
-            concept_lines.append(f"  - {name} [{imp}]: {defn}")
-            for d in details[:3]:
-                concept_lines.append(f"      • {d}")
+            # Mark if this concept was already covered by a prior chunk
+            slug = name.lower().replace(" ", "-").replace("/", "-")
+            already = " [ALREADY COVERED — SKIP]" if slug in generated_slugs else ""
+            concept_lines.append(f"  - {name} [{imp}]: {defn}{already}")
+            if not already:
+                for d in details[:3]:
+                    concept_lines.append(f"      • {d}")
 
     entity_lines = []
     for e in entities:
@@ -3001,27 +3027,35 @@ def build_per_chunk_gen_prompt(
             name = e.get("name", "")
             role = e.get("role", "")
             sig = e.get("significance", "")
-            entity_lines.append(f"  - {name} ({role}): {sig}")
+            slug = name.lower().replace(" ", "-").replace("/", "-")
+            already = " [ALREADY COVERED — SKIP]" if slug in generated_slugs else ""
+            entity_lines.append(f"  - {name} ({role}): {sig}{already}")
 
-    concept_str = "\n".join(concept_lines[:80]) if concept_lines else "(none)"
+    concept_str = "\n".join(concept_lines[:100]) if concept_lines else "(none)"
     entity_str = "\n".join(entity_lines[:30]) if entity_lines else "(none)"
+
+    generated_str = "\n".join(f"  - {s}" for s in generated_slugs) if generated_slugs else "(none yet — you are the first chunk)"
 
     template_section = ""
     if template:
         template_section = f"\n# Document Type\n<template>\n{template[:1500]}\n</template>\n"
 
     return f"""# Role
-You are generating wiki pages for ONE chunk of a book.
+You are generating wiki pages for ONE chunk of a book. Previous chunks have
+already been processed — their pages are listed below. Do NOT regenerate them.
 
 # Source
 Book: {file_path.stem}
 Chunk: {chunk_index + 1}
 
 {template_section}
-# Concepts found in this chunk (generate a page for each):
+# Pages already generated by previous chunks (SKIP these):
+{generated_str}
+
+# Concepts found in this chunk (generate a page for each — skip ALREADY COVERED):
 {concept_str}
 
-# Entities found in this chunk (generate a page for key ones):
+# Entities found in this chunk (generate a page for key ones — skip ALREADY COVERED):
 {entity_str}
 
 # Existing wiki pages (avoid duplicate slugs):
@@ -3030,7 +3064,7 @@ Chunk: {chunk_index + 1}
 # ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
 - Your FIRST line of output MUST be `---FILE:wiki/concepts/...`
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
-- Use [[wikilink]] with FULL filename stem
+- Use [[wikilink]] with FULL filename stem to link to pages from previous chunks
 - ⚠️ NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
 - Math: $inline$ $$display$$
 
@@ -3056,7 +3090,7 @@ updated: {time.strftime('%Y-%m-%d')}
 (frontmatter + content)
 ---END FILE---
 
-Generate a page for EVERY concept listed above. Go!
+Generate a page for EVERY concept listed above that is NOT marked [ALREADY COVERED]. Go!
 """
 
 
@@ -3572,10 +3606,6 @@ sources: ["raw/{source_rel}.pdf"]
 ---
 
 # {title}
-
-**Authors:** {', '.join(str(a) for a in authors[:5]) if authors else 'See book info'}
-**Year:** {year}
-**Publisher:** {publisher}
 
 ## Book Summary
 
