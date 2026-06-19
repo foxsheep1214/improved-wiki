@@ -1,13 +1,8 @@
-"""Shared core for improved-wiki ingest pipeline — verbatim copies from ingest.py.
+"""Shared core for improved-wiki ingest pipeline.
 
-These are the ACTUAL running implementations, copied line-for-line from
-ingest.py on 2026-06-18. They are kept in sync manually until ingest.py's
-local duplicates are fully removed.
-
-All stage modules import from here. ingest.py imports from here too (aliased
-with _ prefix), but its local definitions currently shadow the imports —
-behavior is unchanged. Once every caller has been verified, the local
-definitions in ingest.py will be deleted.
+All stage modules and ingest.py import from here.  Refactored out of ingest.py
+on 2026-06-18 — functions now live in a single canonical location.  No local
+duplicates remain in ingest.py.
 """
 from __future__ import annotations
 

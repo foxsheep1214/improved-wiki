@@ -2,7 +2,7 @@
 """
 ingest.py — End-to-end Ingest for one source file (NashSU-style multi-stage pipeline).
 
-Pipeline (per improved-wiki §7, now matching NashSU's actual stages):
+Pipeline (aligned with ingest-stages-mandatory.md):
   1. Dedup check          (wiki/sources/ source page → skip)
   2. Extract text          (PyMuPDF first, minerU VLM OCR fallback)
   3. Global digest          (1 LLM call: book-level structural summary)
@@ -106,7 +106,6 @@ from _stage_3_write import (
     sanitize_ingested_content, is_safe_ingest_path,
     wiki_path_for_source, merge_page_content,
     _auto_correct_wiki_path, _contains_cjk, _make_cjk_slug,
-    _parse_frontmatter, _merge_frontmatter_arrays, _fmt_frontmatter,
     backup_existing_page,
 )
 
@@ -246,20 +245,6 @@ def _verify_stage_2_file_blocks(file_blocks: list[tuple[str, str]], raw_file: Pa
     if len(concept_file_blocks) < 5 and len(file_blocks) >= 1:
         print(f"  ⚠️  Stage 2: only {len(concept_file_blocks)} concept pages generated. "
               f"Consider re-running with larger token budget or checking prompt output.")
-
-
-def _verify_stage_3_files_written(
-    source_path: Path, file_blocks: list[tuple[str, str]], config
-) -> None:
-    """Verify files were written to correct locations."""
-    _verify_or_die(source_path.exists(), "Stage 3",
-                   f"Source page not written: {source_path.relative_to(config.wiki_root)}")
-    # Verify no concept pages ended up in wiki/ root or wiki/sources/
-    wiki_root_bare = [p for p, _ in file_blocks
-                      if "/" not in p and not p.startswith("wiki/")
-                      and Path(p).suffix == ".md"]
-    if wiki_root_bare:
-        print(f"  ⚠️  Stage 3: {len(wiki_root_bare)} pages would be written to wiki/ root, auto-correction should handle this")
 
 
 def validate_stage_outputs(
@@ -664,9 +649,6 @@ def ingest_one(
     """Process one file end-to-end (NashSU-style 15-stage pipeline with checkpoint/resume)."""
     _set_current_file(raw_file.name)
     print(f"\n=== Ingest: {raw_file} ===")
-
-    # 0. Clean up resolved review pages
-    cleanup_resolved_reviews(config)
 
     # 0. Clean up resolved review pages
     cleanup_resolved_reviews(config)

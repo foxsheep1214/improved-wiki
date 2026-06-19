@@ -159,13 +159,13 @@ python3 scripts/ingest.py wiki/queries/<slug>.md
 ```
 
 The ingest pipeline will:
-1. **Stage 1.1**: Analyze the research page → extract key entities/concepts
-2. **Stage 2.1**: Generate entity/concept pages for newly discovered items
+1. **Stage 1**: Analyze the research page → extract key entities/concepts
+2. **Stage 2**: Generate entity/concept pages for newly discovered items
 3. **Stage 2.3**: Generate follow-up query pages if open questions found
 4. **Stage 2.5**: Generate comparison pages if relevant
-5. **Stage 4.5**: Generate review items — some may become new research topics
-6. **Stage 4.7**: Update index/log/overview
-7. **Stage 4.9**: Embed the new pages
+5. **Stage 2.5 (review)**: Generate review items — some may become new research topics
+6. **Stage 2.6**: Update index/log/overview
+7. **Stage 4**: Embed the new pages
 
 This is what turns "a saved search result" into "integrated knowledge."
 

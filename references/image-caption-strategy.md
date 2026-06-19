@@ -1,7 +1,7 @@
 ---
 description: "Image captioning strategy — unified Path A (PyMuPDF) + Path B (minerU) pipeline, parallel batch dispatch via ThreadPoolExecutor, grayscale→RGB preprocessing, VLM failure detection. Verified: HardwareWiki 18,709 images (2026-06-17), EMC book fix (2026-06-17)."
 tags: [vlm, captioning, batch, minimax, strategy, parallel, preprocessing]
-related: [multimodal-vlm-pitfalls, ingest-stages-mandatory §0.9, known-issues]
+related: [multimodal-vlm-pitfalls, ingest-stages-mandatory §0.6, known-issues]
 ---
 
 # Image Captioning 策略

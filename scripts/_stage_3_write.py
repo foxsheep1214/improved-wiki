@@ -17,7 +17,7 @@ from _core import (
 )
 from _llm_api import call_anthropic_protocol
 
-__all__ = ["write_wiki_file", "stage_2_6_aggregate_repair", "canonicalize_sources_field", "stamp_frontmatter_dates", "sanitize_ingested_content", "is_safe_ingest_path", "wiki_path_for_source", "merge_page_content", "_auto_correct_wiki_path", "_contains_cjk", "_make_cjk_slug", "_parse_frontmatter", "_merge_frontmatter_arrays", "_fmt_frontmatter", "backup_existing_page"]
+__all__ = ["write_wiki_file", "stage_2_6_aggregate_repair", "canonicalize_sources_field", "stamp_frontmatter_dates", "sanitize_ingested_content", "is_safe_ingest_path", "wiki_path_for_source", "merge_page_content", "_auto_correct_wiki_path", "_contains_cjk", "_make_cjk_slug", "backup_existing_page"]
 
 # ---------- File writing ----------
 
@@ -264,89 +264,37 @@ def backup_existing_page(path: Path, config: Config) -> None:
     print(f"  [backup] {path.name} → page-history/{backup_path.name}")
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    """Parse YAML frontmatter from page text. Returns (fields, body)."""
-    if not text.startswith("---"):
-        return {}, text
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}, text
-    fm_text = text[3:end].strip()
-    body = text[end + 4:].lstrip("\n")
-    fields: dict = {}
-    for line in fm_text.split("\n"):
-        if ":" in line:
-            key, _, val = line.partition(":")
-            key = key.strip()
-            val = val.strip().strip('"').strip("'")
-            # Parse YAML lists: [a, b, c]
-            if val.startswith("[") and val.endswith("]"):
-                val = [v.strip().strip('"').strip("'") for v in val[1:-1].split(",") if v.strip()]
-            fields[key] = val
-    return fields, body
+# ── Frontmatter: delegate to canonical _frontmatter.py (NashSU frontmatter.ts + page-merge.ts pattern) ──
+from _frontmatter import (
+    parse_frontmatter,
+    write_frontmatter,
+    union_arrays,
+    merge_page_content as _fm_merge_page_content,
+    lock_fields,
+)
 
-
-def _merge_frontmatter_arrays(existing: dict, new: dict) -> dict:
-    """NashSU parity: union-merge array fields (sources, tags, related)."""
-    merged = dict(existing)
-    for key in ("sources", "tags", "related"):
-        existing_vals = existing.get(key, [])
-        new_vals = new.get(key, [])
-        if isinstance(existing_vals, str):
-            existing_vals = [existing_vals] if existing_vals else []
-        if isinstance(new_vals, str):
-            new_vals = [new_vals] if new_vals else []
-        merged_set = list(dict.fromkeys(list(existing_vals) + list(new_vals)))
-        merged[key] = merged_set
-    # Lock fields: preserve existing type, title, created
-    for key in ("type", "title", "created"):
-        if key in existing:
-            merged[key] = existing[key]
-    return merged
-
-
-def _fmt_frontmatter(fields: dict) -> str:
-    """Format frontmatter dict back to YAML string."""
-    lines = ["---"]
-    for key, val in fields.items():
-        if isinstance(val, list):
-            items = ", ".join(
-                f'"{v}"' if (" " in v or "-" in v) and not v.startswith("[[") else v
-                for v in val
-            )
-            lines.append(f"{key}: [{items}]")
-        elif isinstance(val, str) and (" " in val or ":" in val):
-            lines.append(f'{key}: "{val}"')
-        else:
-            lines.append(f"{key}: {val}")
-    lines.append("---")
-    return "\n".join(lines)
+# Backward-compat aliases (internal use; not exported)
+_parse_frontmatter = parse_frontmatter
+_merge_frontmatter_arrays = union_arrays
+_fmt_frontmatter = write_frontmatter
 
 
 def merge_page_content(existing_text: str, new_text: str, config: Config) -> str:
-    """NashSU parity (ingest.ts L1597-1609): 3-layer merge of old + new page content.
+    """NashSU 3-layer merge: delegates to _frontmatter.merge_page_content.
 
-    1. Union-merge frontmatter arrays (sources, tags, related)
-    2. Lock fields (type, title, created) from existing
-    3. If both have substantial bodies, ask LLM to merge; else use new body
+    Layers: array-union → LLM body merge → lock fields.
+    Fallback: if bodies don't need merging or LLM fails, returns array-merged result.
     """
-    existing_fm, existing_body = _parse_frontmatter(existing_text)
-    new_fm, new_body = _parse_frontmatter(new_text)
 
-    merged_fm = _merge_frontmatter_arrays(existing_fm, new_fm)
-    merged_fm["updated"] = time.strftime("%Y-%m-%d")
-
-    # If new content is empty or just a stub, keep existing body
-    if len(new_body.strip()) < 200:
-        return _fmt_frontmatter(merged_fm) + "\n\n" + existing_body
-
-    # If existing body is substantial, LLM merge
-    if len(existing_body.strip()) > 200:
+    def llm_merger(prev_content: str, merged_content: str, source_file: str) -> str:
+        """LLM merge callback — called by _frontmatter when bodies differ."""
+        old_body = parse_frontmatter(prev_content)[1]
+        new_body = parse_frontmatter(merged_content)[1]
         prompt = f"""Merge two versions of a wiki page. Preserve ALL unique information from both.
 Do NOT drop claims, entities, formulas, or references from either version.
 
 # Existing page content
-{existing_body[:3000]}
+{old_body[:3000]}
 
 # New content (from latest ingest)
 {new_body[:3000]}
@@ -356,18 +304,17 @@ Output the merged page body (no frontmatter, no code fences).
 The merged version should contain everything from both versions,
 with duplicates consolidated and new information integrated.
 """
-        try:
-            response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
-            merged_body = response.strip()
-            # Safety: if LLM response is too short, fall back to new body
-            if len(merged_body) < 100:
-                merged_body = new_body
-        except Exception:
-            merged_body = new_body
-    else:
-        merged_body = new_body
+        response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
+        merged_body = response.strip()
+        if len(merged_body) < 100:
+            return merged_content  # triggers _frontmatter fallback
+        return write_frontmatter(parse_frontmatter(merged_content)[0], merged_body)
 
-    return _fmt_frontmatter(merged_fm) + "\n\n" + merged_body
+    return _fm_merge_page_content(
+        new_content=new_text,
+        existing_content=existing_text if existing_text else None,
+        merger_fn=llm_merger,
+    )
 
 
 def canonicalize_sources_field(content: str, canonical_source: str) -> str:
