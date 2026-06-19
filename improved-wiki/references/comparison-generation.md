@@ -189,7 +189,7 @@ updated: {today}
 
 ### 标记格式
 
-在 Stage 4.5 review 中追加 `type: missing-page` review item：
+在 Stage 2.5 review 中追加 `type: missing-page` review item：
 
 ```yaml
 - id: N

@@ -32,7 +32,7 @@
 ### 为什么用本地 minerU 而不是云端 API
 
 - **零成本**：无 API 调用费用，minerU VLM 在 Apple Silicon 上免费运行。
-- **自动提取图片**：minerU `vlm-auto-engine` 同时输出文字层和分离的图片文件，Stage 0.9 caption 直接用。
+- **自动提取图片**：minerU `vlm-auto-engine` 同时输出文字层和分离的图片文件，Stage 0.6 caption 直接用。
 - **中文优化**：`-l ch` 对中文/日文扫描件识别质量高。
 - **无需 API key**：不需要配置任何云端密钥。
 - **隐私**：所有数据在本地处理。
@@ -106,9 +106,9 @@ def _wait_for_mineru_slot(poll_interval: int = 120):
 
 ## 相关的其他 pipeline
 
-- **Stage 0.9 Caption**：minerU 提取的图片 → minimax `anthropic/v1/messages` 多图批量 caption（5 张/批）。详见 `references/image-caption-strategy.md`。
+- **Stage 0.6 Caption**：minerU 提取的图片 → minimax `anthropic/v1/messages` 多图批量 caption（5 张/批）。详见 `references/image-caption-strategy.md`。
 - **纯 text PDF**：跳过 Stage 0.5 全流程，PyMuPDF `get_text()` 直接提取 → Stage 1 开始。
-- **混合型 PDF 判定**：见 `references/ingest-stages-mandatory.md` Stage 0.1 的第四信号"隐藏 OCR 层检测"。
+- **混合型 PDF 判定**：见 `references/ingest-stages-mandatory.md` Stage 0 的第四信号"隐藏 OCR 层检测"。
 
 ## 修订记录
 

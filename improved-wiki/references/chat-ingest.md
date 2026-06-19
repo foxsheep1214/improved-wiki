@@ -42,8 +42,8 @@ python3 scripts/ingest.py raw/book/Book.pdf --stop-after-stage 0.5
 # Image extraction (stops after Stage 0.6)
 python3 scripts/ingest.py raw/book/Book.pdf --stop-after-stage 0.6
 
-# Image captioning (stops after Stage 0.9)
-python3 scripts/ingest.py raw/book/Book.pdf --stop-after-stage 0.9
+# Image captioning (stops after Stage 0.6)
+python3 scripts/ingest.py raw/book/Book.pdf --stop-after-stage 0.6
 ```
 
 These are I/O operations — no LLM reasoning needed, no reason to involve the user.
@@ -162,8 +162,8 @@ Generate FILE blocks now. Start with ---FILE: as the first characters.
 After generation, Claude:
 1. Parses FILE blocks
 2. Writes pages to `wiki/` (using page merge if page exists)
-3. Injects image references into source page (Stage 3.8)
-4. Appends to index.md / log.md (Stage 4.7, programmatic)
+3. Injects image references into source page (Stage 3.5)
+4. Appends to index.md / log.md (Stage 2.6, programmatic)
 5. Runs `validate_ingest.py`
 
 ```bash

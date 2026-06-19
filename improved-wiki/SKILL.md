@@ -1,13 +1,13 @@
 ---
 name: improved-wiki
-description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (13-stage ingest + lint + graph). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. Phase 0 OCR uses local minerU (free). Lint includes knowledge graph + Louvain community detection."
+description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (15-stage ingest + lint + graph). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. Phase 0 OCR uses local minerU (free). Lint includes knowledge graph + Louvain community detection."
 tags: [ingest, mandatory, nashsu, pipeline, scan-pdf, mineru, local-ocr, knowledge-graph, louvain]
 related_skills: [karpathy-llm-wiki, llm-wiki-local]
 ---
 
 # improved-wiki
 
-Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. 13 ingest Stages (5 Phases) + lint + graph (auto-triggered).
+Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. 15 ingest Stages (4 Phases) + lint + graph (auto-triggered).
 
 ```
 Ingest: 0→0.5→0.6→1→1.5→2.0→2.x→2.3→2.5→2.6→3.5→[4]
@@ -106,12 +106,13 @@ Lint:  [Build Graph] → [Louvain] → [Insights]
 
 | Category | Scripts |
 |----------|---------|
-| Core | `ingest.py`, `_paths.py`, `_language.py`, `_frontmatter.py` |
+| Core | `ingest.py`, `_core.py`, `_llm_api.py`, `_paths.py`, `_language.py`, `_frontmatter.py` |
+| Stage Modules | `_stage_0_extract.py`, `_stage_1_analyze.py`, `_stage_2_generate.py`, `_stage_3_write.py` |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
-| Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `build_knowledge_graph.py`, `validate_ingest.py`, `validate-frontmatter.sh` |
+| Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `build_knowledge_graph.py`, `validate_ingest.py`, `validate-frontmatter.sh`, `normalize_raw_names.py` |
 | Queue | `wiki-monitor.sh`, `run-queue.sh` |
 | Embeddings | `build_embeddings.py`, `search_wiki.py` |
-| Repair | `repair_wiki.py`, `repair_stage_38.py`, `reingest_batch.py` |
+| Repair | `repair_wiki.py`, `repair_stage_38.py`, `reingest_batch.py`, `sweep_reviews.py` |
 
 ## Trigger this skill
 

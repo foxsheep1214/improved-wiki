@@ -45,7 +45,7 @@ The agent reads the prompt, uses its LLM to generate a response, and saves:
 ```json
 {
   "response": "LLM-generated YAML...",
-  "model": "claude-opus-4.7",
+  "model": "claude-opus-4-8",
   "timestamp": "..."
 }
 ```
