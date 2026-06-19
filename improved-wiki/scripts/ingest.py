@@ -1083,14 +1083,17 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         if not rel_path.endswith(".md"):
             rel_path = rel_path + ".md"
 
-        if expected_lang not in ("unknown", "English"):
-            try:
-                from _language import detect_language
-                block_lang = detect_language(content[:2000])
-                if block_lang not in (expected_lang, "English") and block_lang != "unknown":
-                    print(f"  [lang] ⚠️  {rel_path}: expected {expected_lang}, got {block_lang}")
-            except ImportError:
-                pass
+        # Skip per-block language check for minerU OCR — OCR text from garbled
+        # PDFs confuses the detector (e.g. C0 control chars → wrong language).
+        if method not in ("mineru", "mineru-ocr", "mineru-vlm", "mineru-local-ocr"):
+            if expected_lang not in ("unknown", "English"):
+                try:
+                    from _language import detect_language
+                    block_lang = detect_language(content[:2000])
+                    if block_lang not in (expected_lang, "English") and block_lang != "unknown":
+                        print(f"  [lang] ⚠️  {rel_path}: expected {expected_lang}, got {block_lang}")
+                except ImportError:
+                    pass
 
         content = canonicalize_sources_field(content, canonical_source)
         content = stamp_frontmatter_dates(content, today_str)
