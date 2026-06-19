@@ -165,6 +165,24 @@ def load_caption_provider() -> dict:
     }
 
 
+# ── NashSU-aligned context budget (ported from llm_wiki/src/lib/context-budget.ts + ingest.ts) ──
+# Set LLM_CONTEXT_SIZE to your model's context window (in chars). All budgets derive from this.
+# DeepSeek V4 Pro: LLM_CONTEXT_SIZE=1000000 (1M tokens ≈ chars for budget math)
+# If unset, falls back to model-name pattern matching + hardcoded defaults.
+_CONTEXT_SIZE_DEFAULT = 200_000
+_RESPONSE_RESERVE_FRAC = 0.15
+_STABLE_RESERVE_MIN = 12_000
+_STABLE_RESERVE_FRAC = 0.25
+_INSTRUCTION_RESERVE_MIN = 12_000
+_INSTRUCTION_RESERVE_FRAC = 0.08
+_SOURCE_BUDGET_MIN = 8_000
+_SOURCE_BUDGET_MAX = 300_000
+_SOURCE_BUDGET_FRAC = 0.6
+_TARGET_CHARS_MIN = 12_000
+_TARGET_CHARS_MAX = 60_000
+_TARGET_CHARS_FRAC = 0.55
+
+
 @dataclass
 class Config:
     wiki_root: Path
@@ -186,6 +204,7 @@ class Config:
     source_budget: int
     target_chars: int
     max_tokens: int
+    context_size: int | None = None
     conversation_mode: bool = False
     conversation_prefix: str = ""
 
@@ -195,6 +214,34 @@ class Config:
         provider = load_provider_config()
         caption = load_caption_provider()
         runtime_dir = detect_runtime_dir(wiki_root)
+
+        # ── NashSU-aligned context budget ──
+        cs_env = os.environ.get("LLM_CONTEXT_SIZE")
+        context_size = int(cs_env) if cs_env else None
+
+        if context_size:
+            # sourceBudget = maxCtx - responseReserve - stableReserve - instructionReserve
+            # clamped to [SOURCE_BUDGET_MIN, min(SOURCE_BUDGET_MAX, maxCtx * 0.6)]
+            cs = context_size
+            response_reserve = int(cs * _RESPONSE_RESERVE_FRAC)
+            stable_reserve = min(int(cs * _STABLE_RESERVE_FRAC), max(_STABLE_RESERVE_MIN, 50_000))
+            instruction_reserve = max(_INSTRUCTION_RESERVE_MIN, int(cs * _INSTRUCTION_RESERVE_FRAC))
+            available = cs - response_reserve - stable_reserve - instruction_reserve
+            upper = min(_SOURCE_BUDGET_MAX, max(_SOURCE_BUDGET_MIN, int(cs * _SOURCE_BUDGET_FRAC)))
+            source_budget = max(_SOURCE_BUDGET_MIN, min(available, upper))
+
+            # targetChars = sourceBudget * 0.55, clamped [12K, 60K]
+            target_chars = max(_TARGET_CHARS_MIN,
+                              min(int(source_budget * _TARGET_CHARS_FRAC), _TARGET_CHARS_MAX))
+
+            print(f"[config] LLM_CONTEXT_SIZE={context_size:,} → "
+                  f"source_budget={source_budget:,} target_chars={target_chars:,} "
+                  f"(NashSU-aligned)")
+        else:
+            # Backward-compatible hardcoded defaults (no LLM_CONTEXT_SIZE set)
+            source_budget = 200_000
+            target_chars = 100_000
+
         return cls(
             wiki_root=wiki_root,
             raw_root=wiki_root / "raw",
@@ -212,17 +259,46 @@ class Config:
             caption_model=caption["model"],
             chunk_size=300_000,
             chunk_overlap=3_000,
-            source_budget=200_000,
-            target_chars=100_000,
+            source_budget=source_budget,
+            target_chars=target_chars,
             max_tokens=16384,
+            context_size=context_size,
         )
+
+    def compute_source_budget(self, stable_length: int = 50_000) -> int:
+        """NashSU-aligned: per-source budget from context window."""
+        cs = self.context_size or _CONTEXT_SIZE_DEFAULT
+        response_reserve = int(cs * _RESPONSE_RESERVE_FRAC)
+        stable_reserve = min(int(cs * _STABLE_RESERVE_FRAC), max(_STABLE_RESERVE_MIN, stable_length))
+        instruction_reserve = max(_INSTRUCTION_RESERVE_MIN, int(cs * _INSTRUCTION_RESERVE_FRAC))
+        available = cs - response_reserve - stable_reserve - instruction_reserve
+        upper = min(_SOURCE_BUDGET_MAX, max(_SOURCE_BUDGET_MIN, int(cs * _SOURCE_BUDGET_FRAC)))
+        return max(_SOURCE_BUDGET_MIN, min(available, upper))
+
+    def compute_target_chars(self, stable_length: int = 50_000) -> int:
+        """NashSU-aligned: per-source chunk target from source budget."""
+        sb = self.compute_source_budget(stable_length)
+        return max(_TARGET_CHARS_MIN, min(int(sb * _TARGET_CHARS_FRAC), _TARGET_CHARS_MAX))
 
     def compute_max_tokens(self, base_tokens: int = 16384) -> int:
         env_override = os.environ.get("LLM_MAX_TOKENS")
         if env_override:
             return int(env_override)
+
+        # ── Context-size-aware (NashSU-aligned) ──
+        cs = self.context_size or 0
+        if cs >= 500_000:
+            return min(base_tokens * 2, 32768)
+        if cs >= 250_000:
+            return base_tokens
+        if cs >= 120_000:
+            return max(base_tokens // 2, 8192)
+
+        # ── Fallback: model-name pattern matching ──
         model = self.llm_model.lower()
-        if "512k" in model or "1m" in model:
+        # DeepSeek V4 series has 1M context + 384K max output.
+        # 「deepseek-chat」is a legacy alias mapping to v4-flash — same tier.
+        if "512k" in model or "1m" in model or "deepseek-v4" in model or "deepseek-chat" in model:
             return min(base_tokens * 2, 32768)
         if "256k" in model or "200k" in model:
             return base_tokens

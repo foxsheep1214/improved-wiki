@@ -942,6 +942,42 @@ def _do_prepare(
                 }
                 raw_response = "\n".join(all_responses)
                 file_blocks = all_file_blocks
+
+                # ── Barrier-free fallback: per-concept generation ──
+                # If per-chunk generation produced 0 concept blocks (LLM hit
+                # max_tokens/timeout before emitting FILE blocks), fall back
+                # to generating each concept in its own small LLM call.
+                if not concept_blocks and unique_concepts and chunk_analyses:
+                    n_missed = len(unique_concepts)
+                    print(f"  [stage_2] ⚠️  Barrier-free: 0/{n_missed} concepts generated "
+                          f"— falling back to per-concept generation "
+                          f"(pre_existing_slugs={len(generated_slugs)})")
+                    fa_analysis, fa_raw, fa_blocks = _stage_2_per_concept_fallback(
+                        chunk_analyses, global_digest, raw_file, config,
+                        template_content, verbose=verbose,
+                        pre_existing_slugs=generated_slugs,
+                    )
+                    # Filter out source page from fallback — stage_2_0_source_page
+                    # generates the canonical source page below.
+                    fa_concept_entity = [(p, c) for p, c in fa_blocks
+                                         if not p.startswith("sources/")]
+                    all_file_blocks = fa_concept_entity
+                    if fa_concept_entity:
+                        all_responses.append(fa_raw)
+                        raw_response = "\n".join(all_responses)
+                    file_blocks = all_file_blocks
+                    concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
+                    entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
+                    analysis["concepts_generated"] = len(concept_blocks)
+                    analysis["entities_generated"] = len(entity_blocks)
+                    analysis["coverage_pct"] = round(
+                        len(concept_blocks) / max(len(unique_concepts), 1), 2)
+                    analysis["method"] = "barrier-free+fallback"
+                    for path, _ in fa_concept_entity:
+                        s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+                        if s not in generated_slugs:
+                            generated_slugs.append(s)
+
                 _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
                 barrier_free = True
 
