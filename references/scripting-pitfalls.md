@@ -127,7 +127,7 @@ cp -a ~/.agents/skills/improved-wiki/. "$BACKUP_DIR/"
    import os, subprocess
    api_key = open('/tmp/_api_key.txt').read().strip()
    env = os.environ.copy()
-   env["LLM_API_KEY"] = api_key
+   env["MINIMAX_CN_API_KEY"] = api_key  # caption key (text gen needs no key)
    subprocess.run(["script.sh", "--flag"], env=env)
    ```
 2. **Source an env file** instead of using `$(cat ...)`:

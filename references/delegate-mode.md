@@ -1,15 +1,14 @@
 # Delegate Mode — Agent Orchestration
 
-When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **conversation mode** (`--conversation`) to let the agent handle LLM calls with its own model and API key.
+When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **conversation mode** (`--conversation`) to let the agent handle every LLM step with the current conversation's model. This is the only LLM execution mode for text generation — there is no http-direct path. The one external API dependency is image captioning (Stage 0.6, MiniMax VLM).
 
 ---
 
-## Normal vs Conversation Mode
+## Conversation Mode
 
-| Mode | Who calls LLM? | API key needed? |
-|------|----------------|-----------------|
-| Normal | ingest.py directly (HTTP) | ✅ Yes (LLM_API_KEY) |
-| Conversation | Calling agent (via prompt files) | ❌ No (agent uses its own) |
+| Who calls LLM? | API key needed? |
+|----------------|-----------------|
+| Calling agent, via prompt files (current model) | No for text gen (agent uses its own model). MiniMax key only for image captioning. |
 
 ---
 

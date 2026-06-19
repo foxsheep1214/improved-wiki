@@ -28,15 +28,18 @@ cp $SKILL_DIR/references/templates/overview.md  ./wiki/overview.md
 # 4. Drop your first batch of source files into raw/<type>/
 #    e.g. raw/Book/My Book - 2024 - Author.pdf
 
-# 5. Set the env var for the LLM API (do NOT commit this)
-export LLM_API_KEY=***
+# 5. Set the project root env var. Text-generation LLM work runs in
+#    conversation mode (the calling agent's current model) — no LLM API
+#    key needed. The only external key is for image captioning (MiniMax VLM):
 export IMPROVED_WIKI_ROOT=$(pwd)
+export MINIMAX_CN_API_KEY=***   # only needed if your source has images to caption
 
 # 6. Dry-run to verify detection
 $SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf --dry-run
 
-# 7. Process the first file for real
-$SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf
+# 7. Process the first file for real (conversation mode: the calling agent
+#    answers each LLM step with the current model)
+$SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf --conversation
 
 # 8. Inspect the output
 ls wiki/sources/
@@ -136,8 +139,8 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | Symptom | Cause | Fix |
 |---|---|---|
 | `ValueError: Unknown raw folder 'X'` | File is in a folder the script doesn't recognize | Either move the file to a recognized first-level folder (book/paper/datasheet/...) or pass `--type X` |
-| `LLM_API_KEY not set` | Env var not exported | `export LLM_API_KEY=***` (or add to your shell rc) |
-| `LLM API HTTP 401` | Wrong API key or wrong endpoint | Check `LLM_BASE_URL` matches your provider (default is `https://api.minimaxi.com` for MiniMax CN) |
+| `LLM_API_KEY not set` / caption step fails | Image-caption key not exported (text gen needs no key — it runs in conversation mode) | `export MINIMAX_CN_API_KEY=***` (only the Stage 0.6 caption step calls MiniMax VLM) |
+| `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the MiniMax caption key/endpoint used by Stage 0.6 |
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
 | Scanned PDF returns empty text from PyMuPDF | Normal — the script should fall back to minerU OCR | Check the script logs for "[extract] PyMuPDF returned empty text — falling back to minerU OCR" |
@@ -153,8 +156,8 @@ For a typical 300-page book with full text layer:
 |---|---|
 | Hash check | <1s |
 | PyMuPDF text extract | 1-3s |
-| LLM Analysis call | 30-90s (depends on chunk size + provider) |
-| LLM Generation call | 60-180s (this is the big one) |
+| LLM Analysis call (conversation mode) | 30-90s (current model, per-chunk) |
+| LLM Generation call (conversation mode) | 60-180s (this is the big one) |
 | File writes | <1s |
 | **Total** | ~2-4 min per book |
 

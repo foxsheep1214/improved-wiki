@@ -107,6 +107,8 @@ while True:
 
 ## Pitfall 4: MiniMax embo-01 embedding 端点需要 `type=db` 或 `type=query` 字段
 
+> **已废弃 (2026-06-19)**：Embedding 不再走 MiniMax（见 SKILL.md「LLM execution model」）。本节保留作历史记录，`build_embeddings.py` 的 MiniMax 路径将在后续移除。
+
 **症状 (verified 2026-06-11, HardwareWiki Stage 6 build_embeddings)**：调 MiniMax embedding 端点 `https://api.minimaxi.com/v1/embeddings` 用 OpenAI 兼容格式（`{"model": "embo-01", "input": "test"}`）返回：
 ```json
 {"vectors": null, "base_resp": {"status_code": 2013, "status_msg": "invalid params, binding: expr_path=type, cause=missing required parameter"}}
@@ -138,8 +140,8 @@ req = urllib.request.Request(
 | **不要传** | `"text"`/`"embedding"`/`"passage"` | （其他值会触发不同的 2013 错误） |
 
 **lesson**：MiniMax 自家 API 端点跟 OpenAI 兼容但**字段名不同**（`texts` vs `input`），还**多了一个 `type` 必传字段**。第一次调必报错。**MiniMax 整体经验**：
-- LLM 用 MiniMax-M3（anthropic 协议）→ 跟 Anthropic 兼容
-- Embedding 用 embo-01（自协议）→ 跟 OpenAI **不兼容**，要按自家格式
+- LLM 文本生成 → 由当前对话模型完成（conversation mode），不走 MiniMax
+- Embedding → 不再走 MiniMax（可选，独立配置）
 - TTS/视频/图像 → 也各有自己的 endpoint
 
 不能假设"用 OpenAI/Anthropic 兼容"就行。
@@ -186,9 +188,9 @@ mmx CLI 跑 OCR/caption?  (MiniMax CN 国内端，sequential)
 ├─ 50-300 张 → mmx CLI 可容忍，但 20-120 min 总耗时
 └─ > 300 张 → 不要用 mmx CLI，切到 HTTP batching（除非用户明确指定 mmx）
 
-MiniMax embedding 跑向量入库?
+Embedding 跑向量入库?  (不再走 MiniMax；可选，独立配置)
 ├─ Wiki < 100 页 → 不需要（纯 keyword 搜索够用）
-├─ Wiki 100-1000 页 → 用 embo-01 + type=db（入库）+ type=query（查询）
+├─ Wiki 100-1000 页 → 用自选 embedding 端点（Stage 4 可选）
 └─ Wiki > 1000 页 → 同上 + cross-encoder re-rank
 ```
 
@@ -202,7 +204,7 @@ mmx CLI 在 OCR 任务上的细节见 `references/session-lessons.md` §16。
 **多模态脚本模板**：
 1. MiniMax 批量用 Pitfall 2 的 8 图/请求 + JSON 输出 prompt（ingest.py `_caption_images()` 内置并行）
 2. Batches API 用 Pitfall 3 的模板
-3. MiniMax embedding 用 Pitfall 4 的字段规范（`scripts/build_embeddings.py`）
+3. Embedding 不再走 MiniMax（可选，独立配置；Pitfall 4 已废弃）
 
 **mmx CLI 使用**（用户明确指定 mmx 时的 canonical 写法，参考 §16）：
 ```bash

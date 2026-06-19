@@ -1,6 +1,6 @@
 ---
 name: improved-wiki
-description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (~13 numbered ingest stages + 2 pre-gates + lint + graph). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. Phase 0 OCR uses local minerU (free). Lint includes knowledge graph + Louvain community detection."
+description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (~13 numbered ingest stages + 2 pre-gates + lint + graph). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode (the calling agent spawns sub-agents using the current conversation's model — no external API key). Phase 0 OCR uses local minerU (free); image captioning (Stage 0.6) is the one exception and calls MiniMax VLM. Lint includes knowledge graph + Louvain community detection."
 tags: [ingest, mandatory, nashsu, pipeline, scan-pdf, mineru, local-ocr, knowledge-graph, louvain]
 related_skills: [karpathy-llm-wiki, llm-wiki-local]
 ---
@@ -27,9 +27,27 @@ Lint:  [Build Graph] → [Louvain] → [Insights]
        (post-ingest auto-triggered via AUTO_BUILD_GRAPH=1, 30min staleness guard)
 ```
 
+## LLM execution model
+
+All text-generation LLM work in this skill runs in **conversation mode**: the
+calling agent (the current Claude Code conversation) spawns sub-agents that do
+each LLM step — digest, chunk analysis, concept/entity generation, queries,
+comparisons, review, wikilink enrichment, dedup, semantic lint — **using the
+current conversation's model**. No external LLM API key is needed for these
+stages. Mechanically, `ingest.py --conversation` writes a prompt file at each
+LLM step and hands off (exit 101); the calling agent answers it and re-invokes
+(see `references/delegate-mode.md`).
+
+Two exceptions that still call an external API:
+- **Stage 0.6 image captioning** → MiniMax VLM (`anthropic/v1/messages` multi-image batch). This is the only MiniMax dependency; it needs `MINIMAX_CN_API_KEY` / `LLM_API_KEY` for the caption endpoint only.
+- **Stage 4 embeddings** → optional; configured separately if you want vector retrieval. Not routed through MiniMax.
+
+There is no http-direct LLM path for text generation — the pipeline expects the
+calling agent's model to do that work.
+
 ## Entry points
 
-- **Auto Ingest**: `python3 scripts/ingest.py file.pdf […]` — fully automated pipeline
+- **Auto Ingest**: `python3 scripts/ingest.py file.pdf […] --conversation` — fully automated pipeline; the calling agent does each LLM step with the current model
 - **Chat Ingest** ⭐: `/improved-wiki chat-ingest <file>` — interactive human-guided ingest (NashSU `startIngest`/`executeIngestWrites` parity). See `references/chat-ingest.md`.
 - **Deep Research** ⭐: `/improved-wiki deep-research <topic>` — closed-loop web→wiki research pipeline (NashSU `deep-research.ts` parity). See `references/deep-research.md`.
 - **Save Chat to Wiki** ⭐: say "保存到 wiki" after any conversation — captures chat insight as wiki page + auto-ingests (NashSU `chat-save-to-wiki.ts` parity). See `references/save-chat-to-wiki.md`.
@@ -49,8 +67,8 @@ Lint:  [Build Graph] → [Louvain] → [Insights]
 - `references/deep-research.md` ⭐ — closed-loop web→wiki research pipeline (NashSU deep-research.ts parity)
 - `references/save-chat-to-wiki.md` ⭐ — save any conversation as wiki page + auto-ingest (NashSU chat-save-to-wiki.ts parity)
 - `references/review-sweep.md` ⭐ — auto-resolve review items satisfied by new ingests (NashSU sweep-reviews.ts parity)
-- `references/conversation-mode.md` — direct LLM execution mode for ingest (manual step-by-step, no scripts)
-- `references/delegate-mode.md` — agent orchestration for batch ingest
+- `references/conversation-mode.md` — **primary LLM execution mode**: the current conversation does each ingest LLM step with its own model (no scripts, no API key)
+- `references/delegate-mode.md` — **primary LLM execution mode** for batch/automated ingest: `ingest.py --conversation` hands each LLM step to the calling agent
 
 **Conventions**:
 - `references/naming-conventions.md` — file naming, frontmatter, wikilink, directory conventions (NashSU-aligned)
@@ -76,7 +94,7 @@ Lint:  [Build Graph] → [Louvain] → [Insights]
 
 ## Key features
 
-- **Auto-ingest**: `python3 scripts/ingest.py file.pdf [file2.pdf ...]` — NashSU two-step: Stage 2.0 dedicated source page + Stage 2.x concept/entity generation
+- **Auto-ingest**: `python3 scripts/ingest.py file.pdf [file2.pdf ...] --conversation` — NashSU two-step: Stage 2.0 dedicated source page + Stage 2.x concept/entity generation. LLM steps run in conversation mode (current model).
 - **Chat ingest** ⭐ (NashSU v0.4.25 parity): `/improved-wiki chat-ingest <file>` — interactive two-step: Claude presents digest → you provide guidance → Claude generates guided wiki pages. Human relevance judgment in the loop. See `references/chat-ingest.md`.
 - **Deep research** ⭐ (NashSU v0.4.25 parity): `/improved-wiki deep-research <topic>` — closed-loop: web search → LLM synthesis → wiki query page → auto-ingest → entity/concept pages → new review items. Knowledge base grows itself. See `references/deep-research.md`.
 - **Save chat to wiki** ⭐ (NashSU v0.4.25 parity): say "保存到 wiki" after any conversation — captures insight as wiki page with `origin: chat-save` + auto-ingests. Conversations become permanent knowledge. See `references/save-chat-to-wiki.md`.
@@ -118,7 +136,7 @@ Lint:  [Build Graph] → [Louvain] → [Insights]
 
 ## Trigger this skill
 
-**Auto Ingest**: User mentions wiki ingest / PDF OCR / minimax batch / validate-ingest / image caption / local minerU / pilot OCR. **Dedup rule**: before selecting any file, check `wiki/sources/<path>.md` exists. Never rely on `ingest-cache.json` for dedup.
+**Auto Ingest**: User mentions wiki ingest / PDF OCR / batch ingest / validate-ingest / image caption / local minerU / pilot OCR. Ingest runs in conversation mode — the current conversation's model does all text-generation LLM work (spawn sub-agents as needed); only image captioning calls MiniMax. **Dedup rule**: before selecting any file, check `wiki/sources/<path>.md` exists. Never rely on `ingest-cache.json` for dedup.
 
 **Chat Ingest** ⭐: User mentions chat ingest / interactive ingest / 交互消化 / 对话消化 / 人工引导消化 / 重点消化. User provides a source file and wants to discuss it before generating wiki pages. See `references/chat-ingest.md`.
 

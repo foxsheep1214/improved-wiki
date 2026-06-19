@@ -10,7 +10,10 @@ manual intervention per book.
 - Claude Code interactive mode works but requires a visible Terminal window.
   When the display is off/locked, you can't inject text into a running Terminal
   session (see `macos-app-automation` skill pitfall #27).
-- `ingest.py` calls the LLM API directly (MiniMax M3 by default), no GUI needed.
+- `ingest.py --conversation` hands each LLM step to the calling agent (current
+  model); for unattended batches you run an agent loop that answers each
+  conversation prompt (see `references/delegate-mode.md`). No external LLM API
+  key is needed for text generation — only image captioning calls MiniMax.
 
 ## Recommended: Built-in Batch Modes
 
@@ -74,8 +77,10 @@ WIKI_SRC = Path.home() / "Documents/知识库/HardwareWiki/wiki/sources"
 INGEST = Path.home() / ".agents/skills/improved-wiki/scripts/ingest.py"
 PROJECT_ROOT = RAW_DIR.parent.parent
 
+os.environ["IMPROVED_WIKI_ROOT"] = str(PROJECT_ROOT)
+# Text generation runs in conversation mode (calling agent's model) — no LLM
+# API key needed. MINIMAX_CN_API_KEY is only for image captioning, if used.
 os.environ["MINIMAX_CN_API_KEY"] = os.environ.get("MINIMAX_CN_API_KEY", "")
-os.environ["LLM_API_KEY"] = os.environ["MINIMAX_CN_API_KEY"]
 
 # Collect pending: books with PDF in raw/ but no source page in wiki/
 pdfs = []
@@ -91,7 +96,7 @@ for i, pdf in enumerate(pdfs, 1):
     print(f"[{i}/{total}] {pdf.stem}", flush=True)
     try:
         r = subprocess.run(
-            ["python3", str(INGEST), str(pdf)],
+            ["python3", str(INGEST), str(pdf), "--conversation"],
             capture_output=True, text=True, timeout=3600,
             cwd=str(PROJECT_ROOT),
             env={**os.environ, "IMPROVED_WIKI_ROOT": str(PROJECT_ROOT)}
@@ -118,8 +123,9 @@ print(f"DONE: {success} OK, {failed} failed, {total} total")
   16GB Macs. `--parallel 4` is a safe default — it batches Stage 0-2 but keeps
   minerU instances bounded.
 - **Timeout**: 3600s per book (1 hour). Most books complete in 10-30 minutes.
-- **API key**: Set `LLM_API_KEY` (or `MINIMAX_CN_API_KEY`) in environment.
-  `ingest.py` reads from `~/.agents/config.json` first, env vars as fallback.
+- **LLM model**: Text generation runs in conversation mode — the calling agent
+  answers each LLM step with the current model. No `LLM_API_KEY` is needed for
+  text gen. `MINIMAX_CN_API_KEY` is only required for image captioning (Stage 0.6).
 - **Project root**: `IMPROVED_WIKI_ROOT` must point to the project root
   (e.g., `~/Documents/知识库/HardwareWiki`), not `raw/Book/`.
 
@@ -141,7 +147,7 @@ tail -f /tmp/ingest_watch.log
 ## When Display is Off
 
 All modes run entirely headless — no GUI, no Terminal window needed.
-The LLM calls go through the API directly. This is the right tool when:
+The LLM calls go through the calling agent (conversation mode). This is the right tool when:
 - Display is off/locked (cua-driver returns 0x0 captures)
 - Batch is large (10+ books, multiple hours)
 - You want fire-and-forget with a log to check later

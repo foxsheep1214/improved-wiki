@@ -6,15 +6,17 @@
 
 ---
 
+> **例外**：图片 caption（Stage 0.6）仍调用 MiniMax VLM，需要 `MINIMAX_CN_API_KEY`；除此之外不依赖任何外部 LLM API。Embedding（Stage 4）可选，独立配置，不走 MiniMax。本技能不再有 http-direct 文本生成路径。
+
 ## Mode Comparison
 
-| 维度 | Script Mode | Conversation Mode |
-|------|-------------|-------------------|
-| LLM 调用 | 脚本通过 HTTP API | 当前对话直接执行 |
-| API Key | 需要（MiniMax/其他） | 不需要 |
-| 执行方式 | 调用 `ingest.py` 多次 | 在对话中逐步完成 |
-| 状态保存 | `.ingest-checkpoints/` | 对话上下文 |
-| 适用场景 | agent 自动化 | 人工单次消化 |
+| 维度 | Conversation Mode |
+|------|-------------------|
+| LLM 调用 | 当前对话直接执行（当前模型，spawn 子代理） |
+| API Key | 不需要（仅 caption 需 MiniMax key） |
+| 执行方式 | `ingest.py --conversation` 交接 或 对话中逐步完成 |
+| 状态保存 | 对话上下文 / `.llm-wiki/conversation/` |
+| 适用场景 | 人工单次消化、agent 自动化 |
 
 ---
 
