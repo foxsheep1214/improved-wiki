@@ -850,6 +850,9 @@ def _build_image_reference_section(file_path: Path, config: Config) -> str:
     if manifest_path.exists():
         m = json.loads(manifest_path.read_text(encoding="utf-8"))
         images = m.get("images", [])
+        # Legacy guard: skip full-page renders from old ingests (source:"page-render").
+        # Current pipeline no longer produces these.
+        images = [i for i in images if i.get("source") != "page-render"]
         total = len(images)
         for img in sorted(images, key=lambda x: (x["page"], x.get("img_idx_in_page", 0)))[:60]:
             cap_path = media_dir / (img["filename"] + ".caption.txt")
@@ -858,9 +861,14 @@ def _build_image_reference_section(file_path: Path, config: Config) -> str:
             if cap:
                 captioned += 1
     else:
-        # Loose files (minerU)
+        # Loose files (minerU, old cloud OCR without manifest)
         for f in sorted(media_dir.iterdir()):
             if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
+                # Legacy guard: skip old full-page renders (pNNNN.jpg without
+                # -mineru_ / -fig suffix). Current pipeline no longer produces these.
+                stem = f.stem
+                if re.match(r"^p\d{4}$", stem) and "-mineru_" not in stem:
+                    continue
                 total += 1
                 cap_path = media_dir / (f.name + ".caption.txt")
                 cap = cap_path.read_text(encoding="utf-8").strip()[:70] if cap_path.exists() else ""

@@ -756,6 +756,14 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                 body_parts.append(b'Content-Disposition: form-data; name="data"')
                 body_parts.append(b"")
                 body_parts.append(data_json.encode())
+                # Request minerU-extracted figures (not just full-page renders).
+                # return_images → base64-encoded images; return_content_list → per-block
+                # page_idx so we can map each figure to its source page.
+                for field in ("return_images", "return_content_list"):
+                    body_parts.append(f"--{boundary}".encode())
+                    body_parts.append(f'Content-Disposition: form-data; name="{field}"'.encode())
+                    body_parts.append(b"")
+                    body_parts.append(b"true")
                 body_parts.append(f"--{boundary}--".encode())
                 body = b"\r\n".join(body_parts)
 
@@ -787,6 +795,10 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                         chunk_out.mkdir(parents=True, exist_ok=True)
                         md_path = chunk_out / f"{chunk_pdf.stem}.md"
                         md_path.write_text(md, encoding="utf-8")
+                        # Harvest minerU-extracted figures (not just full-page renders).
+                        # results[rk]["images"] = {basename: "data:image/...;base64,..."}
+                        # results[rk]["content_list"] = [{type, img_path, page_idx}, ...]
+                        _harvest_mineru_figures(results, start, file_path, config, chunk_out)
                         print(f"OK ({time.time()-t0:.0f}s, {len(md)} chars)")
                         mineru_ok = True
                     else:
@@ -823,6 +835,7 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                                     chunk_out.mkdir(parents=True, exist_ok=True)
                                     md_path = chunk_out / f"{chunk_pdf.stem}.md"
                                     md_path.write_text(md, encoding="utf-8")
+                                    _harvest_mineru_figures(tdr, start, file_path, config, chunk_out)
                                     print(f"OK ({time.time()-t0:.0f}s, {len(md)} chars)")
                                     mineru_ok = True
                                 else:
@@ -908,42 +921,18 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
             continue
         md_text = md_path.read_text(encoding="utf-8")
 
-        # Render scanned pages as images for the caption pipeline.
-        # Unlike text-layer PDFs (where Stage 0.5 extracts embedded raster images),
-        # scanned PDFs have no embedded images — each page IS the image.  We render
-        # every page to wiki/media/<slug>/ as p<NNNN>.jpg so Stage 0.6 can caption
-        # them and Stage 3.5 can inject them into the source page.
+        # minerU-extracted figures are already saved by _harvest_mineru_figures()
+        # (called immediately after the API response).  No full-page renders needed —
+        # minerU VLM already provides OCR text + independently extracted figures.
         slug = _media_slug(file_path, config)
         media_dir = config.wiki_dir / "media" / slug
-        page_imgs: list[dict] = []
-        for p in range(start, end):
-            page_num = p  # 0-indexed
-            img_name = f"p{page_num:04d}.jpg"
-            img_path = media_dir / img_name
-            page_obj = doc[page_num]
-            if not img_path.exists():
-                try:
-                    pix = page_obj.get_pixmap(dpi=200)
-                    img_path.parent.mkdir(parents=True, exist_ok=True)
-                    pix.save(img_path)
-                except Exception:
-                    pass  # skip pages that fail to render
-            if img_path.exists():
-                rect = page_obj.rect
-                page_imgs.append({
-                    "filename": img_name,
-                    "page": page_num,
-                    "path": str(img_path.relative_to(config.wiki_root)),
-                    "width": int(rect.width),
-                    "height": int(rect.height),
-                })
+        media_dir.mkdir(parents=True, exist_ok=True)
 
-        _save_mineru_chunk_text(md_text, start, end, out_dir, stats, page_imgs)
+        _save_mineru_chunk_text(md_text, start, end, out_dir, stats, [])
         stats["completed_chunks"].append(chunk_key)
         _save_mineru_stats(stats_path, stats)
 
-        n_imgs = len(page_imgs)
-        print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars, {n_imgs} page images")
+        print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars")
         chunk_pdf.unlink(missing_ok=True)
 
     doc.close()
@@ -961,23 +950,33 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
     total_imgs = sum(len(v) for v in stats.get("images", {}).values())
     print(f"[ocr] Done — {len(full_text):,} chars OCR text, {total_imgs} images extracted")
 
-    # Write manifest for scanned page images so Stage 3.5 can find them
+    # Write _manifest.json with minerU-extracted figures.
+    # No full-page renders — they were OCR intermediates and have been removed.
     slug = _media_slug(file_path, config)
     media_dir = config.wiki_dir / "media" / slug
     manifest_path = media_dir / "_manifest.json"
-    all_page_imgs = []
-    for f in sorted(media_dir.glob("p*.jpg")):
-        all_page_imgs.append({
-            "filename": f.name, "page": 0, "path": str(f.relative_to(config.wiki_root)),
-        })
-    if all_page_imgs:
-        _write_manifest(manifest_path, "mineru-ocr", file_path, all_page_imgs)
-        print(f"[ocr] Wrote manifest: {len(all_page_imgs)} page images")
 
-        # Run captioning on scanned page images
+    extracted_figures: list[dict] = []
+    for f in sorted(media_dir.glob("p*-mineru_*.*")):
+        page_num = 0
+        m = re.match(r"p(\d+)-mineru_", f.stem)
+        if m:
+            page_num = int(m.group(1))
+        extracted_figures.append({
+            "filename": f.name, "page": page_num,
+            "path": str(f.relative_to(config.wiki_root)),
+        })
+
+    if extracted_figures:
+        _write_manifest(manifest_path, "mineru-ocr", file_path, extracted_figures)
+        print(f"[ocr] {len(extracted_figures)} extracted figures → _manifest.json")
+
         pending = _find_uncaptioned_mineru_images(media_dir)
         if pending and config.caption_api_key:
-            _caption_images(pending, config, media_dir, source_label="minerU-scanned", batch_size=6)
+            _caption_images(pending, config, media_dir, source_label="minerU-extracted", batch_size=6)
+    else:
+        _write_manifest(manifest_path, "mineru-ocr", file_path, [])
+        print("[ocr] No extracted figures — empty manifest written")
 
     return full_text
 
@@ -1237,6 +1236,124 @@ def _caption_one_batch(batch: list[dict], batch_idx: int, total_batches: int,
 
 MINERU_IMG_MIN_WIDTH = 200
 MINERU_IMG_MIN_HEIGHT = 150
+
+
+def _harvest_mineru_figures(results: dict, page_offset: int, raw_file: Path,
+                             config: Config, chunk_out: Path) -> list[dict]:
+    """Harvest minerU-extracted figures from API response and save to wiki/media.
+
+    minerU VLM extracts individual figures/charts/tables from within scanned pages.
+    These are the ONLY images produced for scanned PDFs (no full-page renders).
+    This function:
+    1. Reads {basename: base64-data-uri} from results[*]["images"]
+    2. Reads content_list from results[*]["content_list"] to map images → pages
+    3. Saves each figure to wiki/media/<slug>/ as p{page:04d}-mineru_{n}.{ext}
+    4. Returns metadata list for _figures.json
+
+    Called immediately after a successful minerU API response for each chunk.
+    """
+    import base64 as _b64
+    slug = _media_slug(raw_file, config)
+    media_dir = config.wiki_dir / "media" / slug
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect all images and content_list items across result entries
+    all_images: dict[str, str] = {}        # basename → data URI
+    all_content: list[dict] = []
+
+    for _rk, rv in (results or {}).items():
+        if not isinstance(rv, dict):
+            continue
+        imgs = rv.get("images")
+        if isinstance(imgs, dict):
+            all_images.update(imgs)
+        cl = rv.get("content_list")
+        if isinstance(cl, list):
+            all_content.extend(cl)
+
+    if not all_images:
+        return []
+
+    # Build page→[image_basename] mapping from content_list.
+    # Each IMAGE block has: type="image", img_path="images/hash.png", page_idx=N
+    page_figs: dict[int, list[str]] = {}
+    for block in all_content:
+        block_type = block.get("type", "")
+        if block_type not in ("image", "chart"):
+            continue
+        img_path = block.get("img_path", "")
+        if not img_path:
+            continue
+        img_basename = os.path.basename(img_path)
+        page_idx = block.get("page_idx", 0)
+        abs_page = page_offset + int(page_idx)
+        page_figs.setdefault(abs_page, []).append(img_basename)
+
+    # If content_list mapping produced nothing, fall back: assign all images
+    # to the chunk-start page so they aren't lost.
+    if not page_figs and all_images:
+        page_figs[page_offset] = list(all_images.keys())
+
+    # Save images and build metadata
+    saved: list[dict] = []
+    img_counter: dict[int, int] = {}
+
+    for page_num in sorted(page_figs):
+        for img_name in page_figs[page_num]:
+            b64_uri = all_images.get(img_name)
+            if not b64_uri:
+                continue
+            # Parse data URI: "data:image/png;base64,XXXX"
+            if "," in b64_uri:
+                _header, data = b64_uri.split(",", 1)
+            else:
+                data = b64_uri
+
+            idx = img_counter.get(page_num, 0) + 1
+            img_counter[page_num] = idx
+            # Determine extension from the original image name or data URI header
+            if img_name.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                ext = img_name.rsplit(".", 1)[-1].lower()
+            else:
+                ext = "png"
+            filename = f"p{page_num:04d}-mineru_{idx}.{ext}"
+            out_path = media_dir / filename
+
+            if not out_path.exists():
+                try:
+                    out_path.write_bytes(_b64.b64decode(data))
+                except Exception:
+                    continue
+
+            # Get dimensions if possible; skip tiny fragments (formulas, icons)
+            w, h = 0, 0
+            try:
+                from PIL import Image
+                im = Image.open(out_path)
+                w, h = im.size
+                im.close()
+                if w < MINERU_IMG_MIN_WIDTH or h < MINERU_IMG_MIN_HEIGHT:
+                    out_path.unlink(missing_ok=True)
+                    continue
+            except Exception:
+                pass
+
+            saved.append({
+                "filename": filename,
+                "page": page_num,
+                "path": str(out_path.relative_to(config.wiki_root)),
+                "width": w, "height": h,
+                "source": "mineru-extracted",
+            })
+
+    if saved:
+        # Persist to chunk_out so the per-chunk stats can reference them
+        harvest_path = chunk_out / "_mineru_figures.json"
+        harvest_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+        print(f"[mineru-figures] {len(saved)} extracted figures saved to {media_dir.name}")
+
+    return saved
 
 
 def _collect_mineru_images(img_dir: Path, page_offset: int) -> list[dict]:
