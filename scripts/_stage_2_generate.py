@@ -240,21 +240,25 @@ def build_per_chunk_gen_prompt(
         generated_slugs = []
 
     concept_lines = []
+    concept_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
     for c in concepts:
         if isinstance(c, dict):
             name = c.get("name", "")
             imp = c.get("importance", "core")
             defn = c.get("definition", "")
             details = c.get("key_details", [])
-            # Mark if this concept was already covered by a prior chunk
             slug = name.lower().replace(" ", "-").replace("/", "-")
             already = " [ALREADY COVERED — SKIP]" if slug in generated_slugs else ""
-            concept_lines.append(f"  - {name} [{imp}]: {defn}{already}")
+            concept_lines.append(
+                f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}{already}"
+            )
             if not already:
+                concept_slugs.append((name, f"concepts/{slug}"))
                 for d in details[:3]:
                     concept_lines.append(f"      • {d}")
 
     entity_lines = []
+    entity_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
     for e in entities:
         if isinstance(e, dict):
             name = e.get("name", "")
@@ -262,12 +266,35 @@ def build_per_chunk_gen_prompt(
             sig = e.get("significance", "")
             slug = name.lower().replace(" ", "-").replace("/", "-")
             already = " [ALREADY COVERED — SKIP]" if slug in generated_slugs else ""
-            entity_lines.append(f"  - {name} ({role}): {sig}{already}")
+            entity_lines.append(
+                f"  - {name} (slug: entities/{slug}) ({role}): {sig}{already}"
+            )
+            if not already:
+                entity_slugs.append((name, f"entities/{slug}"))
 
     concept_str = "\n".join(concept_lines[:100]) if concept_lines else "(none)"
     entity_str = "\n".join(entity_lines[:30]) if entity_lines else "(none)"
 
     generated_str = "\n".join(f"  - {s}" for s in generated_slugs) if generated_slugs else "(none yet — you are the first chunk)"
+
+    # Build linkable slugs list: all slugs the LLM is allowed to wikilink to.
+    linkable = set()
+    for _, s in concept_slugs:
+        linkable.add(s)
+    for _, s in entity_slugs:
+        linkable.add(s)
+    for s in generated_slugs:
+        if "/" in s:
+            linkable.add(s)
+        else:
+            linkable.add(f"concepts/{s}")
+            linkable.add(f"entities/{s}")
+    for s in existing_slugs[:200]:
+        linkable.add(s)
+    linkable_list = sorted(linkable)
+    if len(linkable_list) > 300:
+        linkable_list = linkable_list[:300]
+    linkable_str = "\n".join(f"  - {s}" for s in linkable_list) if linkable_list else "(none)"
 
     template_section = ""
     if template:
@@ -291,15 +318,34 @@ Chunk: {chunk_index + 1}
 # Entities found in this chunk (generate a page for key ones — skip ALREADY COVERED):
 {entity_str}
 
-# Existing wiki pages (avoid duplicate slugs):
-{', '.join(existing_slugs[:100])}
-
 # ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
 - Your FIRST line of output MUST be `---FILE:wiki/concepts/...`
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
-- Use [[wikilink]] with FULL filename stem to link to pages from previous chunks
-- ⚠️ NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
-- Math: $inline$ $$display$$
+
+# [[wikilink]] Rules — STRICT
+Each concept/entity above includes a slug like (slug: concepts/foo-bar).
+This is the EXACT [[wikilink]] you must use — kebab-case with type prefix.
+
+Correct format:
+  [[concepts/natural-convection-heat-sink]]  ← kebab-case + concepts/ prefix
+  [[entities/bell-labs]]                      ← kebab-case + entities/ prefix
+
+WRONG formats (DO NOT use — these create broken links):
+  [[Natural Convection Heat Sink]]  ← Title Case, no prefix = BROKEN
+  [[convection]]                    ← missing prefix = BROKEN
+  [[concepts/litz-wire.md]]         ← includes .md = BROKEN
+  [[cooling technique]]             ← not in linkable list = BROKEN
+
+# Linkable pages (ONLY these [[wikilinks]] are valid):
+{linkable_str}
+
+Rules:
+1. ONLY use [[wikilinks]] from the "Linkable pages" list above.
+2. Use the EXACT slug shown. Do not change case, add words, or invent new ones.
+3. For concepts/entities IN THIS CHUNK: use the slug from its "(slug: ...)" label.
+4. If no matching slug exists, write the term as PLAIN TEXT with NO [[]].
+5. NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
+6. Math: $inline$ $$display$$
 
 # Output Format — EXACT
 ---FILE:wiki/concepts/<slug>.md---

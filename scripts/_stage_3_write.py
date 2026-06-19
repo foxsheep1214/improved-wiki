@@ -14,6 +14,7 @@ from _core import (
     load_cache, save_cache, detect_domain, list_existing_slugs,
     parse_yaml_block, parse_file_blocks,
     is_safe_ingest_path, _WINDOWS_RESERVED, _ILLEGAL_CHARS_RE,
+    source_slug_from_raw_path,
 )
 from _llm_api import call_anthropic_protocol
 
@@ -229,12 +230,16 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
 
 
 def wiki_path_for_source(raw_file: Path, config: Config) -> Path:
-    """Return wiki/sources/<raw-rel-path>.md mirroring raw/ directory structure."""
-    try:
-        rel = raw_file.relative_to(config.raw_root).with_suffix(".md")
-    except ValueError:
-        rel = raw_file.with_suffix(".md").name
-    return config.wiki_dir / "sources" / rel
+    """Return wiki/sources/<raw-rel-path>.md mirroring raw/ directory structure.
+
+    Delegates to ``source_slug_from_raw_path()`` in _core.py for canonical
+    derivation, falling back to the filename-only fallback for backward compat.
+    """
+    result = source_slug_from_raw_path(raw_file, config.wiki_root)
+    if result is not None:
+        return result
+    # Fallback: file not under raw/ — use filename only (backward compat)
+    return config.wiki_dir / "sources" / raw_file.with_suffix(".md").name
 
 
 def sanitize_ingested_content(content: str) -> str:

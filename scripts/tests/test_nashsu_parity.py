@@ -11,20 +11,23 @@ Two architectural differences from NashSU are by design, NOT gaps:
      against the stripped form.
   2. NashSU `parseFileBlocks` returns `{blocks, warnings}` and KEEPS the `wiki/`
      prefix on `block.path`. The skill returns `list[(path, content)]` with the
-     `wiki/` prefix stripped, and surfaces unsafe/unclosed blocks via stdout
-     prints rather than a `warnings` array.
+     `wiki/` prefix stripped, and surfaces warnings via stderr prints rather
+     than a `warnings` array.
 
-All ported cases pass. Four marker/fence-tolerance behaviors were briefly tracked
-as `@unittest.expectedFailure` gaps, then fixed on 2026-06-19 (see
-TestParseFileBlocksTolerantMarkers) — the skill now matches NashSU's
-case-insensitive, whitespace-tolerant markers and CommonMark fence-length rule.
+Parser gaps closed 2026-06-19:
+  G1–G4 (tolerant markers): case-insensitive + whitespace-tolerant markers,
+  CommonMark fence-length tracking (TestParseFileBlocksTolerantMarkers).
+  G5–G8 (stream warnings + coverage, this edit): H2 stream-truncation warnings,
+  H6 empty-path warnings, trailing-whitespace opener, hyphenated-path test.
 
 Run:  python3 scripts/tests/test_nashsu_parity.py
 """
 from __future__ import annotations
 
+import io
 import sys
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -36,6 +39,23 @@ import _core  # noqa: E402
 
 def paths(text: str) -> list[str]:
     return [p for p, _ in _core.parse_file_blocks(text)]
+
+
+@contextmanager
+def capture_parse_stdout():
+    """Capture stdout during a parse_file_blocks call to inspect warnings.
+
+    The skill surfaces warnings via print() (stdout). This context manager
+    captures stdout so tests can assert on warning content (NashSU
+    ``warnings[]`` array parity).
+    """
+    buf = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buf
+    try:
+        yield buf
+    finally:
+        sys.stdout = old_stdout
 
 
 class TestIsSafeIngestPathParity(unittest.TestCase):
@@ -187,6 +207,17 @@ class TestParseFileBlocksParity(unittest.TestCase):
         ])
         self.assertEqual(paths(text), ["concepts/topic-a.md", "entities/topic-b.md"])
 
+    def test_accepts_hyphenated_paths(self):
+        """NashSU canonical: parser accepts paths with hyphens in the filename."""
+        text = "\n".join([
+            "---FILE: wiki/concepts/multi-head-attention.md---",
+            "body",
+            "---END FILE---",
+        ])
+        b = _core.parse_file_blocks(text)
+        self.assertEqual(len(b), 1)
+        self.assertEqual(b[0][0], "concepts/multi-head-attention.md")
+
 
 class TestParseFileBlocksTolerantMarkers(unittest.TestCase):
     """Marker/fence tolerance closed 2026-06-19 to reach NashSU parity.
@@ -228,6 +259,179 @@ class TestParseFileBlocksTolerantMarkers(unittest.TestCase):
         b = _core.parse_file_blocks(text)
         self.assertEqual(len(b), 1)
         self.assertIn("real content after the outer fence closes", b[0][1])
+
+    def test_tolerates_trailing_whitespace_on_opener(self):
+        """NashSU H3: ``---FILE: wiki/...---   `` (trailing spaces) is accepted."""
+        text = "---FILE: wiki/concepts/foo.md---   \nbody\n---END FILE---"
+        self.assertEqual(len(_core.parse_file_blocks(text)), 1)
+
+
+class TestParseFileBlocksStreamWarnings(unittest.TestCase):
+    """H2/H6: stream-truncation and empty-path warnings (NashSU parity).
+
+    The skill prints warnings via stdout rather than returning a warnings[]
+    array. These tests capture stdout to verify the warnings fire.
+    Note: unlike NashSU which DROPS unclosed blocks, the skill keeps them
+    (defensive: partial content > nothing). The key parity is that warnings
+    are surfaced, not silently lost.
+    """
+
+    def test_warns_unclosed_final_block_truncation(self):
+        """H2: final block without ``---END FILE---`` emits a truncation warning."""
+        text = "\n".join([
+            "---FILE: wiki/entities/qwen.md---",
+            "# Qwen",
+            "---END FILE---",
+            "",
+            "---FILE: wiki/concepts/moe.md---",
+            "# Mixture of Exp",  # stream cut here — no closer
+        ])
+        with capture_parse_stdout() as buf:
+            blocks = _core.parse_file_blocks(text)
+        # Both blocks are extracted (skill keeps partial content, unlike NashSU
+        # which drops unclosed blocks — defensive choice).
+        got = [p for p, _ in blocks]
+        self.assertIn("entities/qwen.md", got)
+        self.assertIn("concepts/moe.md", got)
+        # Unclosed block is surfaced as a stdout warning.
+        # The skill strips the wiki/ prefix from paths (architectural diff),
+        # so the warning references "concepts/moe.md" not "wiki/concepts/moe.md".
+        output = buf.getvalue()
+        self.assertIn("concepts/moe.md", output)
+        self.assertIn("not closed", output.lower())
+
+    def test_warns_only_unclosed_block(self):
+        """H2: when the ONLY block lacks ``---END FILE---``, warn but keep content."""
+        text = "---FILE: wiki/concepts/rope.md---\n# RoPE\nIt rotates"
+        with capture_parse_stdout() as buf:
+            blocks = _core.parse_file_blocks(text)
+        # Skill keeps the unclosed block (defensive: partial content better than nothing).
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0][0], "concepts/rope.md")
+        output = buf.getvalue()
+        self.assertIn("rope.md", output)
+        self.assertIn("not closed", output.lower())
+
+    def test_warns_empty_path_block_skipped(self):
+        """H6: ``---FILE:   ---`` with whitespace-only path emits a warning."""
+        text = "---FILE:   ---\nsome body\n---END FILE---"
+        with capture_parse_stdout() as buf:
+            blocks = _core.parse_file_blocks(text)
+        # Empty-path block must NOT produce a silent write.
+        self.assertEqual(len(blocks), 0)
+        output = buf.getvalue()
+        self.assertIn("empty path", output.lower())
+
+    def test_warns_unclosed_block_between_others(self):
+        """H2 variant: a block interleaved between two good blocks without END FILE."""
+        text = "\n".join([
+            "---FILE: wiki/concepts/a.md---",
+            "page A",
+            "---END FILE---",
+            "---FILE: wiki/concepts/broken.md---",
+            "page B (no closer)",
+            "---FILE: wiki/concepts/c.md---",
+            "page C",
+            "---END FILE---",
+        ])
+        with capture_parse_stdout() as buf:
+            blocks = _core.parse_file_blocks(text)
+        # All three blocks are extracted (a, broken, c).
+        got = [p for p, _ in blocks]
+        self.assertIn("concepts/a.md", got)
+        self.assertIn("concepts/broken.md", got)
+        self.assertIn("concepts/c.md", got)
+        # broken block triggers a warning about missing END FILE.
+        output = buf.getvalue()
+        self.assertIn("concepts/broken.md", output)
+        self.assertIn("not closed", output.lower())
+
+    def test_empty_path_inside_content_does_not_warn(self):
+        """Empty path only triggers for FILE header, not body lines."""
+        text = "---FILE: wiki/concepts/real.md---\n---FILE:   ---  # this is body prose\n---END FILE---"
+        with capture_parse_stdout() as buf:
+            blocks = _core.parse_file_blocks(text)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0][0], "concepts/real.md")
+        # Body line starting with ---FILE: is harmless (treated as content).
+        self.assertIn("---FILE:", blocks[0][1])
+
+
+class TestSourceSlugFromRawPath(unittest.TestCase):
+    """Dedup helper: derive expected source page path from raw file path.
+
+    Ported from NashSU source-identity.ts parity — the skill mirrors the
+    raw/ directory structure into wiki/sources/ (naming-conventions.md §2.1).
+    """
+
+    def setUp(self):
+        self.root = Path("/tmp/test-wiki")
+
+    def test_book_type_subdir(self):
+        """Mirrors raw/Book/<name>.pdf → wiki/sources/Book/<name>.md"""
+        result = _core.source_slug_from_raw_path(
+            "/tmp/test-wiki/raw/Book/RF Circuit Design - 2008 - Bowick.pdf",
+            self.root,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result,
+            self.root / "wiki/sources/Book/RF Circuit Design - 2008 - Bowick.md",
+        )
+
+    def test_nested_datasheet_subdir(self):
+        """Preserves extra nesting: raw/Datasheet/ADI/ADL8113.pdf"""
+        result = _core.source_slug_from_raw_path(
+            "/tmp/test-wiki/raw/Datasheet/ADI/ADL8113.pdf",
+            self.root,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            result,
+            self.root / "wiki/sources/Datasheet/ADI/ADL8113.md",
+        )
+
+    def test_str_input_accepted(self):
+        """Both str and Path inputs work."""
+        result = _core.source_slug_from_raw_path(
+            "raw/Book/Test.pdf", str(self.root),
+        )
+        self.assertIsNotNone(result)
+
+    def test_expands_tilde_in_root(self):
+        """~ is expanded in wiki_root. Raw file lives under the expanded root's raw/."""
+        import os
+        home = os.path.expanduser("~")
+        raw_path = f"{home}/test-wiki/raw/Book/Foo.pdf"
+        result = _core.source_slug_from_raw_path(raw_path, "~/test-wiki")
+        self.assertIsNotNone(result)
+        self.assertFalse(str(result).startswith("~"))
+        self.assertTrue(str(result).endswith("wiki/sources/Book/Foo.md"))
+
+    def test_file_under_raw_with_relative_path(self):
+        """File living under raw/ expressed relatively → canonical result."""
+        result = _core.source_slug_from_raw_path(
+            "/tmp/test-wiki/raw/SomeFile.pdf",
+            self.root,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.name, "SomeFile.md")
+
+    def test_file_outside_raw_returns_none(self):
+        """Absolute path outside raw/ returns None."""
+        result = _core.source_slug_from_raw_path(
+            "/etc/passwd",
+            self.root,
+        )
+        self.assertIsNone(result)
+
+    def test_relative_path_outside_raw_returns_none(self):
+        """Relative path that resolves outside raw/ returns None."""
+        result = _core.source_slug_from_raw_path(
+            "../../outside/file.pdf",
+            self.root,
+        )
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

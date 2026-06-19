@@ -601,6 +601,52 @@ def is_safe_ingest_path(rel_path: str) -> bool:
     return True
 
 
+def source_slug_from_raw_path(raw_path: str | Path, wiki_root: str | Path) -> Path | None:
+    """Derive the expected source page path from a raw file path.
+
+    Used for dedup before ingest (SKILL.md gate 0.1): check whether
+    ``wiki/sources/<slug>.md`` already exists.
+
+    Algorithm (NashSU source-identity.ts parity, improved-wiki layout):
+      1. Resolve ``raw_path`` relative to ``<wiki_root>/raw/``
+      2. Replace extension with ``.md``
+      3. Return full path under ``<wiki_root>/wiki/sources/``
+
+    Returns ``None`` if the raw path is outside the project's raw/ tree.
+
+    Example:
+        >>> source_slug_from_raw_path(
+        ...     "raw/Book/RF Circuit Design - 2008 - Bowick.pdf",
+        ...     "/home/user/HardwareWiki",
+        ... )
+        Path("/home/user/HardwareWiki/wiki/sources/Book/RF Circuit Design - 2008 - Bowick.md")
+
+    For dedup:
+        expected = source_slug_from_raw_path(raw_file, config.wiki_root)
+        if expected and expected.exists():
+            print(f"Already ingested: {expected}")
+    """
+    wiki_root = Path(wiki_root).expanduser()
+    raw_path_obj = Path(raw_path).expanduser()
+    raw_root = wiki_root / "raw"
+
+    # Resolve relative paths against the project's raw/ root, matching how
+    # ``ingest.py "raw/Book/file.pdf"`` would be called from project dir.
+    if not raw_path_obj.is_absolute():
+        raw_path_obj = raw_root / raw_path_obj
+
+    try:
+        rel = raw_path_obj.relative_to(raw_root).with_suffix(".md")
+        # Python Path.relative_to does pure string prefix removal — it doesn't
+        # detect ".." traversal. Reject any result whose parts contain "..".
+        if ".." in rel.parts:
+            return None
+    except ValueError:
+        return None
+
+    return wiki_root / "wiki" / "sources" / rel
+
+
 # ── Parse helpers (moved from ingest.py) ──
 
 def parse_yaml_block(response: str) -> dict:
@@ -707,11 +753,21 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
             file_match = FILE_HEADER_RE.match(line)
             if file_match:
                 if current_path is not None:
-                    # Unclosed previous block — flush it
+                    # Unclosed previous block — flush it with warning (H2)
                     content = "\n".join(current_lines).rstrip() + "\n"
+                    print(f"  [parse] FILE block \"{current_path}\" was not closed "
+                          f"before next block — likely missing END FILE marker. "
+                          f"Block kept as-is.")
                     blocks.append((current_path, content))
                 # group(1) = optional "wiki/" prefix, group(2) = actual path
                 path = file_match.group(2).strip()
+                # H6 fix: surface empty-path blocks instead of silently dropping.
+                if not path:
+                    print(f"  [parse] FILE block with empty path skipped "
+                          f"(LLM omitted the path after ---FILE:).")
+                    current_path = None
+                    current_lines = []
+                    continue
                 if not path.endswith(".md"):
                     current_path = None
                     current_lines = []
@@ -752,8 +808,11 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
         if current_path is not None:
             current_lines.append(line)
 
-    # Flush last unclosed block (tolerant of missing END FILE)
+    # Flush last unclosed block (H2: tolerant, but warn — NashSU parity)
     if current_path is not None and current_lines:
+        print(f"  [parse] FILE block \"{current_path}\" was not closed before "
+              f"end of stream — likely truncation (model hit max_tokens, "
+              f"timeout, or connection dropped). Block kept as-is.")
         content = "\n".join(current_lines).rstrip() + "\n"
         blocks.append((current_path, content))
 
