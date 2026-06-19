@@ -186,5 +186,36 @@ class TestWhitelist(unittest.TestCase):
             self.assertEqual(pairs, [["paos", "聚磷菌"]])
 
 
+class TestMainConversationHandoff(unittest.TestCase):
+    """End-to-end: main() exits 101 on first detect, resumes to 0 after the
+    calling agent answers the conversation prompt."""
+
+    def test_main_pending_then_resume(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_wiki(root)
+
+            # First invocation: detect call is uncached → ConversationPending → 101.
+            rc = ds.main(["--project", str(root)])
+            self.assertEqual(rc, 101)
+            conv_dir = root / ".llm-wiki" / "conversation" / "dedup"
+            md_files = list(conv_dir.glob("*.md"))
+            self.assertEqual(len(md_files), 1)
+
+            # Simulate the calling agent answering the detect prompt with no groups.
+            md = md_files[0]
+            md.with_suffix(".txt").write_text(json.dumps({"groups": []}),
+                                              encoding="utf-8")
+
+            # Second invocation: detect cached → no groups → report written → 0.
+            rc = ds.main(["--project", str(root)])
+            self.assertEqual(rc, 0)
+            report = json.loads(
+                (root / ".llm-wiki" / "dedup-report.json").read_text("utf-8")
+            )
+            self.assertEqual(report["groups"], [])
+            self.assertFalse(report["apply"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

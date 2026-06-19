@@ -107,7 +107,7 @@ while True:
 
 ## Pitfall 4: MiniMax embo-01 embedding 端点需要 `type=db` 或 `type=query` 字段
 
-> **已废弃 (2026-06-19)**：Embedding 不再走 MiniMax（见 SKILL.md「LLM execution model」）。本节保留作历史记录，`build_embeddings.py` 的 MiniMax 路径将在后续移除。
+> **已废弃 (2026-06-19，2026-06-20 确认代码已清除)**：Embedding 不再走 MiniMax（见 SKILL.md「LLM execution model」）。`build_embeddings.py` 现在只有一个 OpenAI 兼容的 `/v1/embeddings` 路径（默认本地 Ollama `bge-m3`，可用 `EMBEDDING_*` 环境变量指向任何自选端点），MiniMax `embo-01` 路径已不存在。本节保留作历史记录。
 
 **症状 (verified 2026-06-11, HardwareWiki Stage 6 build_embeddings)**：调 MiniMax embedding 端点 `https://api.minimaxi.com/v1/embeddings` 用 OpenAI 兼容格式（`{"model": "embo-01", "input": "test"}`）返回：
 ```json

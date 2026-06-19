@@ -23,22 +23,24 @@ Output schema (one item per finding):
     "createdAt": <epoch ms>
   }
 
-Config (env vars, matching ingest.py):
+Config:
   IMPROVED_WIKI_ROOT  project root (default: cwd)
-  LLM_API_KEY         required
-  LLM_BASE_URL        https://api.minimaxi.com (default; script appends
-                      /anthropic/v1/messages — see pitfall below)
-  LLM_MODEL           MiniMax-M3 (default)
+
+LLM execution: conversation mode only (round ii, 2026-06-20). The semantic
+lint is one LLM call; this script writes a prompt file under
+<runtime>/conversation/semantic-lint/ and raises ConversationPending (exit
+101). The calling agent answers with the current conversation's model, writes
+the result, and re-invokes — the script reads the cached result and writes
+lint-semantic.json. No external LLM API key is needed (text generation is
+conversation-only). HTTP-direct LLM calls have been removed.
 
 Usage:
   ./wiki-lint-semantic.py              # scan and write lint-semantic.json
   ./wiki-lint-semantic.py --dry-run    # print prompt + summaries, no LLM call
   ./wiki-lint-semantic.py --limit 50   # cap pages sampled (for huge wikis)
-  ./wiki-lint-semantic.py --max-tokens 2048  # cap LLM output (default 4096)
 
-Pitfall — LLM_BASE_URL double-path: ingest.py appends /anthropic/v1/messages
-internally, so set LLM_BASE_URL to the BARE origin (e.g. https://api.minimaxi.com
-NOT https://api.minimaxi.com/anthropic). Same trap as ingest.py.
+Exit codes: 0 done; 101 conversation pending (agent answers + re-invokes);
+2 usage error.
 """
 from __future__ import annotations
 
@@ -48,8 +50,6 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -74,54 +74,6 @@ STATE_FILES = {
 SUMMARY_CHARS = 500
 # Concatenated sample for language detection (NashSU: 2000 chars)
 LANG_SAMPLE_CHARS = 2000
-# Default max_tokens (NashSU Stage 2 semantic: 4096)
-DEFAULT_MAX_TOKENS = 4096
-
-
-# ── LLM call (verbatim pattern from ingest.py call_llm) ──────────────────────
-def call_llm(
-    system_prompt: str,
-    user_content: str,
-    base_url: str,
-    model: str,
-    api_key: str,
-    max_tokens: int,
-) -> str:
-    """Call the LLM via Anthropic messages protocol. Returns the text content."""
-    url = f"{base_url.rstrip('/')}/anthropic/v1/messages"
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": user_content})
-
-    body = json.dumps({
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": messages,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=600) as resp:
-            data = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"LLM API HTTP {e.code}: {err_body[-500:]}")
-
-    content = data.get("content", [])
-    if not content:
-        raise RuntimeError(f"LLM response has no content: {json.dumps(data)[:500]}")
-    text_parts = [b.get("text", "") for b in content if b.get("type") == "text"]
-    return "".join(text_parts)
 
 
 # ── language directive (NashSU parity: _language.detect_language port) ───────────
@@ -129,6 +81,8 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 from _language import build_language_directive  # noqa: E402 (titles, descriptions, PAGES list) MUST be in English."
+from _core import ConversationPending  # noqa: E402
+from _llm_call import make_conversation_llm_call  # noqa: E402
 
 
 # ── core scan ────────────────────────────────────────────────────────────────
@@ -232,8 +186,6 @@ def main() -> int:
                         help="Print prompt + summary stats, skip LLM call")
     parser.add_argument("--limit", type=int, default=None,
                         help="Cap number of pages sampled (for huge wikis)")
-    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
-                        help=f"LLM max_tokens (default {DEFAULT_MAX_TOKENS})")
     parser.add_argument("--output", type=str, default=None,
                         help="Output path (default: <state_dir>/lint-semantic.json)")
     args = parser.parse_args()
@@ -270,42 +222,13 @@ def main() -> int:
         print(f"  first 500 chars of user_content:\n  {user_content[:500]!r}")
         return 0
 
-    # LLM config: env vars override config.json
-    api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = os.environ.get("LLM_BASE_URL", "")
-    model = os.environ.get("LLM_MODEL", "")
-
-    if not (api_key and base_url and model):
-        # Read from ~/.agents/config.json (same source as ingest.py)
-        config_path = Path.home() / ".agents" / "config.json"
-        try:
-            if config_path.exists():
-                cfg = json.loads(config_path.read_text(encoding="utf-8"))
-                default = os.environ.get("LLM_PROVIDER") or cfg.get("default", "")
-                provider = cfg.get("providers", {}).get(default, {})
-                if provider:
-                    api_key = api_key or provider.get("api_key", "")
-                    base_url = base_url or provider.get("base_url", "")
-                    model = model or provider.get("models", {}).get("text", provider.get("model", ""))
-        except Exception:
-            pass
-
-    if not api_key:
-        print("ERROR: LLM_API_KEY not set. Export it (e.g. source ~/.hermes/.env) "
-              "or configure ~/.agents/config.json, or use --dry-run to skip the LLM call.",
-              file=sys.stderr)
-        return 2
-
-    print(f"[semantic-lint] Calling LLM ({model} @ {base_url}) ...")
+    # Conversation mode: write prompt → raise ConversationPending (exit 101) →
+    # agent answers + re-invokes → cached result read here.
+    llm_call = make_conversation_llm_call(state_dir, stage_prefix="semantic-lint")
     try:
-        raw = call_llm(
-            system_prompt, user_content,
-            base_url=base_url, model=model, api_key=api_key,
-            max_tokens=args.max_tokens,
-        )
-    except Exception as e:
-        print(f"[semantic-lint] LLM call failed: {e}", file=sys.stderr)
-        return 1
+        raw = llm_call(system_prompt, user_content)
+    except ConversationPending:
+        return 101
 
     now_ms = int(time.time() * 1000)
     findings = parse_lint_blocks(raw, now_ms)

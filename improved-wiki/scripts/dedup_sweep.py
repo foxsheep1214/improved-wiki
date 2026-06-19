@@ -15,18 +15,23 @@ Wires `_dedup` (port of NashSU dedup.ts) into a real wiki/ sweep:
      backup every touched file, write canonical + rewrites, delete the
      merged-away pages, and prune index.md.
 
-The LLM callable comes from `_llm_call.make_llm_callable` (env +
-~/.agents/config.json). All merge I/O is reversible via the backup dir.
+The LLM callable is the conversation-mode handoff from
+`_llm_call.make_conversation_llm_call`: each LLM step (detect + per-group
+merge) writes a prompt file and raises ConversationPending (exit 101); the
+calling agent answers with the current conversation's model, writes the
+result, and re-invokes — the sweep resumes with every prior call cached.
+No external LLM API key is needed (text generation is conversation-only).
+All merge I/O is reversible via the backup dir.
 
 Usage:
   python3 dedup_sweep.py                            # dry-run: report only
   python3 dedup_sweep.py --apply                    # execute merges
   python3 dedup_sweep.py --project /path/to/wiki    # override root
   python3 dedup_sweep.py --whitelist whitelist.json # extra not-duplicates
-  python3 dedup_sweep.py --max-tokens 8192
 
-Env (for --apply / detect): LLM_API_KEY, LLM_BASE_URL, LLM_MODEL,
-  LLM_PROTOCOL — or ~/.agents/config.json.
+Exit codes: 0 done (report written); 101 conversation pending (agent must
+answer the prompt under <runtime>/conversation/dedup/ and re-invoke); 2
+config/usage error.
 """
 from __future__ import annotations
 
@@ -43,7 +48,9 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import _dedup  # noqa: E402
+from _core import ConversationPending  # noqa: E402
 from _paths import detect_runtime_dir  # noqa: E402
+from _llm_call import make_conversation_llm_call  # noqa: E402
 
 # Files / dirs excluded from dedup scanning (anchors, state, self-output).
 ANCHOR_FILES = {"index.md", "log.md", "overview.md"}
@@ -272,8 +279,6 @@ def main(argv: list[str] | None = None) -> int:
                         help="Execute merges (default: dry-run, no writes)")
     parser.add_argument("--whitelist", action="append", default=[],
                         help="Extra not-duplicates JSON file (repeatable)")
-    parser.add_argument("--max-tokens", type=int, default=4096,
-                        help="LLM max_tokens (default 4096)")
     args = parser.parse_args(argv)
 
     project_root = Path(args.project or os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
@@ -281,20 +286,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: wiki/ not found under {project_root}", file=sys.stderr)
         return 2
 
-    from _llm_call import make_llm_callable
-    try:
-        llm_call = make_llm_callable(max_tokens=args.max_tokens)
-    except RuntimeError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
-        return 2
+    runtime = detect_runtime_dir(project_root)
+    llm_call = make_conversation_llm_call(runtime, stage_prefix="dedup")
 
     whitelist_pairs = load_whitelist(*[Path(p) for p in args.whitelist])
-    run_sweep(
-        project_root, llm_call,
-        apply=args.apply,
-        whitelist_pairs=whitelist_pairs,
-        today=lambda: date.today().isoformat(),
-    )
+    try:
+        run_sweep(
+            project_root, llm_call,
+            apply=args.apply,
+            whitelist_pairs=whitelist_pairs,
+            today=lambda: date.today().isoformat(),
+        )
+    except ConversationPending:
+        # Conversation handoff: the calling agent must answer the prompt under
+        # <runtime>/conversation/dedup/ and re-invoke. Exit 101 signals this
+        # (same convention as ingest.py --conversation).
+        return 101
     return 0
 
 

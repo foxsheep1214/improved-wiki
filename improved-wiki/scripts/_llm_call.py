@@ -1,198 +1,102 @@
-"""_llm_call.py — shared LLM config resolution + (system, user) -> str callable.
+"""_llm_call.py — conversation-mode LLM handoff for standalone sweep tools.
 
-Bridges the `_dedup` / `_lint_suggest` library contract — which inject a plain
-``(system_prompt, user_message) -> str`` callable — to the real LLM endpoints,
-so standalone sweep scripts don't each re-implement env/config.json resolution,
-protocol routing, and retry.
+History: this module used to resolve an LLM endpoint (env vars /
+``~/.agents/config.json``) and make HTTP-direct calls (Anthropic / OpenAI
+protocol) for the dedup + semantic-lint sweeps. As of round ii (2026-06-20)
+text generation is **conversation mode only**: there is no http-direct path.
+The calling agent answers each LLM step with the current conversation's model.
 
-Config resolution order (mirrors wiki-lint-semantic.py + ingest.py):
-  1. Env vars:  LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_PROTOCOL
-  2. ~/.agents/config.json:  default provider → {protocol, base_url, api_key,
-     models.text | model}
+This module now provides the prompt-file handoff that sweep tools
+(`dedup_sweep.py`, `wiki-lint-semantic.py`) use in conversation mode:
 
-Both Anthropic-protocol (system as top-level field) and OpenAI-protocol
-(system as a message role) are supported. Retry reuses _llm_api primitives.
+  1. The sweep calls ``llm_call(system, user)`` (the callable returned by
+     ``make_conversation_llm_call``).
+  2. If a cached result file exists for this (system, user) it is returned
+     immediately — this is how a sweep *resumes* after a ConversationPending
+     exit. The cache key is a content hash, so it auto-invalidates when the
+     wiki content changes.
+  3. Otherwise the prompt is written to
+     ``<runtime>/conversation/<stage_prefix>/<slug>.md`` and
+     ``ConversationPending`` is raised. The calling agent reads the prompt,
+     answers with the current model, writes ``<slug>.txt``, and re-invokes
+     the sweep — which hits step 2 and continues.
+
+The callable is the ``(system, user) -> str`` shape that ``_dedup`` expects,
+so ``_dedup.detect_duplicate_groups`` / ``merge_duplicate_group`` work
+unchanged: each LLM call either returns from cache or raises
+ConversationPending (the sweep exits 101, the agent answers, the next
+re-invoke resumes from the top with all prior calls cached).
 """
 from __future__ import annotations
 
-import json
-import os
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Callable
 
-from _llm_api import _is_retryable_exception, _retry_jitter
+# Reuse the shared ConversationPending signal (defined in _core, also used by
+# ingest.py). Importing _core here keeps one canonical exception type across
+# the whole skill.
+from _core import ConversationPending
 
 __all__ = [
-    "LLMConfig",
-    "resolve_llm_config",
-    "make_llm_callable",
-    "llm_call",
+    "make_conversation_llm_call",
+    "slug_for",
 ]
 
-DEFAULT_MAX_TOKENS = 4096
-DEFAULT_TIMEOUT = 600
-MAX_RETRIES = 5
+# 16 hex chars (64 bits) — collision-resistant for the small number of
+# LLM calls a single sweep makes (1 detect + N merges, or 1 lint pass).
+_SLUG_LEN = 16
 
 
-@dataclass
-class LLMConfig:
-    api_key: str
-    base_url: str
-    model: str
-    protocol: str  # "anthropic" | "openai"
+def slug_for(system: str, user: str) -> str:
+    """Deterministic filesystem-safe slug for a (system, user) prompt pair.
 
-
-def resolve_llm_config() -> LLMConfig | None:
-    """Resolve LLM config from env vars, falling back to ~/.agents/config.json.
-
-    Returns None if no api_key can be found (caller decides how to surface).
+    Content-addressed so the cache auto-invalidates when wiki content
+    changes (the user message encodes the page summaries / merge inputs).
     """
-    api_key = os.environ.get("LLM_API_KEY", "")
-    base_url = os.environ.get("LLM_BASE_URL", "")
-    model = os.environ.get("LLM_MODEL", "")
-    protocol = os.environ.get("LLM_PROTOCOL", "")
-
-    if not (api_key and base_url and model):
-        config_path = Path.home() / ".agents" / "config.json"
-        try:
-            if config_path.exists():
-                cfg = json.loads(config_path.read_text(encoding="utf-8"))
-                default = os.environ.get("LLM_PROVIDER") or cfg.get("default", "")
-                provider = cfg.get("providers", {}).get(default, {})
-                if provider:
-                    api_key = api_key or provider.get("api_key", "")
-                    base_url = base_url or provider.get("base_url", "")
-                    model = model or provider.get("models", {}).get(
-                        "text", provider.get("model", "")
-                    )
-                    protocol = protocol or provider.get("protocol", "anthropic")
-        except (OSError, ValueError):
-            pass
-
-    if not (api_key and base_url and model):
-        return None
-    if protocol not in ("anthropic", "openai"):
-        protocol = "anthropic"
-    return LLMConfig(
-        api_key=api_key, base_url=base_url, model=model, protocol=protocol
-    )
+    digest = hashlib.sha256(
+        f"{system}\n\n{user}".encode("utf-8")
+    ).hexdigest()
+    return digest[:_SLUG_LEN]
 
 
-def llm_call(system: str, user: str, *, config: LLMConfig,
-             max_tokens: int = DEFAULT_MAX_TOKENS) -> str:
-    """Call the LLM with a system + user message. Returns the text content.
-
-    Retries transient errors (5xx, 429, network, timeout, truncated) with
-    exponential backoff + jitter, reusing _llm_api's retry classification.
-    """
-    if config.protocol == "openai":
-        url = f"{config.base_url.rstrip('/')}/v1/chat/completions"
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": user})
-        body = json.dumps({
-            "model": config.model,
-            "max_tokens": max_tokens,
-            "messages": messages,
-        }).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_key}",
-        }
-        return _call_with_retry(url, headers, body, _parse_openai)
-
-    # Anthropic protocol
-    url = f"{config.base_url.rstrip('/')}/anthropic/v1/messages"
-    body = json.dumps({
-        "model": config.model,
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": [{"role": "user", "content": user}],
-    }).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": config.api_key,
-        "anthropic-version": "2023-06-01",
-    }
-    return _call_with_retry(url, headers, body, _parse_anthropic)
-
-
-def make_llm_callable(
-    config: LLMConfig | None = None,
-    *,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+def make_conversation_llm_call(
+    runtime_dir: Path,
+    stage_prefix: str,
 ) -> Callable[[str, str], str]:
-    """Return a ``(system, user) -> str`` closure bound to a resolved config.
+    """Return a ``(system, user) -> str`` callable that does the conversation
+    prompt-file handoff against ``<runtime>/conversation/<stage_prefix>/``.
 
-    Raises RuntimeError if no config can be resolved. This is the shape
-    `_dedup.detect_duplicate_groups` / `merge_duplicate_group` expect.
+    On cache hit: read and return ``<slug>.txt`` (left in place so the sweep
+    can resume across multiple re-invokes — each re-invoke re-runs from the
+    top and finds every prior result cached).
+
+    On cache miss: write ``<slug>.md`` and raise ``ConversationPending``. The
+    calling agent answers, writes ``<slug>.txt``, and re-invokes.
     """
-    cfg = config or resolve_llm_config()
-    if cfg is None:
-        raise RuntimeError(
-            "No LLM config found. Set LLM_API_KEY/LLM_BASE_URL/LLM_MODEL env "
-            "vars or configure ~/.agents/config.json."
+    conv_dir = runtime_dir / "conversation" / stage_prefix
+
+    def _llm_call(system: str, user: str) -> str:
+        slug = slug_for(system, user)
+        conv_dir.mkdir(parents=True, exist_ok=True)
+        result_file = conv_dir / f"{slug}.txt"
+        prompt_file = conv_dir / f"{slug}.md"
+
+        if result_file.exists():
+            response = result_file.read_text(encoding="utf-8")
+            print(f"[conv:{stage_prefix}/{slug}] Read cached response "
+                  f"({len(response)} chars)", flush=True)
+            return response
+
+        prompt_file.write_text(
+            f"# System\n{system}\n\n# User\n{user}\n",
+            encoding="utf-8",
         )
+        print(f"\n{'=' * 60}", flush=True)
+        print(f"  CONVERSATION → {stage_prefix}/{slug}", flush=True)
+        print(f"  Prompt:  {prompt_file}", flush=True)
+        print(f"  Result:  {result_file}", flush=True)
+        print(f"{'=' * 60}\n", flush=True)
+        raise ConversationPending()
 
-    def _callable(system: str, user: str) -> str:
-        return llm_call(system, user, config=cfg, max_tokens=max_tokens)
-
-    return _callable
-
-
-# ── HTTP + retry internals ──────────────────────────────────────────────────
-
-def _call_with_retry(url, headers, body, parse_response: Callable[[dict], str]) -> str:
-    """POST ``body`` to ``url`` with retry; parse via ``parse_response``."""
-    last_error: Exception | None = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            data = _http_json_post(url, headers, body, timeout=DEFAULT_TIMEOUT)
-            return parse_response(data)
-        except Exception as e:
-            last_error = e
-            if attempt < MAX_RETRIES and _is_retryable_exception(e):
-                wait = _retry_jitter(2.0, attempt)
-                label = (f"HTTP {e.code}"
-                         if isinstance(e, urllib.error.HTTPError)
-                         else type(e).__name__)
-                print(f"[llm] {label} on attempt {attempt + 1}/{MAX_RETRIES + 1} "
-                      f"— retrying in {wait:.1f}s...", flush=True)
-                _sleep(wait)
-                continue
-            raise
-    raise RuntimeError(f"LLM call failed after {MAX_RETRIES + 1} attempts: {last_error}")
-
-
-def _sleep(seconds: float) -> None:
-    import time
-    time.sleep(seconds)
-
-
-def _http_json_post(url: str, headers: dict, body: bytes, *, timeout: int) -> dict:
-    """Single HTTP POST returning parsed JSON. Monkeypatched in tests."""
-    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"LLM API HTTP {e.code}: {err_body[-500:]}") from None
-
-
-def _parse_anthropic(data: dict) -> str:
-    content = data.get("content", [])
-    if not content:
-        raise RuntimeError("LLM response has no content (transient)")
-    return "".join(b.get("text", "") for b in content if b.get("type") == "text")
-
-
-def _parse_openai(data: dict) -> str:
-    choices = data.get("choices", [])
-    if not choices:
-        raise RuntimeError("LLM response has no choices (transient)")
-    return choices[0].get("message", {}).get("content", "").strip()
+    return _llm_call
