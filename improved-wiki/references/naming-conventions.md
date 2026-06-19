@@ -39,22 +39,23 @@ wiki/
 
 **来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页）。
 
-### 1.2 raw/ 子目录（NashSU 原生布局）
+### 1.2 raw/ 子目录（improved-wiki 布局）
 
 ```
 raw/
-└── sources/
-    ├── book/
-    ├── paper/
-    ├── datasheet/
-    ├── Applicationnote/
-    ├── Designexample/
-    ├── presentation/
-    ├── standard/
-    └── news/
+├── Book/
+├── Paper/
+├── Datasheet/
+├── Applicationnote/
+├── Designexample/
+├── Presentation/
+├── Standard/
+└── News/
 ```
 
-**来源**：`ingest.ts:360` — `const rawRoot = \`${projectPath}/raw/sources\``。improved-wiki 同时兼容 `raw/<type>/<file>`（无 `sources/` 中间层）和扁平布局。
+**命名规范**：首字母大写，其余小写（Titlecase）。
+
+**来源**：`_core.py:FOLDER_TO_TEMPLATE`。improved-wiki 使用 `raw/<type>/<任意子目录>/<file>`（无 `sources/` 中间层），与 NashSU 原生的 `raw/sources/<type>/` 布局不同（见 Section 12 差异表）。
 
 ### 1.3 Type → 目录映射
 
