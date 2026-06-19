@@ -25,6 +25,7 @@ WIKI = PROJECT_ROOT / "wiki"
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir
+from _lint_suggest import run_structural_lint
 RUNTIME = detect_runtime_dir(PROJECT_ROOT)
 SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "ADL8113")
 
@@ -95,6 +96,41 @@ def find_media_dir(slug: str) -> Optional[Path]:
         if d.is_dir() and (slug in d.name or slug.replace(" ", "") in d.name.replace(" ", "")):
             return d
     return None
+
+
+# ── Structural lint suggestions (wiki-wide, non-gating) ─────────────────────
+# Mirrors dedup_sweep exclusions: anchors + state + lint/REVIEW/media dirs.
+_LINT_ANCHOR_FILES = {"index.md", "log.md", "overview.md"}
+_LINT_STATE_FILES = {
+    "lint-cache.json", "ingest-cache.json", "ingest-queue.json",
+    "review.json", "review-suggestions.json", "embed-cache.json",
+    "lint-semantic.json", "dedup-report.json",
+}
+_LINT_SKIP_DIRS = {"lint", "REVIEW", "media"}
+
+
+def collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
+    """Run structural lint with deterministic link suggestions over wiki/.
+
+    Returns findings from _lint_suggest.run_structural_lint — broken-link,
+    orphan, no-outlinks — each enriched with a suggested_target /
+    suggested_source when a confident match exists. Non-gating: the caller
+    (validate_ingest.main) surfaces these without affecting the exit code.
+    """
+    pages: list[tuple[str, str]] = []
+    if not wiki_dir.is_dir():
+        return []
+    for path in sorted(wiki_dir.rglob("*.md")):
+        rel = path.relative_to(wiki_dir)
+        if rel.name in _LINT_ANCHOR_FILES or rel.name in _LINT_STATE_FILES:
+            continue
+        if rel.parts and rel.parts[0] in _LINT_SKIP_DIRS:
+            continue
+        try:
+            pages.append((str(rel), path.read_text(encoding="utf-8")))
+        except OSError:
+            continue
+    return run_structural_lint(pages)
 
 
 def main():
@@ -428,6 +464,28 @@ def main():
         note("partial", f"lance={'yes' if lance_present else 'no'}, embed-cache={'populated' if embed_cache_exists else 'no'}")
     else:
         note("skipped", "LanceDB not enabled; OK if wiki < 100 pages")
+
+    # ═══════════════════════════════════════════════
+    # Structural lint suggestions (wiki-wide, non-gating)
+    # ═══════════════════════════════════════════════
+    print("\n[Lint suggestions] Structural (wiki-wide, non-gating)")
+    try:
+        lint_findings = collect_structural_lint_findings(WIKI)
+    except Exception as e:  # defensive: lint must never break the validator
+        lint_findings = []
+        note("structural lint skipped", f"{type(e).__name__}: {e}")
+    from collections import Counter as _Counter
+    _lc = _Counter(f["type"] for f in lint_findings)
+    note("findings",
+         f"broken-link={_lc.get('broken-link', 0)} "
+         f"orphan={_lc.get('orphan', 0)} "
+         f"no-outlinks={_lc.get('no-outlinks', 0)}")
+    for f in lint_findings[:20]:
+        suggestion = f.get("suggested_target") or f.get("suggested_source")
+        sugg = f" → suggest: {suggestion}" if suggestion else " (no suggestion)"
+        print(f"    [{f['type']}] {f['page']}{sugg}")
+    if len(lint_findings) > 20:
+        print(f"    ... and {len(lint_findings) - 20} more")
 
     # ── Summary ──
     total = len(results)
