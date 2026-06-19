@@ -103,6 +103,31 @@ def _ensure_pymupdf() -> Path:
     return python
 
 
+def _pymupdf_page_count(file_path: Path) -> int:
+    """Get page count via PyMuPDF. Returns 0 on failure."""
+    try:
+        python = _find_pymupdf_python()
+        if python is None:
+            return 0
+        if python == Path(sys.executable):
+            import fitz
+            doc = fitz.open(file_path)
+            try:
+                return len(doc)
+            finally:
+                doc.close()
+        else:
+            import subprocess
+            r = subprocess.run(
+                [str(python), "-c",
+                 f"import fitz; doc=fitz.open({file_path!r}); print(len(doc)); doc.close()"],
+                capture_output=True, text=True, timeout=30,
+            )
+            return int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else 0
+    except Exception:
+        return 0
+
+
 def extract_text_pymupdf(file_path: Path) -> str:
     python = _ensure_pymupdf()
     if python == Path(sys.executable):
@@ -269,9 +294,23 @@ def extract_text(file_path: Path, config: Config, pilot_confirmed: bool = False)
     if pdf_type == "text":
         try:
             text = extract_text_pymupdf(file_path)
-            if text.strip() and len(text) > len(text.split("\n\n")) * 5:
+            # Check 1: not empty, not sparse
+            ok1 = text.strip() and len(text) > len(text.split("\n\n")) * 5
+            # Check 2: per-page char threshold (>50 chars/page minimum for real text docs).
+            # Misclassified scanned PDFs detected as "text" will have near-zero per-page yield.
+            ok2 = True
+            if ok1:
+                pages = _pymupdf_page_count(file_path)
+                if pages and len(text) < pages * 50:
+                    ok2 = False
+                    print(f"[extract] PyMuPDF returned only {len(text)} chars over {pages} pages "
+                          f"({len(text)/max(pages,1):.0f} chars/page) — likely scanned, trying minerU fallback")
+            if ok1 and ok2:
                 return text, "pymupdf"
-            print(f"[extract] PyMuPDF returned sparse text — trying minerU fallback")
+            if ok1 and not ok2:
+                print(f"[extract] PyMuPDF text looks sparse per-page — trying minerU fallback")
+            elif not ok1:
+                print(f"[extract] PyMuPDF returned sparse text — trying minerU fallback")
         except Exception as e:
             print(f"[extract] PyMuPDF failed ({e}) — trying minerU fallback")
         try:

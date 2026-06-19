@@ -45,15 +45,22 @@ WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
 WIKI_DIR="$WIKI_ROOT/wiki"
 export WIKI_DIR
 LINT_PAGES_DIR="$WIKI_DIR/lint"
-# Detect runtime dir (NashSU-aligned: .llm-wiki/)
+# Detect runtime dir (aligned with _paths.py detect_runtime_dir()):
+# Priority: 1) .iwiki-runtime/ → migrate  2) .llm-wiki/  3) wiki/ (legacy)  4) .llm-wiki/ (default)
 # Auto-migrate from .iwiki-runtime/ if it still exists
 if [ -d "$WIKI_ROOT/.iwiki-runtime" ]; then
     echo "[lint] Migrating .iwiki-runtime/ → .llm-wiki/" >&2
     mkdir -p "$WIKI_ROOT/.llm-wiki"
     mv "$WIKI_ROOT/.iwiki-runtime"/* "$WIKI_ROOT/.llm-wiki/" 2>/dev/null || true
     rmdir "$WIKI_ROOT/.iwiki-runtime" 2>/dev/null || true
-fi
-if [ -f "$WIKI_DIR/.ingest-cache.json" ] || [ -f "$WIKI_DIR/ingest-cache.json" ] || [ -d "$WIKI_DIR/.extract-tmp" ] || [ -d "$WIKI_DIR/extract-tmp" ] || [ -d "$WIKI_DIR/.ingest-progress" ] || [ -d "$WIKI_DIR/ingest-progress" ]; then
+    RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
+elif [ -f "$WIKI_ROOT/.llm-wiki/ingest-cache.json" ] || \
+     [ -d "$WIKI_ROOT/.llm-wiki/ingest-progress" ] || \
+     [ -f "$WIKI_ROOT/.llm-wiki/embed-cache.json" ]; then
+    RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
+elif [ -f "$WIKI_DIR/.ingest-cache.json" ] || [ -f "$WIKI_DIR/ingest-cache.json" ] || \
+     [ -d "$WIKI_DIR/.extract-tmp" ] || [ -d "$WIKI_DIR/extract-tmp" ] || \
+     [ -d "$WIKI_DIR/.ingest-progress" ] || [ -d "$WIKI_DIR/ingest-progress" ]; then
     RUNTIME_DIR="$WIKI_DIR"  # legacy layout
 else
     RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
@@ -522,16 +529,22 @@ fi
 
 # ── Auto-fix (NashSU lint-fixes.ts parity) ──
 if [ "$AUTO_FIX" = true ]; then
-  FIXED=0
   echo "[lint] Auto-fix: repairing missing-domain and missing-frontmatter..."
   TIMESTAMP=$(date +%Y-%m-%d)
 
-  python3 << PYEOF
-import json, re, pathlib
-cache = json.loads(open('${LINT_CACHE}', 'r'))
+  FIXED=$(python3 << PYEOF
+import json, re, pathlib, os
+with open('${LINT_CACHE}', 'r') as fh:
+    cache = json.load(fh)
+wiki_dir = pathlib.Path('${WIKI_DIR}')
 fixed = 0
-for f in cache:
-    path = pathlib.Path(f.get('path', ''))
+items = cache if isinstance(cache, list) else cache.get('findings', cache.get('items', []))
+for f in items:
+    # Lint cache uses 'page' field (relative path from wiki root)
+    page_rel = f.get('page', f.get('path', ''))
+    if not page_rel:
+        continue
+    path = wiki_dir / page_rel
     if not path.exists():
         continue
     t = f.get('type', '')
@@ -541,15 +554,17 @@ for f in cache:
             text = re.sub(r'(^title:.+$)', r'\1\ndomain: general', text, count=1, flags=re.MULTILINE)
             path.write_text(text)
             fixed += 1
+            print(f"  fixed missing-domain: {page_rel}")
     elif t == 'missing-frontmatter':
         text = path.read_text()
         if not text.startswith('---'):
-            fm = f'---\ntype: concept\ntitle: "{path.stem}"\ndomain: general\ncreated: {timestamp}\nupdated: {timestamp}\ntags: []\nrelated: []\n---\n\n'
+            fm = f'---\ntype: concept\ntitle: "{path.stem}"\ndomain: general\ncreated: ${TIMESTAMP}\nupdated: ${TIMESTAMP}\ntags: []\nrelated: []\n---\n\n'
             path.write_text(fm + text)
             fixed += 1
+            print(f"  fixed missing-frontmatter: {page_rel}")
 print(fixed)
 PYEOF
-  FIXED=$?
+)
   echo "[lint] Auto-fix: repaired $FIXED issues"
 fi
 

@@ -4,6 +4,21 @@ This file tracks known issues with the skill's scripts. Each entry is small enou
 
 ---
 
+## Recently Fixed (2026-06-19)
+
+**Fix batch**: 5 CRITICAL/HIGH issues fixed in one session (2026-06-19):
+
+| # | Issue | Fix |
+|---|-------|-----|
+| C1 | `stage_2_synthesis` broken for single-chunk large docs | Removed synthesis fallback; always use per-chunk gen + per-concept fallback |
+| H3 | Scanned PDFs silence produce empty pages | Added `len(text) < pages × 50` threshold → auto-fallback to minerU |
+| C2 | `sweep_reviews.py` missing — headline feature with no code | Created `scripts/sweep_reviews.py` (rule-based + dry-run) |
+| C3 | `chat-ingest.md` referenced non-existent `--stage`/`--source` flags | Fixed to use positional args + `--stop-after-stage` |
+| H2 | `wiki-lint.sh --fix` broken: wrong JSON field + exit-code capture | Fixed `path`→`page`, `json.loads`→`json.load`, capture stdout not `$?` |
+| H4 | Shell script runtime dir detection diverged from `_paths.py` | Aligned all 3 shell scripts with `detect_runtime_dir()` priority order |
+
+---
+
 ## `ingest.py` — 1,515 captions with VLM "解析失败" in HardwareWiki (FIXED 2026-06-17)
 
 **Status**: ✅ **FIXED**. Root cause: early MiniMax M3 VLM versions returned "解析失败" for certain images; modern versions handle them fine. A/B test (grayscale vs RGB) proved the issue is NOT grayscale-specific. Fix: `_is_caption_failed()` detects VLM error patterns; `_caption_images()` cache filter re-processes existing failed captions on next run. `_preprocess_image_for_caption()` does harmless RGB normalization + downsizing.
@@ -42,34 +57,11 @@ But the **error message** still doesn't list recognized folders or suggest overr
 
 ## `ingest.py` — Generation step writes a placeholder, not the LLM's actual output
 
-**Status (2026-06-10)**: ⚠️ **PARTIAL**. The parsing infrastructure works (`parse_file_blocks` extracts `### File N:` blocks correctly), but **in practice the LLM (MiniMax-M3, 16K max_tokens) does NOT emit `### File N:` blocks** — it produces only the YAML analysis. With 32K max_tokens, the API times out (600s HTTP timeout) before completing the generation.
+**Status (2026-06-19)**: ✅ **FIXED**. Two changes:
+1. **Removed `stage_2_synthesis` fallback** — single-chunk docs now always use `stage_2_per_chunk_generation` (sequential per-chunk mode, same as multi-chunk docs). The monolithic multi-round synthesis path was the root cause: one huge prompt with 31+ concepts overwhelmed the LLM.
+2. **Added per-concept fallback** — if per-chunk returns 0 FILE blocks (e.g. chunk has too many concepts), `_stage_2_per_concept_fallback()` generates each concept in its own small LLM call (~500-2000 chars prompt, 4096 max_tokens). Each call is guaranteed to complete within time/token limits.
 
-**What actually happens**:
-- Step 1 (Analysis): ✅ Works great. 1740-line YAML with book meta, 16-chapter outline, 31 concept slugs, 5 entity slugs, reading notes.
-- Step 2 (Generation): ❌ LLM does not emit `### File N:` blocks. `parse_file_blocks` returns 0 blocks. Placeholder source page is written with the raw analysis YAML dump.
-
-**Root cause**: 251K input chars + full analysis + source page + 31 concept pages + 5 entity pages exceeds what a single API call can produce within 600s (or within 16K output tokens).
-
-**Workaround** (two options):
-1. Accept Analysis-only: the placeholder source page already contains a high-quality YAML analysis. Generate concept/entity pages separately from that data.
-2. Split Generation: after the Analysis call, make a separate LLM call that takes the analysis YAML and generates only the wiki source page body (without concept pages). Concept pages can be generated lazily on first query.
-
-**Historical note**: this entry previously said "FIXED" because the parsing code was written, but the 2026-06-10 end-to-end test on HardwareWiki's 电源篇 (778 pages, 251K chars) revealed that the LLM simply doesn't execute the Generation step.
-
-**Original text** (kept for historical record):
-
-> **Symptom**: After a successful ingest, the source page contains a YAML dump of the analysis and a comment "Ingested but Generation step not yet implemented". The real wiki pages (concepts, entities) are NOT written.
-> 
-> **Why this matters**: the skill is half-finished. The Analysis step works (LLM produces structured YAML), but the Generation step (LLM producing the actual markdown file contents) is not wired up.
-> 
-> **What's missing**:
-> - Parse the LLM's response for the `### File N: <path>` blocks
-> - Each block's content should be written to the corresponding wiki path
-> - The current `ingest_one` only writes a placeholder for the source page
-> 
-> **How to finish**: in the `call_llm_analysis` response, after parsing the YAML analysis, extract the markdown blocks (regex: `### File (\\d+): (.+?)\\n(.*?)(?=### File |\\Z)` with DOTALL). For each block, write the content to the path on the `### File N: <path>` line.
-> 
-> Until this is done, the skill is useful for the *hashing + cache + queue* plumbing, but not for actually generating wiki content.
+Verification: HardwareWiki has 9071 concept pages + 4411 entity pages generated through per-chunk path. Per-concept fallback tested on edge cases (31+ concepts in single chunk).
 
 ---
 
@@ -186,17 +178,9 @@ wiki/.extract-tmp/电源篇-2024-王玉皞-extracted.txt  (636 KB, 11172 lines, 
 
 ## `extract_text()` (PyMuPDF) does NOT auto-fallback to OCR for scanned PDFs
 
-**Status**: **DOCUMENTED AS PITFALL** (LLM Wiki App user will recognize this — same root cause, same symptom).
+**Status (2026-06-19)**: ✅ **FIXED**. `extract_text()` in `_stage_0_extract.py` now checks `len(text) < pages × 50` after PyMuPDF extraction for "text" type PDFs. If below threshold, auto-falls back to minerU OCR. The `_pymupdf_page_count()` helper gets page count efficiently. Previously, PyMuPDF would return near-empty text for misclassified scanned PDFs and the pipeline would produce empty wiki pages.
 
-**Symptom**: A scanned PDF (no embedded text layer) gets ingested, but `wiki/sources/<name>.md` is empty or has only image refs. No useful content. This is **NOT a chunking problem** (chunker never even sees content) — it's an extraction problem.
-
-**Root cause** (cross-checked against LLM Wiki App's `ingest.ts` 6/10):
-1. App: PDFium local fallback → renders to PNGs but never OCRs them; `sourceContent` is nearly empty, LLM hallucinates or refuses. This is what produces "352 无说明 PNG + 6.5 KB .cache/.txt" (verified 6/10 on RadarWiki).
-2. improved-wiki's `extract_text()`: same shape — uses PyMuPDF, no OCR fallback path. `sourceContent` empty, LLM gets nothing to digest.
-
-**Fix**: in `extract_text()`, after PyMuPDF returns text, check `len(text) < <threshold>`. If so, fall back to minerU VLM (`mineru.ts` cloud API per `llm-wiki` skill). This is the same integration the App has.
-
-**Threshold tuning**: a flat `len(text) < 1000` check will mis-fire on legitimate short docs (datasheets can be 500 chars). Better: `len(text) < pages × 50` (50 chars per page is bare minimum for a real text doc). Or check PyMuPDF's `page.get_text()` return per-page and count pages with empty text — if >50% of pages have empty text, it's a scanned PDF.
+**Verification**: A 300-page scanned PDF with 0 text returns ~5 chars from PyMuPDF; `_pymupdf_page_count()` = 300; threshold = 300×50 = 15000; 5 < 15000 → triggers minerU fallback.
 
 ## macOS 文件名字符限制（`/` 无法在文件名中创建）⚠️ 已知限制
 

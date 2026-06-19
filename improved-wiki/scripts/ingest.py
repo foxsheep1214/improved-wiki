@@ -93,6 +93,7 @@ from _stage_2_generate import (
     stage_2_5_review_suggestions, _generate_chunk,
     build_per_chunk_gen_prompt, stage_2_per_chunk_generation,
     _extract_concept_entity_names,
+    _stage_2_per_concept_fallback,
     stage_2_0_source_page, stage_2_synthesis, build_synthesis_prompt,
     build_query_generation_prompt, stage_2_3_query_generation,
     build_comparison_disambiguation_prompt,
@@ -962,15 +963,23 @@ def _do_prepare(
                 raw_response = progress["raw_response"]
                 file_blocks = parse_file_blocks(raw_response)
                 print(f"  [stage_2] (cached) Synthesis — {len(file_blocks)} file blocks")
-            elif len(chunk_analyses) > 1:
+            else:
+                # Always use per-chunk generation (NashSU sequential mode).
+                # stage_2_synthesis (monolithic multi-round) is retired —
+                # it fails for large single-chunk docs: LLM hits max_tokens
+                # or 600s timeout before producing FILE blocks.
+                # per-chunk works for 1 chunk too — each chunk call is small.
                 analysis, raw_response, file_blocks = stage_2_per_chunk_generation(
                     chunk_analyses, [], global_digest, raw_file, config, template_content,
                     verbose=verbose,
                 )
-            else:
-                analysis, raw_response, file_blocks = stage_2_synthesis(
-                    global_digest, chunk_analyses, raw_file, config, template_content, verbose=verbose
-                )
+                if not file_blocks and chunk_analyses:
+                    # Per-chunk returned 0 blocks (e.g. chunk with many concepts
+                    # overwhelms single LLM call). Fall back to per-concept calls.
+                    print(f"  [stage_2] ⚠️  Per-chunk returned 0 blocks — falling back to per-concept generation")
+                    analysis, raw_response, file_blocks = _stage_2_per_concept_fallback(
+                        chunk_analyses, global_digest, raw_file, config, template_content, verbose
+                    )
 
         # Merge Stage 2.0 source page into file_blocks (before verification)
         if source_page_response:

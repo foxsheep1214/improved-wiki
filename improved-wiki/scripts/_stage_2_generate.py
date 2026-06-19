@@ -19,7 +19,7 @@ from _core import (
 )
 from _llm_api import _retry_jitter, _is_retryable_exception, call_anthropic_protocol
 
-__all__ = ["stage_2_5_review_suggestions", "build_per_chunk_gen_prompt", "stage_2_per_chunk_generation", "stage_2_0_source_page", "stage_2_synthesis", "build_synthesis_prompt", "build_query_generation_prompt", "stage_2_3_query_generation", "build_comparison_disambiguation_prompt", "build_comparison_in_source_prompt", "stage_2_5_comparison_generation"]
+__all__ = ["stage_2_5_review_suggestions", "build_per_chunk_gen_prompt", "stage_2_per_chunk_generation", "_stage_2_per_concept_fallback", "stage_2_0_source_page", "stage_2_synthesis", "build_synthesis_prompt", "build_query_generation_prompt", "stage_2_3_query_generation", "build_comparison_disambiguation_prompt", "build_comparison_in_source_prompt", "stage_2_5_comparison_generation"]
 
 # ---------- Stage 2.5: Review suggestions ----------
 
@@ -453,6 +453,316 @@ START IMMEDIATELY with ---FILE:... No preamble.
         "method": "per-chunk-sequential",
     }
     return analysis, combined, all_file_blocks
+
+
+# ── Per-concept fallback (when per-chunk returns 0 blocks) ──
+
+# Maximum concepts per LLM call in fallback mode.
+# Above this, concepts are split into multiple calls.
+PER_CONCEPT_BATCH_MAX = 4
+
+
+def _stage_2_per_concept_fallback(
+    chunk_analyses: list[dict],
+    global_digest: dict,
+    file_path: Path,
+    config: Config,
+    template: str = "",
+    verbose: bool = False,
+) -> tuple[dict, str, list[tuple[str, str]]]:
+    """Generate each concept in its own small LLM call.
+
+    Used when per-chunk generation returns 0 FILE blocks (e.g. chunk has
+    too many concepts for a single call to complete within max_tokens/timeout).
+    Each concept gets a focused prompt with just its definition + context from
+    the chunk that found it.
+    """
+    unique_concepts, unique_entities = _extract_concept_entity_names(chunk_analyses)
+    all_file_blocks: list[tuple[str, str]] = []
+    all_responses: list[str] = []
+    generated_slugs: list[str] = []
+    gen_tokens = config.compute_max_tokens(4096)
+    t0 = time.time()
+    total = len(unique_concepts) + len(unique_entities)
+
+    # Build concept→chunk_analysis map for targeted context
+    concept_to_chunk: dict[str, int] = {}
+    for idx, analysis in enumerate(chunk_analyses):
+        for c in analysis.get("concepts_found", []):
+            name = c.get("name", c) if isinstance(c, dict) else str(c)
+            concept_to_chunk[name] = idx
+
+    print(f"[stage_2] Per-concept fallback: {len(unique_concepts)} concepts + "
+          f"{len(unique_entities)} entities, {PER_CONCEPT_BATCH_MAX} per batch, "
+          f"max_tokens={gen_tokens}")
+
+    n = 0
+    existing_slugs = list_existing_slugs(config)
+
+    for concept_name in unique_concepts:
+        chunk_idx = concept_to_chunk.get(concept_name, 0)
+        analysis = chunk_analyses[chunk_idx] if chunk_idx < len(chunk_analyses) else chunk_analyses[0]
+
+        # Extract concept details from the chunk analysis
+        concept_info = None
+        for c in analysis.get("concepts_found", []):
+            name = c.get("name", c) if isinstance(c, dict) else str(c)
+            if name == concept_name:
+                concept_info = c if isinstance(c, dict) else {"name": c}
+                break
+
+        slug = concept_name.lower().replace(" ", "-").replace("/", "-")
+        if slug in generated_slugs:
+            continue
+
+        prompt = _build_per_concept_prompt(
+            concept_info, slug, file_path, config, global_digest,
+            analysis, generated_slugs, existing_slugs, template,
+        )
+
+        for attempt in range(3):
+            try:
+                t_call = time.time()
+                response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens)
+                all_responses.append(response)
+                blocks = parse_file_blocks(response)
+                all_file_blocks.extend(blocks)
+                dt = time.time() - t_call
+                n += 1
+                pct = n * 100 // total
+                tag = f" (retry #{attempt})" if attempt > 0 else ""
+                print(f"  [concept {n}/{total}] {concept_name[:50]} → "
+                      f"{len(blocks)} blocks ({len(response):,} chars, {stop_reason}) "
+                      f"{dt:.0f}s [{pct}%]{tag}")
+                for path, _content in blocks:
+                    s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+                    if s not in generated_slugs:
+                        generated_slugs.append(s)
+                break
+            except Exception as e:
+                if attempt < 2 and _is_retryable_exception(e):
+                    wait = _retry_jitter(2.0, attempt)
+                    print(f"  [concept {n+1}/{total}] {type(e).__name__} retry in {wait:.1f}s...")
+                    time.sleep(wait)
+                    continue
+                print(f"  [concept {n+1}/{total}] ❌ {e}")
+                break
+
+    for entity_name in unique_entities[:min(len(unique_entities), 20)]:
+        slug = entity_name.lower().replace(" ", "-").replace("/", "-")
+        if slug in generated_slugs:
+            continue
+        prompt = _build_per_entity_prompt(
+            entity_name, slug, file_path, config, global_digest,
+            existing_slugs, template,
+        )
+        for attempt in range(3):
+            try:
+                response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens)
+                all_responses.append(response)
+                blocks = parse_file_blocks(response)
+                all_file_blocks.extend(blocks)
+                n += 1
+                pct = n * 100 // total
+                print(f"  [entity {n}/{total}] {entity_name[:50]} → "
+                      f"{len(blocks)} blocks ({len(response):,} chars, {stop_reason}) [{pct}%]")
+                for path, _content in blocks:
+                    s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+                    if s not in generated_slugs:
+                        generated_slugs.append(s)
+                break
+            except Exception as e:
+                if attempt < 2 and _is_retryable_exception(e):
+                    time.sleep(_retry_jitter(2.0, attempt))
+                    continue
+                print(f"  [entity {n+1}/{total}] ❌ {e}")
+                break
+
+    # Generate source page from global digest (compact)
+    try:
+        source_rel = f"sources/{file_path.relative_to(config.raw_root).with_suffix('.md')}"
+    except ValueError:
+        source_rel = f"sources/{file_path.with_suffix('.md').name}"
+    source_prompt = f"""# Role
+Generate a source page for this document from the global digest.
+
+# Global Digest
+```yaml
+{json.dumps(global_digest, ensure_ascii=False, indent=2)[:4000]}
+```
+
+# Concepts generated ({len(all_file_blocks)} pages)
+{', '.join(Path(p).stem for p, _ in all_file_blocks[:80])}
+
+# Output Format — EXACT
+---FILE:wiki/{source_rel}---
+(frontmatter type:source + content)
+---END FILE---
+
+START IMMEDIATELY with ---FILE:... No preamble.
+"""
+    try:
+        src_response, _ = call_anthropic_protocol(source_prompt, config, max_tokens=4096)
+        all_responses.append(src_response)
+        src_blocks = parse_file_blocks(src_response)
+        all_file_blocks.extend(src_blocks)
+    except Exception as e:
+        print(f"  [stage_2] Source page generation failed: {e}")
+
+    combined = "\n".join(all_responses)
+    concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
+    entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
+    source_blocks = [b for b in all_file_blocks if "sources/" in b[0]]
+
+    print(f"[stage_2] Per-concept fallback done — {time.time()-t0:.0f}s, "
+          f"{len(all_file_blocks)} blocks ({len(concept_blocks)}c/{len(entity_blocks)}e/{len(source_blocks)}s)")
+
+    analysis = {
+        "book_meta": global_digest.get("book_meta", {}),
+        "outline": global_digest.get("outline", []),
+        "concepts_identified": len(unique_concepts),
+        "concepts_generated": len(concept_blocks),
+        "entities_generated": len(entity_blocks),
+        "source_generated": len(source_blocks) > 0,
+        "coverage_pct": round(len(concept_blocks) / max(len(unique_concepts), 1), 2),
+        "total_chunks": len(chunk_analyses),
+        "method": "per-concept-fallback",
+    }
+    return analysis, combined, all_file_blocks
+
+
+def _build_per_concept_prompt(
+    concept_info: dict,
+    slug: str,
+    file_path: Path,
+    config: Config,
+    global_digest: dict,
+    chunk_analysis: dict,
+    generated_slugs: list[str],
+    existing_slugs: list[str],
+    template: str = "",
+) -> str:
+    """Build a focused prompt for generating ONE concept page."""
+    name = concept_info.get("name", slug)
+    definition = concept_info.get("definition", "")
+    importance = concept_info.get("importance", "core")
+    details = concept_info.get("key_details", [])[:5]
+
+    try:
+        raw_rel = str(file_path.relative_to(config.raw_root))
+    except ValueError:
+        raw_rel = file_path.name
+
+    # Sibling concepts from same chunk (for wikilinks)
+    siblings = []
+    for c in chunk_analysis.get("concepts_found", []):
+        cn = c.get("name", c) if isinstance(c, dict) else str(c)
+        if cn != name:
+            siblings.append(cn)
+
+    template_section = ""
+    if template:
+        template_section = f"\n# Document Type\n<template>\n{template[:800]}\n</template>\n"
+
+    return f"""# Role
+Generate ONE wiki concept page. Output ONLY this one page, then stop.
+
+{template_section}
+# Concept to Generate
+- Name: {name}
+- Importance: {importance}
+- Definition: {definition}
+{f"- Key Details: " + "; ".join(details) if details else ""}
+
+# Context from Source
+Source: {file_path.stem}
+{f"Sibling concepts in this section (use [[wikilinks]]): {', '.join(siblings[:10])}" if siblings else ""}
+
+# Already Generated (skip these — use [[wikilinks]]):
+{', '.join(generated_slugs[:50]) or "(none yet)"}
+
+# Existing Wiki Pages (avoid duplicates):
+{', '.join(existing_slugs[:50]) or "(none)"}
+
+# ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCK
+Your FIRST line MUST be `---FILE:wiki/concepts/{slug}.md---`
+Do NOT write preamble, analysis, or commentary. Parser IGNORES non-FILE text.
+
+# Output Format — EXACT
+---FILE:wiki/concepts/{slug}.md---
+---
+type: concept
+domain: general
+title: "{name}"
+tags: [...]
+related: []
+sources: ["raw/{raw_rel}"]
+created: {time.strftime('%Y-%m-%d')}
+updated: {time.strftime('%Y-%m-%d')}
+---
+
+# {name}
+
+(Detailed content — explain the concept, include key details, use [[wikilinks]])
+
+---END FILE---
+
+Generate the page NOW. Start with ---FILE:...
+"""
+
+
+def _build_per_entity_prompt(
+    entity_name: str,
+    slug: str,
+    file_path: Path,
+    config: Config,
+    global_digest: dict,
+    existing_slugs: list[str],
+    template: str = "",
+) -> str:
+    """Build a focused prompt for generating ONE entity page."""
+    try:
+        raw_rel = str(file_path.relative_to(config.raw_root))
+    except ValueError:
+        raw_rel = file_path.name
+
+    return f"""# Role
+Generate ONE wiki entity page. Output ONLY this one page, then stop.
+
+# Entity to Generate
+- Name: {entity_name}
+
+# Source
+Document: {file_path.stem}
+
+# Existing Wiki Pages (avoid duplicates):
+{', '.join(existing_slugs[:50]) or "(none)"}
+
+# ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCK
+Your FIRST line MUST be `---FILE:wiki/entities/{slug}.md---`
+Do NOT write preamble, analysis, or commentary.
+
+# Output Format — EXACT
+---FILE:wiki/entities/{slug}.md---
+---
+type: entity
+domain: general
+title: "{entity_name}"
+tags: [...]
+related: []
+sources: ["raw/{raw_rel}"]
+created: {time.strftime('%Y-%m-%d')}
+updated: {time.strftime('%Y-%m-%d')}
+---
+
+# {entity_name}
+
+(Description, significance, key attributes, related concepts using [[wikilinks]])
+
+---END FILE---
+
+Generate the page NOW. Start with ---FILE:...
+"""
 
 
 def _generate_chunk(

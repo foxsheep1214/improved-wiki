@@ -28,15 +28,20 @@ set -euo pipefail
 WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
 RAW_ROOT="$WIKI_ROOT/raw"
 
-# NOTE: Runtime directory detection duplicates _paths.py logic. If _paths.py changes, update this section too.
-# Detect runtime directory (NashSU-aligned: .llm-wiki/)
-# Auto-migrate from .iwiki-runtime if it still exists
+# Runtime directory detection (aligned with _paths.py detect_runtime_dir()).
+# Priority: 1) .iwiki-runtime/ → migrate  2) .llm-wiki/  3) wiki/ (legacy)  4) .llm-wiki/ (default)
 if [ -d "$WIKI_ROOT/.iwiki-runtime" ]; then
     mkdir -p "$WIKI_ROOT/.llm-wiki"
     mv "$WIKI_ROOT/.iwiki-runtime"/* "$WIKI_ROOT/.llm-wiki/" 2>/dev/null || true
     rmdir "$WIKI_ROOT/.iwiki-runtime" 2>/dev/null || true
-fi
-if [ -f "$WIKI_ROOT/wiki/.ingest-cache.json" ] || [ -f "$WIKI_ROOT/wiki/ingest-cache.json" ] || [ -d "$WIKI_ROOT/wiki/.extract-tmp" ] || [ -d "$WIKI_ROOT/wiki/extract-tmp" ] || [ -d "$WIKI_ROOT/wiki/.ingest-progress" ] || [ -d "$WIKI_ROOT/wiki/ingest-progress" ]; then
+    RUNTIME="$WIKI_ROOT/.llm-wiki"
+elif [ -f "$WIKI_ROOT/.llm-wiki/ingest-cache.json" ] || \
+     [ -d "$WIKI_ROOT/.llm-wiki/ingest-progress" ] || \
+     [ -f "$WIKI_ROOT/.llm-wiki/embed-cache.json" ]; then
+    RUNTIME="$WIKI_ROOT/.llm-wiki"
+elif [ -f "$WIKI_ROOT/wiki/.ingest-cache.json" ] || [ -f "$WIKI_ROOT/wiki/ingest-cache.json" ] || \
+     [ -d "$WIKI_ROOT/wiki/.extract-tmp" ] || [ -d "$WIKI_ROOT/wiki/extract-tmp" ] || \
+     [ -d "$WIKI_ROOT/wiki/.ingest-progress" ] || [ -d "$WIKI_ROOT/wiki/ingest-progress" ]; then
     RUNTIME="$WIKI_ROOT/wiki"  # legacy layout
 else
     RUNTIME="$WIKI_ROOT/.llm-wiki"

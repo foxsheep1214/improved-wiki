@@ -36,14 +36,14 @@ User: 在 HardwareWiki 中用 chat 模式消化 raw/papers/新论文.pdf
 Claude runs the same Stage 0 as auto-ingest:
 
 ```bash
-# Text extraction + PDF type detection
-python3 scripts/ingest.py --stage 0.5 --source raw/book/Book.pdf
+# Text extraction + PDF type detection (stops after Stage 0.5)
+python3 scripts/ingest.py raw/book/Book.pdf --stop-after-stage 0.5
 
-# Image extraction (if applicable)
-python3 scripts/ingest.py --stage 0.7 --source raw/book/Book.pdf
+# Image extraction (stops after Stage 0.6)
+python3 scripts/ingest.py raw/book/Book.pdf --stop-after-stage 0.6
 
-# Image captioning (if images found)
-python3 scripts/ingest.py --stage 0.9 --source raw/book/Book.pdf
+# Image captioning (stops after Stage 0.9)
+python3 scripts/ingest.py raw/book/Book.pdf --stop-after-stage 0.9
 ```
 
 These are I/O operations — no LLM reasoning needed, no reason to involve the user.
