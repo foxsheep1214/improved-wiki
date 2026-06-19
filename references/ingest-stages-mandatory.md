@@ -105,7 +105,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - **跳过代价**：扫描版 PDF 仅走 PyMuPDF → 全页波形图/眼图/示意图丢失 → 对于信号完整性、电路设计等图表密集型书籍，丢失了一半以上的知识价值。**2026-06-14 Johnson《High-Speed Signal Propagation》实际发生**：100% 页面有全页大图，但 OCR 文字层字符数达标，最终走了路径 A，全本图表丢失。
 - **产物**：每页一个 `p<NNN>.txt`（与页号 1:1 对应）+ minerU 自动提取的图片
 - **go/no-go**：每页 chars >100；无幻觉（chars<100 且无中文字符 → 重跑）；确认 minerU 输出的 `images/` 目录包含图表
-- **关键实操**：扫描版 PDF 全本 OCR 使用本地 minerU（`~/.venv/bin/mineru -b vlm-auto-engine`），免费、自动提取图片、无需 API key。**并发限制**：系统级最多 1 个 minerU OCR 任务串行执行（`MINERU_MAX_CONCURRENT=1`）。`ingest.py` 在每次 minerU 调用前通过 `_wait_for_mineru_slot()` 自动排队，等待时显示当前占用文件名和累计等待时间（如 `[mineru] ⏳ 并发槽已满 (1/1)「图解传热学」— 已等待 X 分钟，30s 后重试...`），无需人工协调。
+- **关键实操**：扫描版 PDF 全本 OCR 使用本地 minerU（`~/.venv/bin/mineru -b vlm-engine`），免费、自动提取图片、无需 API key。可通过 `MINERU_BACKEND` 环境变量切换后端（vlm-engine / hybrid-engine / pipeline）。**并发限制**：系统级最多 1 个 minerU OCR 任务串行执行（`MINERU_MAX_CONCURRENT=1`）。`ingest.py` 在每次 minerU 调用前通过 `_wait_for_mineru_slot()` 自动排队，等待时显示当前占用文件名和累计等待时间（如 `[mineru] ⏳ 并发槽已满 (1/1)「图解传热学」— 已等待 X 分钟，30s 后重试...`），无需人工协调。
 
 **Stage 0.3 Pilot：OCR 质量验证（2026-06-17 改为 auto-fallback，不再阻塞）**
 - **交互模式**（`--pilot-confirmed`）：先本地 minerU 切 5-10 页 → OCR → 人工看输出质量 → 确认后全本。适用于调试/单本消化时希望先看质量。

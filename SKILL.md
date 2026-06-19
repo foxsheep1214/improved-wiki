@@ -100,7 +100,7 @@ Lint:  [Build Graph] → [Louvain] → [Insights]
 - **Per-page 语言门禁** (built-in): `ingest.py` Stage 3.5 detects body language per FILE block, warns on mismatch with expected source language (NashSU contentMatchesTargetLanguage parity)
 - **Schema routing validation** (built-in): `ingest.py` validates `type:` frontmatter against file path directory, auto-corrects mismatches (NashSU validateWikiPageRouting parity)
 - **Path safety validation** (built-in): `ingest.py` rejects FILE blocks with `..` segments, absolute paths, Windows-invalid names, and non-wiki/ destinations (NashSU isSafeIngestPath parity)
-- **Local OCR**: minerU VLM via `~/.venv/bin/mineru -b vlm-auto-engine` (free, serial, `MINERU_MAX_CONCURRENT=1`)
+- **Local OCR**: minerU VLM via `~/.venv/bin/mineru -b vlm-engine` (free, serial, `MINERU_MAX_CONCURRENT=1`; override via `MINERU_BACKEND` env)
 
 ## Scripts
 

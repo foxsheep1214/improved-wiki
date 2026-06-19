@@ -19,7 +19,7 @@
 2. PyMuPDF 渲染所有页 PNG + 切分 chunks（50 页/chunk）
 3. 每个 chunk 调用本地 minerU VLM：
    ~/.venv/bin/mineru -p <chunk>.pdf -o <chunk>_out \
-     -b vlm-auto-engine -m ocr -l ch
+     -b vlm-engine -l ch
 4. 并发控制：_wait_for_mineru_slot() 确保 ≤2 个 minerU 实例同时运行
 5. minerU 输出 Markdown（含文字 + 自动提取图片）→ 解析为 p<NNN>.txt
 6. 重试：每个 chunk 最多 3 次 retry，自动 kill stale 进程
@@ -32,7 +32,7 @@
 ### 为什么用本地 minerU 而不是云端 API
 
 - **零成本**：无 API 调用费用，minerU VLM 在 Apple Silicon 上免费运行。
-- **自动提取图片**：minerU `vlm-auto-engine` 同时输出文字层和分离的图片文件，Stage 0.6 caption 直接用。
+- **自动提取图片**：minerU `vlm-engine` 同时输出文字层和分离的图片文件，Stage 0.6 caption 直接用。
 - **中文优化**：`-l ch` 对中文/日文扫描件识别质量高。
 - **无需 API key**：不需要配置任何云端密钥。
 - **隐私**：所有数据在本地处理。

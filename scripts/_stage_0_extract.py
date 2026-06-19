@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
+import urllib.error
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -60,6 +62,7 @@ __all__ = [
 # ── Stage 0 constants ──
 
 MINERU_MAX_CONCURRENT = 1  # max parallel minerU OCR jobs system-wide
+MINERU_API_PORT = int(os.environ.get("MINERU_API_PORT", "19999"))  # fixed API port
 CAPTION_BATCH_SIZE = int(os.environ.get("CAPTION_BATCH_SIZE", "8"))
 
 # ---------- Text extraction ----------
@@ -168,10 +171,11 @@ def extract_text_mineru(file_path: Path, config: Config) -> str:
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = file_path.stem
 
+    # minerU v3 backend: defaults to hybrid-engine; override via MINERU_BACKEND env
+    backend = os.environ.get("MINERU_BACKEND", "vlm-engine")
     cmd = [
         str(mineru_bin), "-p", str(file_path), "-o", str(out_dir),
-        "-b", "vlm-auto-engine", "--image-analysis", "False",
-        "-m", "auto", "-l", "ch",
+        "-b", backend, "-l", "ch",
     ]
     print(f"[ocr] Running minerU: {' '.join(cmd)}")
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=7200)
@@ -492,9 +496,10 @@ def stage_0_pilot(file_path: Path, config: Config) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     import subprocess
     try:
+        backend = os.environ.get("MINERU_BACKEND", "vlm-engine")
         result = subprocess.run(
             [str(mineru_bin), "-p", str(pilot_pdf), "-o", str(out_dir),
-             "-b", "vlm-auto-engine", "-m", "ocr", "-l", "ch"],
+             "-b", backend, "-l", "ch"],
             capture_output=True, text=True, timeout=600,
             env={**os.environ},
         )
@@ -643,7 +648,7 @@ def _kill_mineru_servers() -> None:
 
 
 def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
-    """OCR a scanned PDF using local minerU (vlm-auto-engine, MLX backend).
+    """OCR a scanned PDF using local minerU (vlm-engine backend, configurable via MINERU_BACKEND env).
 
     Splits PDF into ~50-page chunks. Each chunk runs minerU independently.
     Results persisted to extract_tmp_dir/<stem>/ with _mineru_stats.json for crash recovery.
@@ -678,6 +683,34 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
     if stats_path.exists():
         stats = json.loads(stats_path.read_text(encoding="utf-8"))
 
+    # Start a persistent minerU API server (one per book, shared across chunks)
+    pending = [c for c in chunks if f"{c[0]}-{c[1]}" not in stats["completed_chunks"]]
+    if not pending:
+        doc.close()
+        return _assemble_ocr_text(out_dir, [end for _, end in chunks])
+
+    import subprocess as _sp
+    api_proc = _sp.Popen(
+        [sys.executable, "-m", "mineru.cli.fast_api",
+         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
+        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+    )
+    # Wait for API to become healthy
+    for _ in range(30):
+        time.sleep(2)
+        try:
+            r = urllib.request.urlopen(f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
+            if json.loads(r.read()).get("status") == "healthy":
+                print(f"[ocr] minerU API ready on port {MINERU_API_PORT}")
+                break
+        except Exception:
+            pass
+    else:
+        api_proc.terminate()
+        api_proc.wait()
+        doc.close()
+        raise RuntimeError(f"minerU API failed to start on port {MINERU_API_PORT}")
+
     # Run minerU on each pending chunk
     for ci, (start, end) in enumerate(chunks):
         chunk_key = f"{start}-{end}"
@@ -698,62 +731,102 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
             stats["failed_chunks"].append({"chunk": chunk_key, "error": str(e)})
             continue
 
-        # Run minerU (retry up to 2 times, killing stale servers between attempts)
-        chunk_out = out_dir / f"_chunk_{start:04d}-{end:04d}_out"
-        import subprocess
-        import shutil
-        _wait_for_mineru_slot()  # enforce MINERU_MAX_CONCURRENT system-wide
+        # Submit chunk to minerU API (direct HTTP, bypasses unreliable CLI)
+        _wait_for_mineru_slot()
+        print(f"  [{ci+1:3d}/{len(chunks)}] pages {start+1}-{end} — minerU API...", end=" ", flush=True)
+        t0 = time.time()
         mineru_ok = False
+        md_path: Path | None = None
         for attempt in range(3):
             if attempt > 0:
-                # Kill stale mineru processes between retries
-                _kill_mineru_servers()
                 time.sleep(2)
-                shutil.rmtree(chunk_out, ignore_errors=True)
-
-            print(f"  [{ci+1:3d}/{len(chunks)}] pages {start+1}-{end} — minerU...", end=" ", flush=True)
-            t0 = time.time()
             try:
-                result = subprocess.run(
-                    [str(mineru_bin), "-p", str(chunk_pdf), "-o", str(chunk_out),
-                     "-b", "vlm-auto-engine", "-m", "ocr", "-l", "ch"],
-                    capture_output=True, text=True, timeout=1800,
-                    env={**os.environ},
+                boundary = "----FormBoundary" + os.urandom(8).hex()
+                body_parts = []
+                body_parts.append(f"--{boundary}".encode())
+                body_parts.append(b'Content-Disposition: form-data; name="files"; filename="chunk.pdf"')
+                body_parts.append(b"Content-Type: application/pdf")
+                body_parts.append(b"")
+                body_parts.append(chunk_pdf.read_bytes())
+                data_json = json.dumps({"lang": "ch"})
+                body_parts.append(f"--{boundary}".encode())
+                body_parts.append(b'Content-Disposition: form-data; name="data"')
+                body_parts.append(b"")
+                body_parts.append(data_json.encode())
+                body_parts.append(f"--{boundary}--".encode())
+                body = b"\r\n".join(body_parts)
+
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
+                    data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
                 )
-            except subprocess.TimeoutExpired:
-                print(f"TIMEOUT (>30min)")
-                continue
+                r = urllib.request.urlopen(req, timeout=1200)
+                resp = json.loads(r.read())
+                if resp.get("status") == "completed":
+                    md = resp.get("results", {}).get(chunk_pdf.name, {}).get("md_content", "")
+                    if md:
+                        chunk_out = out_dir / f"_chunk_{start:04d}-{end:04d}"
+                        chunk_out.mkdir(parents=True, exist_ok=True)
+                        md_path = chunk_out / f"{chunk_pdf.stem}.md"
+                        md_path.write_text(md, encoding="utf-8")
+                        print(f"OK ({time.time()-t0:.0f}s, {len(md)} chars)")
+                        mineru_ok = True
+                    else:
+                        print(f"EMPTY ({time.time()-t0:.0f}s)")
+                        mineru_ok = True
+                    break
+                elif resp.get("status") == "failed":
+                    err = resp.get("error_message", resp.get("error", "unknown"))
+                    print(f"API FAILED: {err[:200]}")
+                    if attempt < 2:
+                        continue
+                else:
+                    # Poll for completion
+                    task_id = resp.get("task_id", "")
+                    if task_id:
+                        for pi in range(60):
+                            time.sleep(5)
+                            tr = urllib.request.urlopen(f"http://127.0.0.1:{MINERU_API_PORT}/tasks/{task_id}")
+                            td = json.loads(tr.read())
+                            if td.get("status") == "completed":
+                                md = td.get("results", {}).get(chunk_pdf.name, {}).get("md_content", "")
+                                if md:
+                                    chunk_out = out_dir / f"_chunk_{start:04d}-{end:04d}"
+                                    chunk_out.mkdir(parents=True, exist_ok=True)
+                                    md_path = chunk_out / f"{chunk_pdf.stem}.md"
+                                    md_path.write_text(md, encoding="utf-8")
+                                    print(f"OK ({time.time()-t0:.0f}s, {len(md)} chars)")
+                                    mineru_ok = True
+                                else:
+                                    print(f"EMPTY ({time.time()-t0:.0f}s)")
+                                    mineru_ok = True
+                                break
+                            elif td.get("status") == "failed":
+                                print(f"TASK FAILED: {td.get('error_message', str(td)[:200])}")
+                                break
+                        if mineru_ok:
+                            break
+                    else:
+                        print(f"NO TASK ID")
+                        continue
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode() if e.fp else ""
+                print(f"HTTP {e.code}: {err_body[:200]}")
+                if e.code >= 500 and attempt < 2:
+                    continue
             except Exception as e:
                 print(f"FAILED: {e}")
-                continue
-
-            if result.returncode != 0:
-                err_tail = result.stderr[-500:] if result.stderr else ""
-                print(f"FAILED ({time.time()-t0:.0f}s): {err_tail[:200]}")
-                # Retry on connection/server errors; break only on permanent failures
-                RETRY_PATTERNS = [
-                    "NoneType", "get",  # original patterns
-                    "onnection", "failed", "timeout", "refused",
-                    "Task failed", "RemoteDisconnected", "ServerDisconnected",
-                    "semaphore", "resource_tracker",  # minerU shutdown crashes
-                    "concurrency", "limited",  # minerU VLM concurrency limit (transient)
-                ]
-                if any(p.lower() in err_tail.lower() for p in RETRY_PATTERNS):
+                if attempt < 2:
                     continue
-                # Permanent failure — don't retry (e.g. invalid PDF, missing file)
-                break
-
-            mineru_ok = True
             break
 
         if not mineru_ok:
-            stats["failed_chunks"].append({"chunk": chunk_key, "error": "minerU failed after retries"})
+            stats["failed_chunks"].append({"chunk": chunk_key, "error": "minerU API failed after retries"})
             _save_mineru_stats(stats_path, stats)
-            _kill_mineru_servers()
-            # ⚠️  Prominent warning — all 3 retries exhausted
             w = 64
             lines = [
-                f"ALL 3 RETRIES EXHAUSTED — CHUNK PERMANENTLY FAILED",
+                f"ALL RETRIES EXHAUSTED — CHUNK PERMANENTLY FAILED",
                 f"",
                 f"Chunk:  pages {start+1}-{end}",
                 f"File:   {chunk_pdf.name}",
@@ -779,53 +852,40 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                 )
             continue
 
-        elapsed = time.time() - t0
-
-        # Find minerU output
-        md_path = chunk_out / chunk_pdf.stem / "vlm" / f"{chunk_pdf.stem}.md"
-        if not md_path.exists():
-            md_path = chunk_out / chunk_pdf.stem / "auto" / f"{chunk_pdf.stem}.md"
-        if not md_path.exists():
-            print(f"FAILED: .md not found")
-            stats["failed_chunks"].append({"chunk": chunk_key, "error": ".md not found in output"})
+        # API already wrote .md — read it and collect images
+        if md_path is None or not md_path.exists():
+            print(f"  [{ci+1:3d}/{len(chunks)}] FAILED — no output file")
+            stats["failed_chunks"].append({"chunk": chunk_key, "error": "no .md output from API"})
             _save_mineru_stats(stats_path, stats)
             continue
-
-        # Read OCR text and collect images
         md_text = md_path.read_text(encoding="utf-8")
-        img_dir = chunk_out / chunk_pdf.stem / "vlm" / "images"
-        extracted_imgs = _collect_mineru_images(img_dir, start)
+        # Images may be in the API output dir
+        img_dir = chunk_out.parent / f"{chunk_pdf.stem}_out" / chunk_pdf.stem / "vlm" / "images"
+        extracted_imgs = _collect_mineru_images(img_dir, start) if img_dir.exists() else []
 
-        # Save per-page text (split by minerU's page markers or heuristics)
         _save_mineru_chunk_text(md_text, start, end, out_dir, stats, extracted_imgs)
-
         stats["completed_chunks"].append(chunk_key)
-        # Move images from temp to persistent location for Stage 3.5
         _copy_mineru_images(extracted_imgs, config, file_path)
         _save_mineru_stats(stats_path, stats)
 
         n_imgs = len(extracted_imgs)
-        print(f"OK ({elapsed:.0f}s) — {len(md_text)} chars, {n_imgs} images")
-
-        # Clean up chunk files
+        print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars, {n_imgs} images")
         chunk_pdf.unlink(missing_ok=True)
-        import shutil
-        shutil.rmtree(chunk_out, ignore_errors=True)
 
     doc.close()
+
+    # Stop API server
+    api_proc.terminate()
+    try:
+        api_proc.wait(timeout=10)
+    except Exception:
+        api_proc.kill()
 
     # Assemble full text from per-page files
     page_nums = list(range(total_pages))
     full_text = _assemble_ocr_text(out_dir, page_nums)
     total_imgs = sum(len(v) for v in stats.get("images", {}).values())
     print(f"[ocr] Done — {len(full_text):,} chars OCR text, {total_imgs} images extracted")
-
-    # ── Caption filtered minerU images with caption provider ──
-    slug = _media_slug(file_path, config)
-    media_dir = config.wiki_dir / "media" / slug
-    pending_imgs = _find_uncaptioned_mineru_images(media_dir)
-    if pending_imgs and config.caption_api_key:
-        _caption_images(pending_imgs, config, media_dir, source_label="minerU", batch_size=6)
 
     return full_text
 
