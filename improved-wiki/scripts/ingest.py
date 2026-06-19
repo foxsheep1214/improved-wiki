@@ -430,17 +430,26 @@ def stage_3_5_inject_images(config: Config, raw_file: Path, source_path: Path,
     content = re.sub(r"## Embedded Images.*?(?=^## |\Z)", "", content, flags=re.MULTILINE | re.DOTALL)
     content = content.rstrip() + "\n\n"
 
-    # Path A: Text-layer PDF — embedded images via manifest
+    # Unified image injection: reads _manifest.json (the single source of truth
+    # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
+    # renders are filtered via source != "page-render" for backward compat.
     slug = _media_slug(raw_file, config)
     media_dir = config.wiki_dir / "media" / slug
     manifest_path = media_dir / "_manifest.json"
 
-    if manifest_path.exists():
-        m = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # Also check legacy _figures.json (older minerU ingests before unification)
+    figures_path = media_dir / "_figures.json"
+    source_path_to_read = figures_path if figures_path.exists() else manifest_path
+
+    if source_path_to_read.exists():
+        m = json.loads(source_path_to_read.read_text(encoding="utf-8"))
         images = m.get("images", [])
+        # Filter out legacy page-render entries (pre-2026-06-19 ingests)
+        images = [i for i in images if i.get("source") != "page-render"]
         if images:
+            is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
             section = f"## Embedded Images\n\n"
-            section += f"本书共抽出 {len(images)} 张嵌入图。\n\n"
+            section += f"本书共抽出 {len(images)} 张{'图表' if is_mineru else '嵌入图'}。\n\n"
             section += "| 页号 | Caption | 文件 |\n|------|---------|------|\n"
             for img in sorted(images, key=lambda x: (x["page"], x.get("img_idx_in_page", 0))):
                 cap_path = media_dir / (img["filename"] + ".caption.txt")
@@ -448,16 +457,15 @@ def stage_3_5_inject_images(config: Config, raw_file: Path, source_path: Path,
                 if len(cap) > 80:
                     cap = cap[:80] + "..."
                 section += f"| p{img['page']} | {cap} | `{img['path']}` |\n"
-            section += f"\n> 详细 manifest: `wiki/media/{slug}/_manifest.json`\n"
+            section += f"\n> 图片由 {'minerU VLM' if is_mineru else 'PyMuPDF'} 提取，caption 由 {config.caption_model} 生成。详细 manifest 见 `wiki/media/{slug}/`\n"
             content += section
             tmp = source_path.with_suffix(source_path.suffix + ".tmp")
             tmp.write_text(content, encoding="utf-8")
             tmp.rename(source_path)
-            print(f"[stage_3_5] Injected {len(images)} embedded images into {source_path.name}")
+            print(f"[stage_3_5] Injected {len(images)} images into {source_path.name}")
             return {"injected": len(images)}
 
-    # Path B: minerU / scanned PDF images in wiki/media/<raw-subpath>/<slug>/
-    # Also catches old cloud OCR p*.caption.txt in extract_tmp_dir
+    # Last resort: old cloud OCR caption files (pre-manifest era)
     images_in_media: list[tuple[str, str]] = []  # (filename, caption)
     if media_dir.exists():
         for f in sorted(media_dir.iterdir()):
