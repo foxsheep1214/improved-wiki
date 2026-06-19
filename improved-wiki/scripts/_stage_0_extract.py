@@ -735,8 +735,7 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
             stats["failed_chunks"].append({"chunk": chunk_key, "error": str(e)})
             continue
 
-        # Submit chunk to minerU API (direct HTTP, bypasses unreliable CLI)
-        _wait_for_mineru_slot()
+        # Submit chunk to minerU API (direct HTTP)
         print(f"  [{ci+1:3d}/{len(chunks)}] pages {start+1}-{end} — minerU API...", end=" ", flush=True)
         t0 = time.time()
         mineru_ok = False
@@ -842,9 +841,30 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                 err_body = e.read().decode() if e.fp else ""
                 print(f"HTTP {e.code}: {err_body[:200]}")
                 if e.code >= 500 and attempt < 2:
+                    # Server may need restart
+                    api_proc.terminate()
+                    try: api_proc.wait(timeout=5)
+                    except: api_proc.kill()
+                    time.sleep(3)
+                    api_proc = _sp.Popen(
+                        [str(venv_python), "-m", "mineru.cli.fast_api",
+                         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                    )
+                    time.sleep(5)
                     continue
             except Exception as e:
                 print(f"FAILED: {e}")
+                if "Connection refused" in str(e) and attempt < 2:
+                    # Server crashed — restart and retry
+                    time.sleep(3)
+                    api_proc = _sp.Popen(
+                        [str(venv_python), "-m", "mineru.cli.fast_api",
+                         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                    )
+                    time.sleep(8)
+                    continue
                 if attempt < 2:
                     continue
             break
@@ -880,24 +900,50 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                 )
             continue
 
-        # API already wrote .md — read it and collect images
+        # API already wrote .md — read it
         if md_path is None or not md_path.exists():
             print(f"  [{ci+1:3d}/{len(chunks)}] FAILED — no output file")
             stats["failed_chunks"].append({"chunk": chunk_key, "error": "no .md output from API"})
             _save_mineru_stats(stats_path, stats)
             continue
         md_text = md_path.read_text(encoding="utf-8")
-        # Images may be in the API output dir
-        img_dir = chunk_out.parent / f"{chunk_pdf.stem}_out" / chunk_pdf.stem / "vlm" / "images"
-        extracted_imgs = _collect_mineru_images(img_dir, start) if img_dir.exists() else []
 
-        _save_mineru_chunk_text(md_text, start, end, out_dir, stats, extracted_imgs)
+        # Render scanned pages as images for the caption pipeline.
+        # Unlike text-layer PDFs (where Stage 0.5 extracts embedded raster images),
+        # scanned PDFs have no embedded images — each page IS the image.  We render
+        # every page to wiki/media/<slug>/ as p<NNNN>.jpg so Stage 0.6 can caption
+        # them and Stage 3.5 can inject them into the source page.
+        slug = _media_slug(file_path, config)
+        media_dir = config.wiki_dir / "media" / slug
+        page_imgs: list[dict] = []
+        for p in range(start, end):
+            page_num = p  # 0-indexed
+            img_name = f"p{page_num:04d}.jpg"
+            img_path = media_dir / img_name
+            page_obj = doc[page_num]
+            if not img_path.exists():
+                try:
+                    pix = page_obj.get_pixmap(dpi=200)
+                    img_path.parent.mkdir(parents=True, exist_ok=True)
+                    pix.save(img_path)
+                except Exception:
+                    pass  # skip pages that fail to render
+            if img_path.exists():
+                rect = page_obj.rect
+                page_imgs.append({
+                    "filename": img_name,
+                    "page": page_num,
+                    "path": str(img_path.relative_to(config.wiki_root)),
+                    "width": int(rect.width),
+                    "height": int(rect.height),
+                })
+
+        _save_mineru_chunk_text(md_text, start, end, out_dir, stats, page_imgs)
         stats["completed_chunks"].append(chunk_key)
-        _copy_mineru_images(extracted_imgs, config, file_path)
         _save_mineru_stats(stats_path, stats)
 
-        n_imgs = len(extracted_imgs)
-        print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars, {n_imgs} images")
+        n_imgs = len(page_imgs)
+        print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars, {n_imgs} page images")
         chunk_pdf.unlink(missing_ok=True)
 
     doc.close()
