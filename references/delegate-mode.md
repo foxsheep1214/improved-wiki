@@ -1,170 +1,91 @@
 # Delegate Mode — Agent Orchestration
 
-When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **delegate mode** to let the agent handle LLM calls with its own model and API key.
+When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **conversation mode** (`--conversation`) to let the agent handle LLM calls with its own model and API key.
 
 ---
 
-## Normal vs Delegate Mode
+## Normal vs Conversation Mode
 
 | Mode | Who calls LLM? | API key needed? |
 |------|----------------|-----------------|
-| Normal | ingest.py directly | ✅ Yes (LLM_API_KEY) |
-| Delegate | Calling agent | ❌ No (agent uses its own) |
+| Normal | ingest.py directly (HTTP) | ✅ Yes (LLM_API_KEY) |
+| Conversation | Calling agent (via prompt files) | ❌ No (agent uses its own) |
 
 ---
 
-## Delegate Mode Workflow
+## Conversation Mode Workflow
 
-### Step 1: Start with `--delegate`
+### Step 1: Start with `--conversation`
 
 ```bash
 cd /path/to/wiki/project
-scripts/ingest.py raw/Book/Book.pdf --delegate
+scripts/ingest.py raw/Book/Book.pdf --conversation
 ```
 
-**Output:** JSON with delegate task + checkpoint path
+At each LLM call point, `ingest.py` writes a prompt file and raises `ConversationPending` (exit code `101`).
 
-```json
-{
-  "status": "awaiting_delegate",
-  "stage": "stage_1",
-  "prompt": "...",
-  "checkpoint_path": "/path/to/.ingest-checkpoints/abc123.json",
-  "instructions": "Execute this LLM task..."
-}
+### Step 2: Agent reads prompt and generates response
+
+Prompt files are written to:
+```
+<llm-wiki>/conversation/<sha256_prefix>/<stage-slug>.md
 ```
 
-Exit code: `101` (special code for "awaiting delegate")
-
----
-
-### Step 2: Agent executes the task
-
-The agent reads the prompt, uses its LLM to generate a response, and saves:
-
-```json
-{
-  "response": "LLM-generated YAML...",
-  "model": "claude-opus-4-8",
-  "timestamp": "..."
-}
+The agent reads the `.md` file, executes the LLM task, and writes the result to:
+```
+<llm-wiki>/conversation/<sha256_prefix>/<stage-slug>.txt
 ```
 
----
-
-### Step 3: Continue with result
+### Step 3: Re-invoke to continue
 
 ```bash
-scripts/ingest.py \
-  --continue-from <checkpoint_path> \
-  --result <result.json>
+scripts/ingest.py raw/Book/Book.pdf --conversation
 ```
 
-**If more work is needed:** Returns next delegate task (exit code 101 again)
+`ingest.py` finds the result file, reads it, continues to the next stage, and repeats until completion.
 
-**If done:** Returns `{"status": "ok", "files_written": [...]}` (exit code 0)
+### Task manifest
 
----
-
-## Full Example
-
-```bash
-# Agent starts
-ingest.py raw/Book/Book.pdf --delegate
-# → exits 101, outputs phase1 task
-
-# Agent executes Phase 1
-# ... generates result ...
-
-# Agent continues
-ingest.py --continue-from .ingest-checkpoints/abc123.json --result phase1-result.json
-# → exits 101, outputs phase2_chunk_1 task
-
-# Agent executes Phase 2 Chunk 1
-# ... generates result ...
-
-# Agent continues (repeat for each chunk)
-ingest.py --continue-from .ingest-checkpoints/abc123_chunk1.json --result chunk1-result.json
-# → exits 101, outputs phase2_chunk_2 task
-# ...
-
-# After all chunks done
-# → exits 101, outputs phase3 task
-
-# Agent executes Phase 3
-# ... generates result ...
-
-# Agent continues (final step)
-ingest.py --continue-from .ingest-checkpoints/abc123_phase3.json --result phase3-result.json
-# → exits 0, files written
-```
-
----
-
-## Checkpoint Structure
-
-Each checkpoint contains:
-
-```json
-{
-  "phase": "phase1" | "phase2" | "chunked" | "phase3",
-  "extracted_text": "...",
-  "extract_method": "pymupdf",
-  "global_digest": {...},
-  "chunk_analyses": [...],
-  "raw_file": "...",
-  "_source_hash": "...",
-  "_updated_at": 1234567890
-}
-```
+Pipelines with multiple LLM calls (chunk analysis, per-chunk generation) use a `tasks.json` manifest in the conversation directory to track pending/completed tasks.
 
 ---
 
 ## Agent Integration Pattern
 
-Pseudo-code for an agent:
-
 ```python
-def ingest_with_delegate(pdf_path, project_path):
-    checkpoint = None
-    result = None
-
+def ingest_via_conversation(pdf_path, project_path):
     while True:
-        if checkpoint is None:
-            # First call
-            cmd = ["ingest.py", pdf_path, "--delegate"]
-        else:
-            # Continue with result
-            cmd = ["ingest.py", "--continue-from", checkpoint, "--result", result]
+        proc = subprocess.run(
+            ["scripts/ingest.py", pdf_path, "--conversation"],
+            cwd=project_path,
+            env={**os.environ, "IMPROVED_WIKI_ROOT": project_path},
+        )
 
-        proc = subprocess.run(cmd, cwd=project_path)
-        exit_code = proc.returncode
+        if proc.returncode == 0:
+            return  # Done
 
-        if exit_code == 0:
-            # Done!
-            return parse_final_output()
+        if proc.returncode == 101:
+            # Read the pending prompt
+            conv_dir = find_conversation_dir(project_path)
+            prompt_file = find_pending_prompt(conv_dir)
+            prompt = prompt_file.read_text()
 
-        elif exit_code == 101:
-            # Read delegate task
-            task = read_delegate_output(project_path)
+            # Execute with agent's own LLM
+            result = call_llm(prompt)
 
-            # Execute with my LLM
-            result_text = my_llm_call(task["prompt"])
+            # Write result back
+            result_file = prompt_file.with_suffix(".txt")
+            result_file.write_text(result)
+            continue
 
-            # Save result
-            result_path = Path(task["checkpoint_path"]).with_suffix(".result.json")
-            result_path.write_text(json.dumps({"response": result_text}))
-
-            checkpoint = task["checkpoint_path"]
-            result = result_path
-
-        else:
-            raise Exception(f"Ingest failed with code {exit_code}")
+        raise RuntimeError(f"Ingest failed: {proc.returncode}")
 ```
 
 ---
 
-## Backward Compatibility
+## Implementation Notes
 
-- **Normal mode still works:** Without `--delegate`, uses `LLM_API_KEY` env var
-- **Environment variables ignored in delegate mode:** `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` not used
+- `conversation_prefix` = last 8 hex chars of the raw file's SHA-256 hash (per-source isolation)
+- Multiple simultaneous ingests are safe — each has a unique conversation directory
+- Task files use simple markdown (no JSON serialization needed)
+- `ConversationPending` exception is defined in `_core.py`

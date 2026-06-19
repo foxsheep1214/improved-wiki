@@ -26,7 +26,8 @@ Handled automatically by `ingest.py` Stage 0.5. For standalone use:
 
 ```bash
 python3 -c "
-from ingest import stage_0_5_extract_images, Config
+from _stage_0_extract import stage_0_5_extract_images
+from _core import Config
 config = Config.from_env()
 stage_0_5_extract_images(Path('raw/Book/Book.pdf'), config)
 "

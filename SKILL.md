@@ -95,7 +95,7 @@ Lint:  [Build Graph] → [Louvain] → [Insights]
 - **Lint auto-fix**: `wiki-lint.sh --fix` repairs missing-domain and missing-frontmatter
 - **Queue watch**: `--watch --drain` daemon mode consuming `ingest-queue.json`
 - **Auto-validation**: `validate_ingest.py` runs at end of every ingest; per-stage gate functions (`_verify_stage_0_text`, `_verify_stage_1_5_chunks`, etc.)
-- **NashSU parity**: aligned with `ingest.ts` v0.4.25 (deep research closed-loop, chat ingest startIngest/executeIngestWrites, review sweep auto-resolution, save-chat-to-wiki, sequential chunk gen, heading path, overlap suffix, CJK slug, PPTX/DOCX, sources union merge, schema routing, aggregate repair caps, page merge, wikilink enrichment, source lifecycle)
+- **NashSU parity**: aligned with `ingest.ts` v0.4.25 on heading path, overlap suffix, accumulating digest, CJK slug, PPTX/DOCX, sources union merge, schema routing, aggregate repair caps, page merge, wikilink enrichment, source lifecycle. Chunk pipeline improved to barrier-free (analyze→generate per chunk, unified for all chunk counts)
 - **Graph 四信号权重** (built-in): `build_knowledge_graph.py` uses NashSU's four-signal model (direct link ×3.0, source overlap ×4.0, Adamic-Adar ×1.5, type affinity ×1.0) for weighted Louvain community detection
 - **Per-page 语言门禁** (built-in): `ingest.py` Stage 3.5 detects body language per FILE block, warns on mismatch with expected source language (NashSU contentMatchesTargetLanguage parity)
 - **Schema routing validation** (built-in): `ingest.py` validates `type:` frontmatter against file path directory, auto-corrects mismatches (NashSU validateWikiPageRouting parity)
