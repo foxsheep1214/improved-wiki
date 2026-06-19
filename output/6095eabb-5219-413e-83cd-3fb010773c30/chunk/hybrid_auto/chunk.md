@@ -1,0 +1,771 @@
+[13] Masoum M.A.S., Fuchs E.F. ‘Introduction to Power Quality’. in power quality Power Systems and Electrical Machines. Elsevier; 2015. pp. 1–104.
+
+[14] Poddar G., Ranganathan V.T. 'Direct torque and frequency control of double-inverter-fed slip-ring induction motor drive'. IEEE Transactions on Industrial Electronics. 2004;51(6):1329–37.
+
+[15] Khan M.A., Haque A., Kurukuru V.S.B., Saad M. 'Advanced control strategy with voltage sag classification for single-phase grid-connected photovoltaic system'. IEEE Journal of Emerging and Selected Topics in Industrial Electronics. 2020:1–12.
+
+[16] Fatama A.-Z., Khan M.A., Kurukuru V.S.B., Haque A. 'Hybrid algorithm for reactive power control in grid integrated photovoltaic inverters'. 2019 International Conference on Power Electronics, Control and Automation (ICPECA); 2019. pp. 1–6.
+
+[17] Ahmad M. 'Power system frequency deviation measurement using an electronic bridge'. IEEE Transactions on Instrumentation and Measurement. 1988;37(1):147–8.
+
+[18] Luo X., Wang J., Wojcik J., et al. 'Review of voltage and frequency grid code specifications for electrical energy storage applications'. Energies. 2018;11(5):1070.
+
+[19] Mahmud N., Zahedi A., Mahmud A. ‘A cooperative operation of novel PV inverter control scheme and storage energy management system based on ANFIS for voltage regulation of grid-tied PV system’. IEEE Transactions on Industrial Informatics. 2017;13(5):2657–68.
+
+[20] Fatama A.Z., Khan M.A., Kurukuru V.S.B., Haque A., Blaabjerg F. 'Coordinated reactive power strategy using static synchronous compensator for photovoltaic inverters'. International Transactions on Electrical Energy Systems. 2020;30(6):1–18.
+
+[21] Yang Y., Wang H., Blaabjerg F. ‘Reactive power injection strategies for single-phase photovoltaic systems considering grid requirements’. IEEE Transactions on Industry Applications. 2014;50(6):4065–76.
+
+[22] Zeng D., Wang G., Pan G., Li H. 'Fault ride-through capability enhancement of PV system with voltage support control strategy'. Open Journal of Applied Sciences. 2013;03(02):30–4.
+
+[23] Khan M.A., Haque A., Kurukuru V.S.B. 'Droop based low voltage ride through implementation for grid integrated photovoltaic system'. 2019 International Conference on Power Electronics, Control and Automation (ICPECA); 2019. pp. 1–5.
+
+[24] Radwan E., Nour M., Awada E., Baniyounes A. 'Fuzzy logic control for low-voltage ride-through single-phase grid-connected PV inverter'. Energies. 2019;12(24):4796.
+
+[25] Vukosavic S.N. Grid Side Converters Control and Design. Springer US; 2018.
+
+[26] Khan M.A., Haque A., Bharath V.S. 'Enhancement of fault ride through strategy for single-phase grid-connected photovoltaic systems'. 2019 IEEE Industry Applications Society Annual Meeting; 2019. pp. 1–6.
+
+[27] Tsili M., Papathanassiou S. ‘A review of grid code technical requirements for wind farms’. IET Renewable Power Generation. 2009;3(3):308.
+
+[28] Tahir S., Wang J., Baloch M., Kaloi G. ‘Digital control techniques based on voltage source inverters in renewable energy applications: a review’. Electronics. 2018;7(2):18.
+
+[29] Huang L., Xin H., Dörfler F. 'H-infinity-control of grid-connected converters: design, objectives and decentralized stability certificates'. IEEE Transactions on Smart Grid. 2020;11(5):1–8.
+
+[30] Aguilera R.P., Lezana P., Konstantinou G., et al.. Closed-loop SHE-PWM technique for power converters through model predictive control. IECON 2015 – 41st Annual Conference of the IEEE Industrial Electronics Society; 2015. pp. 005261–6.
+
+[31] Kouro S., Cortes P., Vargas R., Ammann U., Rodriguez J. 'Model predictive control—a simple and powerful method to control power converters'. IEEE Transactions on Industrial Electronics. 2009;56(6):1826–38.
+
+[32] Perez M.A., Fuentes R.L., Rodriguez J. 'Predictive control of DC-link voltage in an active-front-end rectifier'. 2011 IEEE International Symposium on Industrial Electronics; 2011. pp. 1811–16.
+
+[33] Rivera M., Yaramasu V., Rodriguez J., Wu B. 'Model predictive current control of two-level four-leg inverters—Part II: Experimental implementation and validation'. IEEE Transactions on Power Electronics. 2013;28(7):3469–78.
+
+[34] Hamidi A., Ahmadi A., Feali M.S., Karimi S. 'Implementation of digital FCS-MP controller for a three-phase inverter'. Electrical Engineering. 2015;97(1):25–34.
+
+[35] Rivera M., Yaramasu V., Llor A., Rodriguez J., Wu B., Fadel M. 'Digital predictive current control of a three-phase four-leg inverter predictive current control of a three-phase four-leg'. IEEE Transactions on Industrial Electronics: A Publication of the IEEE Industrial Electronics Society. 2013;60(11):4903–12.
+
+[36] Calle-Prado A., Alepuz S., Bordonau J., Nicolas-Apruzzese J., Cortes P., Rodriguez J. 'Model predictive current control of grid-connected neutral-point-clamped converters to meet low-voltage ride-through requirements'. IEEE Transactions on Industrial Electronics. 2015;62(3):1503–14.
+
+[37] Young H.A., Perez M.A., Rodriguez J., Abu-Rub H. ‘Assessing finite-control-set model predictive control: a comparison with a linear current controller in two-level voltage source inverters’. IEEE Industrial Electronics Magazine. 2014;8(1):44–52.
+
+[38] Teodorescu R., Liserre M., Rodríguez P. Grid Converters for Photovoltaic and Wind Power Systems. John Wiley & Sons; 2011.
+
+[39] Singh P., Pradhan A.K. ‘A local measurement based protection technique for distribution system with photovoltaic plants’. IET Renewable Power Generation. 2020;14(6):996–1003.
+
+[40] Suman M., Venkata Kirthiga M. ‘Unintentional islanding detection’. Distributed Energy Resources in Microgrids. Elsevier; 2019. pp. 419–40.
+
+[41] Salmi T., Bouzguenda M., Gastli A., Masmoudi A. 'Review of common-mode voltage in transformerless inverter topologies for common-mode voltage in transformerless inverter topologies for PV systems'. Smart Innovation, Systems and Technologies. 2012;12:589–96.
+
+[42] Khamis A., Shareef H., Bizkevelci E., Khatib T. 'A review of islanding detection techniques for renewable distributed generation systems'. Renewable and Sustainable Energy Reviews. 2013;28:483–93.
+
+[43] IEEE. IEEE Std 1547, 2003. IEEE Standard for Interconnecting Distributed Resources with Electric Power Systems; 2003.
+
+[44] IEEE. IEEE 1547,2008. IEEE Standard for Interconnecting Distributed Resources with Electric Power Systems; 2008.
+
+[45] IEEE. IEEE Std 1547, 2014. IEEE Standard for Interconnecting Distributed Resources with Electric Power Systems; 2014.
+
+[46] IEEE. IEEE P1547.1a. IEEE Standard for Interconnecting Distributed Resources with Electric Power Systems; 2014.
+
+[47] IEEE-SA Standards Board. IEEE Standard for Interconnection and Interoperability of Distributed Energy Resources with Associated Electric Power Systems Interfaces. IEEE STD 1547-2018. Piscataway, New Jersey, United States: IEEE Standards association; 2018. pp. 1–116. 9781504449410.
+
+[48] Solar photovoltaic energy systems. Utility-interconnected photovoltaic inverters - Test procedure of islanding prevention measures. IEC 62116-2014. Geneva, Switzerland: International Electrotechnical Commission; 2014. pp. 1–13.
+
+[49] Richard De Blasio. IEEE recommended practice for utility interface of photovoltaic (pv) systems. IEEE 929-2000. Piscataway, New Jersey, United States: IEEE Standards Association; 2000. pp. 1–32. 9780738119359.
+
+[50] Stadler I. Study about international standards for the connection of small distributed generators to the power grid. 2007.2189.4-001.00. GIZ Brazil: Deutsche Gesellschaft für Internationale Zusammenarbeit (GIZ) GmbH; 2011. pp. 1–65.
+
+[51] Selbsttätige Schaltstelle zwischen einer netzparallelen Eigenerzeugungsanlage und dem öffentlichen Niederspannungsnetz. Automatic disconnection device between a generator and the public low-voltage grid. DIN VDE V 0126-1-1:2013-08;VDE V 0126-1-1:2013-08. Germany: Beuth Publishing DIN; 2005. pp. 1–10.
+
+[52] Chowdhury S.P., Chowdhury S., Ten C.F., Crossley P.A. Islanding Protection of Distribution Systems with Distributed Generators – A Comprehensive Survey Report. 2008 IEEE Power and Energy Society General Meeting - Conversion and Delivery of Electrical Energy in the 21st Century; Pittsburgh, PA, USA, 20-24 July 2008; 2008. pp. 1–6.
+
+[53] Ustun T.S., Hashimoto J., Otani K. 'Impact of smart inverters on feeder hosting capacity of distribution Networks'. IEEE Access: Practical Innovations, Open Solutions. 2019;7:163526–36.
+
+[54] Xu W., Martel S., Mauch K. An assessment of distributed generation islanding detection methods and issues for Canada. TRN: CA0402591. Natural
+
+Resources Canada, Varennes, PQ (Canada): Government of Canada, Ottawa, ON (Canada). Climate Change Action Fund; Natural Resources Canada, Ottawa, ON (Canada). Office of Energy Research and Development; 2004. pp. 1–53.
+
+[55] Laghari J.A., Mokhlis H., Karimi M., Bakar A.H.A., Mohamad H. 'Computational intelligence based techniques for islanding detection of distributed generation in distribution network: a review'. Energy Conversion and Management. 2014;88(NR 2a):139–52.
+
+[56] Laaksonen H. ‘Advanced islanding detection functionality for future electricity distribution networks Is landing detection functionality for future electricity distribution networks’. IEEE Transactions Power Delivery. 2013;28(4):2056–64.
+
+[57] Xu W., Zhang G., Li C., Wang W., Wang G., Kliber J. 'A power line signaling based technique for anti-islanding protection of distributed generators—Part I: Scheme and analysis'. IEEE Transactions on Power Delivery. 2007;22(3):1758–66.
+
+[58] Riley C.M., Lin B.K., Habetler T.G., Kliman G.B. 'Stator current harmonics and their causal vibrations: a preliminary investigation of sensorless vibration monitoring applications'. IEEE Transactions on Industry Applications. 1999;35(1):94–9.
+
+[59] Sarangi S., Pradhan A.K. ‘Adaptive direct underreaching transfer trip protection scheme for the three-terminal line’. IEEE Transactions on Power Delivery. 2015;30(6):2383–91.
+
+[60] Dutta S., Sadhu P.K., Jaya Bharata Reddy M., Mohanta D.K. ‘Shifting of research trends in islanding detection method—a comprehensive survey’. Protection and Control of Modern Power Systems. 2018;3(1):1.
+
+[61] Ye Z., Kolwalkar A., Zhang Y., Du P., Walling R. ‘Evaluation of anti-islanding schemes based on nondetection zone concept’. IEEE Transactions on Power Electronics. 2004;19(5):1171–6.
+
+[62] Li C., Cao C., Cao Y., Kuang Y., Zeng L., Fang B. 'A review of islanding detection methods for microgrid'. Renewable and Sustainable Energy Reviews. 2014;35(2):211–20.
+
+[63] Mahat P., Chen Z., Bak-Jensen B. 'Review of islanding detection methods for distributed generation'. 2008 Third International Conference on Electric Utility Deregulation and Restructuring and Power Technologies; 2008. pp. 2743–8.
+
+[64] Seyedi M., Taher S.A., Ganji B., Guerrero J.M. 'A hybrid islanding detection technique for inverter-based distributed generator units'. International Transactions on Electrical Energy Systems. 2019;29(11):1–21.
+
+[65] Hasna Mubarak Saleh AI Seiari. An islanding detection method for microgrids with grid-connected and islanded capability islanding detection method for micro-grids with grid-connected and islanded capability scholarworks@UAEU. [Master of Science in Electrical Engineering (MSEE)] UAE, United Arab Emirates University. 2016. Available from https://scholarworks.uaeu.ac.ae/all\_theses/463.
+
+[66] Ciobotaru M., Agelidis V.G., Teodorescu R., Blaabjerg F. 'Accurate and less-disturbing active anti islanding method based on PLL for grid-connected con grid-connected converters'. IEEE Transactions on Power Electronics. 2010;25(6):1576–84.
+
+[67] Lathi B.P., Ding Z. Modern digital and analog communication systems. 4. 1. Oxford, United Kingdom: Oxford; 1998. pp. 1–928. 978-0198073802.
+
+[68] Reddy C.R., Reddy K.H. 'A new passive islanding detection technique for integrated distributed generation system using rate of change of regulator voltage over reactive power at balanced islanding'. Journal of Electrical Engineering & Technology. 2019;14(2):527–34.
+
+[69] Massoud A.M., Ahmed K.H., Finney S.J., Williams B.W. 'Harmonic distortion-based island detection technique for inverter-based distributed generation'. IET Renewable Power Generation. 2009;3(4):493.
+
+[70] Merino J., Mendoza-Araya P., Venkataramanan G., Baysal M. 'Islanding detection in microgrids using harmonic signatures, detection in microgrids using harmonic signatures'. IEEE Transactions Power Delivery. 2015;30(5):2102–9.
+
+[71] Hossain J., Mahmud A. ‘Fault Ride Through Criteria Challeges’. Renewable energy integration: challenges and solutions. 1. 1. Singapore: Springer; 2014. pp. 1–447. 9814585270.
+
+[72] Li W., Gu Y., Luo H., Cui W., He X., Xia C. 'Topology review and derivation methodology of single-phase transformerless photovoltaic inverters for leakage current suppression'. IEEE Transactions on Industrial Electronics. 2015;62(7):4537–51.
+
+[73] Shang Y., Shi S., Dong X. ‘Islanding detection based on asymmetric tripping of feeder circuit breaker in ungrounded power distribution system’. Journal of Modern Power Systems and Clean Energy. 2015;3(4):526–32.
+
+[74] Ropp M.E., Begovic M., Rohatgi A. 'Prevention of islanding in grid-connected photovoltaic systems'. Progress in Photovoltaics: Research and Applications. 1999;7(1):39–59.
+
+[75] Reis M.V.G., Barros T.A.S., Moreira A.B., Nascimento F. E., Ruppert F., Villalva M.G. Analysis of the Sandia frequency shift (SFS) islanding detection method with a single-phase photovoltaic distributed generation system. 2015 IEEE PES Innovative Smart Grid Technologies Latin America (ISGT LATAM); 2015. pp. 125–9.
+
+[76] Wang X., Freitas W., Xu W., Dinavahi V. 'Impact of DG interface controls on the Sandia frequency shift antiislanding method'. IEEE Transactions on Energy Conversion. 2007;22(3):792–4.
+
+[77] Ku Ahmad K.N.E., Selvaraj J., Rahim N.A. 'A review of the islanding detection methods in grid-connected PV inverters'. Renewable and Sustainable Energy Reviews. 2013;21:756–66.
+
+[78] Menon V., Nehrir M.H. 'A hybrid islanding detection technique using voltage unbalance and frequency set point'. IEEE Transactions on Power Systems. 2007;22(1):442–8.
+
+[79] Elnozahy M., El-Saadany E., Salama M. 'A Robust Wavelet-ANN based technique for islanding detection'. Power and Energy Society General Meeting; 2011. pp. 1–8.
+
+[80] Samet H., Hashemi F., Ghanbari T. ‘Minimum non detection zone for islanding detection using an optimal artificial neural network algorithm based on PSO’. Renewable and Sustainable Energy Reviews. 2015;52(3):1–18.
+
+[81] Fatama A., Haque A., Khan M.A. 'A Multi Feature Based Islanding Classification Technique for Distributed Generation Systems'. 2019 International Conference on Machine Learning, Big Data, Cloud and Parallel Computing (COMITCon); 2019. pp. 160–6.
+
+[82] Khan M.A., Haque A., Kurukuru V.S.B. 'An efficient islanding classification technique for single phase grid connected photovoltaic system'. 2019 International Conference on Computer and Information Sciences (ICCIS); 2019. pp. 1–6.
+
+[83] Kurukuru V.S.B., Blaabjerg F., Khan M.A., Haque A. 'A novel fault classification approach for photovoltaic systems'. Energies. 2020;13(2):308.
+
+[84] Khan M.A., Kurukuru V.S.B., Haque A., Mekhilef S. ‘Islanding classification mechanism for grid-connected photovoltaic systems’. IEEE Journal of Emerging and Selected Topics in Power Electronics. 2020:1.
+
+[85] Khan M.A., Haque A., Kurukuru V.S.B. ‘Intelligent control of a novel transformerless inverter topology for photovoltaic applications’. Electrical Engineering. 2020;102(2):627–41.
+
+[86] Eugeniusz R., Burek A., Jedut L. A new method for islanding detection in distributed generation. 5th International Conference on Electrical and Electronics Engineering. Electric control. ELECO 2007; Bursa, Turkey, 5-9 December 2007; 2007. pp. 1–5.
+
+[87] Samantaray S.R., El-Arroudi K., Joos G., Kamwa I. ‘A fuzzy rule-based approach for islanding detection in distributed generation’. IEEE Transactions on Power Delivery. 2010;25(3):1427–33.
+
+[88] Khan M.A., Haque A., Kurukuru V.S.B. 'Performance assessment of standalone transformerless inverters'. International Transactions on Electrical Energy Systems. 2020;30(1):1–21.
+
+[89] Bitaraf H., Sheikholeslamzadeh M., Ranjbar A.M., Mozafari B. 'Neurofuzzy islanding detection in distributed generation'. IEEE PES Innovative Smart Grid Technologies; 2012. pp. 1–5.
+
+[90] Khan M.A., Haque A., Kurukuru V.S.B. 'Machine learning based islanding detection for grid connected photovoltaic system'. 2019 International Conference on Power Electronics, Control and Automation (ICPECA); 2019. pp. 1–6.
+
+[91] Gupta N., Garg R. ‘Algorithm for islanding detection in photovoltaic generator network connected to low-voltage grid’. IET Generation, Transmission & Distribution. 2018;12(10):2280–7.
+
+[92] Heidari M., Seifossadat G., Razaz M. ‘Application of decision tree and discrete wavelet transform for an optimized intelligent-based islanding detection method in distributed systems with distributed generations’. Renewable and Sustainable Energy Reviews. 2013;27(4):525–32.
+
+[93] Fayyad Y. 'Neuro-wavelet based islanding detection technique'. IEEE Electrical Power & Energy Conference; 2010. pp. 1–6.
+
+[94] Parzen E. 'On estimation of a probability density function and mode in statistics'. Annals of Mathematics. 1962;33:1065–76.
+
+[95] Ahmadipour M., Hizam H., Othman M.L., Radzi M.A. 'Islanding detection method using ridgelet probabilistic neural network in distributed generation'. Neurocomputing. 2019;329(11):188–209.
+
+[96] Yang Y., Wang H., Blaabjerg F., Kerekes T. 'A hybrid power control concept for pv Inverters with reduced thermal loading'. IEEE Transactions on Power Electronics. 2014;29(12):6271–5.
+
+[97] Wang H., Liserre M., Blaabjerg F., et al. 'Transitioning to physics-of-failure as a reliability driver in power electronics'. IEEE Journal of Emerging and Selected Topics in Power Electronics. 2014;2(1):97–114.
+
+[98] Kurukuru V.S.B., Haque A., Khan M.A., Tripathy A.K. 'Reliability analysis of silicon carbide power modules in voltage source converters'. 2019 International Conference on Power Electronics, Control and Automation (ICPECA); 2019. pp. 1–6.
+
+[99] Brckner T., Bernet S. 'Estimation and measurement of junction temperatures in a three-level voltage source converter'. IEEE Transactions on Power Electronics. 2007;22(1):3–12.
+
+[100] Shahzad M., Bharath K.V.S., Khan M.A., Haque A. 'Review on reliability of power electronic components in photovoltaic inverters'. 2019 International Conference on Power Electronics, Control and Automation (ICPECA); 2019. pp. 1–6.
+
+[101] Anurag A., Yang Y., Blaabjerg F. ‘Thermal performance and reliability analysis of single-phase PV inverters with reactive power injection outside Feed-In operating hours’. IEEE Journal of Emerging and Selected Topics in Power Electronics. 2015;3(4):870–80.
+
+[102] Bryant A., Parker-Allotey N.-A., Hamilton D., et al. 'A fast loss and temperature simulation method for power converters, Part I: Electrothermal modeling and validation'. IEEE Transactions on Power Electronics. 2012;27(1):248–57.
+
+Chapter 7
+
+# Thermal image based monitoring of PV modules and solar inverters
+
+Zainul Abdin Jaffery $^{1}$
+
+## 7.1 Introduction
+
+As the concern for climate change is still increasing, the world is looking more toward clean energy resources and their efficient utilization. Solar energy has emerged as a major source of clean energy. In the last decades, solar energy installations have registered an exponential growth $[1]$ . Amid the growing dependence on solar energy, reliability becomes an important issue in high-capacity grid-connected solar photovoltaic (PV) power systems. The two most important components of solar power systems are solar PV modules and inverters. Hence, to increase the reliability, efficiency, and safety of PV systems, fault detection and analysis of the two items become significant. Conventional fault-protection methods usually add fuses or circuit breakers in series with PV components. In general, the temperature of the components of electrical equipment is a common indicator of the health condition assessment. Loose connections, short circuits, or damaged components may cause an abnormally high temperature rise in electrical installations. Hence monitoring of temperature can be used effectively for the predictive fault analysis of PV systems. The infrared (IR) thermal imaging-based technique is a noninvasive method that analyzes the temperature of an electrical component or machinery $[2]$ . IR thermal imaging has been successfully used in many applications $[3, 4]$ . In this chapter, the use of IR thermal imaging has been discussed and used for fault analysis of solar PV system components.
+
+## 7.2 Review of fault detection of PV modules
+
+Many conventional methods of fault detection for solar PV modules have been proposed in the literature. Some of the widely used are PV characteristic measurement techniques, power loss analysis technique, arc detection analysis technique, ultrasonic inspection, and frequency analysis method. PV characteristic-based fault diagnosis methods $[5]$ need a physical connection with the module to access the current and voltage output. This may interrupt the regular power supply and may be costly in terms of maintenance. In a large solar PV power plant, it is practically unfeasible to physically access every module. Other drawbacks of PV characteristic-based fault diagnosis methods include that they are time-consuming, especially in the case where a large number of PV modules at the plant level are required to be diagnosed.
+
+A frequency analysis-based fault detection method under dark conditions using red light on PV array was proposed in $[6]$ . The presence of an open-circuit fault in a PV array operated under dark conditions with a forward bias voltage produces an increase in the total dynamic impedance. As a result, the spectral components of the output voltage change. By analyzing the spectral components of the PV array, output voltage fault may be analyzed. However, this method can detect only the open-circuit fault in a PV array.
+
+A power loss analysis method was used in $[7]$ to find the faults in PV modules by comparing the simulated power with actual output power. However, one never be sure about the reason for the loss of power. Time-domain reflector and earth capacitor measurement have been used by researchers in $[8, 9]$ . An arc detection-based fault diagnosing technique using compressed sensing has also been reported in $[10]$ . This work adopted the high-frequency analysis using the analog-to-digital converter technology.
+
+Although the above-discussed methods are well established, there are some limitations associated with these methods. The abnormal voltage–current characteristic curve of a PV panel is a clear indication of a fault, but to find the source or physical location of the fault (especially when a large number of modules are installed), this method may not be suitable. Hence to detect the exact location and nature of the fault, some other method is required. Additionally, the above methods are invasive techniques, which means that PV panels are needed to be physically connected to some measuring devices. Hence there is always some risk of interfering with the normal operation of PV modules.
+
+Recently IR image-processing-based techniques for the condition monitoring of machinery are becoming popular in industries $[2]$ . The use of IR imaging for PV plant inspection offers several advantages. Anomalies can be seen on a crisp thermal image. The exact location of faults can be detected. IR imaging is a noninvasive technique; hence, PV panels can be inspected without disturbing the normal operation. A large number of panels can be scanned in a short time duration using thermal imaging cameras. Moreover, IR imaging offers early fault-diagnosis before the complete failure of the system. Hence, to ensure failure-free operation, IR imaging is a simple, fast, and reliable method to scan the faults in solar panels.
+
+## 7.3 Thermal image-processing-based fault analysis
+
+Every object emits IR radiations above the absolute zero temperature. The intensity of emitted radiation is proportional to the temperature of the object. For correct measurement, ambient temperature values and emissivity of the material needs to be adjusted accurately in the camera. For example, the emissivity of glass is 0.85 and for the polymer back-sheet, it is 0.95. Thermal cameras capture the temperature anomaly in the form of IR images. This temperature difference arises due to the various defects on the surface of an object.
+
+In PV modules, various types of hot-spot patterns emerge due to different types of faults. For example, one string of a module may be warmer than others as shown in Table 7.1. This may be due to short-circuited or open sub-string. It will result in power losses or reduced open-circuit voltage. In other cases, the temperature of one cell is much larger than the others. This may be due to broken cells, disconnected strings, or diode burnt. Major IR image patterns are given in Table 7.1 along with the possible causes and their effects on the PV power output.
+
+Thermal imaging has already been suggested in the literature for preventive fault diagnosis in PV modules. Recent research developments in the diagnosis of PV crystalline modules using thermal imaging were highlighted in $[14]$ . A hot-spot analysis was done in $[11]$ by analyzing the line temperature profile across the hot spots. In this technique, the temperature line profile of a healthy module is compared to the line profile of the PV module under testing.
+
+As discussed previously, feature extraction is an important task in fault diagnosis using thermal imaging-based techniques. Various temperature-based features such as minimum temperature, maximum temperature, and background temperature can be extracted from thermal images, and then a decision-based system is employed to find the types of faults as discussed in $[12]$ . Digital image-processing techniques have been used on thermal images to find the faults in PV modules. Canny edge detection is the most suitable method used in fault detection in thermal images of solar PV modules $[13]$ .
+
+A process flow diagram for the fault analysis of solar PV modules using thermal image processing is given in Figure 7.1.
+
+## 7.3.1 Preprocessing
+
+Thermal images are inherently prone to noise. IR detectors are very sensitive to ambient temperature conditions. They easily capture the IR rays emitted from other objects that lie nearby. Different types of noises may be present in images such as Gaussian noise, impulse noise, shot noise, and speckle noise. To have accurate information from IR images, it is necessary to enhance signal content and suppress noise to increase the signal-to-noise ratio. It is very difficult to locate the faulty regions in images due to minor intensity differences between faulty regions and background regions. Therefore, preprocessing is essential to enhance the intensity difference between the targeted region and the background region without altering the important features of an image. Image preprocessing consists of two steps, namely, contrast enhancement and de-noising. In image de-noising, residual noise in the IR image is filtered out with an appropriate kind of filter. Fixed-pattern noise consists of high spatial frequencies and can be removed by low-pass filters, which suppress high frequencies and, at the same time, preserve edges and contours $[15, 16]$ .
+
+(Continues)
+
+Table 7.1 Frequently occurring fault categories in PV modules with their causes and effects
+
+<table><tr><td>IR image</td><td>Fault description</td><td>Possible failure reason</td><td>Remarks</td></tr><tr><td></td><td>String fault [11]</td><td>Open or short sub-string, bypass diode short circuit</td><td>Reduced power output, less $V_{oc}$ </td></tr><tr><td></td><td>Single-cell burnt, diode burnt, defected cell [12]</td><td>Physical damage, diode failure, shadowing</td><td>Reduced power output, physical inspection required</td></tr><tr><td></td><td>Dust on PV module [13]</td><td>Dust accumulated on PV module</td><td>Reduced power output (temporarily)</td></tr><tr><td></td><td>Manufacturing defect</td><td>Due to diode mismatch while assembling, nonuniform materials used</td><td>Increased temperature of the module</td></tr><tr><td><img src="images/54e4307696a56636862f3b1b8ad43a70bee3b8f1a4a0766124b40dfab45f90d0.jpg"/></td><td>Healthy module</td><td>No defect</td><td>No defect</td></tr><tr><td><img src="images/905acdf7bdd22dc1f411b6fef55a039affc5b631d5e435e7fde9cb84263051d8.jpg"/></td><td>Patchwork pattern</td><td>Bird dropping, shadowing</td><td>Decreased power output, overheating</td></tr><tr><td></td><td>Physical damage discoloration</td><td>Damage due to mishandling during transportation or installation</td><td>Overheating of the panel, decreased power output</td></tr></table>
+
+![](images/cf1b08b98d040db9718db4b5cc2cd2f1b38954ba1e55d450f61fa7f1e3f9f138.jpg)  
+Figure 7.1 Fault analysis of solar PV modules using thermal image processing
+
+## 7.3.2 Image segmentation
+
+Image segmentation is a process to find the region of interest (ROI) in the thermal images. In most commercial applications, predefined geometrical shapes such as rectangles or circles are used for detection. The limitation with these predefined shapes is that sometimes they include the areas that are not necessary to be included in the ROI and sometimes they leave the area that is required to be included in the ROI. To overcome this problem, automatic segmentation methods have been proposed in $[17]$ . Segmentation algorithms are generally based on either discontinuity in the image region or the similarity of the pixels. In the first case, the approach is to partition an image based on abrupt changes, whereas in the second approach, the image is partitioned into regions that are similar as per predefined criteria. Several segmentation methods are available in the literature; some of the popular methods are thresholding method, region growing, watershed algorithm, and clustering method $[18]$ .
+
+## 7.3.3 Feature extraction
+
+Feature extraction and classification is an important part of thermal IR imaging applications. Both the classification and recognition algorithm and the selection of features, through their interaction, can affect the accuracy of the classification and recognition of targets. As one of the much-debated challenges, this issue has received a good deal of attention and research. Common shape-based features such as area, centroid, edge pixels, and Harris corner are taken for visual images $[19]$ . The feature extraction method purely depends on the purpose of the thermal imaging application.
+
+## 7.3.4 Image classification
+
+Image classification is the process of assigning pixels in the image into different classes of interest. Inspired by the human visual system, many attempts have been made to replicate this process with computer systems. To enable computers to understand objects, it is necessary to create a system that would extract high-level features from visual “stimuli” using only numerical manipulations. For a long time, image classification was not considered as a statistical problem until the development of Artificial Neural Networks (ANNs), particularly, Convolutional Neural Networks (CNNs). CNN is a special type of ANN that works in the same way as a regular neural network except that it has a convolution layer at the beginning $[20]$ .
+
+## 7.4 CNN-based fault diagnosis of solar PV modules
+
+To overcome the drawbacks of traditional fault-analysis systems for solar PV modules, a thermal imaging-based fault-analysis system is proposed. A thermal inspection of PV plants can be done using three methods.
+
+1. thermal inspection using handheld cameras
+
+2. thermal inspection using IR cameras mounted on the crane
+
+3. thermal inspection using drone-mounted IR cameras.
+
+Handheld cameras are generally used to inspect stand-alone PV power systems or small-capacity roof-mounted PV modules. Crane-mounted IR cameras are used for large power plants up to 1 MW capacity. However, for very large power plants, manual inspection is costly and time-consuming. In such cases, IR cameras mounted on drones are most viable economically and time-saving $[21]$ .
+
+Deep learning has emerged as a powerful machine learning tool in recent times. It is a biologically inspired model that simulates the human visual cortex that can extract important semantic information from an image or a region. Deep learning networks have found applications in almost every area and especially data mining and image classification $[22]$ . A deep learning network consists of a large number of hidden layers. Although a simple neural network also contains multiple layers in the deep learning network, hidden layers are much larger than a simple neural network. CNN is the most common network used in deep learning networks. For training the CNNs, a large number of images are needed. The general architecture of CNN is shown in Figure 7.2. It consists of four layers: convolution layer, rectified linear unit (ReLU), pooling, and fully connected (FC) layer.
+
+## 7.4.1 Convolution layer
+
+In the convolution layer, a matrix known as the kernel is passed through the input matrix to create a feature map for the next matrix. Kernel size can be varied to calculate another set of features. Convolution filter maps a set of points to a single point in the next layer. It takes the sum of the element-wise product of the filter and a part of the input matrix.
+
+![](images/d809cad3305130a1beb7c1de42ff95dc80765efbbbb9a8425702e17c461ae129.jpg)  
+Figure 7.2 General architecture of CNN
+
+## 7.4.2 Rectified linear unit
+
+ReLU is a piecewise linear function that will output the input directly if it is positive; otherwise it will give a zero. ReLU has become a default activation function for many neural networks because it gives better results and it is easier to train.
+
+## 7.4.3 Pooling
+
+While using the convolution filter on input images, a large number of small images are generated. To collect these small images into one single image, we use a pooling layer. Pooling takes the maximum of the filtered output from all these small matrices.
+
+In this chapter, images extracted from a video of the aerial survey of a large PV power plant are fed to a deep convolution neural network. The input image layer is built with a dataset of 3072 images, where each image is of size $393 \times 424 \times 3$ . Here 3 is the channel size and is used for color images. For grayscale images, the channel size is taken as 1. In convolution layers, the kernel size is taken as $3 \times 3$ and the number of filters taken per layer is 8. This parameter determines the number of feature maps.
+
+Convolution layers are followed by a down-sampling operation. The down-sampling operation makes it possible to accommodate more convolution filters in deeper stages and hence increases the accuracy of the network. There are many methods of down-sampling. Max pooling $[20]$ is one way of down-sampling, which is taken in this paper. Max pooling returns the maximum value of the rectangular regions of the inputs.
+
+The number of fully connected layers gives the total number of categories in which the input images are to be classified. In the present work, seven fully connected layers are taken to classify the images according to the fault categories given in Table 7.1.
+
+For different deep learning models and classification tasks, choosing the appropriate optimization algorithm plays an important role in improving the training speed and classification accuracy of the model. In this chapter, the three most commonly used optimization algorithms including adam (Adaptive Moment Estimation), rmsprop (Root Mean Square Propagation), and sgdm (Stochastic Gradient Descent with Momentum) are tested and compared as shown in the training graph for the deep learning network in Figure 7.3.
+
+A deep learning net was tested for 674 images that included faulty as well as non-faulty images. The adam training network solver provided the best results among the three solvers taken. The confusion matrix for adam is shown in Figure 7.4. It provides an overall accuracy of 93.76 percent as compared to 88.5 percent and 91.69 percent in the case of rmsprop and sgdm, respectively, as shown in Table 7.2.
+
+The performance of all the three training algorithms in terms of training accuracy, training time, and testing time are summarized in Table 7.2. It is concluded from the results that adam is the most accurate as well as fast training-solver among the three. It takes 115 seconds to train the deep learning net and 0.171 to test 674 images, whereas rmsprop is the least accurate among the three training solvers.
+
+![](images/53871a0ab98f0945a5a29bfca71e59ec02f2df741959938c3721f02a490d69f5.jpg)  
+Figure 7.3 Training progress curve for adam, rmsprop, and sgdm
+
+Results of fault category-wise correct and incorrect classification for the three training methods are given in Table 7.3. In the case of adam, 118 out of 674 PV modules were found non-faulty. A total of 138 modules were found faulty due to the patchwork pattern, which is a common cause of faults in PV modules due to bird-droppings. From the results, it is also inferred that dust is also a major cause of the health degradation of panels.
+
+![](images/8b2b02a7bd49d7db7d3a0136670720ab9de1e4adb85092e2e02455a3e825c527.jpg)  
+Figure 7.4 Confusion matrix for adam algorithm
+
+Table 7.2 Performance of training algorithms for the proposed deep net
+
+<table><tr><td>Training algorithm</td><td>Number of iterations</td><td>Accuracy (%)</td><td>Training time (s)</td><td>Testing time (s)</td></tr><tr><td>adam</td><td>100</td><td>93.76</td><td>115</td><td>0.171</td></tr><tr><td>rmsprop</td><td>100</td><td>88.50</td><td>118</td><td>0.184</td></tr><tr><td>sgdm</td><td>100</td><td>91.69</td><td>114</td><td>0.176</td></tr></table>
+
+## 7.5 CNN-based fault diagnosis of solar PV modules
+
+Fault analysis of solar inverters is generally based on the electrical parameter's measurement and its analysis. Fault detection based on the current trajectory and its instantaneous frequency at the output side of PV inverters was done in [23]. ANN-based multilevel inverter fault detection system was proposed in [24], which delivers the power even when the fault occurs. A transformer-based multilevel converter was proposed in [25, 26]. A research facility design was proposed in [27] to detect inverter faults. Most of the research in PV inverter fault detection has been done to bypass the faulty components. Multilevel inverter strategies are suggested to make the system fault-tolerant. Research on pre-fault condition monitoring is rare in the literature. Besides, these techniques are invasive. In this chapter, a thermal imaging-based PV inverter condition-monitoring method is proposed, which diagnoses the thermal health of the inverter so that preventive actions can be taken before the complete system fails. The proposed method uses fuzzy decision-making to classify the health status of the transformer. The decision is made based on the maximum temperature of the components of the inverter and comparison of images of a non-faulty inverter with a faulty inverter. Thermal imaging is a noninvasive method that helps in quickly diagnosing the thermal health of inverter components. Thermal image processing is used to analyze the change in temperature distribution over the surface of the components and possible faults are predicted based on failure mode effect analysis (FMEA). Condition abnormalities due to aging, overloading, corrosion, and ambient temperature can be detected with this technique very easily and accurately.
+
+## 7.5.1 Feature extraction
+
+In the proposed technique, thermal images of the inverter under monitoring are taken with an IR camera. These images are quantitatively analyzed with the Smart View software, which gives two features of the image as similarity index and maximum temperature as shown in Figure 7.5. The inverter IR image is divided into zones. Each zone contains major components of the inverter as shown in Figure 7.6. For each zone, the maximum temperature is determined.
+
+Table 7.3 Category-wise fault classification for deep learning net
+
+<table><tr><td colspan="8">Training accuracy</td></tr><tr><td colspan="2"></td><td colspan="2">adam</td><td colspan="2">rmsprop</td><td colspan="2">sgdm</td></tr><tr><td>Fault category</td><td>Total images</td><td>Correct</td><td>Incorrect</td><td>Correct</td><td>Incorrect</td><td>Correct</td><td>Incorrect</td></tr><tr><td>Non-faulty</td><td>124</td><td>118</td><td>6</td><td>115</td><td>9</td><td>117</td><td>7</td></tr><tr><td>Dust</td><td>128</td><td>115</td><td>13</td><td>108</td><td>20</td><td>112</td><td>16</td></tr><tr><td>Manufacturing defect</td><td>47</td><td>39</td><td>8</td><td>36</td><td>11</td><td>36</td><td>11</td></tr><tr><td>Diode burnt</td><td>116</td><td>108</td><td>8</td><td>110</td><td>6</td><td>106</td><td>10</td></tr><tr><td>Patchwork</td><td>144</td><td>138</td><td>6</td><td>126</td><td>18</td><td>137</td><td>7</td></tr><tr><td>Physical damage</td><td>73</td><td>71</td><td>2</td><td>68</td><td>5</td><td>70</td><td>3</td></tr><tr><td>Array fault</td><td>42</td><td>39</td><td>3</td><td>34</td><td>8</td><td>40</td><td>2</td></tr></table>
+
+![](images/3fe72c26a3cc395c6e33dec61792c8fadec7564928c9b06f8f3e682c790dbf96.jpg)  
+Figure 7.5 Condition monitoring algorithm for inverter
+
+The manufacturer provides the maximum and minimum temperature rating of each component. Fault severity is decided based on the temperature of each component and the similarity index. The similarity index is calculated by taking the correlation between the IR images of the inverter under monitoring and the IR image of the same inverter when it is working in perfect conditions as
+
+$$
+\complement (m, n) = \sum_ {x = 0} ^ {i - 1} \sum_ {y = 0} ^ {j - 1} f (x, y) g (x + m, y + n)\tag{7.1}
+$$
+
+where $\complement(m,n)$ is the correlation between images $f(x,y)$ and $g(x,y)$ .
+
+If-then rule is designed using the similarity index and the temperature corresponding to the components of inverter. The IR image of a solar inverter is given in Figure 7.6.
+
+A list of all major components of the inverter is prepared and the maximum temperature is determined for each component. The temperature range and similarity index are divided into low, medium, and high. The range of similarity index varies between 0 and 1 000. A fuzzy rule base is designed as given in Table 7.4.
+
+Fault due to temperature rise of major components of an inverter is given in Table 7.5. Based on the FMEA, if the temperature goes out of the range given in Table 7.5, possible failure reasons are given. Maintenance actions are to be taken based on the severity of the fault. Critical faults are needed to be rectified immediately.
+
+![](images/79f32565b4b7997f1d6ad9964053559c2f1c9449ac1516d2be79305c1a57bc97.jpg)  
+Figure 7.6 IR image of a solar inverter
+
+The proposed technique helps to maintain the health of the solar PV inverter without interfering in the inverter operation, i.e., the system does not need to be shut down. This technique may also be used for quality testing at the inverter manufacturing unit before the product is sent to the market.
+
+Table 7.4 Fuzzy rule base
+
+<table><tr><td></td><td colspan="2">Similarity index</td><td colspan="2">Temperature (T)</td><td>Fault category</td></tr><tr><td>if</td><td>LOW</td><td>and if</td><td>LOW</td><td>then</td><td>No fault</td></tr><tr><td>if</td><td>LOW</td><td>and if</td><td>MED</td><td>then</td><td>Minor fault</td></tr><tr><td>if</td><td>LOW</td><td>and if</td><td>HIGH</td><td>then</td><td>Major fault</td></tr><tr><td>if</td><td>MED</td><td>and if</td><td>LOW</td><td>then</td><td>Minor fault</td></tr><tr><td>if</td><td>MED</td><td>and if</td><td>MED</td><td>then</td><td>Major fault</td></tr><tr><td>if</td><td>MED</td><td>and if</td><td>HIGH</td><td>then</td><td>Major fault</td></tr><tr><td>if</td><td>HIGH</td><td>and if</td><td>LOW</td><td>then</td><td>Major fault</td></tr><tr><td>if</td><td>HIGH</td><td>and if</td><td>MED</td><td>then</td><td>Critical fault</td></tr><tr><td>if</td><td>HIGH</td><td>and if</td><td>HIGH</td><td>then</td><td>Critical fault</td></tr></table>
+
+Table 7.5 Fault prediction based on FMEA
+
+<table><tr><td rowspan="2">Important components</td><td colspan="2">Manufacturer temperature range (°C)</td><td rowspan="2">Failure impact</td></tr><tr><td>Maximum</td><td>Minimum</td></tr><tr><td>STP80NF10</td><td>-65</td><td>170</td><td>Fault in DC–DC converter switching</td></tr><tr><td>LVC541A</td><td>-40</td><td>85</td><td>DC–DC converter driver failure</td></tr><tr><td>Inductor</td><td>-40</td><td>85</td><td>Smoothing fault</td></tr><tr><td>Capacitor</td><td>-55</td><td>105</td><td>Charging and discharging rate fault</td></tr><tr><td>Heatsink</td><td>-55</td><td>150</td><td>Inductor and capacitor burnout</td></tr><tr><td>BD-135</td><td>-55</td><td>150</td><td>DC–AC switching fault</td></tr><tr><td>Current sensor</td><td>-25</td><td>100</td><td>Problem in fault detection</td></tr><tr><td>Heatsink</td><td>-55</td><td>150</td><td>Switch burnout</td></tr><tr><td>Winding of transformer</td><td>0</td><td>115</td><td>Transformer malfunction or coil burnout</td></tr><tr><td>Heatsink</td><td>-55</td><td>150</td><td>Disconnection of battery half</td></tr><tr><td>Resistance</td><td>-55</td><td>155</td><td>Overcurrent flow in system</td></tr><tr><td>Fuse</td><td>-55</td><td>125</td><td>Fault left undetected</td></tr></table>
+
+## 7.6 Summary
+
+To increase the reliability of solar PV systems, condition monitoring of PV modules and inverters is needed without interfering the operation of the system. Thermal image-processing-based techniques are noninvasive and simple and can be used remotely with communication technologies. In this chapter, simple algorithms have been demonstrated using intelligent techniques such as CNN and fuzzy logic to analyze the conditions of PV modules and inverters. Simulation results illustrate the efficacy of these algorithms. Since the thermal images are taken in harsh environmental conditions, the reliability of the proposed methods depends on the selection of detection and classification algorithms.
+
+## References
+
+[1] Burduhos B.-G., Visa I., Duta A., Neagoe M. 'Analysis of the conversion efficiency of five types of photovoltaic modules during high relative humidity time periods'. IEEE Journal of Photovoltaics. 2018;8(No.6):1716–24.
+
+[2] Bagavathiappan S., Lahiri B.B., Saravanan T., Philip J., Jayakumar T. 'Infrared thermography for condition monitoring – a review'. Infrared Physics & Technology. 2013;60:35–55.
+
+[3] Jadin M.S., Taib S. 'Recent progress in diagnosing the reliability of electrical equipment by using infrared thermography'. Infrared Physics & Technology. 2012;55(4):236–45.
+
+[4] Jaffery Z.A., Dubey A.K. 'Design of early fault detection technique for electrical assets using infrared thermograms'. International Journal of Electrical Power & Energy Systems. 2014;63(9):753–9.
+
+[5] Tingting P., Xiaohong H. 'A fault detection method for photovoltaic systems based on voltage and current observation and evaluation'. Energies (MDPI). 2019;12(9):1–16.
+
+[6] Perla Y. ‘A novel fault detection and location method for PV arrays based on frequency analysis’. IEEE Access :Practical Innovations, Open Solutions. 2019;7:2169–3536.
+
+[7] Chen Y.H., Liang R., Tian Y., Wang F. 'A novel fault diagnosis method of PV based-on power loss and I-V characteristics'. International Conference on New Energy and Future Energy System (NEFES 2016); Beijing, China; August 2016.
+
+[8] Takashima T., Yamaguchi J., Otani K., Kato K., Ishida M. 'Experimental studies of failure detection methods in PV module strings'. Photovoltaic Energy Conversion, Conference Record of the IEEE 4th World Conference, 2; 2006. pp. 2227–30.
+
+[9] Takashima T., Yamaguchi J., Otani K., Oozeki T., Kato K., Ishida M. 'Experimental studies of fault location in PV module strings'. Solar Energy Materials and Solar Cells. 2009;93(6):1079–82.
+
+[10] Fenz W., Thumfart S., Yatchak R., Roitner H., Hofer B., et al. 'Detection of arc faults in PV systems using compressed sensing'. IEEE Journal of Photovoltaics. 2020;10(2):676–84.
+
+[11] Simon M., Meyer E.L. 'Detection and analysis of hot-spot formation in solar cells'. Solar Energy Materials and Solar Cells. 2010;94(2):106–13.
+
+[12] Jaffery Z.A., Dubey A.K., Irshad., Haque A. 'Scheme for predictive fault diagnosis in photo-voltaic modules using thermal imaging'. Infrared Physics & Technology. 2017;83(12):182–7.
+
+[13] Tsanakas J.A., Chrysostomou D., Botsaris P.N., Gasteratos A. 'Fault diagnosis of photovoltaic modules through image processing and Canny edge detection on field thermographic measurements'. International Journal of Sustainable Energy. 2015;34(6):351–72.
+
+[14] Kumar S., Jena P., Sinha A., Gupta R. ‘Application of infrared thermography for non-destructive inspection of solar photovoltaic module’. Journal of Non-Destructive Test Evaluation. 2017;15(9):25–32.
+
+[15] Buzdan R., Wyzgolik R. ‘Remarks on noise removal in infrared images’. Measurement Automation Monitoring. 2015;61(no. 06).
+
+[16] Vries J.D. ‘Image processing and noise reduction techniques for thermographic images from large-scale industrial fires’. Quantitative Infrared Thermography. 2014;042:1–9.
+
+[17] Irshad; Jaffery, Z.A. ‘Performance comparison of image segmentation techniques for infrared images’. 2015 Annual IEEE India Conference (INDICON), New Delhi; 2015. pp. 1–5.
+
+[18] Jaffery Z.A., Zaheeruddin S.L. 'Performance analysis of image segmentation methods for the detection of masses in mammograms'. International Journal of Computer Applications. 2013;82(2):44–50.
+
+[19] Lowe D.G. ‘Distinctive image features from scale-invariant keypoints’. International Journal of Computer Vision. 2004;60(2):91–110.
+
+[20] Shin H.-C., Roth H.R., Gao M., et al. 'Deep convolutional neural networks for computer-aided detection: CNN architectures, dataset characteristics and transfer learning'. IEEE Transactions on Medical Imaging. 2016;35(5):1285–98.
+
+[21] Yahya Z., Achraf E., Imane S., Sara A.L. ‘Thermal infrared and visual inspection of photovoltaic installations by UAV photogrammetry—application case: Morocco’. Drones. 2018;2(41).
+
+[22] Xin M., Wang Y, Yong W. ‘Research on image classification model based on deep convolution neural network’. EURASIP Journal on Image and Video Processing. 2019;2019(1).
+
+[23] Guan Y., Sun D., He Y. 'Mean current vector based online real-time fault diagnosis for voltage source inverter fed induction motor drives'. IEEE International Electric Machines & Drives Conference, 2; 2006. pp. 1114–18.
+
+[24] Stonier A.A., Lehman B. 'An intelligent-based fault-tolerant system for solar-fed cascaded multilevel inverters'. IEEE Transactions on Energy Conversion. 2018;33(3):1047–57.
+
+[25] Nademi H., Das A., Burgos R., Norum L.E., Lars E.N. ‘A new circuit performance of modular multilevel inverter suitable for photovoltaic conversion plants’. IEEE Journal of Emerging and Selected Topics in Power Electronics. 2016;4(2):393–404.
+
+[26] Kim S.-M., Lee J.-S., Lee K.-B. 'A modified level-shifted PWM strategy for fault-tolerant cascaded multilevel Inverters with improved power distribution'. IEEE Transactions on Industrial Electronics. 2016;63(11):7264–74.
+
+[27] Rao S. ‘An 18 kW solar array research facility for fault detection experiments’. Proceedings of the 18th Mediterranean Electro Technical Conference; Limassol, Cyprus; 2016.
+
+Chapter 8
+
+# Failure mode classification for grid-connected photovoltaic converters
+
+$V S \ Bharath \ Kurukuru^{1}, \ Mohammed \ Ali \ Khan^{1}, \ and \ Azra \ Malik^{1}$
+
+Anomaly detection with machine learning (ML) techniques has been extensively used to assist the decision-making process during abnormal conditions. However, these approaches were majorly constrained in the fields of medical and image processing-based applications. This is because of the complexities due to the unavailability and uncertainty of the input data of real-world and mainly industrial applications. In light of the above observation, this chapter proposes a failure mode classification (FMC) for power electronics converters (PECs) that are associated with grid-connected photovoltaic (PV) applications. Generally, the failure mechanisms are a critical aspect of determining the reliability of power electronic converters. The failure mechanisms deal with the physical, chemical and electrical processes through which the failure occurs in the system. Based on the type of failure process, these failure mechanisms can be modelled when appropriate material and environmental information are available. Moreover, with the advancements in ML approaches, the failure data along with the modelled mechanisms can be used to identify the operating state of the PEC. This helps to monitor the operation of the system, performing risk analysis, estimating the reliability of the product and reducing the probability that a customer is exposed to a potential product and or process problem. Further, the development of an FMC for a PEC can be discussed as follows: Initially, all the possible failure modes for PEC components can be identified. Further, the identified data is represented as a function of time and frequency domain to perform the feature extraction process. Further, the extracted feature data is minimized and subjected to classification using ML techniques. Finally, the trained ML classifier is implemented in a feed-forward loop to identify the operating state of a PEC.
+
+## 8.1 Introduction
+
+With the immense expansion in the global population rate, the proportionate growth in the global energy demand is inevitable. There is an immediate need to incorporate renewable energy solutions to the existing energy infrastructure $[1]$ . During the past few years, these renewable energy solutions are being preferred to reduce the stress on the traditional energy resources. Among the available renewable energy resources such as solar PV, wind energy, hydro, tidal, biomass, PV is considered to have highest generation capacity. To provide sustainable energy solution, grid-connected PV systems are increasingly utilized worldwide due to their inherent advantages. They help in reducing greenhouse gas emissions and provide clean and green energy. The reduction in the PV installation and maintenance cost along with the advanced and innovative power electronics technology has taken the grid-connected PV systems to a higher level. The grid-connected PV systems utilize power electronics converters for efficient power conversion. The switching devices based on semiconductor technology serve as the building blocks of power electronic converters $[2]$ . These power devices are utilized for the conversion of current and voltage waveforms. These switching devices provide many benefits such as packaging size, high switching speed and flexible control. The conversion may include the increase or decrease in the current and voltage levels of the input or it may include the power conversion from DC to AC or vice versa. The power conversion should take place such that the system stability and reliability is maintained $[3]$ . For grid-connected PV applications, inverters and converters are commonly used power electronic systems. An inverter acts as an interface between PV and the grid supply and it is responsible for the transfer of power from the DC side to AC side. These converters provide ancillary services such as voltage regulation and reactive power support at the point of grid connection.
+
+The grid-connected PV systems are considered highly reliable. However, like any other complex electrical system, they are also susceptible to failures. These PV systems are modular in nature. Their capacity may vary from a few watts to megawatts. Thus, they can have different types of topologies and configurations $[4]$ , which further contributes to complicating the evaluation of failure modes of the system. Researchers have found that the vast majority of grid-connected PV system failures are inverter related. Inverters essentially are much different in behaviour from the rotating machines such as induction and synchronous machines. Their fault currents decay with a fast rate because they are deficient in inductive characteristics and their characteristics mainly depend upon the time constants of the circuit $[5]$ . However, they can be controlled in such a way that their fault response time can be varied programmatically. Inverters can utilize voltage or control algorithm as the response to fault occurrence. During the transient period, the fault contribution is higher if the voltage control algorithm is used. With the current control algorithm, the increment or decrement rate is much lower. Inverters predominantly consist of the switching devices such as IGBT (insulated gate bipolar transistor) and MOSFET (metal oxide semiconductor field effect transistor). It is found in a research that around 34 per cent of failures in power electronic systems are due to the switching devices and soldering-joint failures $[6]$ . In addition, the DC-link capacitor is another most vulnerable component of the system $[7]$ . Faults in these switching devices can be of two types. First type is failures that occur suddenly such as sudden overvoltage or overcurrent, or sudden temperature increase. Second type is the failures that occur by undergoing through gradual deterioration over a long period.
+
+![](images/3db667a1c47891e6599722a94d72b127c1d9d89ec9b3faa9aacf41fe7c590de9.jpg)  
+Figure 8.1 A typical grid-connected PV system
+
+A typical grid-connected PV system is shown in Figure 8.1. It consists of a PV array as the generator of DC power; further, there is a DC-link capacitor at the output of PV. For applications requiring a very-high-quality and reliable power, the system requires a DC/DC converter for changing the PV output voltage level. This DC/DC converter is responsible for implementing the maximum power point technique to extract maximum power from the PV generator $[8]$ . In addition, there is a DC/AC power electronics converter, i.e., inverter for flexible and efficient power conversion from DC to AC. The fault may occur anywhere in the system and can pose many challenges to the system. These challenges include maintaining reliability, maintaining optimum power quality in the event of a fault, dealing with the incurred energy loss, detecting and identifying the nature of fault. Therefore, for better and improved reliability, it is required that the system should have a mechanism for prior forecast of possible occurrence of fault. Sometimes the fault detection is delayed and sometimes the fault may remain undetected. Both these events may lead to catastrophic consequences. Essentially, the major challenge is continuous system operation in the event of fault. It is required that the system must have a fault tolerant mechanism in place so that the system does not shut down even in the event of an unexpected failure $[9]$ .
+
+Failure can occur at the DC side or at the AC side. The DC side failure is caused due to the fault at the PV panel, capacitor or boost DC/DC converter. The AC side is affected by the fault at inverter or fault in the filter elements. Since PV works in intermittent environment conditions, it may experience material deformation due to ageing, which affects the PV performance badly. Human errors such as wiring mistake, careless handling and manufacturing error may be another potential cause of poor operational performance of PV, which may lead to fault events. Arc fault, local hotspots and cell material sensitivity to temperature are various other possible fault occurrences [10]. However, the most hazardous faults for the solar PV are the ground faults. Careful ground protection schemes must be employed for the PV systems. They may depend upon several factors including the plant size, installation type and the location of the plant. Irrespective of the ground protection method employed, sometimes there may be ground fault occurrence due to unavoidable reasons. These reasons can be due to damage of the cable insulation, ageing, corrosion, unintended short circuit, moisture entrance, etc. These fault events may lead to the system shutdown. Hence, there needs to be proper fault tolerance mechanism along with the ground protection strategy. Bypass diode failure, open circuit fault, line-to-line fault, double ground fault, etc. are other failure events that may happen in the PV systems [11]. Among these, line-to-line faults are quiet dangerous. Unintended low impedance path between two points on a PV panel may cause line-to-line fault. It may lead to change in the current path and may further lead to fire in worst-case scenarios [12]. Generally, fuses and overcurrent protection methods are utilized to avoid line-to-line failure events. Arc faults may also be harmful for the PV system's efficient operation. Arc faults may be categorized into series and parallel arc failure events. Loose screws, misconnection in the wiring, increased thermal stress, etc. may cause these events [13]. Therefore, the reliability of PV systems play a major role in ensuring the efficient and continuous operation of the overall system.
+
+As discussed above, the failure analysis is of utmost importance for a robust and reliable system. Recently, fault tolerant techniques for grid-connected PV systems have become a major research hotspot. Various fault tolerant techniques have been reported in the literature [14]. They can be categorized into two types: (1) fault tolerance based on device redundancy and (2) fault tolerance based on modification in control algorithm. Once a fault is detected, the next step is the fault isolation. It is important to isolate the faulty part from the healthy part to ensure the safety of the working personnel. In addition, the next step is to apply the adopted fault tolerance algorithm. It is required that the fault tolerance algorithm should be utilized considering the overall system requirements along with the inverter configuration. Whenever a fault occurs in the system, the inverter output experience a change, i.e. the output voltage and current waveforms are distorted. To diagnose the type and nature of fault, these distorted waveforms are analysed. There are various fault diagnostic techniques proposed in the literature. Park's vector method is proposed in [15], which requires the calculation of magnitude and phase angle of current vectors along with the analysis of their space vector trajectory. The normalized and improved park's vector method is also proposed [15]. Centroid-based method [16], current pattern recognition method [17], spectrum analysis method [11], wavelet-fuzzy method [18], logic-based method [19] and model-based methods [20] have also been proposed. Recently, the artificial intelligence (AI)-based methods are increasingly adopted for fault diagnosis and identification, and they are considered to provide immensely improved results. These methods require signal processing as the first step towards fault diagnosis. Signal processing may include noise removal from signal, removing redundant signal information and normalizing signal data. Further, feature extraction is also a part of signal processing. Feature extraction is required to extract useful information. For signal processing, various techniques can be used such as discrete Fourier transform (DFT), fast Fourier transform (FFT), short-term Fourier transform (STFT) and wavelet transform (WT) [21] depending upon the system requirements. Among these, WT-based techniques are mostly preferred since they provide better signal time-frequency characteristics compared to other techniques. After the signal processing part, the next step is to apply AI-based techniques for fault detection and classification. ML and deep learning-based intelligent classification techniques provide high accuracy and efficiency as compared to other techniques [22]. Supervised, unsupervised or semi-supervised learning can be utilized according to the requirements. One of the supervised learning-based fault classification methods is artificial neural network (ANN) [23]. However, ANNs may sometimes suffer from overfitting and may fail to predict correctly. An improved version of ANN, multi-layer perceptron network (MLPN), has also been proposed to overcome the issues associated with the ANN [23]. Decision tree [24] and random forest [25]-based methods have also been proposed in literature. Other ML-based techniques such as $k$ -nearest neighbour (K-NN) [26] and support vector machine (SVM) [27] have been presented for grid-connected PV systems. Recently, deep learning-based fault classification techniques, which utilize convolutional neural network (CNN) [28], have taken precedence over other techniques since they provide outstanding accuracy. A grid-connected PV system with fault diagnostic approach is shown in Figure 8.2.
+
+![](images/4754dfe61a84aab767e6729403f4f51da69bc9ac21636878ca5325715d0b2144.jpg)  
+Figure 8.2 Fault diagnostic block diagram for grid-connected PV system
+
+## 8.2 Components of power electronic converters
+
+Today, PV is considered a promising energy source that is utilized not only in power sector, but in transportation, lighting, construction and residential sectors as well. It is pollution free, green and abundantly available. However, it provides DC power and requires an inverter for DC/AC power conversion. With inverter as an interface, PV can be connected to grid and other AC loads. The inverter is responsible for providing clean sinusoidal output with the desired voltage and frequency. Inverter must be able to synchronize with the grid for a proper and efficient grid connection. Sometimes, the system might require a boost DC/DC converter for enhancing the output of PV array. Both these power electronic converters, i.e. DC/DC converter and DC/AC converter (inverter) consist of semiconductor-based power switching devices as a major component. With the advancement in semiconductor technology, IGBT (insulated gate bipolar transistor) have become the most suitable switching devices for power electronic converters [29]. The IGBT has combined the advantages of both BJT (bipolar junction transistor) and MOSFET. It has high switching speed, high input impedance and low saturation voltage. However, along with the DC-link capacitor, it is the most vulnerable component of the grid-connected PV system. The majority of failures in the power electronic converters occur due to the IGBTs and DC-link capacitors. Therefore, the study of IGBT's electrical and thermal characteristics is of paramount importance.
+
+IGBTs have incorporated huge developments in the last few years in terms of dimension, cost, thermal efficiency, reliability, etc. The IGBTs now come with higher power densities owing to the innovative assembly and packaging techniques. In addition, the power outputs of commercial IGBTs can be as high as millions of watts. It is expected that in future also, the IGBT power output will further increase. Today, not only IGBTs have undergone structural and operational advancements, they also have better and improved cooling capabilities, which make them a great choice for power electronics converters. IGBTs are widely used in many critical applications such as switched-mode power supplies (SMPS), uninterrupted power supply (UPS) and inverters. These applications require efficient modulation techniques for the proper operation of the switching devices. However, despite the continuous improvement in the IGBT characteristics, the reliability concerns still exist $[30]$ . Due to the electrical, mechanical and thermal overstress, the IGBTs are susceptible to failure. IGBT failures may be of two kinds – one is the wear out failure and other is catastrophic failure. The wear out failure may occur due to the bond-wire lift-off, bond-wire heel crack, solder-joint failure, avalanche breakdown, latch-up, secondary breakdown, etc. These wear out failures are experienced owing to the long-time operation of the device. The other reason might be the power cycling $[31]$ . The catastrophic failure in IGBTs occur due to the overstress events such as sudden increase in voltage, current or temperature. When the device capacity is not enough to handle this sudden change, the device fails.
+
+## 8.2.1 IGBT failure
+
+The requirement of modern power electronic systems is to meet the specific reliability and robustness level. To fulfil these requirements, it is desired that the efficient cooling and proper thermal efficiency be ensured for the IGBTs. From the reliability perspective, the junction temperature of IGBT play a vital role. It is also important to analyse the heat losses in the IGBTs for any power electronics converters. The heat losses can be categorized into two categories – conduction and switching losses. The conduction losses depend upon the conducting current when there is on state voltage drop across the IGBT. The switching losses occur due to the turning on and off stages of the device depending upon the duty cycle, switching frequency, current and the voltage of the device $[32]$ . The mechanical and thermal losses might also be there which are caused due to the overstress events. The various kinds of failures occurring in the IGBTs are summarized in Table 8.1 and detailed here.
+
+Table 8.1 IGBT failures and their causes
+
+<table><tr><td>Failure</td><td>Failure categories</td><td>Causes of failure</td></tr><tr><td rowspan="5">Catastrophic failure</td><td>High-voltage breakdown</td><td>High-voltage spikes</td></tr><tr><td>Latch-up failure</td><td>High dv/dt during turn off</td></tr><tr><td>Electrostatic discharge (ESD)</td><td>High-voltage application to the gate</td></tr><tr><td>Secondary breakdown</td><td>High-current stresses</td></tr><tr><td>Mechanical overstress</td><td>Surface metallization</td></tr><tr><td rowspan="4">Wear out failure</td><td>Bond-wire lift-off</td><td>Mismatch between CTEs of aluminium (Al) and silicon (Si)</td></tr><tr><td>Bond-wire heel crack</td><td>Ageing</td></tr><tr><td>Solder-joint failure</td><td>Mismatch between CTEs of Copper and Si</td></tr><tr><td>Gate-oxide degradation</td><td>High temperature and high electric field</td></tr></table>
+
+## 8.2.1.1 Wear out failure
+
+For ensuring the reliability of the power electronic converters, the study of wear out failure in the IGBTs is very important. The IGBT material experiences these failures due to thermo-mechanical fatigue stress. These failures can further be categorized as:
+
+Bond-wire lift-off - The bond-wire lift-off failure occur due to mechanical events. The bond-wire can be raptured due to the mismatch between the coefficients of thermal expansion (CTE) of Al and silicon (Si). Due to the temperature swings and difference between the CTEs, the bond-wire crack occurs and due to the growth of the bond-wire cracks, bond failure occurs. The strain difference between the two materials causes stress and that stress depends on the temperature. This results in the initiation of crack and is further propagated by the stress-strain energy loss [33]. This hysteresis energy loss is represented by the temperature swings. When the junction temperature swings are sufficiently high, the crack travels from the sides of Al wire to the centre. That is where the bond-wire lifts off.
+
+Bond-wire heel crack – The bond-wire heel crack is a rare event in the advanced IGBT. After long time operation of the IGBT, bond-wire heel crack can be observed and is considered as the fundamental reason behind the failure mechanism for power electronics converters [34]. It can be detected through the measurement of saturated collector to emitter voltage $\left(V_{CE_{sat}}\right)$ . The criteria to detect this particular failure is an approximate increase of 5 % in $V_{CE_{sat}}$ .
+
+Solder-joint failure – Solder-joint failure occurs very frequently and is one of the major causes of the wear out failure of IGBT. Copper has a higher CTE than Si. This difference in CTE results in a shear stress between the Si die and copper substrate, which further leads to the formation of cracks or voids. These voids result in the effective area of heat dissipation being decreased leading to the concentration of heat on the surface $[35]$ . This further accelerates the formation of voids leading to extremely localized heating due to increased thermal resistance. This together with the power cycling process is responsible for solder fatigue. The solder-joint failure adversely affects the collector to emitter ON voltage ( $V_{CEon}$ ) and its value reduces in the linear region of operation of the IGBT.
+
+Gate-oxide degradation – The gate oxide in the IGBT can be degraded over time owing to high temperatures and high electric fields. This is caused by the dielectric breakdown dependence over time [36]. Due to impact ionization, hot electrons damage the gate-oxide layer. Gate-oxide damage leads to the increase in the gate leakage current. It also adversely affects the collector to emitter threshold voltage $V_{CE_{th}}$ .
+
+## 8.2.1.2 Catastrophic failure
+
+Other than the wear out failures in the IGBT, there are catastrophic failures, which occur due to the excessive electrical, mechanical and thermal stress events. They adversely affect the operation of IGBT and sometimes may permanently damage the device. These failures can be further categorized as:
+
+High-voltage breakdown - Due to high-voltage conditions, heating effects can be significant which further affects the IGBT operation. This becomes a major concern in power electronic converters. High-voltage spikes may occur due to the high decay rate of collector current. Repetitive occurrences of these spikes may destroy the IGBT during the turn-off conditions [36]. This can further lead to increase in the leakage current and high local temperature. Higher values of collector to emitter voltage $(V_{CE})$ or gate to emitter voltage $(V_{GE})$ during the turn off conditions may lead to short circuit. It then becomes necessary to ensure the suitable safe operating area (SOA) for the particular power device to meet the desired heat-sink specifications.
+
+Latch-up failure – Latch-up occurs when gate is no longer able to control the collector current. High dv/dt during the turn-off conditions may lead to the triggering of the parasitic transistor of the IGBT further leading to latch-up. High collector current may also lead to latch-up through the turn-on of the parasitic transistor $[37]$ . The loss of gate control due to latch-up damages the IGBT. However, there has been an improvement in the latch-up immunity of the recent devices; it needs further attention to ensure the reliability and robustness of the power electronics converters.
+
+Electrostatic discharge – ESD is very similar to the high-voltage breakdown failure. It can cause partial puncture of the gate oxide, which allows the device to work properly for a particular operation period and ultimately leads to the failure of the device after a certain duration of time $[37]$ . When excessive voltage is applied to the gate, it leads to the short at the gate, which further affects the operation of the device.
+
+Secondary breakdown - The high stresses of current may lead to the local thermal breakdown of the device during the switching on and off of the device. Secondary breakdown is a kind of thermal breakdown. As the current increases, so does the space charge density at the collector-base junction, along with the decrease in breakdown voltage, in turn causing a rise in the current density [37]. This cycle continues until the time the area of the high current density region is reduced to the minimum area of a stable current filament. Consequently, the temperature of the filament increases rapidly because of self-heating leading to a sudden decrease in voltage across the IGBT.
+
+Mechanical overstress – Due to the mechanical overstress events, atomic migration may occur which in long run may affect the reliability of the device. Surface metallization has been observed in IGBT devices, which may happen due to the Al bond pad reconstruction $[37]$ . This can further cause unequal thermal resistance distribution, which leads to the high temperature in the device. This may even cause device local burnout if proper mitigation steps are not taken.
+
+## 8.2.2 Thermal modelling of IGBT
+
+With the continuous advancement in the switching frequency and power density of the IGBT devices, the electrothermal and thermo-mechanical analysis becomes imperative. These multidimensional studies are required to attain the optimized device operation. Sometimes, one kind of fault may induce another kind of failure in the device, which might be depending upon some different electrical traits of the device. Hence, there is a need to devise optimum holistic thermal or electrothermal or thermo-mechanical model, which is able to include overstress mechanical events, high junction-temperature events, bond-wire failures, high dielectric events, heat-sink issues and all the potential failure causes. The most widely used models are thermal models, which can easily incorporate device characteristics through the resistance-capacitor (RC) network model. These thermal models are computationally efficient and require minimal effort in extracting the junction temperature information. They can be easily simulated electrically and provide satisfactory output. The modelling should be done such that the accuracy of the model is high, and it is able to analyse the reliability parameters as well. These thermal models can be categorized here.
+
+## 8.2.2.1 Analytic models
+
+Initially mathematical thermal models were developed for the reliability analysis. However, there has been a continuous development in these models over the years and now they have become highly efficient. Based on the two-port theory, they have devised computationally efficient tools for effective junction temperature rise calculation and heat flux distributions. Boundary element method (BEM) was used for simulating an IGBT of high power with power cycling [38]. It was able to significantly reduce the complexity in the device geometry and was able to solve the heat losses calculation. The 3D finite difference methods (FDMs) was also proposed to solve the equation of heat-conduction for the thermal model of IGBT. The mechanism of thermal interface material (TIM) was also introduced for optimizing the model's geometry-based operating conditions and analysing heat dissipation of the heat sink.
+
+## 8.2.2.2 Numeric models
+
+Finite element method (FEM) based on the numeric simulation was proposed to obtain the temperature distribution of the device with a significantly high accuracy. It was based on the material properties along with the detailed geometric structure of the device. Over the years, they have incurred huge developments and have become more advanced than before. They can calculate the power loss occurring in the device along with the device temperature using coupled approaches. They can correctly model the thermal characteristics along with the model parameter sensitivity. They can further help in identifying the heat-sink characteristics to provide an efficient cooling mechanism for the device.
+
+## 8.2.2.3 Network models
+
+These are widely utilized for the dynamic and steady state thermal analysis of the power device $[39]$ . It can be represented with the help of basic thermal resistance $(R_{th})$ and capacitance $(C_{th})$ . Initially, a charge-controlled model was developed which was analytical in 1D and was able to implement the circuit simulator for the IGBT. The calculation methods were developed for heat diffusion equations and temperature distributions. This method was able to easily connect to the electrical network, which further helped in fast dynamic calculations along with the estimation of the electro-thermal characteristics. During the switching cycle of the device, this method was able to accurately determine the IGBT temperature rise. Two networks classified under this particular model are Foster and Cauer RC networks $[40]$ . These networks have some structural differences but accuracy-wise they reflect almost the same behaviour. These models have very high accuracy with low time-consumption, and they can deal with thermal, electrical as well as physical properties of the power devices.
+
+## 8.2.3 Cooling measures
+
+The reliability of the switching devices such as IGBT can be enhanced if a proper cooling strategy is adopted. One of the major design considerations for IGBTs is the heat-sink considerations since it directly affects the thermal management and hence, reliable operation of the IGBT. Many failures of IGBT devices can be prevented if there are improved cooling measures are taken. The heat-sink operation is not influenced by the geometrical structure; rather its operation is mainly affected by the material used for cooling. Air cooling methods are mostly utilized since they are low cost and easily available. However, they have poor cooling efficiency as compared to the liquid cooling methods. There are direct liquid-based cooling solutions proposed in literature such as heat-sink cooling method and spray cooling method. These cooling methods perform much better than the air-cooling methods since they have the ability to reduce the thermal resistance by 30 per cent [41]. The conventional indirect cooling was based on heat sink having power module mounted on it through thermal grease leading to high thermal resistance. Nevertheless, with the direct liquid cooling method, there is no thermal grease and hence, reduced thermal resistance and better cooling efficiency. There are micro-channel cooling solutions proposed in the literature. They require minimum amount of coolant, have compact size and possess unique cooling behaviour. Two-phase forced convection cooling solution is also proposed, and it provides better heat transfer coefficient compared to other methods. These solutions are preferred where there are high reliability requirements since they have superior characteristics of maintaining uniform device surface temperature. Jet impingement and spray cooling methods are largely employed for high-power applications. They have amazing cooling properties and are one of the best solutions for larger surface areas since they can easily eliminate large amount of heat. One of the modern and novel cooling methods is hybrid solid and liquid cooling solution for isothermalization of switching devices [42].
+
+## 8.2.4 DC-link capacitor failure
+
+Capacitors are one of the most unreliable components of any electrical system after the semiconductor-based switching devices. For power electronics converters applications, electrolytic capacitors are popularly used since they are cost effective. However, they suffer from some major issues such as low filter-bandwidth, sensitivity to variations in temperature and short life. The MPPF (metallized polypropylene film) capacitors are a better choice for power electronics applications $[43]$ . They have goof filter bandwidth, low ESR (equivalent series resistance) and self-healing property. Along with these advantages, they are rarely affected by the surrounding temperature variations. Nonetheless, both these capacitors are vulnerable to fault occurrences.
+
+There can be various kinds of ways in which capacitors fail. Early failures may occur due to the issues in manufacturing process. Random failure events are very rare in case of capacitors. Mostly, the capacitor failures are wear out failures. Due to longer exposure to temperature variations, partial discharges and ageing may cause capacitor failures. They can also fail due to electrical and mechanical overstress events along with general environment wear and tear events. The gradual breakdown of dielectric may also lead to fault current and reduction in capacitance, and ultimately complete failure. Capacitors may also fail due to improper operation, e.g. continued overvoltage or overcurrent events. Open-circuit fault occurrence may not cause the failure to spread further, but short circuit fault events are regarded as more harmful for the capacitor health. Hence, it is important to take some action in the initial phase only, otherwise short-circuit fault may further propagate and may lead to failure of the neighbouring devices. For capacitors mounted on PCB (printed circuit board), corrosion of leads may occur due to the external materials leading to failure. Repeated overstress events are very harmful for capacitors as they may lead to increase in ESR value causing more heat losses.
+
+Electrolytic capacitors are one of the weakest components of the grid-connected PV systems. Their equivalent circuit consists of a capacitor in series with an equivalent resistor and inductor. These capacitors are susceptible to fault events in the system and may be affected by the external temperature changes. The primary wear out failure may be caused by the vaporization of the electrolyte between the cathode and anode terminals of the capacitors. This vaporization leads to effective decrease in the electrolyte area causing decrease in capacitor value and increase in the ESR value. This leads to rise in temperature and further vaporization of the electrolyte causing the repetition of the same process. There are standards, which suggest that for the electrolytic capacitor to fail completely, the ESR increment should lead to the doubling of ESR value and the capacitor value should decrease by 20 per cent. Various failure detection techniques have been proposed in the literature to identify and diagnose the failure mechanism in the capacitors. These techniques are based on identifying the corresponding ESR and capacitor value change and the temperature variations.
+
+## 8.2.5 Power diode failure
+
+Si power diodes serve as one of the important components of the power electronic converters. However, they may suffer from failures under extreme stresses of voltages or currents. It is observed that the major failures occur in power diodes due to high-voltage spikes. Even if the voltage or current spike does not have enough energy to produce temperature rise of the device, it can still cause damage to the device $[44]$ . This kind of failure can be detected through the analysis of current density since it will be higher at a certain point. Other major diode failure occurs due to secondary breakdown. The power diode VI characteristics consist of positive resistance in the low-current region and high-current region has negative resistance characteristics. The current density in both the regions remain balanced. If due to any reason, the current density imbalance is observed, then a higher current density appears at a certain concentrated area, which can give rise to secondary breakdown. This secondary breakdown eventually leads to the failure of diodes. Therefore, for the proper operation of the grid-connected PV systems, it is imperative to consider the failure mechanism of the power diodes.
+
+## 8.3 Failure mechanisms of power semiconductors
+
+## 8.3.1 Failure mode, mechanisms and effects analysis
+
+Failure mode effect analysis (FMEA) is a method for developing comprehensive lists of failure modes for a system and analysing the effects of the failure mode to the larger system. Failure mode effect and criticality analysis (FMECA) expands upon FMEA by introducing a criticality metric through which the failure modes are ranked based on the severity, occurrence and detectability of each failure mode. The criticality analysis allows engineers to focus on these critical failure modes, identified by a risk priority number, to reduce the effects to the end user or system manufacturer.
+
+Further, these methods for identifying failure modes and were first established in the 1940s by the United States military. The US Department of Defense published and updated MIL-STD-1629A – Procedures for Performing Failure Mode, Effect and Criticality analysis $[45]$ . The Society of Automotive Engineers (SAE) published ARP926 in the 1960s $[46]$ . The electronics industry had used it but formally codified adopted the FMEA process when Joint Electron Device Engineering Council (JEDEC) Solid State Technology Association published of JEP131 $[47]$ . The JEP131 document defines FMEA as: ‘an anticipatory thought process designed to utilize as much knowledge and experience of an organization as possible toward the end of addressing potential issues defined in a new project. The objective is to reduce the probability that a customer is exposed to a potential product and or process problem by performing a thorough risk analysis’ $[48]$ . FMEA should be completed by a group of subject matter experts for the systems identified. In this work, the JEP document is used as a primary source since it is particularly developed for semiconductor components.
+
+The development of an FMEA is as follows. First the system which is to be analysed must be clearly defined. Then the system should be broken down into subsystems either in a functional, geographical/architectural, or combination of the two. In this step, all the functions of the subsystems should be identified. Next, identify all the possible failure modes that the subsystem can experience which may be done using a variety of techniques including testing, engineering judgement and simulation. Then, for each mode, identify the possible causes of failure for each of the failure modes. Here, a life cycle profile for the product should be developed to help understand the various stresses the component may see not only during operation but also during manufacturing, storage and transportation. Finally, identify how the failure affects the end user. Like the life cycle profile, this information is application-specific. Once these steps have been taken the FMEA is completed.
+
+A final step for FMEA and failure mode mechanisms (FMM) and effects analysis (FMMEA) is to attempt to prioritize the failure modes, mechanisms and effects to allow for effective usage of resources to address reliability concerns. Here again, the analysis is highly application specific. As opposed to FMEA which identifies the high-risk-failure modes to update the design and reduce risks to acceptable levels, FMMEA takes the FMEA an additional step and identifies the failure mechanisms associated with failure causes and modes $[49]$ . For failure mechanisms, relevant failure model(s) can be identified which can illustrate how the stress leads to the failure of a system. Failure mechanisms are highly dependent on the materials, geometries and stresses within a system.
+
+In the literature, Patil et al. [50] have published a FMMEA for Si power devices, see Table 8.2; however, this FMMEA is limited to only discrete IGBT parts, power cycled at high mean temperatures with large junction temperature swings [50]. The FMMEA was developed for the purposes of identifying failure precursor parameters for prognostics applications and it served that function well. Such an FMMEA is limited in several respects, first as will be discussed in failure mechanism criticality analysis, FMMEA requires application knowledge, therefore this is not truly an FMMEA and it makes no effort to account for failure mechanism criticality. Second, Patil et al.'s list does not include all relevant failure mechanisms for Si power devices in the reasonably expected operating conditions.
+
+Table 8.2 Potential failure modes, causes and mechanisms in literature
+
+<table><tr><td>Potential failure modes</td><td>Potential failure causes</td><td>Potential failure mechanisms</td></tr><tr><td>Short circuit, loss of gate control, increased leakage current (oxide)</td><td>High temperature, high electric field, overvoltage</td><td>Time dependent dielectric breakdown ( $V_{th}$ ,  $g_{th}$ )</td></tr><tr><td>Loss of gate control, device burnout (Si die)</td><td>High electric field, overvoltage, ionizing radiation</td><td>Latch-up ( $V_{CE(ON)}$ )</td></tr><tr><td>High leakage currents (oxide, oxide/substrate interface)</td><td>Overvoltage, high current densities</td><td>Hot electrons ( $V_{th}$ ,  $g_{m}$ )</td></tr><tr><td>Open circuit (bond-wire)</td><td>High temperature, high current densities</td><td>Bond-wire cracking, lift-off  $V_{CE(ON)}$ </td></tr><tr><td>Open circuit (die attach)</td><td>High temperature, high current densities</td><td>Voiding, delamination of die attach ( $V_{CE(ON)}$ )</td></tr></table>
+
+## 8.3.2 Power semiconductor failure mechanisms
+
+This section provides a description of relevant failure mechanisms that have been observed in Si power devices and a table summarizing the failure modes, sites, causes and mechanisms. Once a life cycle profile has been identified, a list of failure modes and mechanisms that may be precipitated from the stresses present in the life cycle profile must be established in an FMMEA. While there are many potential sources of thermal, mechanical and electrical stresses on the power semiconductor components, the mechanisms which may be precipitated are dependent on the physical characteristics of the power semiconductor component. This section provides an overview of the failure mechanisms which have been reported in power semiconductors. It is not intended to be a comprehensive listing of all the relevant literature on each possible failure mechanism; however, a basic description and several sources are identified for each of the mechanisms.
+
+## 8.3.2.1 Aluminium reconstruction
+
+The die metallization for power semiconductors is typically Al. Additionally, if the substrate is direct bonded aluminum (DBA) then there is Al metallized on the ceramic substrate. Due to thermal cycling of the component due to joule heating, switching losses, changes in the temperature of the environment and the mismatch of thermal coefficients of expansion between the Al and Si and ceramic substrate and thermo-mechanical stresses are generated within the package. These stresses can be significant enough to cause yielding of the Al metallization, causing it to buckle and form hillocks. This mechanism is referred to as Al reconstruction $[51–53]$ . The reconstruction of Al can increase in the resistance of the metallization layer. Al reconstruction can be exacerbated by electromigration which can happen if significant current densities are present in the metallization. Al metallization that is coated with a passivation layer, typically silicon nitride, has been shown to resist reconstruction; however, bond pads, which make up a significant portion of the total metallized area, are not passivated and therefore remain unprotected.
+
+## 8.3.2.2 Bond fatigue
+
+Bond-wire fatigue is also a thermo-mechanically driven failure mechanism. Due to the large diameter of wire used to handle high current densities in power devices, Al bond-wire must be wedge-bonded on both ends of the connection unlike gold or copper bond-wire which are typically used in low-power applications with smaller wires that can be ball bonded. Fatigue of these wedge bonds occurs due to joule heating, switching losses, changes in the temperature of the environment and the mismatch of thermal coefficients of expansion of the Al wire and the Si die $[51–53]$ . Bond-wire fatigue manifests itself as either lift-off or heel cracking. The heel of the wedge bond acts to as a stress concentrator and a crack propagates through the heel. In bond-wire lift-off, the wedge delaminates from the surface of the bond pad at the heel and toe sides of the wedge bond and propagates inward. Bond-wire fatigue results in an increase in the on-state resistance of the power device and can lead to an open circuit.
+
+## 8.3.2.3 Die-attach fatigue and delamination
+
+Another location of thermo-mechanical stress due to CTE mismatch is the die attach which connects the die to the substrate. As the die is vertically conductive, the die attach must be conductive as it is part of the electrical path of the power semiconductor component. Similar to the Al metallization and wire bonds, the die attach is in intimate contact with the die and undergoes thermo-mechanical fatigue and possible delamination $[54, 55]$ . Delamination occurs when the separation is between the die itself and the die-attach material; however, fatigue can occur and propagate through the die attach. Additionally, the delamination of the die attach increases the thermal resistance of the die attach, decreasing the ability of the die attach to dissipate heat generated at the die. Increased thermal resistance results in higher die temperature impacting the electrical characteristics of the device.
+
+## 8.3.2.4 Substrate cracking
+
+The substrate itself is a possible location of failure within a power module. The ceramics in the direct bonded copper (DBC) and DBA substrates can crack when subjected to thermo-mechanical cycling due to operational and environmental loading $[56]$ . The substrate acts to insulate the conductive paths of the power package from the heat-sink or other cooling mechanisms. Therefore, when cracking occurs, the insulation properties of the ceramic break down and a reduced insulation strength is observed. Depending on the electrical connection of the heat sink, this can create a significant leakage path within the power package.
+
+## 8.3.2.5 Bond-wire melting
+
+While the die is the most significant source of joule heating within the power package, the parasitic resistance of the bond-wires also acts as a heat source. The bond-wires are encapsulated in either silicone gel or an epoxy moulding compound (EMC) depending on whether or not the package is a discrete or a module. Both silicone gel and EMC are poor conductors of heat. This means heat generated within the bond-wires is difficult to dissipate and the wire can see elevated temperatures. If the power package is used near or at its current rating and effective measures are not taken to cool the package, the bond-wires can melt $[57]$ . The result of this failure is an open circuit of the transistor.
+
+## 8.3.2.6 Die-attach voiding
+
+Another failure mechanism related to the die attach is voiding of the die attach $[58–60]$ . Small amounts of voiding are residual in the die attach from the manufacturing process. Power cycles grow and coalesce the smaller distributed voids which are initially present in the solder. Like die-attach fatigue, die-attach voiding results in an increase in the on-state resistance of the power package and increases the thermal resistance of the packaging, thus increasing the junction temperature of the package.
+
+## 8.3.2.7 Aluminium corrosion
+
+When moisture is present within the package, corrosion of the Al wire bonds and bond pads can be of concern $[61, 62]$ . In the presence of moisture, Al reacts to form $\mathrm{Al(OH)}_{3}$ which passivates its surface and passivates the Al. This passivation layer can become soluble in the presence of contaminants such as halogens. During power cycling of a component, the encapsulant layer can delaminate from the base plate thus developing a path for moisture and contaminants to ingress into a component. Similar to the thermo-mechanical fatigue mechanisms, corrosion would cause an increase in the on-state resistance of the power semiconductor and is a wear out failure mechanism.
+
+## 8.3.2.8 Latch-up
+
+There are parasitic circuit elements associated with the power package as semiconductors and metals have non-ideal material properties associated with them. One particularly harmful parasitic element within power components are parasitic thyristors. Thyristors are switches which only require a voltage or current pulse to turn on, unlike other switches such as MOSFETs or IGBTs which require a voltage on a gate be maintained for the switch to be in the on-state. Thyristors continue conducting after the removal of the gate voltage or current pulse until the electric potential between the anode and cathode is zero. Power semiconductor device have a parasitic thyristor incidentally built in.
+
+Switches such as MOSFETs and IGBTs are expected to conduct only when a gate voltage is applied and, therefore, the activation of the thyristor may cause the loss of gate control of the device. Such an event is referred to as latch-up and is observed as a short circuit between the conduction terminals [63]. The thyristor is activated when the current exceeds the so-called latching current of the device. In an IGBT, this overcurrent forces current into the base of the parasitic NPN transistor, as the local high-current density in the P region at the base increases the resistance locally.
+
+Latch-up of a device does not inherently cause a destructive failure of the component. In the unlikely event that the latch-up event is detected and measures are taken to remove the current from the device, the event can be stopped and the device will function normally. However, if the latch-up event is not identified, it can lead to a thermal runaway causing the device to burn out. Latch-up is an overstress failure mechanism and is observed as a short circuit of the device.
+
+## 8.3.2.9 Avalanche breakdown
+
+The avalanche breakdown $[64, 65]$ mechanism can precipitate, often during switching, when the drain-source or collector-emitter voltage exceeds the breakdown voltage of the power device. Electrons within the device gain sufficient energy to impact atoms within the device and ionize the atoms and releasing additional electrons. If these impacts continue, the device can ‘avalanche’ as an increasing number of electrons are freed and able to impact atoms to free addition electrons. Avalanche breakdown often occurs during switching of a device when the inductance of the power semiconductor or the system within which it is operating, creates a voltage spike on the system. Avalanche breakdown manifests itself as a short circuit of the device and is considered an overstress mechanism.
+
+## 8.3.2.10 Partial discharge
+
+The silicone gel that encapsulates the metallization's and bond-wires within power modules is used to increase the breakdown strength of these conductors. However, due to the high-voltage and geometries of the conductors the electric field within the package can still be enhanced and cause a partial discharge within the silicone gel [66, 67]. Over time, these discharge events can develop a carbonized, conductive path within the gel leading to increased leakage. Locally, partial discharge can cause bubbles in the gel to form due to the local heating events. Partial discharge within the gel is observed as increased leakage, developing towards a short circuit and is a wear out mechanism.
+
+## 8.3.2.11 Electrochemical and silver migration
+
+Often die attaches contain silver, as a sintered silver paste or a tin–silver alloy solder, which has a strong propensity to migrate under a variety of conditions $[68, 69]$ . In the presence of moisture, silver and other metals show some slight solubility. If an electric field is also present, the silver and other metals will migrate from the anode to the cathode through electrochemical migration. At the cathode, the silver will deposit and form dendritic structures back towards the anode. Given time, these dendrites can grow long enough to short the cathode and the anode. Mass transport of silver can also happen through corrosion, particularly in the presence of sulphur. Unlike electrochemical migration, in silver migration due to corrosion, there is no expectation of growth direction. Silver migration and electrochemical migration manifest themselves in an increased leakage current and are wear out failure mechanisms.
+
+## 8.3.2.12 Dielectric breakdown
+
+It is essential that the insulated dielectric that forms the gate of voltage-controlled devices maintains dielectric integrity for the device to operate. If the electric field through the gate exceeds the dielectric strength of the insulating material, then the terminals will short and permanent damage will be done to the gate $[70]$ . For Si devices, the gate is made of silicon dioxide. Dielectric breakdown can occur due to an overvoltage event on the die for a short period of time. One possible cause of this overvoltage is an ESD. Such cases would be overstress events and likely result in a shorting of the gate to one of the conduction terminals.
+
+## 8.3.2.13 Time-dependent dielectric breakdown
+
+Dielectric breakdown can also occur over time through a process called time-dependent dielectric breakdown $[71]$ . One leading explanation for this mechanism is that Si–Si bonds within the dielectric are weak and over time the application of an electric field breaks down these bonds, creating locations within the dielectric through which electrons can jump to and travel through the insulating gate. Time-dependent dielectric breakdown manifests itself as high gate leakage current and is a wear out mechanism.
+
+## 8.3.2.14 Hot carrier injection
+
+Some electrons may gain sufficient energy while travelling through the MOS channel to be able to tunnel through the gate-oxide layer $[72]$ . These electrons become 'hot', referring to their individual speed, and as a consequence energy, as opposed to the bulk temperature of the device itself, as they travel along through the gate channel when the device is conducting. These electrons can cause impact ionization near the end of the channel which can produce electrons which can inject themselves into the gate dielectric. All these steps can cause damage at the interface of the Si and silicon dioxide or allow the carriers to become trapped within the dielectric itself. Hot carrier injection (HCI) causes parameters associated with the gate such as the gate threshold voltage to shift. Under HCI damage, gate threshold voltage would drift higher, requiring higher gate voltage to be applied to achieve the same level of conduction in an otherwise healthy device. HCI is reported to be more common at low temperatures, unlike most other mechanisms which are thermally accelerated. At lower temperatures, lattice scattering is reduced allowing longer free paths for electrons to accelerate, gaining energy to create hot carriers. HCI is a wear out mechanism.
+
+## 8.3.2.15 Competing failure mechanisms
+
+The failure mechanisms discussed in this section are not all independent of each other. In many cases one failure mechanism may lead the device to failure through another mechanism. For example, the degradation of the die attach can cause a latch-up event on the die. Power cycling through delamination and voiding causes both an increase in electrical and thermal resistance. This leads to an increase in the temperature of the die during operation as more power is dissipated due to the resistance increase and heat cannot leave the package as easily. Additionally, as portions of the die attach have ‘disconnected’ from the die, current crowding occurs, leading portions of the device susceptible to latch-up failure event though the device itself is still conducting the same amount of current. In such an instance, it is evident that one failure mechanism drove the device to failure through another mechanism. Due to the potential of failure mechanisms to convolute each other, it is important for engineers to understand such mutually accelerating factors when designing systems.
+
+## 8.3.3 Power semiconductor failure modes and mechanisms
+
+In Section 8.3.2, a list of relevant failure mechanisms was developed for Si power semiconductors. Such a list that we name FMM is the foundation of any FMMEA which may be developed for a component. This list, as well as information from the life cycle profile in the context of the application should be combined to establish an FMMEA. The failure mechanisms discussed in Section 8.3.2 are listed in Table 8.3.
+
+Table 8.3 is organized to include the failure mode, location, causes and mechanism. Systems integrators will find this information useful for identifying the failure causes and mechanisms that should be considered in the design of the system. For example, if they are aware that moisture will be present in the application, they should consider relevant measures to prevent ECM and silver migration. The corollary to this is that if they are confident that no significant moisture will be present then such measure may not be necessary in the design of the system.
+
+Another possible application of this table is for failure analysis engineers. Based on the information that they establish during the failure analysis; this table can help lead the failure analysis team to identify the cause and mechanism associated with the failure. Once the cause has been identified, the proper steps can be taken to reduce the likelihood of future failures or identify risks for fielded systems.
+
+## 8.4 Data preparation and feature extraction
+
+The main objective of the proposed fault classification methodology is to determine the suitable wavelet coefficients to detect and classify the PV system faults accurately.
+
+## 8.4.1 Wavelet transform
+
+Conventionally, FT has been widely used as the main signal analysis technique that can provide an amplitude-frequency domain representation. However, the main limitation with the FT is the lack of time-domain related information. To overcome this limitation, the STFT (8.1) and WT (8.2) have emerged as time frequency transforms which can provide both time and frequency information of the analysis signal.
+
+Table 8.3 Failure modes and mechanisms of Si power devices
+
+<table><tr><td>Potential failure mode</td><td>Potential failure location</td><td>Potential failure causes</td><td>Potential failure mechanisms</td></tr><tr><td rowspan="4">Short circuit</td><td rowspan="2">Collector-emitter path (die)</td><td>Collector-emitter current above latching trigger current, high temperature, cosmic rays</td><td>Latch-up (overstress)</td></tr><tr><td>Collector-emitter voltage exceeds breakdown voltage, high-frequency switching, unclamped inductive switching</td><td>Avalanche breakdown and secondary breakdown (overstress)</td></tr><tr><td>Gate oxide (die)</td><td>Gate voltage exceeds the breakdown voltage of the gate</td><td>Electrical overstress and ESD (overstress)</td></tr><tr><td>Encapsulant (package)</td><td>The electric field between bond-wires exceeds the dielectric strength of encapsulant</td><td>Partial discharge (overstress)</td></tr><tr><td rowspan="2">Increased collector-emitter leakage current</td><td rowspan="2">The periphery of die (package)</td><td>Presence of moisture, high temperature, mobile ions, high electric field</td><td>Electrochemical migration (wear out)</td></tr><tr><td>Presence of silver within package, moisture, high temperature, high electric field</td><td>Silver migration (wear out)</td></tr><tr><td>Reduction of dielectric strength</td><td>Insulating substrate (package)</td><td>Temperature and power cycling, CTE mismatch</td><td>Substrate cracking (wear out)</td></tr><tr><td rowspan="2">Increased gate leakage current and gate threshold voltage</td><td rowspan="2">Gate oxide (die)</td><td>Prolonged gate voltage application, high temperature</td><td>Time-dependent dielectric breakdown (wear out)</td></tr><tr><td>High MOS-channel currents, low temperature</td><td>Hot carrier injection (wear out)</td></tr><tr><td rowspan="4">On-state resistance increase (may develop into open circuit)</td><td rowspan="2">Bond-wire (package)</td><td>Temperature and power cycling, CTE mismatch</td><td>Bond-wire cracking and lift-off (wear out)</td></tr><tr><td>Presence of moisture and contaminants such as halogens</td><td>Al corrosion (wear out)</td></tr><tr><td>Surface metallization (die and package)</td><td>Temperature and power cycling, CTE mismatch</td><td>Al reconstruction (wear out)</td></tr><tr><td>Die attach (package)</td><td>Temperature and power cycling, CTE mismatch</td><td>Voiding, delamination of die (wear out)</td></tr><tr><td>Open circuit</td><td>Bond-wire (package)</td><td>High temperature due to power dissipation</td><td>Bond-wire melting (overstress)</td></tr></table>
+
+$$
+S T F \left[ e, g \right] = X \left[ k \right] = \sum_ {n = - \infty} ^ {\infty} x \left[ n \right] g \left[ n - e \right] e ^ {- j \omega n}\tag{8.1}
+$$
+
+where x is a time domain signal, X is the transformed signal in the frequency domain, g is the window function, e is the index to define the size of the fixed window function and $\omega$ is the angular frequency.
+
+$$
+X \big [ \varphi , v \big ] = \frac {1}{\sqrt {v}} \sum_ {t = - \infty} ^ {\infty} x \left[ t \right] w \left[ \frac {t - \varphi}{v} \right]\tag{8.2}
+$$
+
+where x[t] is the target signal, w[t] is the chosen wavelet and v and $\varphi$ are the scale and shift parameters, respectively.
+
+Generally, the WT represents a signal-processing tool that was applied to capture the features contained in the signal. There are many methods for applying WT, namely, Hilbert–Huang transform $[73]$ , Wigner-Ville distribution $[74]$ , stationary WT $[75]$ , continuous WT $[76]$ and discrete WT (DWT) $[77]$ . It is considered that DWT offers an exact representation for any given signal, providing frequency sub-bands at different resolutions. This phenomenon provides a great advantage for discrete wavelets over the continuous WT. It also provides significant reduction in the computational complexity by just computing the wavelet coefficients at the frequency sub-bands. Therefore, the computational complexity for the discrete wavelets is only $O(n)$ , is significantly less compared to the continuous wavelets, with n as data size. The major advantage of DWT is its extensive library of the wavelet functions, making it adaptable for transient analysis. This provides different resolutions for time-frequency spectrum. Table 8.4 depicts the computational time for various WT techniques.
+
+For every level of wavelet decomposition j, the discrete-time signal is decomposed into approximation wavelet coefficients $Ca_{j}$ and detailed wavelet coefficients $Cd_{j}$ . The approximation and the detail wavelet coefficients can be computed using the following:
+
+$$
+C a _ {j} (e) = \sum l _ {e} f _ {l _ {o}} (l _ {e} - 2 e) C a _ {j - 1} (l _ {e})\tag{8.3}
+$$
+
+$$
+C d _ {j} (e) = \sum l _ {e} f _ {l _ {1}} (l _ {e} - 2 e) C a _ {j - 1} (l _ {e})\tag{8.4}
+$$
+
+Table 8.4 Computational time of various wavelet transform analysis techniques
+
+<table><tr><td>Technique</td><td>SWT</td><td>DWT</td><td>HHT</td><td>CWT</td><td>WVD</td></tr><tr><td>Computational time (s)</td><td>0.195</td><td>0.004</td><td>0.241</td><td>0.245</td><td>0.08</td></tr></table>
+
+where $f_{l_{0}}$ is the low-pass filter and $f_{l_{1}}$ is the high-pass filter. The energy of the wavelet coefficients at the details $g_{d_{j}}$ and the approximations $g_{a_{j}}$ of the $j_{th}$ decomposition level can be calculated using the following:
+
+$$
+g _ {a j} = \sum e \left| C a _ {j} (e) \right| ^ {2}\tag{8.5}
+$$
+
+$$
+g _ {d j} = \sum e \left| C d _ {j} (e) \right| ^ {2}\tag{8.6}
+$$
+
+## 8.4.2 Harmony search algorithm
+
+The harmony search algorithm (HSA) is a meta-heuristic optimization technique, which was developed by Geem et al. [78], and has been recently utilized in several power system benchmark with success [79]. The HSA is a simple concept and is easy to implement since it requires less parameters with simple mathematical analysis. Furthermore, the need for setting an initial value of decision variables is completely eliminated. The limitations of conventional techniques, mainly the need for initial values and considerable gradient details, were highlighted in [80]. Furthermore, the study in [80] concluded that the HSA was capable of providing a superior accuracy in comparison with present meta-heuristic optimization algorithms.
+
+The optimization steps of the HSA can be outlined as, optimization problem preparation, decision variables description, harmony memory (HM) initialization, generation of a new harmony solution and HM updating $[81]$ . The basic elements of HAS are harmony, HM, HM size (HMS), maximum iterations, HM considering ratio (HMCR), pitch considering rate (PCR) and fret width (FW). Here, harmony is defined as a set of values corresponding to an objective function and the place where these values are stored is abbreviated as HM. Generally, the best harmony is stored in the first place and the rest are classified according to their performance. This arrangement helps in depicting the HMS and is considered as an important aspect while calibrating a model. A brief overview of functioning of harmony search optimization is depicted in Figure 8.3.
+
+Further, HS algorithm is implemented for identifying the wavelet coefficients of discrete WT for the purpose of developing an efficient fault classification mechanism.
+
+## 8.4.3 Statistical features
+
+This section develops a wavelet-based fault classification technique, by choosing an optimum combination of mother wavelets and the number of wavelet decomposition levels. This combination helps in extracting the most important attributes from a given signal, which can be trained for fault classification for PV systems.
+
+## 8.4.3.1 Feature vector representation
+
+## 8.4.3.1.1 Signal preprocessing
+
+In signal preprocessing, the voltage and current parameters extracted from various faults in PV systems are considered. Initially, these signals are sampled at a rate of 64 samples per cycle, which is mostly used in digital protective relays as reported by [82]. To remove the steady state information from the signal and keep only the transient information following the fault inception, the difference between the samples in each two successive cycles as shown in Figure 8.4 is calculated using the following:
+
+![](images/245ead33522917965aa81e1874b6f26442a7cdbc9c1fb1925f7618e876f84a83.jpg)  
+Figure 8.3 HS optimization algorithm
+
+$$
+V ^ {D} (j) = V (j + n) - V (j) \quad j = 1, 2, \dots , n\tag{8.7}
+$$
+
+where V is the type of the signal (current or voltage).
+
+The discrete WT is applied to the sequences $(\chi^{D})$ of the currents and voltages. Equations (8.3)-(8.6) are utilized to calculate the approximation and detail wavelet coefficients. The number of decomposition levels is selected to be four to guarantee that the power system frequency (i.e., 50 Hz) is centred at the approximation level (i.e., $Ca_{4}$ ), which spans between 0 and 100 Hz as shown in Figure 8.5.
+
+![](images/63e6bdea154fbc9122d640bdaf42866aa15ed127350d66943cc64234dff1e338.jpg)
+
+(a)  
+![](images/e030bb9bc3cfd1189cc809042429eff7c889d1a9eb0ec66cc4bbc9c09823e15f.jpg)  
+(b)  
+Figure 8.4 The analysis window of the sampled signal: (a) one window of two cycles, (b) the difference between two cycles
+
+The outcome of the WT analysis is a vector consisting of the wavelet coefficients, which is then used to compute the energy of the wavelet coefficients of the details $(g_{d1} - g_{d4})$ and the approximation $(g_{d4})$ for each current or voltage sampled signals. The steps of implementing the DWT analysis, which are described in Section 8.4.1, are then repeated for various types of faults to calculate the energies of the wavelet coefficients for each fault type and then tabulate them into one array $W_{c}$ , which consists of the all-fault types coefficients energies.
+
+## 8.4.3.1.2 Normalization
+
+The energy of the wavelet coefficients, which are described by the vector as depicted in Figure 8.6, usually needs normalization. There is a need for normalization to ensure that, there is no unbalance in the values of the energy of the wavelet coefficients that may arise due to the large values of the approximation coefficients compared to those at the detail levels. To address this issue, the energies vector $(E_{ag})$
+
+![](images/e1314766936c1187d8fd62092635e3e5ef13e37eee75ecbb8db8283ddc272a52.jpg)  
+Figure 8.5 Wavelet decomposition levels for signal preprocessing
+
+of the wavelet coefficients is normalized to get the normalized value $(ZE_{ag})$ of the energy of the wavelet coefficient vector and the remaining elements in the energy's vectors for all other fault types are computed in a similar way.
+
+$$
+Z _ {E a g} (k) = \frac {E _ {a g} (k) - \mu (E _ {a g})}{\sigma (E _ {a g})}\tag{8.8}
+$$
+
+## 8.4.3.1.3 Reference vector
+
+Each type of fault is represented by a vector, which holds the energy of the wavelet coefficients. To represent each fault by only one value, another vector was generated, which uses as a reference vector. Consequently, the distances between the vectors for all other fault types and this vector (reference vector) can be easily calculated.
+
+![](images/8942c2f5b40289bbda10ba504cc484cd5adf6e5e4eff4f83625cdcdab47913c1.jpg)  
+Figure 8.6 Energy vector of wavelet coefficients
+
+To generate a reference vector, the DWT is applied to the current and voltage signals at a non-fault (i.e., healthy) case and then the wavelet coefficients energies of that non-faulty case are sorted in a vector $E_{h}$ and then normalized to get $Z_{Eh}$ using (8.9).
+
+$$
+Z _ {E h} (k) = \frac {E _ {h} (k) - \mu (E _ {h})}{\sigma (E _ {h})}\tag{8.9}
+$$
+
+## 8.4.3.1.4 Euclidean distance
+
+The distance among the vector $Z_{E}$ of every fault and the non-faulty condition vector $Z_{Eh}$ is computed with (8.10).
+
+$$
+E D _ {t} \sqrt {\sum r \left[ Z _ {g t} (r) - Z _ {g h} (r) \right] ^ {2}}\tag{8.10}
+$$
+
+All the values of the Euclidean distances among the fault types are sorted in a single vector $D_{t}$ .
+
+## 8.4.3.1.5 Variance
+
+The variance $\sigma_{D_{t}}^{2}$ between the distances in the distance vector $D_{t}$ is calculated as in (8.11):
+
+$$
+\sigma_ {D _ {t}} ^ {2} = \frac {1}{m - 1} \sum P \left[ D _ {t} (P) - \mu (D _ {t}) \right] ^ {2}\tag{8.11}
+$$
+
+Hence, the value of the variance $\sigma_{D_{t}}^{2}$ needs to be maximized for maximum differences between all fault types. Moreover, the variance is affected by the wavelet functions combination choice used in the analysis. To overcome this problem HSA is utilized.
+
+In this work, the variance $\sigma_{D_{t}}^{2}$ represents the objective function which is to be maximum.
+
+$$
+\text {Maximize} \quad \{\sigma_ {D _ {t}} ^ {2} \}\tag{8.12}
+$$
+
+The decision variable set is y, the total number of decision variables is $N_{y}$ , each decision variable $y_{x}$ are restricted by the maximum value $y_{max}$ and minimum value $y_{min}$ . The HSA randomly allocates the values for each decision variable. In every iteration, the decision variable vector y consists of various elements, where each element is allocated a numeric value. At the beginning, the HSA algorithm arbitrarily generates the initial values for every decision variable as in (8.13):
+
+$$
+y _ {x} = y _ {x m i n} + r a n d _ {1} \left(y _ {x m a x} - y _ {x m i n}\right)\tag{8.13}
+$$
+
+where $rand_{1}$ is an arbitrary number created using the uniform distribution between 0 and 1. Equation (8.14) depicts the decision variables arranged in the HM matrix, where $N_{y}$ is the number of decision variables and $H_{s}$ is the HMS, which is an input parameter to the algorithm.
+
+$$
+\mathrm{HM} = \left[\begin{array}{c c c}Y _ {1} ^ {1}&\dots&Y _ {N _ {y}} ^ {1}\\\dots&\dots&\dots\\Y _ {1} ^ {H _ {s}}&\dots&Y _ {1} ^ {H _ {s}}\end{array}\right]\rightarrow \left[\begin{array}{c}f _ {1} (y)\\\dots\\f _ {H s} (y)\end{array}\right]\tag{8.14}
+$$
+
+The values of the fitness function are computed using each row in HM and are then stored in a vector $\left[f_{1}(y),\ldots,f_{Hs}(y)\right]^{T}$ . The main objective of the HSA is to search through multiple trials for the optimal values of decision variables by maximizing the value of fitness function. Hence, in each trial the HSA finds the highest value of the fitness function and tries to replace it with another new one with a lower value.
+
+A new solution vector with new values for the decision variable values is generated as $y^{new} = \left[y_{1}^{new}, \ldots, y_{N_{y}}^{new}\right]$ . The solution vector considers HM rate $HMC_{r}$ , the pitch adjusting rate $PA_{r}$ and the bandwidth (bw). Each value of the decision variable in the new vector $y^{new}$ is generated according to (8.15).
+
+$$
+y _ {1} ^ {n e w} \leftarrow \left\{ \begin{array}{l l} y _ {1} ^ {n e w} \epsilon [ y _ {1} ^ {1}, \dots , y _ {1} ^ {H s} ] & r a n d _ {2} \leq H M C _ {r} \\ y _ {1} ^ {n e w} \epsilon [ y _ {1 m a x}, y _ {1 m a x} ] & r a n d _ {2} \leq H M C _ {r} \end{array} \right.\tag{8.15}
+$$
+
+where $rand_{2}$ is an arbitrary number created using the uniform distribution between 0 and 1. The new decision variable value is adjusted according to $PA_{r}$ .
+
+$$
+y _ {1} ^ {\text {new}} \leftarrow \left\{ \begin{array}{c c} y _ {1} ^ {\text {new}} \pm \text {rand} \times b w & \text {rand} _ {3} \leq P A _ {r} \\ y _ {1} ^ {\text {new}} & \text {rand} _ {3} > P A _ {r} \end{array} \right.\tag{8.16}
+$$
+
+where $rand_{3}$ is an arbitrary number created using the uniform distribution between 0 and 1. The HSA parameters bw and PAr are updated in every epoch to improve the performance of HSA using [83]:
+
+$$
+P A _ {r} = P A _ {r m i n} + \left[ \left(P A _ {r m a x} - P A _ {r m i n}\right) \left(\frac {I _ {r}}{M I _ {r}}\right) \right]\tag{8.17}
+$$
+
+$$
+b w = b w _ {m a x} \times e ^ {(I n [ b w _ {m i n} / b w _ {m a x} / M I r ] \times I r)}\tag{8.18}
+$$
+
+where $PA_{rmn}$ = minimum pitch adjusting rate, $PA_{rmax}$ = maximum pitch adjusting rate, $bw_{min}$ = minimum bandwidth, $bw_{max}$ = maximum bandwidth, $I_{r}$ = current iteration and $MI_{r}$ = maximum iteration.
+
+If the value of objective function for the new harmony vector is less than the worst member value, the HSA change (update) the HM matrix by replacing the worst harmony vector by the new one. The db5 wavelet coefficients obtained through harmony search were applied to the voltage signals of various PV faults and operating conditions.
+
+## 8.4.3.2 Feature extraction
+
+Once the wavelet coefficients and level of decomposition and reconstruction are determined, the feature extraction process can be initiated. During this process, the most relevant information from different signals is extracted and represented in a lower dimensional space. This relevant information regarding the signals helps in discriminating and distinguishing different objects or faults $[84]$ .

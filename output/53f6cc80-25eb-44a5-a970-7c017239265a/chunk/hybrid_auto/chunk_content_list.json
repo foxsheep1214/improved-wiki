@@ -1,0 +1,3811 @@
+[
+    {
+        "type": "text",
+        "text": "Reliability of Power Electronics Converters for Solar Photovoltaic Applications",
+        "text_level": 1,
+        "bbox": [
+            135,
+            159,
+            800,
+            369
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Edited by\nAhteshamul Haque, Frede Blaabjerg, Huai Wang,\nYongheng Yang, Zainul Addin Jaffery",
+        "bbox": [
+            131,
+            393,
+            821,
+            473
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "footer",
+        "text": "The Institution of Engineering and Technology",
+        "bbox": [
+            135,
+            886,
+            604,
+            909
+        ],
+        "page_idx": 0
+    },
+    {
+        "type": "text",
+        "text": "Published by The Institution of Engineering and Technology, London, United Kingdom  \nThe Institution of Engineering and Technology is registered as a Charity in England & Wales (no. 211014) and Scotland (no. SC038698).",
+        "bbox": [
+            97,
+            92,
+            791,
+            147
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "© The Institution of Engineering and Technology 2021",
+        "bbox": [
+            97,
+            153,
+            540,
+            171
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "First published 2021",
+        "bbox": [
+            97,
+            177,
+            269,
+            194
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "This publication is copyright under the Berne Convention and the Universal Copyright Convention. All rights reserved. Apart from any fair dealing for the purposes of research or private study, or criticism or review, as permitted under the Copyright, Designs and Patents Act 1988, this publication may be reproduced, stored or transmitted, in any form or by any means, only with the prior permission in writing of the publishers, or in the case of reprographic reproduction in accordance with the terms of licences issued by the Copyright Licensing Agency. Enquiries concerning reproduction outside those terms should be sent to the publisher at the undermentioned address:",
+        "bbox": [
+            97,
+            209,
+            841,
+            328
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "The Institution of Engineering and Technology\nMichael Faraday House\nSix Hills Way, Stevenage\nHerts, SG1 2AY, United Kingdom",
+        "bbox": [
+            97,
+            334,
+            475,
+            396
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "www.theiet.org",
+        "bbox": [
+            97,
+            402,
+            230,
+            420
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "While the authors and publisher believe that the information and guidance given in this work are correct, all parties must rely upon their own skill and judgement when making use of them. Neither the author nor publisher assumes any liability to anyone for any loss or damage caused by any error or omission in the work, whether such an error or omission is the result of negligence or any other cause. Any and all such liability is disclaimed.",
+        "bbox": [
+            97,
+            425,
+            846,
+            502
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "The moral rights of the author to be identified as author of this work have been asserted by him in accordance with the Copyright, Designs and Patents Act 1988.",
+        "bbox": [
+            97,
+            506,
+            843,
+            539
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "British Library Cataloguing in Publication Data\nA catalogue record for this product is available from the British Library",
+        "bbox": [
+            97,
+            583,
+            669,
+            616
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "ISBN 978-1-83953-116-3 (hardback)\nISBN 978-1-83953-117-0 (PDF)",
+        "bbox": [
+            97,
+            639,
+            418,
+            672
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "Typeset in India by Exeter Premedia Services Private Limited Printed in the UK by CPI Group (UK) Ltd, Croydon",
+        "bbox": [
+            97,
+            717,
+            585,
+            749
+        ],
+        "page_idx": 1
+    },
+    {
+        "type": "text",
+        "text": "Contents",
+        "text_level": 2,
+        "bbox": [
+            443,
+            138,
+            590,
+            165
+        ],
+        "page_idx": 2
+    },
+    {
+        "type": "text",
+        "text": "List of figures\nList of tables\nAbout the Editors\n1 Power electronics converters for solar PV applications\nAhteshamul Haque\n1.1 Introduction\n1.2 Role of power electronics in solar PV systems\n1.3 DC–DC power electronics converters\n1.3.1 Buck converter\n1.3.2 Boost converter\n1.3.3 Buck-boost converter\n1.3.4 Single-ended primary inductance converter\n1.3.5 Ćuk converter\n1.3.6 Positive-output super-lift Luo converter\n1.3.7 Ultra-lift Luo converter\n1.3.8 Zeta converter\n1.3.9 Flyback converter\n1.3.10 Three-port half-bridge DC–DC converter\n1.3.11 Full-bridge converter\n1.3.12 Dual active bridge converter\n1.3.13 Multielement resonant converter\n1.3.14 Push-pull converter\n1.4 DC–AC converters\n1.4.1 Transformer-based inverter\n1.4.2 Transformerless inverter\n1.4.2.1 Half-bridge transformerless inverter\n1.4.2.2 Neutral point-clamped transformerless inverter\n1.4.2.3 Active neutral point-clamped transformerless inverter\n1.4.2.4 T-type transformerless inverter\n1.4.2.5 Three-switch transformerless inverter\n1.4.2.6 Full-bridge transformerless inverter\n1.4.2.7 H5 transformerless inverter\n1.4.2.8 Full-bridge transformerless inverter with midpoint switches and diodes\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23\n24\n25\n26\n27\n28\n29\n30\n31\n32\n33\n34\n35\n36\n37\n38\n39\n40\n41\n42\n43\n44\n45\n46\n47\n48\n49\n50\n51\n52\n53\n54\n55\n56\n57\n58\n59\n60\n61\n62\n63\n64\n65\n66\n67\n68\n69\n70\n71\n72\n73\n74\n75\n76\n77\n78\n79\n80\n81\n82\n83\n84\n85\n86\n87\n88\n89\n90\n91\n92\n93\n94\n95\n96\n97\n98\n99\n100\n101\n102\n103\n104\n105\n106\n107\n108\n109\n110\n111\n112\n113\n114\n115\n116\n117\n118\n119\n120\n121\n122\n123\n124\n125\n126\n127\n128\n129\n130\n131\n132\n133\n134\n135\n136\n137\n138\n139\n140\n141\n142\n143\n144\n145\n146\n147\n148\n149\n150\n151\n152\n153\n154\n155\n156\n157\n158\n159\n160\n161\n162\n163\n164\n165\n166\n167\n168\n169\n170\n171\n172\n173\n174\n175\n176\n177\n178\n179\n180\n181\n182\n183\n184\n185\n186\n187\n188\n189\n190\n191\n192\n193\n194\n195\n196\n197\n198\n199\n200\n201\n202\n203\n204\n205\n206\n207\n208\n209\n210\n211\n212\n213\n214\n215\n216\n217\n218\n219\n220\n221\n222\n223\n224\n225\n226\n227\n228\n229\n230\n231\n232\n233\n234\n235\n236\n237\n238\n239\n240\n241\n242\n243\n244\n245\n246\n247\n248\n249\n250\n251\n252\n253\n254\n255\n256\n257\n258\n259\n260\n261\n262\n263\n264\n265\n266\n267\n268\n269\n270\n271\n272\n273\n274\n275\n276\n277\n278\n279\n280\n281\n282\n283\n284\n285\n286\n287\n288\n289\n290\n291\n292\n293\n294\n295\n296\n297\n298\n299\n300\n301\n302\n303\n304\n305\n306\n307\n308\n309\n310\n311\n312\n313\n314\n315\n316\n317\n318\n319\n320\n321\n322\n323\n324\n325\n326\n327\n328\n329\n330\n331\n332\n333\n334\n335\n336\n337\n338\n339\n340\n341\n342\n343\n344\n345\n346\n347\n348\n349\n350\n351\n352\n353\n354\n355\n356\n357\n358\n359\n360\n361\n362\n363\n364\n365\n366\n367\n368\n369\n370\n371\n372\n373\n374\n375\n376\n377\n378\n379\n380\n381\n382\n383\n384\n385\n386\n387\n388\n389\n390\n391\n392\n393\n394\n395\n396\n397\n398\n399\n400\n401\n402\n403\n404\n405\n406\n407\n408\n409\n410\n411\n412\n413\n414\n415\n416\n417\n418\n419\n420\n421\n422\n423\n424\n425\n426\n427\n428\n429\n430\n431\n432\n433\n434\n435\n436\n437\n438\n439\n440\n441\n442\n443\n444\n445\n446\n447\n448\n449\n450\n451\n452\n453\n454\n455\n456\n457\n458\n459\n460\n461\n462\n463\n464\n465\n466\n467\n468\n469\n470\n471\n472\n473\n474\n475\n476\n477\n478\n479\n480\n481\n482\n483\n484\n485\n486\n487\n488\n489\n490\n491\n492\n493\n494\n495\n496\n497\n498\n499\n500\n501\n502\n503\n504\n505\n506\n507\n508\n509\n510\n511\n512\n513\n514\n515\n516\n517\n518\n519\n520\n521\n522\n523\n524\n525\n526\n527\n528\n529\n530\n531\n532\n533\n534\n535\n536\n537\n538\n539\n540\n541\n542\n543\n544\n545\n546\n547\n548\n549\n550\n551\n552\n553\n554\n555\n556\n557\n558\n559\n560\n561\n562\n563\n564\n565\n566\n567\n568\n569\n570\n571\n572\n573\n574\n575\n576\n577\n578\n579\n580\n581\n582\n583\n584\n585\n586\n587\n588\n589\n590\n591\n592\n593\n594\n595\n596\n597\n598\n599\n600\n601\n602\n603\n604\n605\n606\n607\n608\n609\n610\n611\n612\n613\n614\n615\n616\n617\n618\n619\n620\n621\n622\n623\n624\n625\n626\n627\n628\n629\n630\n631\n632\n633\n634\n635\n636\n637\n638\n639\n640\n641\n642\n643\n644\n645\n646\n647\n648\n649\n650\n651\n652\n653\n654\n655\n656\n657\n658\n659\n660\n661\n662\n663\n664\n665\n666\n667\n668\n669\n670\n671\n672\n673\n674\n675\n676\n677\n678\n679\n680\n681\n682\n683\n684\n685\n686\n687\n688\n689\n690\n691\n692\n693\n694\n695\n696\n697\n698\n699\n700\n701\n702\n703\n704\n705\n706\n707\n708\n709\n710\n711\n712\n713\n714\n715\n716\n717\n718\n719\n720\n721\n722\n723\n724\n725\n726\n727\n728\n729\n730\n731\n732\n733\n734\n735\n736\n737\n738\n739\n740\n741\n742\n743\n744\n745\n746\n747\n748\n749\n750\n751\n752\n753\n754\n755\n756\n757\n758\n759\n760\n761\n762\n763\n764\n765\n766\n767\n768\n769\n770\n771\n772\n773\n774\n775\n776\n777\n778\n779\n780\n781\n782\n783\n784\n785\n786\n787\n788\n789\n790\n791\n792\n793\n794\n795\n796\n797\n798\n799\n800\n801\n802\n803\n804\n805\n806\n807\n808\n809\n810\n811\n812\n813\n814\n815\n816\n817\n818\n819\n820\n821\n822\n823\n824\n825\n826\n827\n828\n829\n830\n831\n832\n833\n834\n835\n836\n837\n838\n839\n840\n841\n842\n843\n844\n845\n846\n847\n848\n849\n850\n851\n852\n853\n854\n855\n856\n857\n858\n859\n860\n861\n862\n863\n864\n865\n866\n867\n868\n869\n870\n871\n872\n873\n874\n875\n876\n877\n878\n879\n880\n881\n882\n883\n884\n885\n886\n887\n888\n889\n890\n891\n892\n893\n894\n895\n896\n897\n898\n899\n900\n901\n902\n903\n904\n905\n906\n907\n908\n909\n910\n911\n912\n913\n914\n915\n916\n917\n918\n919\n920\n921\n922\n923\n924\n925\n926\n927\n928\n929\n930\n931\n932\n933\n934\n935\n936\n937\n938\n939\n940\n941\n942\n943\n944\n945\n946\n947\n948\n949\n950\n951\n952\n953\n954\n955\n956\n957\n958\n959\n960\n961\n962\n963\n964\n965\n966\n967\n968\n969\n970\n971\n972\n973\n974\n975\n976\n977\n978\n979\n980\n981\n982\n983\n984\n985\n986\n987\n988\n989\n990\n991\n992\n993\n994\n995\n996\n997\n998\n999\n1000\n1001\n1002\n1003\n1004\n1005\n1006\n1007\n1008\n1009\n1010\n1011\n1012\n1013\n1014\n1015\n1016\n1017\n1018\n1019\n1020\n1021\n1022\n1023\n1024\n1025\n1026\n1027\n1028\n1029\n1030\n1031\n1032\n1033\n1034\n1035\n1036\n1037\n1038\n1039\n1040\n1041\n1042\n1043\n1044\n1045\n1046\n1047\n1048\n1049\n1050\n1051\n1052\n1053\n1054\n1055\n1056\n1057\n1058\n1059\n1060\n1061\n1062\n1063\n1064\n1065\n1066\n1067\n1068\n1069\n1070\n1071\n1072\n1073\n1074\n1075\n1076\n1077\n1078\n1079\n1080\n1081\n1082\n1083\n1084\n1085\n1086\n1087\n1088\n1089\n1090\n1091\n1092\n1093\n1094\n1095\n1096\n1097\n1098\n1099\n1100\n1101\n1102\n1103\n1104\n1105\n1106\n1107\n1108\n1109\n1110\n1111\n1112\n1113\n1114\n1115\n1116\n1117\n1118\n1119\n1120\n1121\n1122\n1123\n1124\n1125\n1126\n1127\n1128\n1129\n1130\n1131\n1132\n1133\n1134\n1135\n1136\n1137\n1138\n1139\n1140\n1141\n1142\n1143\n1144\n1145\n1146\n1147\n1148\n1149\n1150\n1151\n1152\n1153\n1154\n1155\n1156\n1157\n1158\n1159\n1160\n1161\n1162\n1163\n1164\n1165\n1166\n1167\n1168\n1169\n1170\n1171\n1172\n1173\n1174\n1175\n1176\n1177\n1178\n1179\n1180\n1181\n1182\n1183\n1184\n1185\n1186\n1187\n1188\n1189\n1190\n1191\n1192\n1193\n1194\n1195\n1196\n1197\n1198\n1199\n1200\n1201\n1202\n1203\n1204\n1205\n1206\n1207\n1208\n1209\n1210\n1211\n1212\n1213\n1214\n1215\n1216\n1217\n1218\n1219\n1220\n1221\n1222\n1223\n1224\n1225\n1226\n1227\n1228\n1229\n1230\n1231\n1232\n1233\n1234\n1235\n1236\n1237\n1238\n1239\n1240\n1241\n1242\n1243\n1244\n1245\n1246\n1247\n1248\n1249\n1250\n1251\n1252\n1253\n1254\n1255\n1256\n1257\n1258\n1259\n1260\n1261\n1262\n1263\n1264\n1265\n1266\n1267\n1268\n1269\n1270\n1271\n1272\n1273\n1274\n1275\n1276\n1277\n1278\n1279\n1280\n1281\n1282\n1283\n1284\n1285\n1286\n1287\n1288\n1289\n1290\n1291\n1292\n1293\n1294\n1295\n1296\n1297\n1298\n1299\n1300\n1301\n1302\n1303\n1304\n1305\n1306\n1307\n1308\n1309\n1310\n1311\n1312\n1313\n1314\n1315\n1316\n1317\n1318\n1319\n1320\n1321\n1322\n1323\n1324\n1325\n1326\n1327\n1328\n1329\n1330\n1331\n1332\n1333\n1334\n1335\n1336\n1337\n1338\n1339\n1340\n1341\n1342\n1343\n1344\n1345\n1346\n1347\n1348\n1349\n1350\n1351\n1352\n1353\n1354\n1355\n1356\n1357\n1358\n1359\n1360\n1361\n1362\n1363\n1364\n1365\n1366\n1367\n1368\n1369\n1370\n1371\n1372\n1373\n1374\n1375\n1376\n1377\n1378\n1379\n1380\n1381\n1382\n1383\n1384\n1385\n1386\n1387\n1388\n1389\n1390\n1391\n1392\n1393\n1394\n1395\n1396\n1397\n1398\n1399\n1400\n1401\n1402\n1403\n1404\n1405\n1406\n1407\n1408\n1409\n1410\n1411\n1412\n1413\n1414\n1415\n1416\n1417\n1418\n1419\n1420\n1421\n1422\n1423\n1424\n1425\n1426\n1427\n1428\n1429\n1430\n1431\n1432\n1433\n1434\n1435\n1436\n1437\n1438\n1439\n1440\n1441\n1442\n1443\n1444\n1445\n1446\n1447\n1448\n1449\n1450\n1451\n1452\n1453\n1454\n1455\n1456\n1457\n1458\n1459\n1460\n1461\n1462\n1463\n1464\n1465\n1466\n1467\n1468\n1469\n1470\n1471\n1472\n1473\n1474\n1475\n1476\n1477\n1478\n1479\n1480\n1481\n1482\n1483\n1484\n1485\n1486\n1487\n1488\n1489\n1490\n1491\n1492\n1493\n1494\n1495\n1496\n1497\n1498\n1499\n1500\n1501\n1502\n1503\n1504\n1505\n1506\n1507\n1508\n1509\n1510\n1511\n1512\n1513\n1514\n1515\n1516\n1517\n1518\n1519\n1520\n1521\n1522\n1523\n1524\n1525\n1526\n1527\n1528\n1529\n1530\n1531\n1532\n1533\n1534\n1535\n1536\n1537\n1538\n1539\n1540\n1541\n1542\n1543\n1544\n1545\n1546\n1547\n1548\n1549\n1550\n1551\n1552\n1553\n1554\n1555\n1556\n1557\n1558\n1559\n1560\n1561\n1562\n1563\n1564\n1565\n1566\n1567\n1568\n1569\n1570\n1571\n1572\n1573\n1574\n1575\n1576\n1577\n1578\n1579\n1580\n1581\n1582\n1583\n1584\n1585\n1586\n1587\n1588\n1589\n1590\n1591\n1592\n1593\n1594\n1595\n1596\n1597\n1598\n1599\n1600\n1601\n1602\n1603\n1604\n1605\n1606\n1607\n1608\n1609\n1610\n1611\n1612\n1613\n1614\n1615\n1616\n1617\n1618\n1619\n1620\n1621\n1622\n1623\n1624\n1625\n1626\n1627\n1628\n1629\n1630\n1631\n1632\n1633\n1634\n1635\n1636\n1637\n1638\n1639\n1640\n1641\n1642\n1643\n1644\n1645\n1646\n1647\n1648\n1649\n1650\n1651\n1652\n1653\n1654\n1655\n1656\n1657\n1658\n1659\n1660\n1661\n1662\n1663\n1664\n1665\n1666\n1667\n1668\n1669\n1670\n1671\n1672\n1673\n1674\n1675\n1676\n1677\n1678\n1679\n1680\n1681\n1682\n1683\n1684\n1685\n1686\n1687\n1688\n1689\n1690\n1691\n1692\n1693\n1694\n1695\n1696\n1697\n1698\n1699\n1700\n1701\n1702\n1703\n1704\n1705\n1706\n1707\n1708\n1709\n1710\n1711\n1712\n1713\n1714\n1715\n1716\n1717\n1718\n1719\n1720\n1721\n1722\n1723\n1724\n1725\n1726\n1727\n1728\n1729\n1730\n1731\n1732\n1733\n1734\n1735\n1736\n1737\n1738\n1739\n1740\n1741\n1742\n1743\n1744\n1745\n1746\n1747\n1748\n1749\n1750\n1751\n1752\n1753\n1754\n1755\n1756\n1757\n1758\n1759\n1760\n1761\n1762\n1763\n1764\n1765\n1766\n1767\n1768\n1769\n1770\n1771\n1772\n1773\n1774\n1775\n1776\n1777\n1778\n1779\n1780\n1781\n1782\n1783\n1784\n1785\n1786\n1787\n1",
+        "bbox": [
+            135,
+            245,
+            900,
+            914
+        ],
+        "page_idx": 2
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.9 H6-1 transformerless inverter 22  \n1.4.2.10 Modified Highly Efficient and Reliable Inverter Concept 23  \n1.4.2.11 oH5-1 transformerless inverter 24  \n1.4.2.12 Modified transformerless inverter 24  \n1.5 Summary 24  \nReferences 25  \n\n2 Wear-out failure prediction of a PV microinverter 35  \nYanfeng Shen and Huai Wang  \n2.1 System description and reliability evaluation process 35  \n2.1.1 System description 35  \n2.1.2 Reliability evaluation process 36  \n2.2 Electrothermal and lifetime modeling 37  \n2.2.1 Power loss modeling 37  \n2.2.2 Thermal modeling 37  \n2.2.3 Lifetime modeling 43  \n2.3 Wear-out failure analysis of the PV microinverter 43  \n2.3.1 Static annual damage of components 44  \n2.3.2 Monte Carlo simulation 45  \n2.3.3 System failure probability due to wear-out 46  \n2.4 Reliability improvement of the PV microinverter 48  \n2.4.1 Advanced multimode control of the qZSSRC 48  \n2.4.2 New DC-link electrolytic capacitor with longer nominal lifetime 49  \n2.4.3 Wear-out failure probability 50  \n2.5 Summary 51  \nReferences 51  \n\n3 Reliability analysis methods and tools 53  \nIonut Vernica and Frede Blaabjerg  \n3.1 Background and motivation 53  \n3.2 Failure mode and effect analysis 55  \n3.3 Design for reliability 60  \n3.4 Software tools in design for reliability 64  \n3.5 Reliability testing and robustness validation 66  \n3.5.1 Qualitative test methods 66  \n3.5.2 Quantitative test methods 68  \n3.5.3 Qualification testing 71  \n3.6 Summary 73  \nReferences 74  \n\n4 Grid-connected solar inverter system: a case study 77  \nV S Bharath Kurukuru",
+        "bbox": [
+            97,
+            79,
+            861,
+            907
+        ],
+        "page_idx": 3
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            151,
+            58,
+            529,
+            76
+        ],
+        "page_idx": 3
+    },
+    {
+        "type": "text",
+        "text": "4.1 Identifying the site for case study 78  \n4.1.1 Site details 78  \n4.1.2 Components used in the system 83  \n4.2 Data collected for reliability study 84  \n4.2.1 Failure rate of power electronic switches 85  \n4.2.1.1 Thermal model of IGBT and diode 86  \n4.2.1.2 IGBT failure rate 88  \n4.2.1.3 Diode failure rate 88  \n4.2.1.4 Capacitor failure rate 89  \n4.2.2 Reliability of inverter 90  \n4.3 Reliability study for the identified site 92  \n4.3.1 Risk modeling for components of PV system 92  \n4.3.1.1 The periodic discrete probability distribution of input power 92  \n4.3.2 Reliability analysis of PV array 94  \n4.3.2.1 Equivalent parameters for reliability of PV string 94  \n4.3.2.2 State enumeration for PV array reliability analysis 95  \n4.3.2.3 Effect of aging and degradation 96  \n4.3.3 PV system risk indices 97  \n4.3.3.1 Equivalent parameters for reliability of PV string 97  \n4.3.3.2 Equivalent parameters for reliability of PV string 98  \n4.4 Results of site study for reliability analysis 99  \n4.4.1 Results of reliability indices 99  \n4.4.2 Aging and degradation effects 100  \n4.4.3 PV risk assessment 100  \n4.4.3.1 Impact of temperature 100  \n4.4.3.2 Impact of solar insolation 105  \n4.4.3.3 Impact of capacitor equivalent series resistance 105  \n4.4.4 Impact of the increased number of strings on PV system reliability 107  \n4.4.5 Impact of panel failure rate on PV system reliability 110  \n4.5 Summary 110  \nReferences 111  \nControl strategy for grid-connected solar inverters 115  \nZhongting Tang and Yongheng Yang  \nAbstract 115  \n5.1 Introduction 115  \n5.1.1 Demands for grid-connected solar inverters 115  \n5.1.2 General controls 117  \n5.2 MPPT control 118  \n5.2.1 Modeling of PV panels 118  \n5.2.2 MPPT algorithm 119",
+        "bbox": [
+            158,
+            88,
+            900,
+            882
+        ],
+        "page_idx": 4
+    },
+    {
+        "type": "header",
+        "text": "Contents",
+        "bbox": [
+            771,
+            60,
+            857,
+            76
+        ],
+        "page_idx": 4
+    },
+    {
+        "type": "page_number",
+        "text": "ix",
+        "bbox": [
+            875,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 4
+    },
+    {
+        "type": "text",
+        "text": "5.3 Solar inverter control 121  \n5.3.1 Reference frame transformation 122  \nA. Clarke transformation (abc→αβ) 122  \nB. Park transformation (αβ→dq) 123  \n5.3.2 Grid-connected current control 124  \nA. Modeling of the grid current controller 124  \nB. Design of the grid current controller 125  \n5.3.3 PQ Control 128  \nA. Modeling of the PQ control 128  \nB. Design of the DC-link controller 128  \n5.3.4 DC-link voltage control 129  \nA. Modeling of the DC-link controller 129  \nB. Design of the DC-link controller 129  \n5.4 Case study 130  \n5.4.1 PI controller for three-phase inverters 130  \n5.4.2 PR controller for single-phase inverters 135  \n5.5 Summary 137  \nReferences 137  \n6 Control strategy for grid-connected solar inverter for IEC standards 141  \nMohammed Ali Khan and Ariya Sangwongwanich  \n6.1 LVRT requirement for control 141  \n6.1.1 Permissible limit for voltage fluctuation 142  \n6.1.2 Permissible limit for frequency fluctuation 142  \n6.1.3 Power factor, reactive current injection, and reactive power requirement 144  \n6.1.4 Overview of LVRT requirement based on grid codes 145  \n6.2 Control strategy used to meet LVRT standards 148  \n6.2.1 Generator-side converter 149  \n6.2.1.1 Cost function 150  \n6.2.1.2 Control algorithm 151  \n6.2.2 Grid-side converter 151  \n6.2.2.1 Inverter modeltationary reference 151  \n6.2.2.2 Cost function 154  \n6.2.2.3 Current tracking control algorithm and simulation 154  \n6.2.3 Control structure on symmetrical faults 155  \n6.2.4 Control structure and minimization function under unbalanced faults 156  \n6.2.5 Experimental analysis 159  \n6.3 Anti-islanding requirements for control 162  \n6.3.1 IEEE Standard for Interconnection and Interoperability of resources and interfaces (IEEE 1547) 162  \n6.3.2 Utility-interconnected PV inverters—test procedure of islanding prevention measures (IEC 62116) 164",
+        "bbox": [
+            110,
+            84,
+            861,
+            901
+        ],
+        "page_idx": 5
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            133,
+            60,
+            509,
+            76
+        ],
+        "page_idx": 5
+    },
+    {
+        "type": "text",
+        "text": "6.3.3 IEEE recommended practice for utility interface of PV systems (IEEE 929) 164\n6.3.4 Requirement overview for anti-islanding operation 165\n6.4 Control strategy used to meet anti-islanding standards 165\n6.4.1 Communication-based islanding detection scheme 166\n6.4.1.1 Power line carrier (PLC) communication 166\n6.4.1.2 Transfer trip 167\n6.4.2 Local islanding detection scheme 168\n6.4.2.1 Passive islanding detection technique 168\n6.4.2.1.1 Frequency surge/over or under frequency 168\n6.4.2.1.2 Rate of change in frequency 169\n6.4.2.1.3 Over or under voltage 170\n6.4.2.1.4 Harmonics distortion 170\n6.4.2.1.5 Phase jump detection 170\n6.4.2.2 Active islanding detection technique 170\n6.4.2.2.1 Frequency shift (slip mode) 172\n6.4.2.2.2 Active frequency drift 172\n6.4.2.2.3 Frequency shift (Sandia) 172\n6.4.2.2.4 Frequency jump 173\n6.4.2.2.5 Voltage shift (Sandia) 173\n6.4.2.2.6 Impedance measurement method 174\n6.4.2.3 Hybrid islanding detection scheme 174\n6.4.2.3.1 Frequency shift (Sandia) and ROCOF method 174\n6.4.2.3.2 Voltage imbalance along with positive feedback 174\n6.4.3 Intelligent islanding detection scheme 175\n6.4.3.1 ANN-based islanding detection 175\n6.4.3.2 FLC-based islanding detection technique 175\n6.4.3.3 ANFIS-based islanding detection techniques 176\n6.4.3.4 Decision tree-based islanding detection method 176\n6.5 Reactive power control and its effect on reliability 176\n6.6 Conclusion 179\nReferences 181\nThermal image-based monitoring of PV modules and solar inverters 189\nZainul Abdin Jaffery\n7.1 Introduction 189\n7.2 Review of fault detection of PV modules 189\n7.3 Thermal image-processing-based fault analysis 190\n7.3.1 Preprocessing 191\n7.3.2 Image segmentation 194\n7.3.3 Feature extraction 194\n7.3.4 Image classification 194",
+        "bbox": [
+            149,
+            88,
+            900,
+            900
+        ],
+        "page_idx": 6
+    },
+    {
+        "type": "header",
+        "text": "Contents",
+        "bbox": [
+            771,
+            60,
+            857,
+            76
+        ],
+        "page_idx": 6
+    },
+    {
+        "type": "page_number",
+        "text": "xi",
+        "bbox": [
+            873,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 6
+    },
+    {
+        "type": "text",
+        "text": "7.4 CNN-based fault diagnosis of solar PV modules 195  \n7.4.1 Convolution layer 195  \n7.4.2 Rectified linear unit 196  \n7.4.3 Pooling 196  \n7.5 CNN-based fault diagnosis of solar PV modules 198  \n7.5.1 Feature extraction 198  \n7.6 Summary 202  \nReferences 202  \n\nFailure mode classification for grid-connected photovoltaic converters 205  \nV S Bharath Kurukuru, Mohammed Ali Khan, and Azra Malik  \n8.1 Introduction 206  \n8.2 Components of power electronic converters 210  \n8.2.1 IGBT failure 210  \n8.2.1.1 Wear out failure 211  \n8.2.1.2 Catastrophic failure 212  \n8.2.2 Thermal modelling of IGBT 213  \n8.2.2.1 Analytic models 213  \n8.2.2.2 Numeric models 214  \n8.2.2.3 Network models 214  \n8.2.3 Cooling measures 214  \n8.2.4 DC-link capacitor failure 215  \n8.2.5 Power diode failure 216  \n8.3 Failure mechanisms of power semiconductors 216  \n8.3.1 Failure mode, mechanisms and effects analysis 216  \n8.3.2 Power semiconductor failure mechanisms 218  \n8.3.2.1 Aluminium reconstruction 218  \n8.3.2.2 Bond fatigue 219  \n8.3.2.3 Die-attach fatigue and delamination 219  \n8.3.2.4 Substrate cracking 219  \n8.3.2.5 Bond-wire melting 220  \n8.3.2.6 Die-attach voiding 220  \n8.3.2.7 Aluminium corrosion 220  \n8.3.2.8 Latch-up 220  \n8.3.2.9 Avalanche breakdown 221  \n8.3.2.10 Partial discharge 221  \n8.3.2.11 Electrochemical and silver migration 221  \n8.3.2.12 Dielectric breakdown 222  \n8.3.2.13 Time-dependent dielectric breakdown 222  \n8.3.2.14 Hot carrier injection 222  \n8.3.2.15 Competing failure mechanisms 223  \n8.3.3 Power semiconductor failure modes and mechanisms 223  \n8.4 Data preparation and feature extraction 223",
+        "bbox": [
+            119,
+            61,
+            861,
+            901
+        ],
+        "page_idx": 7
+    },
+    {
+        "type": "text",
+        "text": "8.4.1 Wavelet transform 223  \n8.4.2 Harmony search algorithm 226  \n8.4.3 Statistical features 226  \n8.4.3.1 Feature vector representation 226  \n8.4.3.1.1 Signal preprocessing 226  \n8.4.3.1.2 Normalization 228  \n8.4.3.1.3 Reference vector 229  \n8.4.3.1.4 Euclidean distance 230  \n8.4.3.1.5 Variance 230  \n8.4.3.2 Feature extraction 231  \n8.4.4 Principle component analysis 233  \n8.5 Machine learning approach 234  \n8.5.1 K-nearest neighbour classifier 234  \n8.5.2 Fault classification algorithm 236  \n8.6 Failure mode effect classification analysis 238  \n8.6.1 Approaches for criticality analysis 241  \n8.6.2 Approaches for severity analysis 241  \n8.6.3 Occurrence 242  \n8.6.4 Detection 242  \n8.7 Summary 243  \nReferences 243  \ndex 251",
+        "bbox": [
+            162,
+            88,
+            898,
+            512
+        ],
+        "page_idx": 8
+    },
+    {
+        "type": "header",
+        "text": "Contents xiii",
+        "bbox": [
+            760,
+            60,
+            895,
+            76
+        ],
+        "page_idx": 8
+    },
+    {
+        "type": "text",
+        "text": "List of figures",
+        "text_level": 2,
+        "bbox": [
+            407,
+            150,
+            626,
+            179
+        ],
+        "page_idx": 9
+    },
+    {
+        "type": "text",
+        "text": "Figure 1.1 Solar PV installed capacity at world level [1] 2\nFigure 1.2 Power generation share of solar PV-based plants at world level [1] 2\nFigure 1.3 Employment from investment in solar PV plants [1] 3\nFigure 1.4 Layout of solar PV plant 3\nFigure 1.5 Main functions of DC–DC converters in solar PV plants 4\nFigure 1.6 Main functions of DC–AC converters in solar PV plants 4\nFigure 1.7 Classification of DC–DC converters used in solar PV applications 5\nFigure 1.8 Schematic of a buck DC–DC converter 5\nFigure 1.9 Schematic of the boost DC–DC converter 6\nFigure 1.10 Schematic of the buck-boost DC–DC converter 6\nFigure 1.11 Schematic of the SEPIC DC–DC converter 7\nFigure 1.12 Schematic of a Ćuk DC–DC converter 7\nFigure 1.13 Schematic of a positive-output super-lift Luo DC–DC converter 8\nFigure 1.14 Schematic of an ultra-lift Duo DC–DC converter 9\nFigure 1.15 Schematic of a Zeta DC–DC converter 9\nFigure 1.16 Schematic of a flyback DC–DC converter 10\nFigure 1.17 Schematic of a three-port half-bridge DC–DC converter 10\nFigure 1.18 Schematic of a full-bridge DC–DC converter 11\nFigure 1.19 Schematic of a dual active bridge DC–DC converter 12\nFigure 1.20 Schematic of a bidirectional multielement DC–DC resonant converter 13\nFigure 1.21 Schematic of a push-pull DC–DC converter 13\nFigure 1.22 Classification of DC–AC converters used in solar PV application 15\nFigure 1.23 DC–AC converters with transformer: (a) low-frequency inverter, (b) high-frequency inverter 16\nFigure 1.24 Two-switch half-bridge transformerless inverter 18\nFigure 1.25 NPC transformerless inverter 19\nFigure 1.26 ANPC transformerless inverter 19\nFigure 1.27 T-type transformerless inverter 20\nFigure 1.28 Three-switch transformerless inverter 20\nFigure 1.29 Full-bridge transformerless inverter 21\nFigure 1.30 H5 transformerless inverter 21",
+        "bbox": [
+            133,
+            242,
+            900,
+            901
+        ],
+        "page_idx": 9
+    },
+    {
+        "type": "text",
+        "text": "Figure 1.31 Full-bridge transformerless inverter with midpoint switches and diodes 22\nFigure 1.32 H6-1 transformerless inverter 23\nFigure 1.33 Modified HERIC transformerless inverter 23\nFigure 1.34 oH5-1 transformerless inverter 24\nFigure 1.35 Modified transformerless inverter 24\nFigure 2.1 Schematic of the impedance-source PV microinverter product 36\nFigure 2.2 Photo of the PV microinverter product 36\nFigure 2.3 Experimental waveforms in the (a) pass-through mode, (b) buck mode, and (c) boost mode. (d) Measured grid voltage and current waveforms. Measured efficiency curves of (e) the DC–DC stage and (f) the whole microinverter including the auxiliary power supply. 38\nFigure 2.4 Failure modes of power electronics systems and evaluation flowchart of the hardware wear-out failure probability 39\nFigure 2.5 Thermal impedance network of an enclosed converter system, including the self and mutual junction-enclosure thermal impedances 40\nFigure 2.6 Structure models of the main components, enclosure, and PCB (including traces and vias) built in ANSYS/Icepak for FEM simulations. The PCB and the enclosure are placed horizontally. The enclosure is naturally cooled, i.e., all faces are exposed to the open air. 41\nFigure 2.7 FEM simulation results for thermal impedances. (a) Junction-case and junction enclosure thermal impedances of S₁; mutual junction-enclosure thermal impedances between S₁ and other components. Self junction-enclosure thermal impedances of (b) semiconductor devices and (c) passive components. 42\nFigure 2.8 Temperature profiles of critical components (S₁, S₃, S₅, Cdc) and the enclosure. (a) Aalborg, Denmark, considering the TCC effect; (b) Arizona, USA, considering TCC; (c) Aalborg, Denmark, not considering TCC; (d) Arizona, USA, not considering TCC 44\nFigure 2.9 Annual damage to each critical component in the topology of Figure 2.1 when the microinverter operates at different locations with and without considering the TCC effect 45\nFigure 2.10 Histograms of the years to the wear-out failure of (a) Cdc and (b) S₁ for a population of 1 × 10⁵ samples operating at the two locations, with and without considering the TCC effect 46\nFigure 2.11 Probability curves of wear-out failure for each component and the system when operating at (a) Aalborg, Denmark, with considering the TCC effect; (b) Aalborg, Denmark, without considering the TCC effect o; (c) Arizona, USA, with considering the TCC effect; (d) Arizona, USA, without considering the TCC effect 47",
+        "bbox": [
+            95,
+            92,
+            861,
+            909
+        ],
+        "page_idx": 10
+    },
+    {
+        "type": "header",
+        "text": "xvi Reliability of power electronics converters",
+        "bbox": [
+            97,
+            58,
+            527,
+            76
+        ],
+        "page_idx": 10
+    },
+    {
+        "type": "text",
+        "text": "Figure 2.12 Advanced multimode control of the qZSSRC with a variable DC-link voltage: (a) sketch of DC-link voltage variations; (b) regulation characteristics",
+        "bbox": [
+            135,
+            90,
+            823,
+            146
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 2.13 Measured efficiency with the new control strategy: (a) the whole PV microinverter including the auxiliary power, (b) the DC–DC power stage",
+        "bbox": [
+            135,
+            146,
+            857,
+            200
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 2.14 Calculated temperature profiles of critical components ( $S_{1}$ , $S_{3}$ , $S_{5}$ , $C_{dc}$ ) and the enclosure of the PV microinverter with the new DC-link capacitor and new control scheme. The mission profile of Arizona is used and the TCC effect is taken into account in the temperature calculations.",
+        "bbox": [
+            135,
+            200,
+            864,
+            289
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 2.15 Reliability evaluation results of the PV microinverter with the variable DC-link voltage control and the new electrolytic capacitor; the mission profile of Arizona is applied: (a) annual damage and (b) wear-out failure probabilities of each component and the system",
+        "bbox": [
+            135,
+            291,
+            861,
+            380
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.1 Failure rate distribution for (a) commercial and utility PV installations [4], (b) residential and commercial PV installations [5], and (c) utility PV installations [6]",
+        "bbox": [
+            135,
+            381,
+            769,
+            435
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.2 Unscheduled maintenance cost breakdown of a utility-scale PV installation [8]",
+        "bbox": [
+            135,
+            435,
+            814,
+            472
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.3 Different reliability analysis methods and tools, and their applicability throughout the various stages of the product life cycle",
+        "bbox": [
+            135,
+            472,
+            794,
+            524
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.4 “Boundary diagram” example of a power module used in a typical grid-connected PV inverter during the field operation life cycle. (PCBA = printed circuit board assembly, dv/dt = rate of change of voltage, EMI = electromagnetic interference, PWM = pulse width modulation, RF = radio frequency).",
+        "bbox": [
+            135,
+            526,
+            848,
+            616
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.5 Sample “P-DIagram” Representation of a Power Module Used Within a Typical Grid-Connected PV Inverter. (PWM = Pulse Width Modulation, DC = Direct Current, AC = Alternative Current, DBC = Direct Bonded Copper, IGBT = Insulated-Gate Bipolar Transistor, DV/DT = Rate of Change of Voltage, EMI = Electromagnetic Interference)",
+        "bbox": [
+            135,
+            616,
+            852,
+            725
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.6 Example “structure tree” of a power module used in a typical PV inverter of a grid-connected PV system. (PCBA = printed circuit board assembly, PCB = printed circuit board, IGBT = Insulated-Gate Bipolar Transistor, DBC = direct bonded copper, FMx = failure mode, Fx = function).",
+        "bbox": [
+            135,
+            725,
+            859,
+            815
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.7 Generic Flow Diagram of the DfR Methodology Used for Power-Electronic-Based Systems",
+        "bbox": [
+            135,
+            815,
+            800,
+            850
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.8 Typical Mission-Profile-Based Lifetime Estimation Methodology for Power Electronics Used in PV Systems. (PE = Power Electronic)",
+        "bbox": [
+            135,
+            850,
+            866,
+            906
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "header",
+        "text": "List of figures xvii",
+        "bbox": [
+            710,
+            60,
+            895,
+            78
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "aside_text",
+        "text": "48\n49\n49\n50\n54\n55\n55\n57\n58\n59\n61\n62",
+        "bbox": [
+            868,
+            82,
+            895,
+            907
+        ],
+        "page_idx": 11
+    },
+    {
+        "type": "text",
+        "text": "Figure 3.9 Samples Operating and Destructive Limits Outcomes of Halt for a Specific Stress Factor (E.g., Vibration or Shock and Thermal Cycling) 67\nFigure 3.10 Basic principle of accelerated lifetime testing (based on [33]) 69\nFigure 3.11 Advanced AC Accelerated Power Cycling Test Setup For IGBT Power Modules [35] 70\nFigure 3.12 Basic principle of CALT procedure (based on [36]) 71\nFigure 3.13 Qualification testing procedure for PV inverter, as defined in IEC 62093 [43] 72\nFigure 4.1 Measured and expected energy (kWh) 79\nFigure 4.2 Measured average power (kW) 80\nFigure 4.3 Measured maximum power (kW) 80\nFigure 4.4 Sum of expected insolation (Wh/m²) 81\nFigure 4.5 Average modeled expected energy ratio (EER) 81\nFigure 4.6 Sum of modeled normalized energy (Whac/Whdc) 82\nFigure 4.7 Average of modeled normalized power (Wac/Wdc) 82\nFigure 4.8 Maximum of modeled normalized power 83\nFigure 4.9 Schematic of a string inverter-based PV system 85\nFigure 4.10 Schematic of a central inverter-based PV system 86\nFigure 4.11 Thermal model of IGBT and diode (single IGBT and diode with Rth1, and Ta corresponding to junction, case, heat sink, and ambient temperatures, respectively, and Zjc, Zch, and Rth2 corresponding to thermal impedance junction to case, case to heat sink, and heat sink to ambient, respectively) 87\nFigure 4.12 Equivalent RC thermal network with Rth corresponding to resistance and τ corresponding to capacitance [18] 87\nFigure 4.13 Power curve data of different periods in chronological order of spring, summer, autumn, and winter 93\nFigure 4.14 Discrete probability distribution of power curve data of different periods in chronological order of spring, summer, autumn, and winter 94\nFigure 4.15 Degradation effect on (a) energy availability of the central inverter, (b) energy availability of the string inverter, (c) availability time of the central inverter, and (d) availability time of the string inverter 101\nFigure 4.16 Impact of periodic temperature variations on the reliability of string and central inverters 103\nFigure 4.17 Impact of solar irradiance variation on the reliability of string and central inverters 106\nFigure 4.18 Impact of capacitor ESR on the reliability of string and central inverters 108\nFigure 5.1 General control structure for the grid-connected solar PV inverter 116\nFigure 5.2 Equivalent circuit of a PV cell model 118",
+        "bbox": [
+            95,
+            90,
+            861,
+            892
+        ],
+        "page_idx": 12
+    },
+    {
+        "type": "header",
+        "text": "xviii Reliability of power electronics converters",
+        "bbox": [
+            97,
+            58,
+            540,
+            78
+        ],
+        "page_idx": 12
+    },
+    {
+        "type": "text",
+        "text": "Figure 5.3 $I-V$ and $P-V$ characteristics of a PV cell: (a) different solar irradiance levels at 25 °C and (b) different temperatures at 1000 W/m² 119\nFigure 5.4 Flowchart of the P&O MPPT algorithm 120\nFigure 5.5 Performance comparison of the modified (line 1) and conventional (line 2) P&O MPPT algorithm (ambient temperature 25 °C) 121\nFigure 5.6 Dual-loop control for a two-stage grid-connected solar inverter 121\nFigure 5.7 Circuit diagram of two general solar inverters with an $L$ -type filter: (a) single-phase inverter and (b) three-phase inverter 123\nFigure 5.8 Current control loops in the synchronous $dq$ -reference frame, which focus on the design of the controllers: $G_{\\mathrm{pl}}^{\\mathrm{d}}(s) =$ the $d$ -component PI current controller, $G_{\\mathrm{delay}}(s) =$ the elapsed delay due to the PWM and computations in the control system, and $G_{\\mathrm{f}}(s) =$ the filter (plant) transfer function 126\nFigure 5.9 PQ control block with DC-link voltage control loop in the synchronous $dq$ -reference frame, where $G_{\\mathrm{Q}}(s)$ represents the reactive power controller, $G_{\\mathrm{cd}}(s)$ and $G_{\\mathrm{cq}}(s)$ are the current controllers for the $d$ - and $q$ -axis components, and $v_{\\mathrm{inv}}^*$ is the reference inverter output voltage 128\nFigure 5.10 Control structure of the inverter stage in a two-stage, three-phase grid-connected solar system in the synchronous $dq$ -reference frame, where the PQ control includes a closed-loop voltage control and an open-loop control for the reactive power. The PLL is used for reference transformations. 131\nFigure 5.11 Frequency response of the double-loop control (i.e., the DC-link voltage control loop and the $d$ -axis current control loops) with the designed parameters: (a) open loop Bode plots and (b) closed-loop Bode plots, where BW represents bandwidth of the system 133\nFigure 5.12 Simulation results for the grid-connected three-phase AC–DC converter system controlled in the synchronous reference frame with the designed parameters: (a) grid line-to-line voltages, (b) grid currents, (c) DC-link voltage, (d) $d$ -axis current component, and (e) $q$ -axis current 134\nFigure 5.13 Control structure of the single-phase grid-connected solar inverter, where the current loop adopts PR controller 135\nFigure 5.14 Dynamic performance of the single-phase inverter with the PR controller: (a) the grid current (i.e., the $\\alpha$ -axis current) and (b) the d-axis current. 136\nFigure 6.1 Frequency variation as per the grid code of different countries [18] 144\nFigure 6.2 (a) Range of power factor variation with respect to active power and (b) range of power factor variation with respect to voltage [27] 146",
+        "bbox": [
+            133,
+            90,
+            900,
+            892
+        ],
+        "page_idx": 13
+    },
+    {
+        "type": "header",
+        "text": "List of figures xix",
+        "bbox": [
+            714,
+            60,
+            895,
+            78
+        ],
+        "page_idx": 13
+    },
+    {
+        "type": "text",
+        "text": "Figure 6.3 LVRT plot based on different grid code 21 147\nFigure 6.4 Schematic of the control structure for a single-phase two-stage grid-connected PV system 148\nFigure 6.5 Control algorithm for generator-side stage:(a) power reference-based, (b) converter state-based 152\nFigure 6.6 Flowchart of the PV system implementation using MCA: (a) control algorithm for single-phase system and (b) control algorithm for three-phase system 157\nFigure 6.7 Voltage sag effect on single-phase GCPVS: (a) voltage and (b) current at PCC 160\nFigure 6.8 Active and reactive power during voltage sag effect on single-phase GCPVS 160\nFigure 6.9 Voltage sag effect on single-phase GCPVS: (a) voltage and (b) current at PCC 161\nFigure 6.10 Active and reactive power during voltage sag effect on single-phase GCPVS 162\nFigure 6.11 Islanding detection schemes 166\nFigure 6.12 PLC islanding detection schemes 166\nFigure 6.13 Transfer trip islanding detection schemes 167\nFigure 6.14 Disturbance introduced by frequency shift islanding detection [76] 173\nFigure 6.15 Decision tree schematic with leaf and child nodes [91] 177\nFigure 6.16 Schematic of the thermal model of the IGBT diode module 178\nFigure 6.17 Flowchart for relating junction temperature with power control strategy 179\nFigure 6.18 Simulation of 10 kW single-phase GCPVS with (a) active and reactive power, and (b) junction temperature for power device 180\nFigure 6.19 Simulation of 10 kW three-phase GCPVS with (a) active and reactive power and (b) junction temperature for power device 180\nFigure 7.1 Fault analysis of solar PV modules using thermal image processing 194\nFigure 7.2 General architecture of CNN 195\nFigure 7.3 Training progress curve for adam, rmsprop, and sgdm 197\nFigure 7.4 Confusion matrix for adam algorithm 197\nFigure 7.5 Condition monitoring algorithm for inverter 200\nFigure 7.6 IR image of a solar inverter 201\nFigure 8.1 A typical grid-connected PV system 207\nFigure 8.2 Fault diagnostic block diagram for grid-connected PV system 209\nFigure 8.3 HS optimization algorithm 227\nFigure 8.4 The analysis window of the sampled signal: (a) one window of two cycles, (b) the difference between two cycles 228\nFigure 8.5 Wavelet decomposition levels for signal preprocessing 229\nFigure 8.6 Energy vector of wavelet coefficients 229\nFigure 8.7 Diagram flow of the PCA algorithm 234",
+        "bbox": [
+            95,
+            88,
+            861,
+            911
+        ],
+        "page_idx": 14
+    },
+    {
+        "type": "page_number",
+        "text": "XX",
+        "bbox": [
+            99,
+            61,
+            128,
+            75
+        ],
+        "page_idx": 14
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            520,
+            76
+        ],
+        "page_idx": 14
+    },
+    {
+        "type": "text",
+        "text": "Figure 8.8 Illustration of K-NN 235  \nFigure 8.9 Block diagram for the wavelet-based fault detection technique. 236  \nFigure 8.10 Various operating and fault conditions of PV inverter 237  \nFigure 8.11 Scatter plot of the trained data 238  \nFigure 8.12 Confusion matrix for trained data 239  \nFigure 8.13 ROC for trained data 240",
+        "bbox": [
+            135,
+            90,
+            898,
+            200
+        ],
+        "page_idx": 15
+    },
+    {
+        "type": "header",
+        "text": "List of figures xxi",
+        "bbox": [
+            717,
+            60,
+            895,
+            76
+        ],
+        "page_idx": 15
+    },
+    {
+        "type": "text",
+        "text": "List of tables",
+        "text_level": 2,
+        "bbox": [
+            414,
+            153,
+            619,
+            180
+        ],
+        "page_idx": 16
+    },
+    {
+        "type": "text",
+        "text": "Table 1.1 Comparison between different DC–DC converters 14\nTable 1.2 Comparison between different transformerless inverter topology 17\nTable 2.1 Specifications and parameters of the PV microinverter prototype 37\nTable 4.1 Characteristics of the Sun-power PV module 84\nTable 4.2 Base case reliability analysis parameters (central inverter system) 91\nTable 4.3 Base case reliability analysis parameters (string inverter) 91\nTable 4.4 Reliability indices for the base case during the first year of service 100\nTable 4.5 Impact of temperature on availability of PV inverter 102\nTable 4.6 Statistical parameters of temperature sensitivity test for energy availability index in different periods 104\nTable 4.7 Statistical parameters of temperature sensitivity test for availability time index in different periods 104\nTable 4.8 Statistical parameters of irradiance sensitivity test for energy availability index in different periods 107\nTable 4.9 Statistical parameters of irradiance sensitivity test for availability time index in different periods 107\nTable 4.10 Impact of the increased number of strings on the availability of PV inverters 109\nTable 4.11 Impact of panel failure rate on availability of PV inverters 110\nTable 5.1 System parameters of the 10-kW grid-connected three-phase solar inverter 131\nTable 5.2 System parameters of the 3.5-kW grid-connected single-phase inverter. 136\nTable 6.1 Permissible limit of voltage fluctuation with respect to nominal voltage 142\nTable 6.2 Permissible limit of frequency fluctuation with respect to nominal frequency 143\nTable 6.3 Grid code-based power factor requirement 147\nTable 6.4 Comparative analysis of passive islanding detection scheme [65] 169\nTable 6.5 Comparative analysis of active islanding detection scheme [65] 171",
+        "bbox": [
+            133,
+            242,
+            900,
+            901
+        ],
+        "page_idx": 16
+    },
+    {
+        "type": "text",
+        "text": "Table 6.6 Comparative analysis of active islanding detection scheme 177  \nTable 7.1 Frequently occurring fault categories in PV modules with their causes and effects 192  \nTable 7.2 Performance of training algorithms for the proposed deep net 198  \nTable 7.3 Category-wise fault classification for deep learning net 199  \nTable 7.4 Fuzzy rule base 201  \nTable 7.5 Fault prediction based on FMEA 202  \nTable 8.1 IGBT failures and their causes 211  \nTable 8.2 Potential failure modes, causes and mechanisms in literature 218  \nTable 8.3 Failure modes and mechanisms of Si power devices 224  \nTable 8.4 Computational time of various wavelet transform analysis techniques 225  \nTable 8.5 Model type and training performance results for K-NN 237",
+        "bbox": [
+            97,
+            90,
+            861,
+            365
+        ],
+        "page_idx": 17
+    },
+    {
+        "type": "header",
+        "text": "xxiv Reliability of power electronics converters",
+        "bbox": [
+            97,
+            60,
+            538,
+            76
+        ],
+        "page_idx": 17
+    },
+    {
+        "type": "text",
+        "text": "About the Editors",
+        "text_level": 1,
+        "bbox": [
+            373,
+            150,
+            660,
+            177
+        ],
+        "page_idx": 18
+    },
+    {
+        "type": "text",
+        "text": "Frede Blaabjerg is a full professor at Aalborg University's Centre of Reliable Power Electronics, Denmark. His current research interests include power electronics and its applications such as in wind turbines, PV systems, reliability, harmonics, and adjustable speed drives. He has authored or co-authored more than 600 journal papers, and co-authored or edited fourteen books in power electronics. He is recipient of 32 IEEE Prize Paper Awards, the IEEE PELS Distinguished Service Award in 2009, the IEEE William E. Newell Power Electronics Award 2014, Global Energy Prize in 2019 and the 2020 IEEE Edison Medal. He has been President of the IEEE Power Electronics Society in 2019-2020. He was nominated in 2014-2020 by Thomson Reuters as one of the 250 most cited researchers in engineering in the world.",
+        "bbox": [
+            133,
+            245,
+            900,
+            447
+        ],
+        "page_idx": 18
+    },
+    {
+        "type": "text",
+        "text": "Ahteshamul Haque is an assistant professor at Jamia Millia Islamia University, New Delhi, India. His research focuses on power electronics and its application in renewable energy, drives, and other areas. Prior to Jamia Millia Islamia, he was working for a multinational organisation. He has received patents and awards for his work, and established an Advanced Power Electronics Research Lab.",
+        "bbox": [
+            133,
+            463,
+            900,
+            556
+        ],
+        "page_idx": 18
+    },
+    {
+        "type": "text",
+        "text": "Huai Wang is a full professor at the Centre of Reliable Power Electronics (CORPE), Aalborg University, Denmark. His research addresses the fundamental challenges in modeling power electronic component failure mechanisms and application issues in system-level predictability, condition monitoring, circuit architecture, and robustness design. He was previously a visiting scientist at the ETH Zurich, Switzerland, the Massachusetts Institute of Technology, USA, and with the ABB Corporate Research Centre. His awards include the 2016 Richard M. Bass Outstanding Young Power Electronics Engineer Award and the 2014 Green Talents Award from the German Federal Ministry of Education and Research.",
+        "bbox": [
+            133,
+            571,
+            900,
+            737
+        ],
+        "page_idx": 18
+    },
+    {
+        "type": "text",
+        "text": "Zainul Abdin Jaffery is a professor and Head of the Department of Electrical Engineering, Jamia Millia Islamia University, New Delhi, India. He has published about 80 research papers in the area of Electronics and Electrical engineering in journals and conferences. His research focuses on digital signal processing, digital image processing, and their applications in power engineering and electronics engineering. He is a senior member of IEEE (USA).",
+        "bbox": [
+            131,
+            752,
+            900,
+            865
+        ],
+        "page_idx": 18
+    },
+    {
+        "type": "text",
+        "text": "xxvi Reliability of power electronics converters",
+        "text_level": 2,
+        "bbox": [
+            97,
+            60,
+            540,
+            78
+        ],
+        "page_idx": 19
+    },
+    {
+        "type": "text",
+        "text": "Yongheng Yang is a ZJU100 Professor at Zhejiang University, China. He received the Ph.D. degree from Aalborg University in 2014, where he was an associate professor in 2018-2020. He has published more than 250 scientific papers and two monographs. He received the 2018 IET Renewable Power Generation Premium Award. He was the IEEE Denmark Section Chair during 2019-2020. He is an associate editor for several IET/IEEE journals.",
+        "bbox": [
+            95,
+            92,
+            861,
+            202
+        ],
+        "page_idx": 19
+    },
+    {
+        "type": "text",
+        "text": "Chapter 1",
+        "bbox": [
+            450,
+            144,
+            583,
+            168
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "Power electronics converters for solar PV applications",
+        "text_level": 1,
+        "bbox": [
+            223,
+            177,
+            812,
+            233
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "Ahteshamul Haque¹",
+        "bbox": [
+            384,
+            242,
+            644,
+            268
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "1.1 Introduction",
+        "text_level": 2,
+        "bbox": [
+            135,
+            334,
+            352,
+            354
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "The demand for renewable energy-based power plants is growing exponentially worldwide due to the climate change threat. The other reason for this demand is the exponential growth in electrical energy demand for industrialization. The availability of conventional fossil fuel reservoirs such as coal is very limited. Solar photovoltaic (PV)-based power plant is the most acceptable among all renewable energy sources as the sunlight is relatively available in abundance in most of the regions.",
+        "bbox": [
+            133,
+            372,
+            900,
+            481
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "The total solar PV installed capacity is thus increasing worldwide, and it is forecasted that growth will continue, as shown in Figures 1.1 and 1.2, [2].",
+        "bbox": [
+            135,
+            481,
+            898,
+            518
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "Almost in every business sector, the world is facing a growing recession, but in solar PV-based plant area, the job prospects have increased significantly, as indicated in Figure 1.3, and many opportunities are created at various levels, which helps in solving unemployment issues worldwide.",
+        "bbox": [
+            133,
+            518,
+            898,
+            589
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "Based on the above data, it can be concluded that solar energy is the fastest growing renewable energy generation technique and most of the researchers are focusing on the development of a highly efficient and lossless method to achieve maximum power possible. Moreover, solar PV plants have technological challenges i.e. power conversion, quality factor, and safety issues. To address these issues various technological standards are made by regulating agencies, e.g., power electronics converters, control strategy, low-voltage ride-through (LVRT) $[3, 4]$ , anti-islanding $[5, 6]$ , and reliability, which will be discussed in the coming sections and chapters in detail.",
+        "bbox": [
+            133,
+            589,
+            900,
+            752
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "footer",
+        "text": "$^{1}$ Advance Power Electronics Research Laboratory, Department of Electrical Engineering, Jamia Millia Islamia (A Central University), New Delhi, India",
+        "bbox": [
+            135,
+            865,
+            886,
+            900
+        ],
+        "page_idx": 20
+    },
+    {
+        "type": "text",
+        "text": "Solar PV Installed Capacity (Globally)",
+        "text_level": 2,
+        "bbox": [
+            255,
+            90,
+            773,
+            117
+        ],
+        "page_idx": 21
+    },
+    {
+        "type": "chart",
+        "img_path": "images/208075b03f84c8f53d8f42b770915634cab11054ac9dfb04cad6e55a579f1816.jpg",
+        "content": "",
+        "chart_caption": [
+            "Figure 1.1 Solar PV installed capacity at world level [1]"
+        ],
+        "chart_footnote": [],
+        "bbox": [
+            124,
+            123,
+            834,
+            383
+        ],
+        "page_idx": 21
+    },
+    {
+        "type": "text",
+        "text": "1.2 Role of power electronics in solar PV systems",
+        "text_level": 2,
+        "bbox": [
+            97,
+            450,
+            692,
+            472
+        ],
+        "page_idx": 21
+    },
+    {
+        "type": "text",
+        "text": "The layout of a solar PV power plant is shown in Figure 1.4. The solar PV output is DC and variable, i.e., it depends on ambient conditions (temperature, solar irradiance, etc.). These variable electrical signals need to be regulated as per the desired shape and magnitude. Power electronics converters are used to regulate the PV output. Moreover, power electronics converters are also used to convert the DC voltage into the AC voltage of the desired magnitude and frequency. The ability of power electronics switches to operate with pulse width modulation (PWM) makes the system-control efficient. Different control algorithms can be implemented for generating PWM and obtaining accurate output power with a low response time.",
+        "bbox": [
+            95,
+            488,
+            864,
+            601
+        ],
+        "page_idx": 21
+    },
+    {
+        "type": "chart",
+        "img_path": "images/6ecf677f7b7393386a8cbe4cabeefc93edde25291847a7b8f6ec34783c162b8a.jpg",
+        "content": "",
+        "chart_caption": [
+            "Solar PV Power Generation (% Power Generation Share–World Level)",
+            "Figure 1.2 Power generation share of solar PV-based plants at world level [1]"
+        ],
+        "chart_footnote": [],
+        "bbox": [
+            135,
+            689,
+            821,
+            874
+        ],
+        "page_idx": 21
+    },
+    {
+        "type": "header",
+        "text": "2 Reliability of power electronics converters",
+        "bbox": [
+            101,
+            60,
+            524,
+            78
+        ],
+        "page_idx": 21
+    },
+    {
+        "type": "chart",
+        "img_path": "images/ecdebebc9dbb30fbbfb61365cd5075950ba96715efa8200a8715f65a0930f23b.jpg",
+        "content": "",
+        "chart_caption": [
+            "Figure 1.3 Employment from investment in solar PV plants [1]"
+        ],
+        "chart_footnote": [],
+        "bbox": [
+            167,
+            102,
+            864,
+            352
+        ],
+        "page_idx": 22
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            133,
+            405,
+            900,
+            463
+        ],
+        "page_idx": 22
+    },
+    {
+        "type": "image",
+        "img_path": "images/2441551cf29e8d2d91204adbb5298219c04f55a1e4f2d78b9bb73fb4289b3197.jpg",
+        "image_caption": [
+            "Figure 1.4 Layout of solar PV plant"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            138,
+            487,
+            895,
+            874
+        ],
+        "page_idx": 22
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            357,
+            60,
+            864,
+            76
+        ],
+        "page_idx": 22
+    },
+    {
+        "type": "page_number",
+        "text": "3",
+        "bbox": [
+            880,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 22
+    },
+    {
+        "type": "image",
+        "img_path": "images/4fb4b8a0a95b5544770720efcc322b795dc436bf680472b608dbbc16eeafde0d.jpg",
+        "image_caption": [
+            "Figure 1.5 Main functions of DC–DC converters in solar PV plants"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            99,
+            93,
+            857,
+            205
+        ],
+        "page_idx": 23
+    },
+    {
+        "type": "text",
+        "text": "For a single-stage PV system, the output from the solar panel is directly fed to the DC–AC converter that regulated the incoming DC and converts it into AC. The output of the inverter is then passed through the filter before it is fed to the grid and local load. The control signal is generated by the measured voltage of the inverter at point of common coupling.",
+        "bbox": [
+            95,
+            273,
+            861,
+            363
+        ],
+        "page_idx": 23
+    },
+    {
+        "type": "text",
+        "text": "In the case of a two-stage system, the PV output from the solar panel is fed to the DC–DC converter. The maximum power point tracking (MPPT) control is implemented in the control of DC–DC converters. Also, if a battery is used in the solar PV plant, a charger circuit is required, which is also a power electronics converter. The PV-side auxiliary power is tapped off different DC voltage levels as per the requirement by the load. The main role of DC–DC converters in solar PV plant is shown in Figure 1.5. Similarly, the main functions of the DC–AC power electronics converter are shown in Figure 1.6. The LVRT and islanding detection protection are implemented in the control of the DC–AC converter.",
+        "bbox": [
+            95,
+            363,
+            861,
+            529
+        ],
+        "page_idx": 23
+    },
+    {
+        "type": "text",
+        "text": "1.3 DC-DC power electronics converters",
+        "text_level": 2,
+        "bbox": [
+            97,
+            555,
+            599,
+            574
+        ],
+        "page_idx": 23
+    },
+    {
+        "type": "text",
+        "text": "In solar PV applications, DC–DC converters are used, and they are classified into two types: isolated and non-isolated type, as shown in Figure 1.7. The major difference between the two types of converters is in cost and galvanic isolation. The isolated type DC–DC has galvanic isolation between the input and output because of a magnetically coupled element, and at the same time, the cost is high. Flyback, resonant, forward, push-pull, bridge DC–DC converters are examples of isolated converters. The non-isolated type converters are Ćuk, SEPIC, boost, buck-boost, etc.",
+        "bbox": [
+            95,
+            592,
+            861,
+            722
+        ],
+        "page_idx": 23
+    },
+    {
+        "type": "image",
+        "img_path": "images/4d6dd06880fa77ed8d42282fd41863ca651e8936ed905b54bcabd722834611c2.jpg",
+        "image_caption": [
+            "Figure 1.6 Main functions of DC-AC converters in solar PV plants"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            99,
+            758,
+            857,
+            874
+        ],
+        "page_idx": 23
+    },
+    {
+        "type": "header",
+        "text": "4 Reliability of power electronics converters",
+        "bbox": [
+            97,
+            60,
+            524,
+            78
+        ],
+        "page_idx": 23
+    },
+    {
+        "type": "image",
+        "img_path": "images/685c54109fb8b1a24fd91c0c2157f5f88eb1628ac4384965afd895b94b9d10cf.jpg",
+        "image_caption": [
+            "Figure 1.7 Classification of DC–DC converters used in solar PV applications"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            135,
+            93,
+            886,
+            411
+        ],
+        "page_idx": 24
+    },
+    {
+        "type": "text",
+        "text": "These DC–DC converters used in solar PV applications are discussed in Sections 1.3.1 to 1.3.14.",
+        "bbox": [
+            135,
+            476,
+            898,
+            512
+        ],
+        "page_idx": 24
+    },
+    {
+        "type": "text",
+        "text": "1.3.1 Buck converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            529,
+            389,
+            549
+        ],
+        "page_idx": 24
+    },
+    {
+        "type": "text",
+        "text": "The buck converter, also known as a step-down converter, is used to step down the input voltage at the output side. The schematic of the converter is shown in Figure 1.8. This converter is a switched-mode power supply containing a diode, a power switch, and an energy storage element in the form of either a capacitor or a inductor. Here, the input voltage source feeds the controllable power switch that is operated with a PWM either through a time base or with a frequency base. Generally, to eliminate the voltage ripple, a combination of capacitor and inductor can be used at both the load side and the supply side of the converter. The main application of this converter is in the battery charger circuit $[7]$ , solar PV pumping system $[8]$ , MPPT tracking, etc. $[9]$ .",
+        "bbox": [
+            133,
+            556,
+            900,
+            648
+        ],
+        "page_idx": 24
+    },
+    {
+        "type": "image",
+        "img_path": "images/366544f5b9f2f38c7efd7bf54bbb729af1b36e54b39d0b71bf2ccd272b2674c3.jpg",
+        "image_caption": [
+            "Figure 1.8 Schematic of a buck DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            142,
+            674,
+            886,
+            871
+        ],
+        "page_idx": 24
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            357,
+            60,
+            864,
+            76
+        ],
+        "page_idx": 24
+    },
+    {
+        "type": "page_number",
+        "text": "5",
+        "bbox": [
+            880,
+            60,
+            895,
+            73
+        ],
+        "page_idx": 24
+    },
+    {
+        "type": "image",
+        "img_path": "images/a53e2baa6e7d210c110aabd18e582925640cc420bcb42355443d99cabafb19e7.jpg",
+        "image_caption": [
+            "Figure 1.9 Schematic of the boost DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            201,
+            92,
+            760,
+            242
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            95,
+            297,
+            861,
+            390
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "text",
+        "text": "1.3.2 Boost converter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            404,
+            361,
+            423
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "text",
+        "text": "The boost converter is referred to as a step-up converter and used in applications where the voltage magnitude at the output needs to be larger than the input voltage. This converter finds its majority of applications in PV systems to boost the PV voltage $[10–12]$ . The schematic of the boost converter is shown in Figure 1.9. Similar to a buck converter, the boost converter is also a switched-mode power supply containing an inductor, a power switch, a diode, and a capacitor. Here, the input voltage source feeds the inductor that leads to a constant input current. Further, the power switch is operated with a PWM to achieve the required output voltage. Many modifications are available for the basic boost converter in the literature $[10–13]$ to achieve ripple minimization, high voltage gain, and enhanced performance.",
+        "bbox": [
+            95,
+            429,
+            864,
+            613
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "text",
+        "text": "1.3.3 Buck-boost converter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            627,
+            420,
+            647
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "text",
+        "text": "The buck-boost converter can operate both in step-down and in step-up mode depending upon the duty cycle provided to the converter. The schematic of the converter shown in Figure 1.10 is developed by combining the basic buck converter and boost converter topologies discussed in Sections 1.3.1 and 1.3.2. This converter found most of its applications in stand-alone and grid-connected PV systems, and motor drives $[14]$ . Similar to the operation of a buck converter, the input voltage source feeds the controllable power switch in the converter that is operated with a PWM. The literature identified that the continuous current mode operation of the buck-boost converter has lower ripples in the current. Further, a buck-boost converter with two power switches can have the least current and voltage stress on the components operating in the converter. Moreover, to enhance the operation of a basic buck-boost converter, various other topologies such as SEPIC $[15]$ , Ćuk $[16]$ , and Luo converters $[17]$ are available in the literature.",
+        "bbox": [
+            95,
+            653,
+            861,
+            708
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "image",
+        "img_path": "images/7478918ae9e8abbf4c6fdde02a9a6745533bf35d9f2b6e7461a5328a2d625b9a.jpg",
+        "image_caption": [
+            "Figure 1.10 Schematic of the buck-boost DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            214,
+            733,
+            748,
+            873
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "header",
+        "text": "6 Reliability of power electronics converters",
+        "bbox": [
+            101,
+            60,
+            524,
+            76
+        ],
+        "page_idx": 25
+    },
+    {
+        "type": "image",
+        "img_path": "images/56ac967c00d2d7999dccb440c9214a525c4b585b92df9e4102cc4bfdb64b3efd.jpg",
+        "image_caption": [
+            "Figure 1.11 Schematic of the SEPIC DC-DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            142,
+            90,
+            895,
+            271
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            131,
+            334,
+            900,
+            517
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "text",
+        "text": "1.3.4 Single-ended primary inductance converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            530,
+            699,
+            552
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "text",
+        "text": "The single-ended primary inductance converter (SEPIC) is widely used in DC voltage flickering control and sensor-less control of PV applications. The schematic of the SEPIC is shown in Figure 1.11. While operating the converter, the on-time switching must be larger than the off-time switching to realize a high voltage at the output. Further, this also ensures that the capacitor is fully charged. For any condition, if the switching is not achieved, the converter fails to provide the required output. Besides, the operation of the converter along with a high-frequency transformer achieves an output voltage with minimized ripples. This provides various advantages with key features such as continuous output current, minimized output ripples, and minimized switching stress $[15, 18–20]$ .",
+        "bbox": [
+            133,
+            556,
+            900,
+            740
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "text",
+        "text": "1.3.5 Ćuk converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            752,
+            380,
+            773
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "text",
+        "text": "The schematic of a Ćuk converter shown in Figure 1.12 has similarities with the basic buck-boost-converter except for the fact that the inductor is replaced with a capacitor to achieve the power transfer. This arrangement is also known as a negative-output capacitive energy-based flyback DC–DC converter [21]. Further, the Ćuk converter achieves ripple-free output in a system by inverting the output polarity of the converter with suitable connections [16, 22, 23]. Besides, to improve the efficiency of Ćuk converters and achieve optimal bidirectional operation concerning the regulation of voltage and current [24], various modifications are proposed in the literature [25–28]. These studies have identified the application of the converter in various motor drive circuits [21] and renewable energy applications [29–31].",
+        "bbox": [
+            133,
+            779,
+            900,
+            909
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            357,
+            60,
+            864,
+            76
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "page_number",
+        "text": "7",
+        "bbox": [
+            880,
+            60,
+            895,
+            73
+        ],
+        "page_idx": 26
+    },
+    {
+        "type": "image",
+        "img_path": "images/4f8e89152918e33fc68e679cc66bdd0f409d7c16bbc128ab858a6f259f855cde.jpg",
+        "image_caption": [
+            "Figure 1.12 Schematic of a Ćuk DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            104,
+            90,
+            857,
+            269
+        ],
+        "page_idx": 27
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            95,
+            325,
+            861,
+            381
+        ],
+        "page_idx": 27
+    },
+    {
+        "type": "text",
+        "text": "1.3.6 Positive-output super-lift Luo converter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            396,
+            619,
+            417
+        ],
+        "page_idx": 27
+    },
+    {
+        "type": "text",
+        "text": "The positive-output super-lift Luo converter shown in Figure 1.13 was initially introduced by Luo et al. [17] in 2003. This converter was developed with different series energy storage elements such as series inductors and capacitors that provide high output voltage resembling arithmetic progressions. Later, the design of the converter was modified in [32] by adding a high voltage transfer gain and its operation was enhanced by using a sliding mode controller in [33] for achieving the balance between the voltage regulation and load current. This converter is considered to be more powerful when compared to the SEPIC and Ćuk converters discussed in Sections 1.3.4 and 1.3.5 due to its unique features of enhanced efficiency and high output voltage resembling higher geometric progressions. Moreover, these converters are still under development for their operation with domestic and industrial PV applications $[34, 35]$ .",
+        "bbox": [
+            95,
+            423,
+            864,
+            588
+        ],
+        "page_idx": 27
+    },
+    {
+        "type": "image",
+        "img_path": "images/affb297644f9822663827b86c2e1e95c65cab19edff558a89d119748f882bd68.jpg",
+        "image_caption": [
+            "Figure 1.13 Schematic of a positive-output super-lift Luo DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            106,
+            619,
+            861,
+            870
+        ],
+        "page_idx": 27
+    },
+    {
+        "type": "page_number",
+        "text": "8",
+        "bbox": [
+            99,
+            60,
+            115,
+            73
+        ],
+        "page_idx": 27
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            133,
+            60,
+            524,
+            76
+        ],
+        "page_idx": 27
+    },
+    {
+        "type": "image",
+        "img_path": "images/4a5839972fc3d830d60c4433d58e47f54f221c393a013c5ff361f931d83f6122.jpg",
+        "image_caption": [
+            "Figure 1.14 Schematic of an ultra-lift Duo DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            144,
+            93,
+            886,
+            297
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            133,
+            361,
+            898,
+            416
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "text",
+        "text": "1.3.7 Ultra-lift Luo converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            429,
+            481,
+            450
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "text",
+        "text": "The ultra-lift Luo converter is shown in Figure 1.14 [36, 37]. This converter combines the design aspects of voltage and super-lift Luo converters to produce a high-voltage conversion gain. This makes the converter highly efficient among the other non-isolated DC–DC converters. Further, it is identified that the closed-loop design of the converter is monotonous as the slightest variation in duty ratio results in large output voltage variations.",
+        "bbox": [
+            131,
+            455,
+            900,
+            567
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "text",
+        "text": "1.3.8 Zeta converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            580,
+            384,
+            601
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "text",
+        "text": "The Zeta converter combines the advantages of the buck-boost, SEPIC, and Ćuk converters. The schematic of the Zeta converter is shown in Figure 1.15. When operated in a PV system, the Zeta converter enables continuous MPPT over the entire area of the PV curve. Further, the Zeta converter provides a non-inverted output voltage that has either an enhanced or a diminished value concerning the input voltage $[38–42]$ . Moreover, to reduce the output ripples and achieve enhanced voltage conversion in continuous and discontinuous modes, new topologies of the Zeta converter are developed in the literature $[43]$ . These advancements are constituted for operation with the battery storage systems in PV applications.",
+        "bbox": [
+            133,
+            607,
+            900,
+            663
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "image",
+        "img_path": "images/89568365984209fd45cae94c532d54d9f7c7111b9f17f161762659c142c345cb.jpg",
+        "image_caption": [
+            "Figure 1.15 Schematic of a Zeta DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            142,
+            689,
+            893,
+            870
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            357,
+            60,
+            864,
+            76
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "page_number",
+        "text": "9",
+        "bbox": [
+            880,
+            60,
+            895,
+            73
+        ],
+        "page_idx": 28
+    },
+    {
+        "type": "image",
+        "img_path": "images/3c282c6a4dcc906f820964c7564faeca5aaf5bb32cae0d0c23d0de8f761b9632.jpg",
+        "image_caption": [
+            "Figure 1.16 Schematic of a flyback DC-DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            106,
+            93,
+            852,
+            380
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            95,
+            443,
+            861,
+            553
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "text",
+        "text": "1.3.9 Flyback converter",
+        "text_level": 2,
+        "bbox": [
+            99,
+            567,
+            384,
+            586
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "text",
+        "text": "The schematic of the flyback DC–DC converter is shown in Figure 1.16. This converter acts as a key solution for higher converter gain requirements by employing transformers in the system. For a transformer with a large air gap to store energy, the flyback converter can be used in high-power applications. Further, the large air gap results in less magnetizing inductance, and the flyback converter provides very less energy transfer efficiency and large leakage flux. Moreover, the flyback converter overcomes the drawback of output polarity inversion and high current flow in the power switch and output diode in Ćuk converters [44]. These advantages have seen the application of flyback converters to operate in the discontinuous mode with isolated grid-connected inverters [45]. This application identified the unique features such as swift dynamic response and less complexity of the converter. Further, the efficiency and decreased ripple content of the converter is enhanced by employing various soft switching techniques [46, 47].",
+        "bbox": [
+            95,
+            592,
+            864,
+            831
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "text",
+        "text": "1.3.10 Three-port half-bridge DC–DC converter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            844,
+            653,
+            865
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "text",
+        "text": "The schematic of a three-port half-bridge DC–DC converter is shown in Figure 1.17. The converter's primary circuit operates in the buck converter mode with synchronous rectification to provide the high-frequency transformer with a DC bias current. Further, various implementations are projected for post and synchronous regulations to regulate the three ports individually for achieving a single-stage power conversion with modest topology and simple control $[48]$ . Moreover, to achieve continuous input current with a wide range of zero-voltage switching and low ripple, the three switches are operated with an active-clamped half-bridge DC converter $[49]$ . Besides, to achieve a high voltage gain for large input voltage applications, the hybrid secondary rectifier is modified as a dual half-bridge LLC resonant converter. Here, depending on the switching strategy, the hybrid secondary rectifier acts as a quadruple rectifier $[50]$ . In $[51]$ , the output power and efficiency are improved by employing an interleaved high-performance DC converter. A half-bridge of this topology ensures that the duty cycle of the two interleaved converters is close to 50 percent for achieving a continuous output current width with less lag and small component size. Further, to reduce the electromagnetic interference and voltage stress and achieve a high efficiency, the three-level converter is operated with a high-voltage bidirectional half-bridge in high-voltage DC microgrid applications $[52]$ .",
+        "bbox": [
+            95,
+            871,
+            861,
+            907
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "page_number",
+        "text": "10",
+        "bbox": [
+            101,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 29
+    },
+    {
+        "type": "image",
+        "img_path": "images/840f61a0328f0f09cb37a194825fab622ec266fa7e6f7c7a26dc264df791ef00.jpg",
+        "image_caption": [
+            "Figure 1.17 Schematic of a three-port half-bridge DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            140,
+            92,
+            895,
+            285
+        ],
+        "page_idx": 30
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            131,
+            340,
+            900,
+            650
+        ],
+        "page_idx": 30
+    },
+    {
+        "type": "text",
+        "text": "1.3.11 Full-bridge converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            663,
+            468,
+            684
+        ],
+        "page_idx": 30
+    },
+    {
+        "type": "text",
+        "text": "The full-bridge converter is used to integrate various components of the PV system such as PV array, energy storage device, and the load. The general schematic of a full-bridge converter is shown in Figure 1.18. The arrangement of a full-bridge converter consists of the integration of two buck-boost converters. This is developed to achieve zero-voltage switching and single power conversion with the topology $[53]$ . Further, the circulating current losses are minimized by achieving zero-voltage switching during turn-on of switches through operating the full-bridge topology with asymmetrical PWM. Moreover, the use of asymmetrical PWM with a full-bridge converter minimizes the stress on power switches and achieves higher efficiency $[54]$ . Besides, the problem of reverse recovery in output diode is overcome by achieving zero-current switchings during the switch turnoff through combining the resonant part of the circuit with the blocking capacitor and leakage inductance.",
+        "bbox": [
+            131,
+            690,
+            900,
+            909
+        ],
+        "page_idx": 30
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            348,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 30
+    },
+    {
+        "type": "page_number",
+        "text": "11",
+        "bbox": [
+            871,
+            60,
+            895,
+            73
+        ],
+        "page_idx": 30
+    },
+    {
+        "type": "image",
+        "img_path": "images/fe27f57dfe18687931440800c293a9b45f0b0ab419cb99c65614d496ebccd27f.jpg",
+        "image_caption": [
+            "Figure 1.18 Schematic of a full-bridge DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            101,
+            92,
+            855,
+            282
+        ],
+        "page_idx": 31
+    },
+    {
+        "type": "text",
+        "text": "1.3.12 Dual active bridge converter",
+        "text_level": 2,
+        "bbox": [
+            99,
+            325,
+            513,
+            345
+        ],
+        "page_idx": 31
+    },
+    {
+        "type": "text",
+        "text": "The dual active bridge converter has found its application in stand-alone hybrid systems due to its advantages with high conversion efficiency, bidirectional power flow, galvanic isolation, and high power density $[55–57]$ . The schematic of the converter is shown in Figure 1.19. From the circuit, it can be identified that the high-voltage DC sources feed the primary bridge and the low-voltage energy storage or load is connected to the secondary bridge. Further, a high-frequency power transformer is used to isolate the two full bridges whose leakage inductance is used as a storage element in the circuit. To enable the bidirectional power flow with the circuit, a square wave is conveniently phase shifted between both the bridges. Moreover, the voltage difference of the storage element is controlled to achieve power conversion with the circuit $[58]$ . The control aspects of the dual active bridge-isolated bidirectional DC–DC converter are widely discussed through digital controllers in $[59, 60]$ . In $[61, 62]$ , the high-frequency dual active bridge transformers were developed as an improvement to the existing converters. Besides, an ultra-capacitor-based dual active bridge converter was developed in $[60]$ .",
+        "bbox": [
+            95,
+            351,
+            864,
+            625
+        ],
+        "page_idx": 31
+    },
+    {
+        "type": "image",
+        "img_path": "images/3af4072a6b2d21b68183905f066486a1f6c83c499f57105ede589e6c8dd2f1d3.jpg",
+        "image_caption": [
+            "Figure 1.19 Schematic of a dual active bridge DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            101,
+            711,
+            850,
+            871
+        ],
+        "page_idx": 31
+    },
+    {
+        "type": "page_number",
+        "text": "12",
+        "bbox": [
+            101,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 31
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 31
+    },
+    {
+        "type": "image",
+        "img_path": "images/72f7b37865487c02ae567a7a5bc82fd3d4f43f9bb91dde5711a3437c277b0782.jpg",
+        "image_caption": [
+            "Figure 1.20 Schematic of a bidirectional multielement DC–DC resonant converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            138,
+            93,
+            886,
+            352
+        ],
+        "page_idx": 32
+    },
+    {
+        "type": "text",
+        "text": "1.3.13 Multielement resonant converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            422,
+            590,
+            441
+        ],
+        "page_idx": 32
+    },
+    {
+        "type": "text",
+        "text": "The multielement resonant converter is an enhanced topology of the traditional LLC converter $[63, 64]$ . This converter provides advantages of zero-voltage and -current switching using a short output circuit $[65, 66]$ , higher efficiencies at the full load operation, and high power density making them adaptable in renewable energy generation applications $[67, 68]$ . The schematic of a three-port multielement resonant converter is shown in Figure 1.20. The design aspects of this converter involve series and parallel connection of five resonant components in the circuit. These multiple resonant components provide various resonant frequencies in the circuit and their suitable placement helps in transferring the active power of fundamental and third-order harmonics. Further, the parasitic leakage current due to the nonideal isolated transformer is ignored for this converter. From the literature, it is identified that the zero-voltage switching characteristics can be easily achieved for all the power switches in the three ports along with 96 percent power-conversion efficiency $[69]$ .",
+        "bbox": [
+            133,
+            449,
+            900,
+            704
+        ],
+        "page_idx": 32
+    },
+    {
+        "type": "text",
+        "text": "1.3.14 Push-pull converter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            717,
+            450,
+            737
+        ],
+        "page_idx": 32
+    },
+    {
+        "type": "text",
+        "text": "The push-pull converter, also known as a switching converter, is shown in Figure 1.21. This converter involves a transformer and operates with the help of a center-tapped primary winding by acting as a forward converter to the transformer core effectively. Further, the push-pull converter has small filters for different available power levels with the circuit. The major advantage of this converter is the transistor pair in the circuit employs input lines that avail the flow of current through the main winding of the transformer. Besides, the concurrent switching of the transistors draws current from the transformer resulting in a shattered condition for the current at the line during the switching condition of half-cycle pair. Moreover, when operated with low input noise, the push-pull converters have stable input current and can have efficient high-power applications $[70]$ . Further, the center tapping that only utilizes half of the winding of the transformer at a time resulted in increased copper losses for the circuit.",
+        "bbox": [
+            131,
+            743,
+            900,
+            909
+        ],
+        "page_idx": 32
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 32
+    },
+    {
+        "type": "page_number",
+        "text": "13",
+        "bbox": [
+            871,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 32
+    },
+    {
+        "type": "image",
+        "img_path": "images/d4ec22a0bdc080cd683a00da574c18548c7db0d5295089722db707ce35c7ed6b.jpg",
+        "image_caption": [
+            "Figure 1.21 Schematic of a push-pull DC–DC converter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            104,
+            93,
+            850,
+            292
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            95,
+            351,
+            861,
+            422
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "text",
+        "text": "Further, a summary of different DC–DC converters classified under isolated, non-isolated, unidirectional, and bidirectional are shown in Table 1.1 [71]. The summary identifies the important aspects of different converters and compares them with each other.",
+        "bbox": [
+            95,
+            423,
+            861,
+            494
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "text",
+        "text": "1.4 DC-AC converters",
+        "text_level": 2,
+        "bbox": [
+            99,
+            520,
+            389,
+            541
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "text",
+        "text": "Solar inverters play a vital role in the PV application. The DC power from the panel after being boosted by a DC–DC converter is fed to the solar inverter before it can be supplied to the load and grid. The inverter converts DC power into a regulated AC power that can be controlled by varying the switching of the power electronics devices. The basic inverter topologies are presented in Figure 1.22. The topologies are designed to operate in a grid-connected mode of operation while satisfying different grid codes requirements. From Figure 1.22, it can be deduced that the solar inverter can be categorized into two classes: transformer-based and transformerless inverters $[72–74]$ . The galvanic isolation present in the transformer-based inverter provides isolation between the DC and the AC side and protects the system from any leakage power or power circulation that may occur in the AC side of the system. But the disadvantage of the transformer-based inverter is that the size of the inverter becomes large, and the efficiency of the inverter is low due to the transformer-based losses. To overcome the disadvantages, transformerless inverters were proposed. The absence of a transformer for the inverter reduces the size substantially and at the same time the efficiency of the inverter is improved $[75]$ . However, the concern with transformerless inverters is the absence of isolation between the AC and DC side of the system. There is a change of power flow from AC to DC end, which may cause damage to DC equipment. As a result, many different topologies have been proposed to reduce leakage currents in transformerless inverters.",
+        "bbox": [
+            97,
+            558,
+            861,
+            595
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "table",
+        "img_path": "images/38c021ddc3c38262f4fcdefc315537a0cdeff638adf98ba831de2d716956634c.jpg",
+        "table_caption": [
+            "Table 1.1 Comparison between different DC–DC converters"
+        ],
+        "table_footnote": [],
+        "table_body": "<table><tr><td></td><td>Converter type</td><td>Optimal power demand</td><td>Voltage stress</td><td>Efficiency</td></tr><tr><td>Non-isolated</td><td>Buck</td><td>Low</td><td>High</td><td>Medium</td></tr><tr><td>unidirectional DC-</td><td>Boost</td><td>Low</td><td>High</td><td>Medium</td></tr><tr><td>DC converter</td><td>Buck-boost</td><td>Low</td><td>Medium</td><td>Medium</td></tr><tr><td>Non-isolated</td><td>Buck-boost</td><td>Low</td><td>Medium</td><td>Medium</td></tr><tr><td>bidirectional DC-</td><td>SEPIC</td><td>Low</td><td>High</td><td>Medium</td></tr><tr><td>DC converter</td><td>Ćuk</td><td>Low</td><td>High</td><td>Medium</td></tr><tr><td></td><td>Half-bridge</td><td>Low</td><td>Medium</td><td>High</td></tr><tr><td rowspan=\"4\">Isolated unidirectional DC-DC converter</td><td>Flyback</td><td>Low</td><td>High</td><td>High</td></tr><tr><td>Half-bridge</td><td>Low</td><td>High</td><td>High</td></tr><tr><td>Full-bridge</td><td>High</td><td>Medium</td><td>Medium</td></tr><tr><td>Push-pull</td><td>High</td><td>High</td><td>Medium</td></tr><tr><td rowspan=\"2\">Isolated bidirectional DC-DC converter</td><td>Half-bridge</td><td>Low</td><td>High</td><td>Medium</td></tr><tr><td>Full-bridge</td><td>High</td><td>Low</td><td>Medium</td></tr></table>",
+        "bbox": [
+            99,
+            663,
+            857,
+            901
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "page_number",
+        "text": "14",
+        "bbox": [
+            101,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 33
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            133,
+            92,
+            900,
+            420
+        ],
+        "page_idx": 34
+    },
+    {
+        "type": "text",
+        "text": "1.4.1 Transformer-based inverter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            434,
+            524,
+            455
+        ],
+        "page_idx": 34
+    },
+    {
+        "type": "text",
+        "text": "The transformer in the inverter provides galvanic isolation that separates the AC from the DC. The isolation avoids injection of DC current into the grid and stops leakage currents from the grid into the DC circuit. Transformer inverters can be categorized based on the operating frequency. The low-frequency transformer inverter as depicted in Figure 1.23a [76] is more reliable and cost-effective but at the same time, the efficiency is significantly poor. Whereas in the case of the high-frequency transformer inverter depicted in Figure 1.23b [77], the size of the inverter is small, and the inverter is more efficient compared to the low-frequency one. Because of the high-frequency operation, the components are constantly operating in high stress and the reliability is low [78, 79].",
+        "bbox": [
+            133,
+            460,
+            900,
+            642
+        ],
+        "page_idx": 34
+    },
+    {
+        "type": "text",
+        "text": "1.4.2 Transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            657,
+            493,
+            678
+        ],
+        "page_idx": 34
+    },
+    {
+        "type": "text",
+        "text": "The transformer present in the inverter achieves galvanic isolation and reduces the leakage currents from the grid. This helps in ensuring safety, but a substantial amount of power is lost because of the transformer, which reduces the efficiency of the inverter. Due to the large size and low efficiency of the transformer-based inverter, there has been a shift in research toward the transformerless inverters for PV applications. A few of the commonly used transformerless inverter topologies $[80]$ are explained in this section. A comparative analysis of different transformerless inverters is presented in Table 1.2.",
+        "bbox": [
+            133,
+            683,
+            900,
+            829
+        ],
+        "page_idx": 34
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 34
+    },
+    {
+        "type": "page_number",
+        "text": "15",
+        "bbox": [
+            871,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 34
+    },
+    {
+        "type": "image",
+        "img_path": "images/52c27009f4900d6e91c4bcdb5f64a5a8bac530717c148c76a10cab758a5f952a.jpg",
+        "image_caption": [
+            "Figure 1.22 Classification of DC-AC converters used in solar PV application"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            99,
+            93,
+            852,
+            841
+        ],
+        "page_idx": 35
+    },
+    {
+        "type": "page_number",
+        "text": "16",
+        "bbox": [
+            101,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 35
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            58,
+            538,
+            78
+        ],
+        "page_idx": 35
+    },
+    {
+        "type": "image",
+        "img_path": "images/801ec5bc035e7cb695fbf6094dba8b6fb26a6936c08877ce31b2266d5789a3fa.jpg",
+        "image_caption": [
+            "(a)"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            140,
+            96,
+            895,
+            229
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "image",
+        "img_path": "images/e892a78b83a283ae641b82482d801e749d07ab7cf0e20e18e20fda55e7080f25.jpg",
+        "image_caption": [
+            "(b)",
+            "Figure 1.23 DC-AC converters with transformer: (a) low-frequency inverter, (b) high-frequency inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            142,
+            298,
+            895,
+            435
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.1 Half-bridge transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            561,
+            635,
+            580
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "text",
+        "text": "A half-bridge transformerless inverter comprises two power electronics switches connected in parallel with capacitors as shown in Figure 1.24 [105]. The operation is performed by turning on one switch at a time and charging the antiparallel capacitor at that instance. When the second switch is turned on, the corresponding capacitor is discharged, and the obtained inverter output is passed through an L-filter. The topology is simple to implement but achieving MPPT is difficult [106]. As a result, a high ripple is present in the output current.",
+        "bbox": [
+            131,
+            583,
+            900,
+            716
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.2 Neutral point-clamped transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            752,
+            746,
+            772
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "text",
+        "text": "An neutral point-clamped (NPC) transformerless inverter comprises four power electronics switches with two diodes as shown in Figure 1.25 [82]. The clamping diodes at the midpoint aid in achieving the zero-voltage stage. Switches $S_{1}$ and $S_{3}$ operate in one-half cycle with alternating pulsing whereas $S_{2}$ and $S_{4}$ operate in another cycle. The current ripple is low compared to the half-bridge topology, but this topology is unable to balance conduction losses on the negative side causing a limitation for the DC-link [107].",
+        "bbox": [
+            133,
+            775,
+            900,
+            907
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "page_number",
+        "text": "17",
+        "bbox": [
+            871,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 36
+    },
+    {
+        "type": "table",
+        "img_path": "images/6b40f9a8e680c4fa44e290eee0916ad188b6f39086f1e178cb699c3263b44d20.jpg",
+        "table_caption": [
+            "Table 1.2 Comparison between different transformerless inverter topology"
+        ],
+        "table_footnote": [],
+        "table_body": "<table><tr><td rowspan=\"3\" colspan=\"3\">Single-phase transformerless inverter</td><td colspan=\"4\">Components in topologies</td><td colspan=\"2\">Filter</td><td></td><td></td><td></td><td></td><td></td></tr><tr><td colspan=\"2\">Semiconductor switches</td><td colspan=\"2\">Passive element</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr><tr><td>Insulated-gate bipolar transistor</td><td>Diodes</td><td>C</td><td>L</td><td>C</td><td>L</td><td>Common-mode current</td><td>Common-mode voltage</td><td>Power factor (PF)</td><td>Total harmonic distortion (THD)</td><td>η (%)</td></tr><tr><td rowspan=\"4\" colspan=\"3\">DC-link voltage ( $2V_{PV}$ )</td><td>Two-switch H-B [81]</td><td>2</td><td>2</td><td>2</td><td>0</td><td>0</td><td>1</td><td>&lt;20</td><td>Const.</td><td>N/A</td><td>1.1</td></tr><tr><td>NPC [82]</td><td>4</td><td>2</td><td>2</td><td>0</td><td>0</td><td>1</td><td>=0</td><td>Const.</td><td>N/A</td><td>1.19</td></tr><tr><td>ANPC [83]</td><td>6</td><td>6</td><td>2</td><td>0</td><td>0</td><td>1</td><td>&lt;20</td><td>N/A</td><td>N/A</td><td>N/A</td></tr><tr><td>T-type [84]</td><td>4</td><td>4</td><td>2</td><td>0</td><td>0</td><td>1</td><td>&lt;20</td><td>Const.</td><td>N/A</td><td>N/A</td></tr><tr><td rowspan=\"19\">DC-link voltage ( $V_{PV}$ )</td><td rowspan=\"3\" colspan=\"2\">Common-ground-type topologies</td><td>S4 [85]</td><td>4</td><td>2</td><td>3</td><td>0</td><td>1</td><td>1</td><td>=0</td><td>Const.</td><td>0.8</td><td>2.1</td></tr><tr><td>Karschmy [86]</td><td>5</td><td>2</td><td>2</td><td>1</td><td>1</td><td>1</td><td>=0</td><td>Const.</td><td>Unity</td><td>N/A</td></tr><tr><td>Siwakoti-H [87]</td><td>4</td><td>1</td><td>2</td><td>0</td><td>1</td><td>1</td><td>=0</td><td>Const.</td><td>0.85</td><td>&lt;2.3</td></tr><tr><td rowspan=\"5\" colspan=\"2\">H6-type topologies</td><td>Improved H6 with diode [88]</td><td>6</td><td>2</td><td>1</td><td>0</td><td>1</td><td>2</td><td>&lt;20</td><td>190-200</td><td>0.9</td><td>N/A</td></tr><tr><td>ZCT-H6 [89]</td><td>8</td><td>3</td><td>4</td><td>2</td><td>1</td><td>2</td><td>&lt;250</td><td>N/A</td><td>Unity</td><td>N/A</td></tr><tr><td>H6 with diode [90]</td><td>6</td><td>2</td><td>1</td><td>0</td><td>1</td><td>2</td><td>&lt;200</td><td>159-240</td><td>0.99</td><td>1.86</td></tr><tr><td>SLF-H6 [91]</td><td>8</td><td>2</td><td>4</td><td>2</td><td>1</td><td>2</td><td>&lt;150</td><td>N/A</td><td>Unity</td><td>N/A</td></tr><tr><td>H6 in midpoint [92]</td><td>6</td><td>0</td><td>1</td><td>0</td><td>1</td><td>2</td><td>&lt;200</td><td>159-240</td><td>Unity</td><td>N/A</td></tr><tr><td rowspan=\"2\" colspan=\"2\">Buck-boost type topologies</td><td>Dual buck [93]</td><td>4</td><td>2</td><td>2</td><td>3</td><td>1</td><td>2</td><td>N/A</td><td>N/A</td><td>N/A</td><td>3.6</td></tr><tr><td>Generation control circuit-neutral point clamped [94]</td><td>6</td><td>2</td><td>2</td><td>1</td><td>1</td><td>1</td><td>&lt;20</td><td>N/A</td><td>Unity</td><td>4.08</td></tr><tr><td rowspan=\"9\">H-bridge type topologies</td><td rowspan=\"4\">Midpoint clamping</td><td>iH5/oH5 [95]</td><td>6</td><td>0</td><td>2</td><td>0</td><td>1</td><td>2</td><td>&lt;20</td><td>199-200</td><td>Unity</td><td>N/A</td></tr><tr><td>H5-D [96]</td><td>5</td><td>1</td><td>2</td><td>0</td><td>1</td><td>2</td><td>&lt;50</td><td>185-195</td><td>Unity</td><td>4.88</td></tr><tr><td>HERIC Active 1 [97]</td><td>7</td><td>2</td><td>2</td><td>0</td><td>1</td><td>2</td><td>&lt;25</td><td>199-200</td><td>N/A</td><td>N/A</td></tr><tr><td>HB-ZVR [98]</td><td>5</td><td>5</td><td>2</td><td>0</td><td>1</td><td>2</td><td>&lt;200</td><td>163-200</td><td>Unity</td><td>N/A</td></tr><tr><td rowspan=\"5\">Decoupling</td><td>PN-NPC [99]</td><td>8</td><td>0</td><td>2</td><td>0</td><td>1</td><td>2</td><td>&lt;35</td><td>199-201</td><td>Unity</td><td>N/A</td></tr><tr><td>HERIC [100]</td><td>6</td><td>0</td><td>1</td><td>0</td><td>1</td><td>2</td><td>&lt;200</td><td>165-235</td><td>Unity</td><td>N/A</td></tr><tr><td>HERIC AC-based [101]</td><td>6</td><td>2</td><td>1</td><td>0</td><td>1</td><td>2</td><td>&lt;200</td><td>165-236</td><td>Unity</td><td>N/A</td></tr><tr><td>H6 DC side [102]</td><td>6</td><td>0</td><td>2</td><td>0</td><td>1</td><td>2</td><td>&lt;200</td><td>151-249</td><td>Unity</td><td>1.58</td></tr><tr><td>H5 [103, 104]</td><td>5</td><td>0</td><td>1</td><td>0</td><td>1</td><td>2</td><td>&lt;200</td><td>159-235</td><td>Unity</td><td>N/A</td></tr></table>",
+        "bbox": [
+            92,
+            171,
+            903,
+            846
+        ],
+        "page_idx": 37
+    },
+    {
+        "type": "image",
+        "img_path": "images/99e3a4bd7addc140c193d85870a46bfec65277ab88f2aff5af1912d777698a91.jpg",
+        "image_caption": [
+            "Figure 1.24 Two-switch half-bridge transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            253,
+            93,
+            782,
+            289
+        ],
+        "page_idx": 38
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.3 Active neutral point-clamped transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            357,
+            816,
+            375
+        ],
+        "page_idx": 38
+    },
+    {
+        "type": "text",
+        "text": "An active neutral point-clamped (ANPC) transformerless inverter illustrated in Figure 1.26 is a modification of an NPC inverter [108]. In the ANPC, the diodes are replaced by power electronics switches. The upper clamping is controlled by $S_{2}$ and $S_{5}$ whereas the lower clamping is regulated by $S_{3}$ and $S_{6}$ [109]. By replacing the diodes with the power electronics switches, the conduction losses of the inverter are controlled.",
+        "bbox": [
+            133,
+            378,
+            900,
+            491
+        ],
+        "page_idx": 38
+    },
+    {
+        "type": "image",
+        "img_path": "images/896e45ec025f484e96873310a0618737a3c09e312445c86e429ddbe84a2d15ca.jpg",
+        "image_caption": [
+            "Figure 1.25 NPC transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            253,
+            524,
+            780,
+            874
+        ],
+        "page_idx": 38
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 38
+    },
+    {
+        "type": "page_number",
+        "text": "19",
+        "bbox": [
+            871,
+            60,
+            895,
+            73
+        ],
+        "page_idx": 38
+    },
+    {
+        "type": "image",
+        "img_path": "images/b215482a44269d280ed741fea3fe3c4d1e5f24813c907fdd7bb15636fe5439b4.jpg",
+        "image_caption": [
+            "Figure 1.26 ANPC transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            217,
+            93,
+            744,
+            405
+        ],
+        "page_idx": 39
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.4 T-type transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            479,
+            538,
+            499
+        ],
+        "page_idx": 39
+    },
+    {
+        "type": "text",
+        "text": "A T-type three-level transformerless inverter consists of four power electronics switches with two bidirectional switches incorporated in the midpoint of the DC-link capacitor and switches ( $S_{1}$ and $S_{2}$ ) leg [107] as illustrated in Figure 1.27. The $S_{1}$ and $S_{3}$ operate in a complementary way with $S_{2}$ and $S_{4}$ [110]. The clamping with two power electronics switches ( $S_{3}$ and $S_{4}$ ) reduces the requirement of switching devices, which causes a reduction in conduction losses when compared to the ANPC topology.",
+        "bbox": [
+            95,
+            503,
+            861,
+            641
+        ],
+        "page_idx": 39
+    },
+    {
+        "type": "image",
+        "img_path": "images/5d87c3985d0ec3f1e6218645ed75510c11a83dd51670cc2c6449dac4caeaee20.jpg",
+        "image_caption": [
+            "Figure 1.27 T-type transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            214,
+            677,
+            744,
+            874
+        ],
+        "page_idx": 39
+    },
+    {
+        "type": "page_number",
+        "text": "20",
+        "bbox": [
+            99,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 39
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 39
+    },
+    {
+        "type": "image",
+        "img_path": "images/cfe1b40468b0dfcefc7efe5d6e4dacf7adbdfcf69eab18bf12c863c6d9abb218.jpg",
+        "image_caption": [
+            "Figure 1.28 Three-switch transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            253,
+            93,
+            782,
+            248
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.5 Three-switch transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            316,
+            647,
+            334
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "text",
+        "text": "The three-switch transformerless inverter is a modified NPC or ANPC inverter. The number of power electronics switches is reduced from previous topologies, as shown in Figure 1.28. The topology incorporates a diode bridge along with $S_{3}$ . The diode bridge provides the current path during the null state. The operation takes place in four modes. $S_{1}$ is turned on during the positive half-cycle whereas $S_{2}$ remains on during the negative half-cycle. During the freewheeling mode of a positive half-cycle, $D_{1}$ and $D_{4}$ are in forwarding bias with $S_{3}$ whereas for the negative half-cycle biasing, $D_{2}$ and $D_{3}$ are on alongside $S_{3}$ [111].",
+        "bbox": [
+            133,
+            337,
+            900,
+            485
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.6 Full-bridge transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            135,
+            505,
+            626,
+            523
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "text",
+        "text": "A full-bridge transformerless inverter consists of four power electronics switches as shown in Figure 1.29. During the positive half-cycle of operation, $S_{1}$ and $S_{4}$ are turned on and the antiparallel diode along $S_{2}$ and $S_{4}$ provide a path for the current flow. The $S_{2}$ and $S_{1}$ are complementary to each other and similarly $S_{3}$ and $S_{4}$ are complementary to each other. For positive half-cycle $S_{1}$ and $S_{4}$ are turned on and, as a result, the output voltage is equal to the input voltage. Whereas during the freewheeling mode of the positive cycle, the current flows though $S_{1}$ and antiparallel diode of $S_{2}$ [112].",
+        "bbox": [
+            131,
+            526,
+            900,
+            636
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "image",
+        "img_path": "images/c3201541a90a1b144f7be8039398ade37694a554dbfaf2944d1b737a7ce60138.jpg",
+        "image_caption": [
+            "Figure 1.29 Full-bridge transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            140,
+            669,
+            895,
+            871
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "page_number",
+        "text": "21",
+        "bbox": [
+            868,
+            60,
+            895,
+            73
+        ],
+        "page_idx": 40
+    },
+    {
+        "type": "image",
+        "img_path": "images/77ea944dd6135d60db955b31182788cd864a96ffbe20e4f57f940f3d28312f4c.jpg",
+        "image_caption": [
+            "Figure 1.30 H5 transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            140,
+            93,
+            821,
+            291
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            97,
+            355,
+            861,
+            393
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.7 H5 transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            414,
+            497,
+            434
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "text",
+        "text": "The H5 transformerless inverter topology is the commonly implemented topology, which was patented and is commercially produced by SMA Solar Technology $[103]$ . The topology consists of five power electronics switches as shown in Figure 1.30. It can be observed that $S_{5}$ on the DC side acts as a DC decoupling switch. During the freewheeling mode of operating, $S_{5}$ is turned off, which disconnects the DC side and effectively reduces the common-mode current $[113, 114]$ . During the positive half-cycle, $S_{5}$ and $S_{4}$ operate at the switching frequency, whereas $S_{1}$ operates at the grid frequency. The other two switches remain in the off state. Whereas during the negative half-cycle, $S_{5}$ and $S_{2}$ operate at the switching frequency and $S_{3}$ operates at the grid frequency.",
+        "bbox": [
+            95,
+            435,
+            861,
+            619
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.8 Full-bridge transformerless inverter with midpoint switches and diodes",
+        "text_level": 2,
+        "bbox": [
+            97,
+            639,
+            839,
+            678
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "text",
+        "text": "The full-bridge transformerless inverter with midpoint switches and diodes topology is similar to the H5 transformerless inverter topology. Two extra switches are added on the top and bottom of a full-bridge inverter, as shown in Figure 1.31. While $S_{4}$ conduct, $S_{1}$ and $S_{6}$ conduct simultaneously. When $S_{3}$ is in on state, $S_{2}$ and $S_{5}$ operate with the same switching pulse. During a freewheeling period of a positive half-cycle, $D_{2}$ operates in forwarding bias along with $S_{4}$ . Whereas during the negative half-cycle, $D_{1}$ operates in forwarding bias along with $S_{2}$ [115].",
+        "bbox": [
+            95,
+            681,
+            861,
+            809
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.9 H6-1 transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            831,
+            518,
+            850
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "text",
+        "text": "The H6-1 transformerless inverter consists of six power electronics switches, as shown in Figure 1.32 [116]. For operation in a positive half-cycle, $S_{1}$ , $S_{4}$ , and $S_{6}$ are turned on. And during the freewheeling state, $S_{6}$ along with the antiparallel diode of",
+        "bbox": [
+            97,
+            852,
+            861,
+            907
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "page_number",
+        "text": "22",
+        "bbox": [
+            99,
+            60,
+            128,
+            73
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 41
+    },
+    {
+        "type": "image",
+        "img_path": "images/7b8b1f45c4fbd0812c3e75ba388995801963ff1e2fa30a42bdfe0baaf645be8b.jpg",
+        "image_caption": [
+            "Figure 1.31 Full-bridge transformerless inverter with midpoint switches and diodes"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            253,
+            93,
+            780,
+            280
+        ],
+        "page_idx": 42
+    },
+    {
+        "type": "text",
+        "text": "$S_{5}$ conducts without any input, and the current flows through the load. During the negative half-cycle, $S_{2}$ , $S_{3}$ , and $S_{5}$ are turned on and for freewheeling state, $S_{5}$ along with the antiparallel diode of $S_{6}$ conducts.",
+        "bbox": [
+            133,
+            352,
+            898,
+            408
+        ],
+        "page_idx": 42
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.10 Modified Highly Efficient and Reliable Inverter Concept",
+        "text_level": 2,
+        "bbox": [
+            135,
+            429,
+            848,
+            450
+        ],
+        "page_idx": 42
+    },
+    {
+        "type": "text",
+        "text": "The HERIC transformerless inverter consists of six power electronics switches and has an issue with leakage currents. To overcome the drawback a modified version was proposed in $[117–119]$ as shown in Figure 1.33. The topology aims at reducing the leakage current and keeping the common-mode voltage to the minimum. The drawback of this topology remains the shoot-through issue.",
+        "bbox": [
+            133,
+            452,
+            900,
+            544
+        ],
+        "page_idx": 42
+    },
+    {
+        "type": "image",
+        "img_path": "images/d3cb349fdf8c2e3cdad93ee7b64b70350b4a33a353601abda2379a63d9d340e4.jpg",
+        "image_caption": [
+            "Figure 1.32 H6-1 transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            253,
+            657,
+            780,
+            871
+        ],
+        "page_idx": 42
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            78
+        ],
+        "page_idx": 42
+    },
+    {
+        "type": "page_number",
+        "text": "23",
+        "bbox": [
+            868,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 42
+    },
+    {
+        "type": "image",
+        "img_path": "images/0312d7458bbbf34ab590dd53ac15f4a07aa46287aa38102c9262800f5f819fd9.jpg",
+        "image_caption": [
+            "Figure 1.33 Modified HERIC transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            178,
+            95,
+            782,
+            289
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.11 oH5-1 transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            346,
+            542,
+            363
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "text",
+        "text": "The oH5-1 topology has been derived from the H5 transformerless inverter topology. The topology aims to clamp the input voltage to the half value $[108]$ . The topology consists of six power electronics switches as shown in Figure 1.34.",
+        "bbox": [
+            95,
+            366,
+            861,
+            423
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "text",
+        "text": "1.4.2.12 Modified transformerless inverter",
+        "text_level": 2,
+        "bbox": [
+            97,
+            444,
+            574,
+            463
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "text",
+        "text": "As illustrated in Figure 1.35, the topology presented is a modification over the basic full-bridge converter [120]. During the positive half-cycle $S_{1}$ and $S_{3}$ are in on state, whereas $S_{2}$ remains off. In case of the negative half-cycle, $S_{5}$ is in on state, whereas $S_{4}$ remains off.",
+        "bbox": [
+            97,
+            466,
+            861,
+            539
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "text",
+        "text": "1.5 Summary",
+        "text_level": 2,
+        "bbox": [
+            99,
+            562,
+            282,
+            583
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "text",
+        "text": "Solar energy-based power generation is one of the major stakeholders in the renewable energy market around the globe. The low operating cost and easy availability have made it more favorable for the consumer. But many challenges are still present as a large amount of generated power is lost during the conversion process. As a result, many power electronics converters are designed over time to improve the efficiency and reliability of PV-based system. The chapter presents a brief introduction about the power electronics converters used for PV applications. Both the DC–DC converters and DC–AC converters are presented in this chapter and different topologies that are applied in PV applications are explained.",
+        "bbox": [
+            97,
+            601,
+            861,
+            639
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "image",
+        "img_path": "images/d15423e0f576caba2c9d28d5a0fdf11339a6d4286f7aa92f5fdc5e2b5931fe6e.jpg",
+        "image_caption": [
+            "Figure 1.34 oH5-1 transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            178,
+            665,
+            780,
+            873
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "page_number",
+        "text": "24",
+        "bbox": [
+            99,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 43
+    },
+    {
+        "type": "image",
+        "img_path": "images/11493a1578f3e2e11f8ff380d65f21ec7e1c8375c58cd5b0726c7d5a70b9eb02.jpg",
+        "image_caption": [
+            "Figure 1.35 Modified transformerless inverter"
+        ],
+        "image_footnote": [],
+        "content": "",
+        "bbox": [
+            217,
+            93,
+            816,
+            414
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "text",
+        "text": "",
+        "bbox": [
+            133,
+            482,
+            900,
+            610
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "text",
+        "text": "References",
+        "text_level": 2,
+        "bbox": [
+            135,
+            633,
+            269,
+            653
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "ref_text",
+        "text": "[1] International Renewable Energy Agency – IRENA. Future of solar photovoltaic: deployment, investment, technology, grid integration and socio-economic aspects; 2019.",
+        "bbox": [
+            158,
+            672,
+            898,
+            723
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "ref_text",
+        "text": "[2] Zhao Y., Lehman B., De Palma J.F., Mosesian J., Lyons R. Challenges to overcurrent protection devices under line-line faults in solar photovoltaic arrays. 2011 IEEE Energy Conversion Congress and Exposition; Phoenix, AZ, USA, 17-22 Sept. 2011; 2011.",
+        "bbox": [
+            160,
+            726,
+            895,
+            796
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "ref_text",
+        "text": "[3] Fatama A.Z., Khan M.A., Kurukuru V.S.B., Haque A., Blaabjerg F. 'Coordinated reactive power strategy using static synchronous compensator for photovoltaic inverters'. International Transactions on Electrical Energy Systems. 2020;30(6):1–18.",
+        "bbox": [
+            160,
+            797,
+            895,
+            868
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "ref_text",
+        "text": "[4] Khan M.A., Haque A., Kurukuru V.S.B., Saad M. ‘Advanced control strategy with voltage sag classification for single-phase grid-connected",
+        "bbox": [
+            158,
+            871,
+            895,
+            907
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "page_number",
+        "text": "25",
+        "bbox": [
+            868,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 44
+    },
+    {
+        "type": "ref_text",
+        "text": "photovoltaic system'. IEEE Journal of Emerging and Selected Topics in Power Electronics. 2020:1.",
+        "bbox": [
+            165,
+            92,
+            861,
+            128
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[5] Khan M.A., Kurukuru V.S.B., Haque A., Mekhilef S. ‘Islanding classification mechanism for grid-connected photovoltaic systems’. IEEE Journal of Emerging and Selected Topics in Power Electronics. 2020:1–1.",
+        "bbox": [
+            119,
+            129,
+            864,
+            182
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[6] Fatama A., Haque A., Khan M.A. 'A multi feature based Islanding classification technique for distributed generation systems'. 2019 International Conference on Machine Learning, Big Data, Cloud and Parallel Computing; 2019. pp. 160–6.",
+        "bbox": [
+            119,
+            182,
+            861,
+            254
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[7] Masoum M.A.S., Mousavi Badejani S.M., Fuchs E.F. 'Microprocessor-Controlled new class of optimal battery chargers for photovoltaic applications'. IEEE Transactions on Energy Conversion. 2004;19(3):599–606.",
+        "bbox": [
+            119,
+            254,
+            861,
+            309
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[8] Elgendy M.A., Zahawi B., Atkinson D.J. 'Assessment of perturb and observe MPPT algorithm implementation techniques for PV pumping applications'. IEEE Transactions on Sustainable Energy. 2012;3(1):21–33.",
+        "bbox": [
+            119,
+            310,
+            861,
+            363
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[9] Yusivar F., Farabi M.Y., Suryadiningrat R., Ananduta W.W., Syaifudin Y. 'Buck-converter photovoltaic simulator'. International Journal of Power Electronics and Drive Systems. 2011;1(2).",
+        "bbox": [
+            119,
+            363,
+            861,
+            417
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[10] Khazaei P., Mojtaba Modares S., Dabbaghjamanesh M., Almousa M., Moeini A. 'A high efficiency DC/DC boost converter for photovoltaic applications'. International Journal of Soft Computing and Engineering. 2016;2:2231–307.",
+        "bbox": [
+            110,
+            417,
+            861,
+            488
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[11] Saravanan S., Babu N.R. ‘A modified high step-up non-isolated DC-DC converter for PV application’. Journal of Applied Research and Technology. 2017;15(3):242–9.",
+        "bbox": [
+            110,
+            491,
+            861,
+            542
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[12] Forouzesh M., Siwakoti Y.P., Gorji S.A., Blaabjerg F., Lehman B. 'Step-up DC–DC converters: a comprehensive review of voltage-boosting techniques, topologies, and applications'. IEEE Transactions on Power Electronics. 2017;32(12):9143–78.",
+        "bbox": [
+            110,
+            544,
+            861,
+            615
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[13] Huber L., Jovanovic M.M. 'A design approach for server power supplies for networking applications'. in APEC 2000. Fifteenth Annual IEEE Applied Power Electronics Conference and Exposition; 2000. pp. 1163–9.",
+        "bbox": [
+            110,
+            616,
+            861,
+            671
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[14] Howlader A.M., Urasaki N., Senjyu T., Yona A., Saber A.Y. 'Optimal PAM control for a buck boost DC–DC converter with a wide-speed-range of operation for a PMSM'. Journal of Power Electronics. 2010;10(5):477–84.",
+        "bbox": [
+            110,
+            671,
+            861,
+            725
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[15] Chiang S.J., Hsin-Jang Shieh., Ming-Chieh Chen. 'Modeling and control of PV charger system with SEPIC converter'. IEEE Transactions on Industrial Electronics. 2009;56(11):4344–53.",
+        "bbox": [
+            110,
+            726,
+            861,
+            779
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[16] Simonetti D.S.L., Sebastian J., dos Reis F.S., Uceda J. 'Design criteria for SEPIC and Cuk converters as power factor preregulators in discontinuous conduction mode'. Proceedings of the 1992 International Conference on Industrial Electronics, Control, Instrumentation, and Automation; San Diego, CA, USA, 13 Nov. 1992; 1992. pp. 283–8.",
+        "bbox": [
+            110,
+            779,
+            861,
+            868
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[17] Luo F.L., Ye H. 'Positive output super-lift converters'. IEEE transactions on power electronics. 2003;18(1):105–13.",
+        "bbox": [
+            110,
+            870,
+            861,
+            906
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "page_number",
+        "text": "26",
+        "bbox": [
+            99,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 45
+    },
+    {
+        "type": "ref_text",
+        "text": "[18] Bose B.K. ‘Power electronics, smart grid, and renewable energy systems’. Proceedings of the IEEE. 2017;105(11):2011–18.",
+        "bbox": [
+            147,
+            92,
+            895,
+            128
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[19] Niculescu E., Niculescu M.C., Purcaru D.M. 'Modelling the PWM zeta converter in discontinuous conduction mode'. MELECON 2008 – The 14th IEEE Mediterranean Electrotechnical Conference; 2008. pp. 651–7.",
+        "bbox": [
+            149,
+            129,
+            898,
+            182
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[20] Al-Saffar M.A., Ismail E.H., Sabzali A.J., Fardoun A.A. 'An improved topology of SEPIC converter with reduced output voltage ripple'. IEEE Transactions on Power Electronics. 2008;23(5):2377–86.",
+        "bbox": [
+            149,
+            182,
+            898,
+            236
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[21] Song M.-S., Son Y.-D., Lee K.-H. 'Non-isolated bidirectional soft-switching SEPIC/ZETA converter with reduced ripple currents'. Journal of Power Electronics. 2014;14(4):649–60.",
+        "bbox": [
+            149,
+            236,
+            900,
+            289
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[22] Bist V., Singh B. ‘PFC Cuk converter-fed BLDC motor drive’. IEEE Transactions on Power Electronics. 2015;30(2):871–87.",
+        "bbox": [
+            149,
+            291,
+            898,
+            327
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[23] Tse C.K., Lai Y.M., Iu H.H.C. 'HOPF bifurcation and chaos in a free-running current-controlled Cuk switching regulator'. IEEE Transactions on Circuits and Systems I: Fundamental Theory and Applications. 2000;47(4):448–57.",
+        "bbox": [
+            149,
+            328,
+            898,
+            381
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[24] 10.1109/TPEL.2016.2516255[Darwish A., Massoud A., Holliday D., Ahmed S., Williams B. 'Single-stage three-phase differential-mode buck-boost inverters with continuous input current for PV applications'. IEEE Transactions on Power Electronics; 2016. p. 1.",
+        "bbox": [
+            149,
+            381,
+            898,
+            453
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[25] Mostaan A., Baghramian A. ‘Enhanced self lift zeta converter for negative-to-positive voltage conversion’. 4th Annual International Power Electronics, Drive Systems and Technologies Conference; 2013. pp. 212–17.",
+        "bbox": [
+            149,
+            455,
+            898,
+            508
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[26] Kamnarn U., Chunkag V. ‘Analysis and design of a modular three-phase AC-to-DC converter using CUK rectifier module with nearly unity power factor and fast dynamic response’. IEEE Transactions on Power Electronics. 2009;24(8):2000–12.",
+        "bbox": [
+            149,
+            508,
+            898,
+            580
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[27] Lin B.-R., Chen J.-J., Shen S.-F. 'Zero voltage switching double-ended converter'. IET Power Electronics. 2010;3(2):187.",
+        "bbox": [
+            149,
+            580,
+            898,
+            616
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[28] Fardoun A.A., Ismail E.H., Sabzali A.J., Al-Saffar M.A. 'New efficient bridgeless cuk rectifiers for PFC applications'. IEEE Transactions on Power Electronics. 2012;27(7):3292–301.",
+        "bbox": [
+            149,
+            616,
+            900,
+            669
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[29] Durán E., Andújar J.M., Segura F., Barragán A.J. ‘A high-flexibility DC load for fuel cell and solar arrays power sources based on DC–DC converters’. Applied Energy. 2011;88(no. 5):1690–702.",
+        "bbox": [
+            149,
+            671,
+            898,
+            725
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[30] Valencia P., Ramos-Paja C. ‘Sliding-mode controller for maximum power point tracking in Grid-Connected photovoltaic systems’. Energies. 2015;8(11):12363–87.",
+        "bbox": [
+            149,
+            726,
+            898,
+            778
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[31] Jiménez-Castillo G., Muñoz-Rodríguez F.J., Rus-Casas C., Gómez-Vidal P. 'Improvements in performance analysis of photovoltaic systems: array power monitoring in pulse width modulation charge controllers'. Sensors. 2019;19(9):2150.",
+        "bbox": [
+            149,
+            779,
+            898,
+            850
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[32] Berkovich Y., Axelrod B., Madar R., Twina A. 'Improved Luo converter modifications with increasing voltage ratio'. IET Power Electronics. 2015;8(2):202–12.",
+        "bbox": [
+            149,
+            852,
+            898,
+            904
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "page_number",
+        "text": "27",
+        "bbox": [
+            868,
+            60,
+            895,
+            75
+        ],
+        "page_idx": 46
+    },
+    {
+        "type": "ref_text",
+        "text": "[33] Kumar K.R., Jeevananthan S. 'Sliding mode control for current distribution control in paralleled positive output elementary super lift Luo converters'. Journal of Power Electronics. 2011;11(5):639–54.",
+        "bbox": [
+            110,
+            92,
+            861,
+            146
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[34] Luo F.L., Ye H. 'Positive output cascade boost converters'. IEE Proceedings – Electric Power Applications. 2004;151(5):590.",
+        "bbox": [
+            110,
+            147,
+            861,
+            182
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[35] Singh B., Bist V., Chandra A., Al-Haddad K. 'Power factor correction in bridgeless-Luo converter-fed BLDC motor drive'. IEEE Transactions on Industry Applications. 2015;51(2):1179–88.",
+        "bbox": [
+            110,
+            182,
+            861,
+            236
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[36] Luo F.L., Ye H. 'Ultra-lift Luo-converter'. IEE Proceedings – Electric Power Applications. 2005;152(1):27.",
+        "bbox": [
+            110,
+            236,
+            861,
+            271
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[37] Luo F.L., Ye H. 'Ultra-lift Luo-converter'. 2004 International Conference on Power System Technology, 2004 PowerCon. 1; 2004. pp. 81–6.",
+        "bbox": [
+            110,
+            273,
+            861,
+            309
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[38] Seyedmahmoudian M., Rahmani R., Mekhilef S., et al. 'Simulation and hardware implementation of new maximum power point tracking technique for partially shaded PV system using hybrid DEPSO method'. IEEE Transactions on Sustainable Energy. 2015;6(3):850–62.",
+        "bbox": [
+            110,
+            309,
+            861,
+            381
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[39] Narula S., Singh B., Bhuvaneswari G. 'Power factor corrected welding power supply using modified zeta converter'. IEEE Journal of Emerging and Selected Topics in Power Electronics. 2016;4(2):617–25.",
+        "bbox": [
+            110,
+            381,
+            861,
+            435
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[40] Singh B., Bist V. ‘Reduced sensor configuration of brushless DC motor drive using a power factor correction-based modified-zeta converter’. IET Power Electron. 2014;7(9):2322–35.",
+        "bbox": [
+            110,
+            435,
+            861,
+            488
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[41] Singh S., Singh B., Bhuvaneswari G., Bist V. 'Power factor corrected zeta converter based improved power quality switched mode power supply'. IEEE Transactions on Industrial Electronics. 2015;62(9):5422–33.",
+        "bbox": [
+            110,
+            491,
+            861,
+            544
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[42] Murthy-Bellur D., Kazimierczuk M.K. 'Isolated two-transistor zeta converter with reduced transistor voltage stress'. IEEE Transactions on Circuits and Systems II: Express Briefs. 2011;58(1):41–5.",
+        "bbox": [
+            110,
+            544,
+            861,
+            598
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[43] A. M. S. S.A., Beltrame R.C., Schuch L., M. L. daS.M. 'PV module-integrated single-switch DC/DC converter for PV energy harvest with battery charge capability'. 2014 11th IEEE/IAS International Conference on Industry Applications; 2014. pp. 1–8.",
+        "bbox": [
+            110,
+            598,
+            861,
+            671
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[44] Gules R., dos Santos W.M., dos Reis F.A., Romaneli E.F.R., Badin A.A. 'A modified SEPIC converter with high static gain for renewable applications'. IEEE Transactions on Power Electronics. 2014;29(11):5860–71.",
+        "bbox": [
+            110,
+            671,
+            861,
+            725
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[45] D.D.-C.Lu., Agelidis V.G. 'Photovoltaic-battery-powered DC bus system for common portable electronic devices'. IEEE Transactions on Power Electronics. 2009;24(3):849–55.",
+        "bbox": [
+            110,
+            726,
+            861,
+            779
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[46] Achille E., Martire T., Glaize C., Joubert C. 'Optimized DC-AC boost converters for modular photovoltaic grid-connected generators'. 2004 IEEE International Symposium on Industrial Electronics. 2; 2004. pp. 1005–10.",
+        "bbox": [
+            110,
+            779,
+            861,
+            850
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[47] Hsieh Y.-C., Chen M.-R., Cheng H.-L. 'An interleaved flyback converter featured with zero-voltage transition'. IEEE Transactions on Power Electronics. 2011;26(1):79–84.",
+        "bbox": [
+            110,
+            852,
+            861,
+            904
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "page_number",
+        "text": "28",
+        "bbox": [
+            99,
+            60,
+            128,
+            73
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            538,
+            76
+        ],
+        "page_idx": 47
+    },
+    {
+        "type": "ref_text",
+        "text": "[48] Wu H., Chen R., Zhang J., Xing Y., Hu H., Ge H. 'A family of three-port half-bridge converters for a stand-alone renewable power system'. IEEE Transactions on Power Electronics. 2011;26(9):2697–706.",
+        "bbox": [
+            149,
+            92,
+            898,
+            146
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[49] Duong T.-D., Nguyen M.-K., Lim Y.-C., Choi J.-H. 'An active-clamped current-fed half-bridge DC-DC converter with three switches'. 2018 International Power Electronics Conference; 2018. pp. 982–6.",
+        "bbox": [
+            149,
+            147,
+            898,
+            200
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[50] Baek J.-I., Kim C.-E., Kim K.-W., Lee M.-S., Moon G.-W. Dual half-bridge LLC resonant converter with hybrid-secondary-rectifier (HSR) for Wide-Output-Voltage applications. 2018 International Power Electronics Conference (IPEC-Niigata 2018 – ECCE Asia); 2018. pp. 108–13.",
+        "bbox": [
+            149,
+            200,
+            898,
+            271
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[51] Hsieh H.-I., Chiu H.-L., Hsieh G.-C. 'Performance study of high-power half-bridge interleaved LLC converter'. 2018 International Power Electronics Conference; 2018. pp. 123–9.",
+        "bbox": [
+            149,
+            273,
+            898,
+            325
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[52] Andrijanovits A., Vinnikov D., Roasto I., Blinov A. 'Three-level half-bridge ZVS DC/DC converter for electrolyzer integration with renewable energy systems'. 2011 10th International Conference on Environment and Electrical Engineering; 2011. pp. 1–4.",
+        "bbox": [
+            149,
+            328,
+            898,
+            399
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[53] Hu W., Wu H., Xing Y., Sun K. 'A full-bridge three-port converter for renewable energy application'. 2014 IEEE Applied Power Electronics Conference and Exposition - APEC. 2014; 2014. pp. 57–62.",
+        "bbox": [
+            149,
+            399,
+            898,
+            453
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[54] Cha W.-J., Kwon J.-M., Kwon B.-H. 'Highly efficient asymmetrical PWM full-bridge converter for renewable energy sources'. IEEE Transactions on Industrial Electronics. 2016;63(5):2945–53.",
+        "bbox": [
+            149,
+            453,
+            898,
+            506
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[55] Stieneker M., De Doncker R.W. 'Dual-active bridge DC-DC converter systems for medium-voltage DC distribution grids'. 2015 IEEE 13th Brazilian Power Electronics Conference and 1st Southern Power Electronics Conference; 2015. pp. 1–6.",
+        "bbox": [
+            149,
+            508,
+            898,
+            580
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[56] Jeong D.-K., Kim H.-S., Baek J.-W., Kim J.-Y., Kim H.-J. 'Dual active bridge converter for energy storage system in DC microgrid'. 2016 IEEE Transportation Electrification Conference and Expo, Asia-Pacific; 2016. pp. 152–6.",
+        "bbox": [
+            149,
+            580,
+            898,
+            651
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[57] Sathishkumar P., Piao S., Khan M., et al. 'A blended SPS-ESPS control DAB-IBDC converter for a standalone solar power system'. Energies. 2017;10(9):1431.",
+        "bbox": [
+            149,
+            653,
+            898,
+            705
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[58] Ryu M., Jung D., Baek J., Kim H. ‘An optimized design of bi-directional dual active bridge converter for low voltage battery charger’. 2014 16th International Power Electronics and Motion Control Conference and Exposition; 2014. pp. 177–83.",
+        "bbox": [
+            149,
+            707,
+            898,
+            779
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[59] Sathishkumar P., Krishna T., Himanshu., Khan M., Zeb K., Kim H.-J. 'Digital soft start implementation for minimizing start up transients in high power DAB-IBDC converter'. Energies. 2018;11(4):956.",
+        "bbox": [
+            149,
+            779,
+            895,
+            834
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[60] Haihua Zhou., Khambadkone A.M. 'Hybrid modulation for dual-active-bridge bidirectional converter with extended power range for ultracapacitor application'. IEEE Transactions on Industry Applications. 2009;45(4):1434–42.",
+        "bbox": [
+            149,
+            834,
+            898,
+            904
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "header",
+        "text": "Power electronics converters for solar PV applications",
+        "bbox": [
+            346,
+            60,
+            852,
+            76
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "page_number",
+        "text": "29",
+        "bbox": [
+            868,
+            60,
+            895,
+            73
+        ],
+        "page_idx": 48
+    },
+    {
+        "type": "ref_text",
+        "text": "[61] Zhao B., Song Q., Liu W., Sun Y. 'Overview of dual-active-bridge isolated bidirectional DC–DC converter for high-frequency-link power-conversion system'. IEEE Transactions on Power Electronics. 2014;29(8):4091–106.",
+        "bbox": [
+            110,
+            92,
+            861,
+            146
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[62] Naayagi R.T., Forsyth A.J., Shuttleworth R. 'High-power bidirectional DC–DC converter for aerospace applications'. IEEE Transactions on Power Electronics. 2012;27(11):4366–79.",
+        "bbox": [
+            110,
+            147,
+            861,
+            200
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[63] Liu R., Lee C.Q. ‘Analysis and design of LLC-type series resonant convertor’. Electronics letters. 1988;24(24):1517.",
+        "bbox": [
+            110,
+            200,
+            861,
+            236
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[64] Koscelnik J., Frivaldsky M., Prazenica M., Mazgut R. 'A review of multi-elements resonant converters topologies'. 2014 ELEKTRO; 2014. pp. 312–17.",
+        "bbox": [
+            110,
+            236,
+            861,
+            289
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[65] Sharifi S., Jabbari M., Farzanehfard H. ‘A new family of single-switch ZVS resonant converters’. IEEE Transactions on Industrial Electronics. 2017;64(6):4539–48.",
+        "bbox": [
+            110,
+            291,
+            861,
+            343
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[66] Jabbari M., Kazemi H., Hematian N., Shahgholian G. ‘A novel resonant LLC soft-switching buck converter’. 2014 IEEE 23rd International Symposium on Industrial Electronics; 2014. pp. 370–4.",
+        "bbox": [
+            110,
+            346,
+            861,
+            399
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[67] Junjun Deng., Siqi Li., Sideng Hu., Mi C.C., Ruiqing Ma. 'Design methodology of LLC resonant converters for electric vehicle battery chargers'. IEEE Transactions on Vehicular Technology. 2014;63(4):1581–92.",
+        "bbox": [
+            110,
+            399,
+            861,
+            453
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[68] Khodabakhsh J., Moschopoulos G. 'A study of multilevel resonant DC-DC converters for conventional DC voltage bus applications'. 2018 IEEE Applied Power Electronics Conference and Exposition; 2018. pp. 2135–41.",
+        "bbox": [
+            110,
+            455,
+            861,
+            524
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[69] Wang Y., Han F., Yang L., Xu R., Liu R. 'A three-port bidirectional multielement resonant converter with decoupled power flow management for hybrid energy storage systems'. IEEE Access. 2018;6:61331–41.",
+        "bbox": [
+            110,
+            526,
+            861,
+            580
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[70] Petit P., Aillerie M., Sawicki J.-P., Charles J.-P. 'Push-pull converter for high efficiency photovoltaic conversion'. Energy Procedia. 2012;18:1583–92.",
+        "bbox": [
+            110,
+            580,
+            861,
+            616
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[71] Turksoy O., Yilmaz U., Teke A. 'Overview of battery charger topologies in plug-in electric and hybrid electric vehicles'. 16th International Conference on Clean Energy. 2018:9–11.",
+        "bbox": [
+            110,
+            616,
+            861,
+            669
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[72] Patrao I., Figueres E., González-Espín F., Garcerá G. ‘Transformerless topologies for grid-connected single-phase photovoltaic inverters’. Renewable and Sustainable Energy Reviews. 2011;15(7):3423–31.",
+        "bbox": [
+            110,
+            671,
+            861,
+            725
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[73] Khan M.A., Haque A., Bharath K.V., Mekhilef S. 'Single phase Transformerless photovoltaic Inverter for grid connected systems – an overview'. International Journal of Power Electronics. 2018;12(1):1–28.",
+        "bbox": [
+            110,
+            726,
+            861,
+            779
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[74] Islam M., Mekhilef S., Hasan M. ‘Single phase transformerless inverter topologies for grid-tied photovoltaic system: a review’. Renewable and Sustainable Energy Reviews. 2015;45(3):69–86.",
+        "bbox": [
+            110,
+            779,
+            861,
+            832
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "ref_text",
+        "text": "[75] Gotekar P.S., Muley S.P., Kothari D.P., Umre B.S. Comparison of full bridge bipolar, H5, H6 and HERIC inverter for single phase photovoltaic systems - a review. 2015 Annual IEEE India Conference (INDICON); New Delhi, India, 17-20 Dec. 2015; 2015. pp. 1–6.",
+        "bbox": [
+            110,
+            834,
+            861,
+            906
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "page_number",
+        "text": "30",
+        "bbox": [
+            99,
+            60,
+            128,
+            75
+        ],
+        "page_idx": 49
+    },
+    {
+        "type": "header",
+        "text": "Reliability of power electronics converters",
+        "bbox": [
+            144,
+            60,
+            536,
+            76
+        ],
+        "page_idx": 49
+    }
+]

@@ -113,11 +113,10 @@ _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir  # noqa: E402
 from _llm_api import (  # noqa: E402
-    call_anthropic_api as _call_anthropic_api_raw,
-    call_openai_api as _call_openai_api_raw,
     _retry_jitter,
     _is_retryable_exception,
     set_progress_hook,
+    set_conversation_router,
 )
 # Wire up progress hook for LLM API calls
 set_progress_hook(_llm_call_progress)
@@ -508,39 +507,34 @@ def stage_3_5_inject_images(config: Config, raw_file: Path, source_path: Path,
 
 # ---------- LLM API call ----------
 
-def _call_anthropic_api(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
-    """Call Anthropic-protocol API via _llm_api (retry 5x, jitter, IncompleteRead-safe)."""
-    mt = max_tokens or config.max_tokens
-    return _call_anthropic_api_raw(
-        api_key=config.llm_api_key, base_url=config.llm_base_url,
-        model=config.llm_model, prompt=prompt, max_tokens=mt)
-
-
-def _call_openai_api(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
-    """Call OpenAI-protocol API via _llm_api (retry 5x, jitter, IncompleteRead-safe)."""
-    mt = max_tokens or config.max_tokens
-    return _call_openai_api_raw(
-        api_key=config.llm_api_key, base_url=config.llm_base_url,
-        model=config.llm_model, prompt=prompt, max_tokens=mt)
-
-
 def call_anthropic_protocol(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
-    """Call the configured LLM API, or delegate to agent in conversation mode.
+    """Text-generation LLM call — conversation mode only (round ii, 2026-06-20).
 
-    Routes to the correct protocol based on config.llm_protocol:
-      - "openai"    → OpenAI Chat Completions (DeepSeek, OpenAI, etc.)
-      - "anthropic" → Anthropic Messages API (MiniMax, Claude, etc.)
+    HTTP-direct text generation has been removed. In conversation mode the
+    prompt is written to a file and ``ConversationPending`` is raised so the
+    calling agent can answer with the current conversation's model; on
+    re-invoke the cached result is read and returned. Without conversation
+    mode the call raises (use ``--conversation``).
+
+    This function is registered as the conversation router on ``_llm_api`` so
+    that the stage modules (which call ``_llm_api.call_anthropic_protocol``)
+    route here automatically.
 
     Returns (text_content, stop_reason).
     """
-    if config.conversation_mode:
-        return _conversation_llm_call(prompt, config, max_tokens)
+    if not config.conversation_mode:
+        raise RuntimeError(
+            "Text generation requires --conversation mode. HTTP-direct LLM "
+            "calls have been removed (round ii); run ingest.py with "
+            "--conversation so the calling agent handles each LLM step with "
+            "the current conversation's model."
+        )
+    return _conversation_llm_call(prompt, config, max_tokens)
 
-    proto = getattr(config, 'llm_protocol', 'anthropic')
-    if proto == "openai":
-        return _call_openai_api(prompt, config, max_tokens)
-    else:
-        return _call_anthropic_api(prompt, config, max_tokens)
+
+# Register the conversation router so stage modules (which import
+# `call_anthropic_protocol` from `_llm_api`) route through conversation mode.
+set_conversation_router(call_anthropic_protocol)
 
 
 # ---------- Conversation / Delegate Mode ----------

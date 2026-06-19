@@ -1,17 +1,30 @@
-"""LLM API call helpers — extracted from ingest.py (2026-06-18).
+"""LLM API helpers — retry classification + conversation-mode router.
 
-Provides retry logic and API call functions for Anthropic-protocol
-and OpenAI-protocol endpoints.
+History: this module used to host the HTTP-direct text-generation callers
+(`call_anthropic_api` / `call_openai_api`) and a protocol router. As of
+2026-06-20 (round ii) text generation is **conversation mode only** — the
+calling agent spawns sub-agents using the current conversation's model, and
+no external LLM API key is needed for text gen. The HTTP-direct text-gen
+path has been removed.
 
-All transient errors (5xx, 429, network, timeout, truncated responses) are
-retried with exponential backoff + jitter.  Non-retryable errors (4xx except
-429, permanent failures) raise immediately.
+What remains here:
+  * Retry classification helpers (`_retry_jitter`, `_is_retryable_exception`,
+    `_is_retryable_http_error`) — still imported by the stage modules and by
+    `_llm_call.py` (which itself is being retired for text gen).
+  * A conversation router hook: `ingest.py` registers its
+    `call_anthropic_protocol` (which performs the prompt-file handoff) via
+    `set_conversation_router`. The stage modules call
+    `_llm_api.call_anthropic_protocol(prompt, config, max_tokens)`; when
+    `config.conversation_mode` is set the call is delegated to the registered
+    router, otherwise it raises (http-direct is gone).
+
+Image captioning (Stage 0.6, MiniMax VLM) and minerU OCR are NOT text
+generation and live elsewhere (`_stage_0_extract.py`); they are unaffected.
 """
 from __future__ import annotations
 
 import json
 import time
-import urllib.request
 import urllib.error
 
 
@@ -21,7 +34,7 @@ _progress_hook = None  # callable(label, attempt, retries) | None
 
 
 def set_progress_hook(hook) -> None:
-    """Set a callback for LLM call progress (used by ingest.py for [file] tags)."""
+    """Set a callback for LLM call progress (kept for backward compat)."""
     global _progress_hook
     _progress_hook = hook
 
@@ -77,162 +90,49 @@ def _is_retryable_exception(exc: Exception) -> bool:
     return False
 
 
-# ── Public API ──
+# ── Conversation-mode router ──
+#
+# ingest.py registers its `call_anthropic_protocol` (the function that writes
+# a prompt file and raises ConversationPending) here at startup. The stage
+# modules (`_stage_1_analyze`, `_stage_2_generate`, `_stage_3_write`,
+# `_enrich_wikilinks`) import `call_anthropic_protocol` from this module, so
+# registering the router once makes every stage text-gen call route through
+# conversation mode automatically — no per-module monkeypatching needed.
+
+_conversation_router = None  # (prompt, config, max_tokens) -> (text, stop_reason)
 
 
-def call_anthropic_api(api_key: str, base_url: str, model: str,
-                       prompt: str, max_tokens: int = 4096,
-                       timeout: int = 600) -> tuple[str, str]:
-    """Call an Anthropic-protocol API.
+def set_conversation_router(fn) -> None:
+    """Register ingest.py's conversation-mode LLM call router."""
+    global _conversation_router
+    _conversation_router = fn
 
-    Uses Anthropic Messages API format:
-      POST {base_url}/anthropic/v1/messages
-      Auth: x-api-key
-
-    Retry: up to 5 attempts with exponential backoff + jitter on all
-    transient errors (5xx, 429, network, timeout, truncated responses).
-
-    Returns (text_content, stop_reason).
-    """
-    url = f"{base_url.rstrip('/')}/anthropic/v1/messages"
-    body = json.dumps({
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
-
-    max_retries = 5
-    last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            t0 = time.time()
-            _progress("LLM (Anthropic)", attempt + 1, max_retries)
-            req = urllib.request.Request(
-                url, data=body, method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read())
-            content = data.get("content", [])
-            if not content:
-                raise RuntimeError("LLM response has no content (transient)")
-            text_parts = [block.get("text", "") for block in content if block.get("type") == "text"]
-            stop_reason = data.get("stop_reason", "unknown")
-            result = "".join(text_parts)
-            elapsed = time.time() - t0
-            print(f"OK ({elapsed:.0f}s, {len(result):,} chars)", flush=True)
-            return result, stop_reason
-        except Exception as e:
-            last_error = e
-            if attempt < max_retries and _is_retryable_exception(e):
-                wait = _retry_jitter(2.0, attempt)
-                err_label = type(e).__name__
-                if isinstance(e, urllib.error.HTTPError):
-                    err_label = f"HTTP {e.code}"
-                print(f"[llm] {err_label} on attempt {attempt + 1}/{max_retries + 1} "
-                      f"— retrying in {wait:.1f}s...", flush=True)
-                time.sleep(wait)
-                continue
-            if isinstance(e, urllib.error.HTTPError):
-                err_body = e.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"LLM API HTTP {e.code}: {err_body[-500:]}")
-            raise
-    raise RuntimeError(f"LLM API call failed after {max_retries + 1} attempts: {last_error}")
-
-
-def call_openai_api(api_key: str, base_url: str, model: str,
-                    prompt: str, max_tokens: int = 4096,
-                    timeout: int = 600) -> tuple[str, str]:
-    """Call an OpenAI-compatible API (DeepSeek, OpenAI, etc.).
-
-    Uses OpenAI Chat Completions format:
-      POST {base_url}/v1/chat/completions
-      Auth: Authorization: Bearer <key>
-
-    Retry: up to 5 attempts with exponential backoff + jitter on all
-    transient errors (5xx, 429, network, timeout, truncated responses).
-
-    Returns (text_content, stop_reason).
-    """
-    url = f"{base_url.rstrip('/')}/v1/chat/completions"
-    body = json.dumps({
-        "model": model,
-        "max_tokens": max_tokens,
-        "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
-
-    max_retries = 5
-    last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
-        try:
-            t0 = time.time()
-            _progress("LLM (OpenAI)", attempt + 1, max_retries)
-            req = urllib.request.Request(
-                url, data=body, method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read())
-            choices = data.get("choices", [])
-            if not choices:
-                raise RuntimeError("LLM response has no choices (transient)")
-            text = choices[0].get("message", {}).get("content", "")
-            stop_reason = choices[0].get("finish_reason", "unknown")
-            elapsed = time.time() - t0
-            print(f"OK ({elapsed:.0f}s, {len(text):,} chars)", flush=True)
-            usage = data.get("usage", {})
-            if usage:
-                print(f"[llm] tokens: {usage.get('prompt_tokens', '?')} in / "
-                      f"{usage.get('completion_tokens', '?')} out", flush=True)
-            return text.strip(), stop_reason
-        except Exception as e:
-            last_error = e
-            if attempt < max_retries and _is_retryable_exception(e):
-                wait = _retry_jitter(2.0, attempt)
-                err_label = type(e).__name__
-                if isinstance(e, urllib.error.HTTPError):
-                    err_label = f"HTTP {e.code}"
-                print(f"[llm] {err_label} on attempt {attempt + 1}/{max_retries + 1} "
-                      f"— retrying in {wait:.1f}s...", flush=True)
-                time.sleep(wait)
-                continue
-            if isinstance(e, urllib.error.HTTPError):
-                err_body = e.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"LLM API HTTP {e.code}: {err_body[-500:]}")
-            raise
-    raise RuntimeError(f"LLM API call failed after {max_retries + 1} attempts: {last_error}")
-
-
-# ── Config-aware router (used by ingest.py stage functions) ──
 
 def call_anthropic_protocol(prompt: str, config, max_tokens: int | None = None
                             ) -> tuple[str, str]:
-    """Route LLM call to the correct protocol based on config.llm_protocol."""
-    mt = max_tokens or config.max_tokens
+    """Route a text-generation LLM call.
+
+    Conversation mode (the only text-gen path as of round ii): delegate to
+    the router registered by ingest.py, which writes a prompt file and raises
+    ``ConversationPending`` so the calling agent can answer with the current
+    conversation's model.
+
+    HTTP-direct text generation has been removed. If invoked without
+    conversation mode, raise a clear error pointing at ``--conversation``.
+    """
     if getattr(config, 'conversation_mode', False):
-        # Conversation mode — handled by ingest.py, not here
-        raise RuntimeError("Conversation mode requires ingest.py context")
-    if getattr(config, 'llm_protocol', 'anthropic') == "openai":
-        return call_openai_api(
-            api_key=config.llm_api_key,
-            base_url=config.llm_base_url,
-            model=config.llm_model,
-            prompt=prompt,
-            max_tokens=mt,
-        )
-    return call_anthropic_api(
-        api_key=config.llm_api_key,
-        base_url=config.llm_base_url,
-        model=config.llm_model,
-        prompt=prompt,
-        max_tokens=mt,
+        if _conversation_router is None:
+            raise RuntimeError(
+                "Conversation mode is active but no router is registered "
+                "(ingest.py must call set_conversation_router at startup)."
+            )
+        return _conversation_router(prompt, config, max_tokens)
+    raise RuntimeError(
+        "Text generation requires --conversation mode. HTTP-direct LLM calls "
+        "have been removed (round ii, 2026-06-20); run ingest.py with "
+        "--conversation so the calling agent handles each LLM step with the "
+        "current conversation's model. (Image captioning still calls MiniMax "
+        "VLM separately; OCR runs local minerU.)"
     )
 
 
@@ -240,8 +140,7 @@ __all__ = [
     "_retry_jitter",
     "_is_retryable_http_error",
     "_is_retryable_exception",
-    "call_anthropic_api",
-    "call_openai_api",
     "call_anthropic_protocol",
+    "set_conversation_router",
     "set_progress_hook",
 ]
