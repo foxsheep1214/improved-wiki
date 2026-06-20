@@ -11,12 +11,12 @@ This file tracks known issues with the skill's scripts. Each entry is small enou
 | 1 | **Removed ~546 lines of dead synthesis code** | `stage_2_synthesis`, `build_synthesis_prompt`, `stage_2_per_chunk_generation` + their exclusive helpers (`_classify_concepts_by_importance`, `_compute_uncovered_concepts`, `_concept_matches_page`, `_normalize_for_matching`, `COVERAGE_TARGETS`) in `_stage_2_generate.py`. These were the retired legacy multi-round synthesis path (SKILL.md §Key features) — 0 call sites from `ingest.py`. `__all__` updated. `_stage_2_generate.py`: 1882 → 1336 lines. |
 | 2 | **Hardened `is_safe_ingest_path`** (`_core.py`) | Now rejects empty filenames (`concepts/.md`) and Windows reserved names with extensions (`concepts/con.md`). Strictly additive — no previously-valid path is newly rejected. |
 | 3 | **Removed duplicate `__all__`** in `_llm_api.py` | The premature first definition (before the function defs) shadowed nothing useful; the canonical superset at file end remains. |
-| 4 | **Bare `except:` → `except Exception:`** in `_stage_0_extract.py` minerU restart loop | No longer swallows `KeyboardInterrupt`/`SystemExit`. |
+| 4 | **Bare `except:` → `except Exception:`** in `_stage_1_extract.py` minerU restart loop | No longer swallows `KeyboardInterrupt`/`SystemExit`. |
 | 5 | **Added regression tests** | `scripts/tests/test_core_pure.py` — 23 stdlib `unittest` cases for `is_safe_ingest_path`, `parse_yaml_block` (CJK quotes), `parse_file_blocks` (slash/hyphen/fence), `detect_template_type` (layouts A/B/C), `str_distance`. Run: `python3 scripts/tests/test_core_pure.py`. All pass. |
 
-**Still open** (noted, not yet done): shell scripts (`run-queue.sh`, `wiki-lint.sh`, `wiki-monitor.sh`) lack `set -euo pipefail`; `--dry-run` cost estimate; several files still exceed the 800-line guideline (`ingest.py` 1827, `_stage_0_extract.py` 1787).
+**Still open** (noted, not yet done): shell scripts (`run-queue.sh`, `wiki-lint.sh`, `wiki-monitor.sh`) lack `set -euo pipefail`; `--dry-run` cost estimate; several files still exceed the 800-line guideline (`ingest.py` 1827, `_stage_1_extract.py` 1787).
 
-**Reconciled (2026-06-19)**: stage-count wording unified across SKILL.md / ingest-stages-mandatory.md / initial-setup.md to **"~13 numbered stages + 2 pre-gates (0.1 dedup / 0.3 pilot OCR)"**. Earlier docs variously said "15-stage" / "~15 步" / 12-marker diagram — these were granularity mismatches (the diagram omitted the pre-gates and the bare write step), not a real stage merge. The genuine merges (Stage 1.5+2.1 → barrier-free; legacy multi-round synthesis retired) are documented in SKILL.md §Key features.
+**Reconciled (2026-06-19)**: stage-count wording unified across SKILL.md / ingest-stages-mandatory.md / initial-setup.md to **"~13 numbered stages + 2 pre-gates (0.1 dedup / 0.3 pilot OCR)"**. Earlier docs variously said "15-stage" / "~15 步" / 12-marker diagram — these were granularity mismatches (the diagram omitted the pre-gates and the bare write step), not a real stage merge. The genuine merges (Stage 2.2+2.1 → barrier-free; legacy multi-round synthesis retired) are documented in SKILL.md §Key features.
 
 ---
 
@@ -194,7 +194,7 @@ wiki/.extract-tmp/电源篇-2024-王玉皞-extracted.txt  (636 KB, 11172 lines, 
 
 ## `extract_text()` (PyMuPDF) does NOT auto-fallback to OCR for scanned PDFs
 
-**Status (2026-06-19)**: ✅ **FIXED**. `extract_text()` in `_stage_0_extract.py` now checks `len(text) < pages × 50` after PyMuPDF extraction for "text" type PDFs. If below threshold, auto-falls back to minerU OCR. The `_pymupdf_page_count()` helper gets page count efficiently. Previously, PyMuPDF would return near-empty text for misclassified scanned PDFs and the pipeline would produce empty wiki pages.
+**Status (2026-06-19)**: ✅ **FIXED**. `extract_text()` in `_stage_1_extract.py` now checks `len(text) < pages × 50` after PyMuPDF extraction for "text" type PDFs. If below threshold, auto-falls back to minerU OCR. The `_pymupdf_page_count()` helper gets page count efficiently. Previously, PyMuPDF would return near-empty text for misclassified scanned PDFs and the pipeline would produce empty wiki pages.
 
 **Verification**: A 300-page scanned PDF with 0 text returns ~5 chars from PyMuPDF; `_pymupdf_page_count()` = 300; threshold = 300×50 = 15000; 5 < 15000 → triggers minerU fallback.
 
@@ -202,7 +202,7 @@ wiki/.extract-tmp/电源篇-2024-王玉皞-extracted.txt  (636 KB, 11172 lines, 
 
 **Status**: **FIXED (2026-06-16)** — `_auto_correct_wiki_path()` in `ingest.py` now includes `stem = stem.replace('/', '_')` to handle macOS `/` in filenames.
 
-**Symptom**: Stage 2 LLM 生成的概念页 slug 中包含 `/`（例如 `[[热仿真(Cauer/Foster模型)]]`），`_auto_correct_wiki_path()` 无法纠正，`os.rename()` / `open(path, "w")` 报 `FileNotFoundError`。macOS（及 Linux）文件系统不允许文件名中出现 `/`（它被解释为目录分隔符）。
+**Symptom**: Stage 2.3 LLM 生成的概念页 slug 中包含 `/`（例如 `[[热仿真(Cauer/Foster模型)]]`），`_auto_correct_wiki_path()` 无法纠正，`os.rename()` / `open(path, "w")` 报 `FileNotFoundError`。macOS（及 Linux）文件系统不允许文件名中出现 `/`（它被解释为目录分隔符）。
 
 **触发条件** (HardwareWiki 实测)：
 - 源页 wikilink 引用格式 `[[名称(子分类/子名称)]]`，其中 `/` 在括号内也被 LLM 输出为 slug
@@ -210,7 +210,7 @@ wiki/.extract-tmp/电源篇-2024-王玉皞-extracted.txt  (636 KB, 11172 lines, 
 
 **影响范围**：1 个 wikilink 无法创建对应文件（HardwareWiki Lutz 2013）。其他书用 `_` 替换 `/` 后均可创建，但严格匹配的 wikilink 解析取决于 LLM Wiki app 的 slug 匹配策略（不区分大小写、`-`/`_`/空格 互换）。
 
-**Workaround**：Stage 2 的 prompt 中已知会提示 `# Constraints - Use _ instead of / in slugs`，但 LLM 仍可能忽略。最可靠的修复是 `_auto_correct_wiki_path()` 新增一条替换规则：
+**Workaround**：Stage 2.3 的 prompt 中已知会提示 `# Constraints - Use _ instead of / in slugs`，但 LLM 仍可能忽略。最可靠的修复是 `_auto_correct_wiki_path()` 新增一条替换规则：
 
 ```python
 # 在 _auto_correct_wiki_path() 的 slug 变量赋值后添加
@@ -230,7 +230,7 @@ slug = slug.replace("/", "_")
 ## `.digested` files in `raw/` subdirectories (LEGACY ARTIFACTS)
 
 **Status**: ✅ **Documented (2026-06-20)**. These are markers from an older
-pipeline version. The current pipeline (Stage 0.1) uses `wiki/sources/` as
+pipeline version. The current pipeline (Stage 0.2) uses `wiki/sources/` as
 the sole dedup signal — zero code references to `.digested`.
 
 HardwareWiki had 109 `.digested` files across `raw/Datasheet/` and `raw/Book/`

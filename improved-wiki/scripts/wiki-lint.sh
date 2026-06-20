@@ -1,6 +1,13 @@
 #!/bin/bash
 # wiki-lint.sh — Mechanical scan of wiki/ for structural problems.
 #
+# Lint phases (mirrors Ingest's Phase convention):
+#   Phase 0 · 前置检查     — lock + cleanup resolved lint pages
+#   Phase 1 · 结构扫描     — collect pages, run structural detection (6 categories)
+#   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic)
+#   Phase 3 · 写入         — write .lint-cache.json + wiki/lint/*.md + summary
+#   Phase 4 · 自动修复     — optional --fix / --fix-links
+#
 # Detects 6 categories of issues:
 #   1. broken-link        — [[wikilink]] points to a non-existent page
 #   2. orphan              — page no other page links to

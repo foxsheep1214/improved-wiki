@@ -4,9 +4,9 @@ Accumulated 2026-06-11 from HardwareWiki + RadarWiki live debugging sessions. Ea
 
 ---
 
-## 0. Stage 0.5 图片提取实现 (2026-06-11)
+## 0. Stage 1.2 图片提取实现 (2026-06-11)
 
-**背景**: improved-wiki 之前缺少 Stage 0.5 的实现。
+**背景**: improved-wiki 之前缺少 Stage 1.2 的实现。
 
 **解决**: 新增 `scripts/extract_images.py`
 
@@ -99,7 +99,7 @@ ingest.py --continue-from <checkpoint> --result result.json
 
 ---
 
-## 4. Stage 3.5 Image Injection 支持 (2026-06-11)
+## 4. Stage 3.2 Image Injection 支持 (2026-06-11)
 
 **新增**: `scripts/inject_images_to_source.py`
 
@@ -114,9 +114,9 @@ ingest.py --continue-from <checkpoint> --result result.json
 
 ---
 
-## 0. Stage 0.5 图片提取实现 (2026-06-11)
+## 0. Stage 1.2 图片提取实现 (2026-06-11)
 
-**背景**: improved-wiki 之前缺少 Stage 0.5 的实现，只有 `validate-ingest.sh` 检查，但没有提取脚本。
+**背景**: improved-wiki 之前缺少 Stage 1.2 的实现，只有 `validate-ingest.sh` 检查，但没有提取脚本。
 
 **解决**: 新增 `scripts/extract_images.py`
 
@@ -211,8 +211,8 @@ ls $PROJ/wiki/sources/*.md 2>/dev/null | wc -l   # sources count
 
 | Failure class | Interpretation |
 |---|---|
-| Stage 0 / 0.5 / 0.6 / 1 / 1.5 / 2 missing artifacts | **Slug doesn't exist** — these stages are per-slug by definition |
-| Stage 2.5 / 3.5 / 3.7 / 4 / 5 fails on real slug-named state | **Project-level problem** — affects every slug in the project |
+| Stage 1.1 / 0.5 / 0.6 / 1 / 1.5 / 2 missing artifacts | **Slug doesn't exist** — these stages are per-slug by definition |
+| Stage 2.3.5 / 3.5 / 3.7 / 4 / 5 fails on real slug-named state | **Project-level problem** — affects every slug in the project |
 
 This is a useful first probe because it surfaces project-wide gaps (e.g. `review.json` schema invalid, `review-suggestions.json` missing, sources 1:1 coverage gap) without needing to know which books the project has.
 
@@ -289,7 +289,7 @@ Reference numbers captured during this session, useful for "did something regres
 - 0 entries in `ingest-progress/` (no in-flight work at snapshot time)
 - `review-suggestions.json` present, generated at 2026-06-11 16:57:38 by MiniMax-M3, stop_reason=end_turn
 - `wiki/methodology/ingest-decisions.md` (4.3KB) present — per-project VLM/batch decisions exist
-- Validate script smoke test (slug="电源篇"): 4 ✅ / 10 ❌. Real project gaps surfaced: Stage 2.5 review-suggestions missing per-book, Stage 3.5 source pages lack `## Embedded Images` section, Stage 3.7 raw=105 > sources=46, Stage 4 review.json schema invalid.
+- Validate script smoke test (slug="电源篇"): 4 ✅ / 10 ❌. Real project gaps surfaced: Stage 3.3 review-suggestions missing per-book, Stage 3.2 source pages lack `## Embedded Images` section, Stage 3.1.7 raw=105 > sources=46, Stage 3.5 review.json schema invalid.
 
 ---
 
@@ -312,9 +312,9 @@ When reporting "ingest done" or "validate passed", report **both** dimensions:
 1. **Engineering progress**: did the stages execute? did validate-ingest.sh print ✅?
 2. **Goal achievement**: does the wiki now actually contain useful, retrievable content for the user?
 
-❌ Anti-pattern: "Stage 5 cache written, 15/15 ✅" — that says nothing about whether the user can find anything. HardwareWiki 2026-06-11 state was exactly this: 15-stage validation would print mostly green while the source pages had no `## Embedded Images` injection (Stage 3.5) and the actual digest text didn't help users find anything.
+❌ Anti-pattern: "Stage 5 cache written, 15/15 ✅" — that says nothing about whether the user can find anything. HardwareWiki 2026-06-11 state was exactly this: 15-stage validation would print mostly green while the source pages had no `## Embedded Images` injection (Stage 3.2) and the actual digest text didn't help users find anything.
 
-✅ Pattern: "3 books fully digested (738 captioned images, 38 concepts, 52 entities in 电源篇), all with caption coverage 100%; 2 books in raw/ (开发流程篇 / 无源器件篇) lack source pages — Stage 3 fallback didn't trigger for those." — engineering + goal in one breath.
+✅ Pattern: "3 books fully digested (738 captioned images, 38 concepts, 52 entities in 电源篇), all with caption coverage 100%; 2 books in raw/ (开发流程篇 / 无源器件篇) lack source pages — Stage 3.1 fallback didn't trigger for those." — engineering + goal in one breath.
 
 When validating an ingest, always cross-check **at least one** user-visible artifact (a concept page contains expected terms, a source page links to embedded images, a search returns the book). validate-ingest.sh's per-stage checks are necessary but not sufficient.
 
@@ -341,7 +341,7 @@ This pattern extends the "audit actual state before launching" rule from `refere
 
 ---
 
-## 12. Scanned-PDF branch: when `PyMuPDF.get_text()` returns 0, the default Stage 0/0.5 don't apply
+## 12. Scanned-PDF branch: when `PyMuPDF.get_text()` returns 0, the default Stage 1.1/0.5 don't apply
 
 **Symptom (2026-06-11, HardwareWiki 无源器件篇 123 MB)**: Standard pre-flight returns:
 ```
@@ -349,9 +349,9 @@ This pattern extends the "audit actual state before launching" rule from `refere
 每页 get_text() 长度: 全 0
 每页 get_images(): 恰好 1 张嵌入图 (== 整页扫描图)
 ```
-The default Stage 0 path (`PyMuPDF.get_text()` → text-layer extraction) produces nothing useful. The default Stage 0.5 path (`PyMuPDF.get_images()` → embedded image extraction) returns exactly 1 image per page — that's the entire page scanned as an image, not a captioned figure.
+The default Stage 1.1 path (`PyMuPDF.get_text()` → text-layer extraction) produces nothing useful. The default Stage 1.2 path (`PyMuPDF.get_images()` → embedded image extraction) returns exactly 1 image per page — that's the entire page scanned as an image, not a captioned figure.
 
-**Diagnostic recipe** (run BEFORE deciding Stage 0 backend):
+**Diagnostic recipe** (run BEFORE deciding Stage 1.1 backend):
 ```python
 import fitz
 doc = fitz.open(pdf_path)
@@ -365,9 +365,9 @@ print(f"avg images per page: {sum(img_per_page)/len(img_per_page):.1f}")
 **The scanned-PDF branch** (apply if diagnostic above triggers):
 | Default stage | Scanned-PDF substitute |
 |---|---|
-| Stage 0: `PyMuPDF.get_text()` → text file | PyMuPDF render page as 150 DPI PNG → OCR via chosen backend |
-| Stage 0.5: `PyMuPDF.get_images()` → per-figure extract | Whole-page PNG IS the figure unit. Captioning covers page-level content (mixes formula/figure/text/table). |
-| Stage 0.6: caption each extracted figure | Caption each rendered page (full-page "figure") |
+| Stage 1.1: `PyMuPDF.get_text()` → text file | PyMuPDF render page as 150 DPI PNG → OCR via chosen backend |
+| Stage 1.2: `PyMuPDF.get_images()` → per-figure extract | Whole-page PNG IS the figure unit. Captioning covers page-level content (mixes formula/figure/text/table). |
+| Stage 1.3: caption each extracted figure | Caption each rendered page (full-page "figure") |
 
 **Lesson**: `improved-wiki/scripts/ingest.py` and `caption_sample_test.py` assume the default text-layer + per-figure branch. They will silently produce empty `wiki/sources/` on scanned PDFs. The scan-detect step above must run first; if it triggers, switch to the scanned-PDF pipeline (manual orchestration, no ingest.py shortcut).
 
@@ -459,7 +459,7 @@ r = requests.post(
 
 ## 15. User-mandated backend override — record the deviation, don't argue the default
 
-**Established**: 2026-06-11, HardwareWiki 无源器件篇 OCR. Skill default for Stage 0 OCR is "MinerU VLM (local vlm-auto-engine)" per `references/scanned-pdf-to-llm-wiki-recovery.md`. User explicitly said: "**不同意，stage0 ocr也走minimax**". The agent offered the default; the user overrode.
+**Established**: 2026-06-11, HardwareWiki 无源器件篇 OCR. Skill default for Stage 1.1 OCR is "MinerU VLM (local vlm-auto-engine)" per `references/scanned-pdf-to-llm-wiki-recovery.md`. User explicitly said: "**不同意，stage0 ocr也走minimax**". The agent offered the default; the user overrode.
 
 **The principle** (generalizes beyond OCR):
 - **Skill defaults are recommendations, not contracts.** They exist to spare the user from having to re-explain a 15-stage pipeline every session. They do not exist to override user choice.
@@ -470,11 +470,11 @@ r = requests.post(
 - **Don't conflate "skill default" with "what the skill expects."** The skill's `ingest-stages-mandatory.md` §0 says "走 MinerU VLM OCR" but this is a default recommendation that the user can override per-project. The contract is the 15-Stage list, not the per-stage backend choice.
 - **When the user's override contradicts a memory entry**, check whether the memory is still active (see §11). On 2026-06-11, USER.md had `"caption 优先本地 MinerU VLM（零 API），难图 MiniMax"` and `"多模态长任务先问'有无批量 API'（Anthropic messages 单请求多图, Message Batches 50% 折扣）"` — both contradicted the user's live directive. The user explicitly framed this as `"这3 条 memory 影响工作了"`, meaning: don't trust memory that contradicts current context.
 
-**Anti-pattern to avoid**: agent loads the skill, sees Stage 0 default = MinerU, starts planning around MinerU. User says "use MiniMax." Agent responds with "but MinerU is faster locally, are you sure?" — that's arguing with the user about their own infrastructure. Wrong. Honor override, note deviation, move on.
+**Anti-pattern to avoid**: agent loads the skill, sees Stage 1.1 default = MinerU, starts planning around MinerU. User says "use MiniMax." Agent responds with "but MinerU is faster locally, are you sure?" — that's arguing with the user about their own infrastructure. Wrong. Honor override, note deviation, move on.
 
 **Decision recording template** for `wiki/methodology/<source>-decisions.md`:
 ```markdown
-## Stage 0 (OCR) backend: mmx CLI (user override of skill default)
+## Stage 1.1 (OCR) backend: mmx CLI (user override of skill default)
 **User directive**: "不同意，stage0 ocr也走minimax" (2026-06-11)
 **Skill default was**: MinerU vlm-auto-engine (local)
 **Reason for override**: (user's reason if given; otherwise "user preference, no further justification needed")
@@ -526,7 +526,7 @@ mmx vision describe \
 
 If you can't do any of those three, **you don't yet have a threshold; you have a guess.** Mark it explicitly: "this is a guess pending validation" — and run the validation.
 
-**Lesson for skill authoring**: this rule applies equally to skill defaults. The Stage 0.6 sample-test gate of "5-20 images" in `ingest-stages-mandatory.md` is a guess that worked; the script doesn't justify the range. If you want a tighter guideline, sample empirically — don't paper over the guess with confident prose.
+**Lesson for skill authoring**: this rule applies equally to skill defaults. The Stage 1.3 sample-test gate of "5-20 images" in `ingest-stages-mandatory.md` is a guess that worked; the script doesn't justify the range. If you want a tighter guideline, sample empirically — don't paper over the guess with confident prose.
 
 ---
 

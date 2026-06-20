@@ -1,6 +1,6 @@
 # Delegate Mode — Agent Orchestration
 
-When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **conversation mode** (`--conversation`) to let the agent handle every LLM step with the current conversation's model. This is the only LLM execution mode for text generation — there is no http-direct path. The one external API dependency is image captioning (Stage 0.6, MiniMax VLM).
+When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **conversation mode** (`--conversation`) to let the agent handle every LLM step with the current conversation's model. This is the only LLM execution mode for text generation — there is no http-direct path. The one external API dependency is image captioning (Stage 1.3, MiniMax VLM).
 
 ---
 

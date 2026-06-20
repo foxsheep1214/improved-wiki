@@ -104,9 +104,9 @@ wiki/queries/<slug>.md
 ...
 ```
 
-**规则**：`slug` 由 LLM 在 Stage 2 生成，**必须用 kebab-case**（`ingest.ts` prompt 指令）。CJK 标题保留可读字符，不强制转拼音。
+**规则**：`slug` 由 LLM 在 Stage 2.3 生成，**必须用 kebab-case**（`ingest.ts` prompt 指令）。CJK 标题保留可读字符，不强制转拼音。
 
-**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
+**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.3 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
 
 **冲突处理**：同名 slug 加数字后缀，如 `impedance-matching-2.md`。
 
@@ -118,7 +118,7 @@ wiki/overview.md
 wiki/log.md
 ```
 
-**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件**由 Stage 2.6 程序化 append，LLM 永远不应生成它们**。
+**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件**由 Stage 3.4 程序化 append，LLM 永远不应生成它们**。
 
 ---
 
@@ -274,8 +274,8 @@ wiki/media/<slug>/_manifest.json
 ├── ingest-queue.json           # 待处理队列
 ├── ingest-progress/            # <hash[:16]>.json 检查点
 ├── extract-tmp/<slug>/         # 文本抽取临时文件
-├── review-suggestions.json     # Stage 2.5 产物
-├── review.json                 # Stage 4 产物（run_review_suggestions.py）
+├── review-suggestions.json     # Stage 2.3.5 产物
+├── review.json                 # Stage 3.5 产物（run_review_suggestions.py）
 ├── lint-cache.json             # lint 结果缓存
 ├── lint-semantic.json          # 语义 lint 结果
 ├── ingest-lock                 # 并发锁
@@ -371,9 +371,9 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 | 文件 | 来源 |
 |------|------|
-| `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 2.5 每项一个 md |
-| `<runtime>/review-suggestions.json` | Stage 2.5 汇总 JSON |
-| `<runtime>/review.json` | `run_review_suggestions.py` Stage 4 产物 |
+| `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 2.3.5 每项一个 md |
+| `<runtime>/review-suggestions.json` | Stage 2.3.5 汇总 JSON |
+| `<runtime>/review.json` | `run_review_suggestions.py` Stage 3.5 产物 |
 
 ---
 
@@ -421,7 +421,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 |------|------------|---------------|------|
 | Raw 布局 | `raw/sources/<type>/<file>` | `raw/<type>/<任意子目录>/<file>` | 刻意设计，人类友好 |
 | 聚合页排除 | `index.md` + `log.md` | 额外排除 `schema.md` + `overview.md` | NashSU 无 schema.md |
-| Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 0.5 独有产物 |
+| Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 1.2 独有产物 |
 | Lint 页面 | app UI 直接展示 | `wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出 |
 | Review 页面 | `review.json`（app UI） | `wiki/REVIEW/<type>/<date>-<stem>-<NNN>.md` + `review.json` | 人类可浏览 + 机器可读双输出 |
 | 页面合并 | 3-layer LLM merge | 同 NashSU（2026-06-14 实现） | — |

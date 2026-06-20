@@ -6,7 +6,7 @@ Run after large batch ingests or when disk space / clutter becomes noticeable.
 ## `.digested` files (LEGACY — safe to delete)
 
 `.digested` files are markers from an older pipeline version. The current
-pipeline (Stage 0.1) uses `wiki/sources/<raw-rel-path>.md` existence +
+pipeline (Stage 0.2) uses `wiki/sources/<raw-rel-path>.md` existence +
 wikilink integrity as the sole dedup signal. The codebase has **zero
 references** to `.digested`.
 
@@ -38,7 +38,7 @@ ps aux | grep ingest.py | grep -v grep
 | `ingest-progress/` | Crash-recovery checkpoints | When no ingest is running |
 
 **Do NOT delete** (active state):
-- `ingest-cache.json` — dedup hash cache (Stage 2.6)
+- `ingest-cache.json` — dedup hash cache (Stage 3.4)
 - `lint-cache.json` / `lint-lock` — lint state
 - `graph.json` — knowledge graph (Graph command output)
 - `embed-cache.json` — embedding cache

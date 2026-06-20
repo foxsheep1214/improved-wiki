@@ -18,8 +18,8 @@ What remains here:
     `config.conversation_mode` is set the call is delegated to the registered
     router, otherwise it raises (http-direct is gone).
 
-Image captioning (Stage 0.6, MiniMax VLM) and minerU OCR are NOT text
-generation and live elsewhere (`_stage_0_extract.py`); they are unaffected.
+Image captioning (Stage 1.3, MiniMax VLM) and minerU OCR are NOT text
+generation and live elsewhere (`_stage_1_extract.py`); they are unaffected.
 """
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def _is_retryable_exception(exc: Exception) -> bool:
 #
 # ingest.py registers its `call_anthropic_protocol` (the function that writes
 # a prompt file and raises ConversationPending) here at startup. The stage
-# modules (`_stage_1_analyze`, `_stage_2_generate`, `_stage_3_write`,
+# modules (`_stage_2_analyze`, `_stage_2_generate`, `_stage_3_write`,
 # `_enrich_wikilinks`) import `call_anthropic_protocol` from this module, so
 # registering the router once makes every stage text-gen call route through
 # conversation mode automatically — no per-module monkeypatching needed.

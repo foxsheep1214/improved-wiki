@@ -6,7 +6,7 @@
 
 ---
 
-> **例外**：图片 caption（Stage 0.6）仍调用 MiniMax VLM，需要 `MINIMAX_CN_API_KEY`；除此之外不依赖任何外部 LLM API。Embedding（Stage 4）可选，独立配置，不走 MiniMax。本技能不再有 http-direct 文本生成路径。
+> **例外**：图片 caption（Stage 1.3）仍调用 MiniMax VLM，需要 `MINIMAX_CN_API_KEY`；除此之外不依赖任何外部 LLM API。Embedding（Stage 3.5）可选，独立配置，不走 MiniMax。本技能不再有 http-direct 文本生成路径。
 
 ## Mode Comparison
 
@@ -22,16 +22,16 @@
 
 ## Conversation Mode Workflow
 
-### Stage 0.5: Image Extraction
+### Stage 1.2: Image Extraction
 
-Handled automatically by `ingest.py` Stage 0.5. For standalone use:
+Handled automatically by `ingest.py` Stage 1.2. For standalone use:
 
 ```bash
 python3 -c "
-from _stage_0_extract import stage_0_5_extract_images
+from _stage_1_extract import stage_1_2_extract_images
 from _core import Config
 config = Config.from_env()
-stage_0_5_extract_images(Path('raw/Book/Book.pdf'), config)
+stage_1_2_extract_images(Path('raw/Book/Book.pdf'), config)
 "
 ```
 
@@ -39,7 +39,7 @@ stage_0_5_extract_images(Path('raw/Book/Book.pdf'), config)
 
 ---
 
-### Stage 0: Text Extraction
+### Stage 1.1: Text Extraction
 
 ```python
 import fitz
@@ -54,7 +54,7 @@ Path("/tmp/extract.txt").write_text(text, encoding="utf-8")
 
 ---
 
-### Stage 1: Global Digest
+### Stage 2.1: Global Digest
 
 **输入**：前 100K 字符（避免超上下文）
 
@@ -106,14 +106,14 @@ chunk_plan:
 
 ---
 
-### Stage 1.5: Chunk Analysis
+### Stage 2.2: Chunk Analysis
 
 **输入**：完整文本 + Global Digest
 
 **分块策略**：
 - 目标：~60K 字符/块（与 ingest.py `target_chars` 一致）
 - 重叠：3K 字符
-- 短源（≤ 60K）仍然跑 1 块——Stage 1.5 永远不能跳过
+- 短源（≤ 60K）仍然跑 1 块——Stage 2.2 永远不能跳过
 
 **每个块的 Prompt 模板**：
 ```
@@ -167,7 +167,7 @@ digest_updates:
 
 ---
 
-### Stage 2.5: Review Suggestions
+### Stage 2.3.5: Review Suggestions
 
 **输入**：所有 chunk analyses + Global Digest
 
@@ -179,7 +179,7 @@ digest_updates:
 {所有 chunk 分析的汇总}
 </all_analyses>
 
-生成 5 类审查项（YAML 格式，与 ingest.py stage_2_5_review_suggestions 一致）：
+生成 5 类审查项（YAML 格式，与 ingest.py stage_3_3_review_suggestions 一致）：
 1. **confirm** — 需要确认的可疑内容
 2. **suggestion** — 改进建议
 3. **missing-page** — 缺少的重要页面
@@ -206,7 +206,7 @@ digest_updates:
 
 ---
 
-### Stage 2: Synthesis + Wiki Generation
+### Stage 2.3: Synthesis + Wiki Generation
 
 **输入**：Global Digest + 所有 Chunk Analyses
 
@@ -224,7 +224,7 @@ digest_updates:
 
 现有 wiki 页面：{现有页面列表}
 
-请生成以下页面（不要生成 index/log/overview——那由程序化的 Stage 2.6 处理）：
+请生成以下页面（不要生成 index/log/overview——那由程序化的 Stage 3.4 处理）：
 
 1. **Source 页面**：`wiki/sources/书名.md`
    - Frontmatter: type, title, created, updated, tags, related, sources
@@ -285,7 +285,7 @@ sources: ["raw/Book/书名.pdf"]
 
 ---
 
-### Stage 3.5: Image Injection
+### Stage 3.2: Image Injection
 
 **输入**：`wiki/media/<type>/<slug>/_manifest.json`
 
@@ -333,15 +333,15 @@ sources: ["raw/Book/书名.pdf"]
 ## 完整流程（单次对话）
 
 ```
-1. Stage 0.5: extract_images.py → 图片
-2. Stage 0: Python 提取文本 → 全量字符
-3. Stage 1: 读取文本 + prompt → global digest YAML
-4. Stage 1.5: 分 N 次读取文本块 + prompt → N 个 chunk YAML（短源 ≥1 块，永远不跳过）
-5. Stage 2.5: 读取 analyses + prompt → review items（≥4 FILE 块时触发）
-6. Stage 2: 读取 digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）
-7. Stage 2.6: 程序化追加 index/log/overview（不让 LLM 重写）
-8. 写入 wiki 文件（Stage 3）
-9. Stage 3.5: 读取 _manifest.json + source 页 → 注入 ## Embedded Images 段
+1. Stage 1.2: extract_images.py → 图片
+2. Stage 1.1: Python 提取文本 → 全量字符
+3. Stage 2.1: 读取文本 + prompt → global digest YAML
+4. Stage 2.2: 分 N 次读取文本块 + prompt → N 个 chunk YAML（短源 ≥1 块，永远不跳过）
+5. Stage 2.3.5: 读取 analyses + prompt → review items（≥4 FILE 块时触发）
+6. Stage 2.3: 读取 digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）
+7. Stage 3.4: 程序化追加 index/log/overview（不让 LLM 重写）
+8. 写入 wiki 文件（Stage 3.1）
+9. Stage 3.2: 读取 _manifest.json + source 页 → 注入 ## Embedded Images 段
 ```
 
 ---
@@ -349,8 +349,8 @@ sources: ["raw/Book/书名.pdf"]
 ## 注意事项
 
 1. **文本长度**：长文本需要分阶段处理，避免超上下文
-2. **批次处理**：Stage 1.5 需要分批，每块 ~60K（ingest.py `target_chars`），短源仍然跑 1 块
-3. **最终整合**：Stage 2 需要整合所有分析结果，合理归并概念/实体
-4. **图片 caption**：Stage 3.5 需要注入 `## Embedded Images` 段到 source 页
+2. **批次处理**：Stage 2.2 需要分批，每块 ~60K（ingest.py `target_chars`），短源仍然跑 1 块
+3. **最终整合**：Stage 2.3 需要整合所有分析结果，合理归并概念/实体
+4. **图片 caption**：Stage 3.2 需要注入 `## Embedded Images` 段到 source 页
 5. **Frontmatter 完整性**：确保每个页面有 7 个必填字段
-6. **不要生成 index/log/overview**：这三页由 Stage 2.6 程序化 append，LLM 不应输出它们（防止 ADL8113 事故——整文件重写导致静默丢失历史条目）
+6. **不要生成 index/log/overview**：这三页由 Stage 3.4 程序化 append，LLM 不应输出它们（防止 ADL8113 事故——整文件重写导致静默丢失历史条目）

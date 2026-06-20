@@ -9,7 +9,7 @@
 
 ## Skill 的行为要求
 
-### Stage 0 之前（每次 ingest）
+### Stage 1.1 之前（每次 ingest）
 
 1. **检查 `raw/NAMING.md` 是否存在**
    - 存在 → 继续

@@ -31,24 +31,24 @@ Or with a wiki project context:
 User: 在 HardwareWiki 中用 chat 模式消化 raw/papers/新论文.pdf
 ```
 
-### Step 1: Mechanical Pre-processing (Stage 0)
+### Step 1: Mechanical Pre-processing (Stage 1.1)
 
-Claude runs the same Stage 0 as auto-ingest:
+Claude runs the same Stage 1.1 as auto-ingest:
 
 ```bash
-# Text extraction + PDF type detection (stops after Stage 0.5)
-python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-stage 0.5
+# Text extraction + PDF type detection (stops after Stage 1.2)
+python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-Stage 1.2
 
-# Image extraction (stops after Stage 0.6)
-python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-stage 0.6
+# Image extraction (stops after Stage 1.3)
+python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-Stage 1.3
 
-# Image captioning (stops after Stage 0.6)
-python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-stage 0.6
+# Image captioning (stops after Stage 1.3)
+python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-Stage 1.3
 ```
 
 These are I/O operations — no LLM reasoning needed, no reason to involve the user.
 
-### Step 2: Present Analysis (Stage 1 equivalent)
+### Step 2: Present Analysis (Stage 2.1 equivalent)
 
 Claude reads the extracted text and presents a structured **digest** to the user:
 
@@ -124,7 +124,7 @@ Claude: 明白了。消化策略：
   确认后我就开始生成 wiki 页面。输入"生成"继续。
 ```
 
-### Step 4: Generate Wiki Pages (Stage 2 with user guidance)
+### Step 4: Generate Wiki Pages (Stage 2.3 with user guidance)
 
 When the user confirms ("生成" / "generate" / "写入" / "proceed"), Claude generates wiki pages. The generation prompt **must include** the user's guidance:
 
@@ -157,13 +157,13 @@ Generate FILE blocks now. Start with ---FILE: as the first characters.
 
 **Critical difference from auto-ingest**: The user guidance section is placed FIRST and labeled as authoritative. This ensures the LLM prioritizes user intent over default behavior.
 
-### Step 5: Write & Validate (Stage 3-4)
+### Step 5: Write & Validate (Stage 3.1-4)
 
 After generation, Claude:
 1. Parses FILE blocks
 2. Writes pages to `wiki/` (using page merge if page exists)
-3. Injects image references into source page (Stage 3.5)
-4. Appends to index.md / log.md (Stage 2.6, programmatic)
+3. Injects image references into source page (Stage 3.2)
+4. Appends to index.md / log.md (Stage 3.4, programmatic)
 5. Runs `validate_ingest.py`
 
 ```bash
@@ -226,7 +226,7 @@ After presenting the digest, Claude should proactively ask:
 ## Edge Cases
 
 ### Very Long Sources (>200K chars)
-Chat ingest should still use chunked analysis (Stage 1.5), but the user guidance is merged into each chunk's analysis prompt. The user doesn't need to review each chunk — only the global digest is presented.
+Chat ingest should still use chunked analysis (Stage 2.2), but the user guidance is merged into each chunk's analysis prompt. The user doesn't need to review each chunk — only the global digest is presented.
 
 ### Re-ingest with Chat
 If a source was previously auto-ingested, chat re-ingest can be used to add missing pages or correct emphasis. Claude should:

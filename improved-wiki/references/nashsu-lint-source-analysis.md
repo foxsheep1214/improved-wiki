@@ -10,7 +10,7 @@ Detailed source-level comparison of NashSU's actual lint implementation
 - `src/stores/lint-store.ts` — 66 lines, Zustand store for `useLintStore`
 - `src/stores/review-store.ts` — 117 lines, Zustand store for `useReviewStore`
 - `src/components/lint/lint-view.tsx` — 426 lines, the "Run Lint" UI button
-- `src/lib/ingest.ts` — 2993 lines; lint/review interaction at L888-933 (Stage 2.5) + L1097-1104 (Stage 4)
+- `src/lib/ingest.ts` — 2993 lines; lint/review interaction at L888-933 (Stage 2.3.5) + L1097-1104 (Stage 3.5)
 
 **Repo URL**: <https://github.com/nashsu/llm_wiki> (v0.4.23 tag)
 
@@ -248,15 +248,15 @@ incoming item's `description` / `sourcePath` override the old, and
 **Sources of review items** (`ingest.ts` L1097-1104):
 ```ts
 const reviewItems = [
-  ...parseReviewBlocks(generation, sp),         // Stage 2's FILE/REVIEW blocks
-  ...parseReviewBlocks(reviewSuggestionOutput, sp),  // Stage 2.5 dedicated review pass
+  ...parseReviewBlocks(generation, sp),         // Stage 2.3's FILE/REVIEW blocks
+  ...parseReviewBlocks(reviewSuggestionOutput, sp),  // Stage 2.3.5 dedicated review pass
 ]
 if (reviewItems.length > 0) {
   useReviewStore.getState().addItems(reviewItems)
 }
 ```
 
-**Stage 2.5 trigger** (`ingest.ts` L889): `shouldRunDedicatedReviewStage(generation)` fires when generation is ≥10K chars OR ≥4 FILE blocks OR ends with an incomplete REVIEW block.
+**Stage 2.3.5 trigger** (`ingest.ts` L889): `shouldRunDedicatedReviewStage(generation)` fires when generation is ≥10K chars OR ≥4 FILE blocks OR ends with an incomplete REVIEW block.
 
 **REVIEW block format** (`ingest.ts` L1623):
 ```ts
@@ -272,7 +272,7 @@ SEARCH: ADC SNR budget | radar SNR budget
 ---END REVIEW---
 ```
 
-**Improved-wiki**: `scripts/ingest.py` already implements Stage 4 (`parseReviewBlocks`) and writes to `.llm-wiki/review.json` with the same 5-type schema. **This is already byte-compatible with the app's `review.json`.**
+**Improved-wiki**: `scripts/ingest.py` already implements Stage 3.5 (`parseReviewBlocks`) and writes to `.llm-wiki/review.json` with the same 5-type schema. **This is already byte-compatible with the app's `review.json`.**
 
 ---
 

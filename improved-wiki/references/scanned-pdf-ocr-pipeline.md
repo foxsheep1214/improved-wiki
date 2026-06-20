@@ -1,6 +1,6 @@
 # Scanned PDF OCR Pipeline (minerU Local VLM, 2026-06-17)
 
-适用于**扫描版 PDF**（无文本层，PyMuPDF `get_text()` 全空）或**混合型 PDF**（有文本层但多页有大图，>30% 抽样页判定为 `mixed`）的本地 OCR pipeline。由 `ingest.py` Stage 0.5 自动执行。
+适用于**扫描版 PDF**（无文本层，PyMuPDF `get_text()` 全空）或**混合型 PDF**（有文本层但多页有大图，>30% 抽样页判定为 `mixed`）的本地 OCR pipeline。由 `ingest.py` Stage 1.2 自动执行。
 
 ## 何时使用这条 pipeline
 
@@ -32,7 +32,7 @@
 ### 为什么用本地 minerU 而不是云端 API
 
 - **零成本**：无 API 调用费用，minerU VLM 在 Apple Silicon 上免费运行。
-- **自动提取图片**：minerU `vlm-engine` 同时输出文字层和分离的图片文件，Stage 0.6 caption 直接用。
+- **自动提取图片**：minerU `vlm-engine` 同时输出文字层和分离的图片文件，Stage 1.3 caption 直接用。
 - **中文优化**：`-l ch` 对中文/日文扫描件识别质量高。
 - **无需 API key**：不需要配置任何云端密钥。
 - **隐私**：所有数据在本地处理。
@@ -76,7 +76,7 @@ def _wait_for_mineru_slot(poll_interval: int = 120):
 - 超时控制：`timeout=1800` 直接杀进程
 - 重试简单：stderr 匹配 retry patterns 即可
 
-## Stage 0.5 输出物
+## Stage 1.2 输出物
 
 | 产物 | 位置 | 验证标准 |
 |------|------|---------|
@@ -106,9 +106,9 @@ def _wait_for_mineru_slot(poll_interval: int = 120):
 
 ## 相关的其他 pipeline
 
-- **Stage 0.6 Caption**：minerU 提取的图片 → minimax `anthropic/v1/messages` 多图批量 caption（5 张/批）。详见 `references/image-caption-strategy.md`。
-- **纯 text PDF**：跳过 Stage 0.5 全流程，PyMuPDF `get_text()` 直接提取 → Stage 1 开始。
-- **混合型 PDF 判定**：见 `references/ingest-stages-mandatory.md` Stage 0 的第四信号"隐藏 OCR 层检测"。
+- **Stage 1.3 Caption**：minerU 提取的图片 → minimax `anthropic/v1/messages` 多图批量 caption（5 张/批）。详见 `references/image-caption-strategy.md`。
+- **纯 text PDF**：跳过 Stage 1.2 全流程，PyMuPDF `get_text()` 直接提取 → Stage 2.1 开始。
+- **混合型 PDF 判定**：见 `references/ingest-stages-mandatory.md` Stage 1.1 的第四信号"隐藏 OCR 层检测"。
 
 ## 修订记录
 

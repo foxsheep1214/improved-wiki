@@ -40,7 +40,7 @@ tail -f /tmp/ingest_watch.log
 Key options:
 - `--watch` — continuously re-scans `ingest-queue.json` (every 30s by default)
 - `--drain` — exit when the queue is empty (omit to loop forever)
-- `--parallel N` — max concurrent books for Stage 0-2 (default: 4 in batch)
+- `--parallel N` — max concurrent books for Stage 1.1-2 (default: 4 in batch)
 - `--poll-interval SECS` — override the 30s queue re-scan interval
 - `--max-retries N` — max attempts per queued entry before giving up (default: 3)
 
@@ -120,12 +120,12 @@ print(f"DONE: {success} OK, {failed} failed, {total} total")
   improved-wiki skill). Do NOT use `ingest-cache.json` or memory.
 - **Serial only for minerU-intensive stages**: minerU has built-in concurrency
   limiting (max 2 instances). Running too many books in parallel will SIGABRT on
-  16GB Macs. `--parallel 4` is a safe default — it batches Stage 0-2 but keeps
+  16GB Macs. `--parallel 4` is a safe default — it batches Stage 1.1-2 but keeps
   minerU instances bounded.
 - **Timeout**: 3600s per book (1 hour). Most books complete in 10-30 minutes.
 - **LLM model**: Text generation runs in conversation mode — the calling agent
   answers each LLM step with the current model. No `LLM_API_KEY` is needed for
-  text gen. `MINIMAX_CN_API_KEY` is only required for image captioning (Stage 0.6).
+  text gen. `MINIMAX_CN_API_KEY` is only required for image captioning (Stage 1.3).
 - **Project root**: `IMPROVED_WIKI_ROOT` must point to the project root
   (e.g., `~/Documents/知识库/HardwareWiki`), not `raw/Book/`.
 
