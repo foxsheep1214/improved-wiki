@@ -547,7 +547,16 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     LLM, writes the result back, and re-invokes ingest.py.  On re-invoke,
     ingest.py finds the result file and continues.
     """
-    slug = re.sub(r"[^a-zA-Z0-9]+", "-", _infer_stage(prompt)).strip("-")[:60] or "llm-task"
+    # Stage-name slug + content-hash suffix. The stage name (Stage-1-Global-
+    # Digest, Stage-2-Synthesis, LLM-task, ...) gives human-readable grouping;
+    # the 8-char content hash guarantees distinct prompts get distinct cache
+    # files. Without the hash, every call that falls through _infer_stage to
+    # 'LLM-task' (Stage 2.0 source page, per-concept fallback, ...) shares one
+    # file and the wrong answer gets reused across stages. The hash is
+    # deterministic, so replay of the same prompt still hits the cache.
+    stage = re.sub(r"[^a-zA-Z0-9]+", "-", _infer_stage(prompt)).strip("-")[:40] or "llm-task"
+    content_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:8]
+    slug = f"{stage}-{content_hash}"
     prefix = config.conversation_prefix or "00000000"
     conv_dir = config.runtime_dir / "conversation" / prefix
     conv_dir.mkdir(parents=True, exist_ok=True)

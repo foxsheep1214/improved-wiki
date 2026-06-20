@@ -388,7 +388,11 @@ def stamp_frontmatter_dates(content: str, today: str) -> str:
     end = content.find("\n---", 3)
     if end == -1:
         return content
-    fm = content[3:end]
+    # content[3] is the '\n' after the opening '---'; the frontmatter body
+    # starts at index 4. Slicing [3:end] carried that newline and re-serialization
+    # produced '---\n\ntype:...' (a blank line after the fence), breaking YAML
+    # parsing — and stacking a blank line each time stamp ran twice.
+    fm = content[4:end]
     body = content[end + 4:]
     lines = fm.split("\n")
     new_lines = []

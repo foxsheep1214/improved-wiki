@@ -104,6 +104,25 @@ class TestConversationHandoff(unittest.TestCase):
             # The .txt must still exist for future replays.
             self.assertTrue(md.with_suffix(".txt").exists())
 
+    def test_distinct_prompts_get_distinct_slugs(self):
+        # Regression: _infer_stage maps several distinct Stage-2 calls
+        # (source page, main generation, per-concept fallback) to the same
+        # 'LLM-task' stage name. They must still get distinct cache files,
+        # or the source-page answer gets reused for concept/entity generation
+        # (wrong content → 0 valid blocks). A content-hash suffix guarantees
+        # distinct prompts → distinct slugs.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp, conversation=True)
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol("write source page for part A", cfg)
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol("write source page for part B", cfg)
+            conv_dir = cfg.runtime_dir / "conversation" / cfg.conversation_prefix
+            md_files = list(conv_dir.glob("*.md"))
+            self.assertEqual(len(md_files), 2,
+                             "distinct prompts must get distinct cache files")
+
     def test_without_conversation_mode_raises(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
