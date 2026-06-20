@@ -826,9 +826,11 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                     break
                 elif resp.get("status") == "failed":
                     err = resp.get("error_message", resp.get("error", "unknown"))
-                    print(f"API FAILED: {err[:200]}")
                     if attempt < 2:
+                        print(f"API FAILED (retry {attempt+1}/3): {err[:100]}")
                         continue
+                    else:
+                        print(f"API FAILED (final): {err[:200]}")
                 else:
                     # Poll for completion
                     task_id = resp.get("task_id", "")
@@ -875,34 +877,44 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
                         continue
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode() if e.fp else ""
-                print(f"HTTP {e.code}: {err_body[:200]}")
-                if e.code >= 500 and attempt < 2:
-                    # Server may need restart
-                    api_proc.terminate()
-                    try: api_proc.wait(timeout=5)
-                    except Exception: api_proc.kill()
-                    time.sleep(3)
-                    api_proc = _sp.Popen(
-                        [str(venv_python), "-m", "mineru.cli.fast_api",
-                         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                    )
-                    time.sleep(5)
-                    continue
-            except Exception as e:
-                print(f"FAILED: {e}")
-                if "Connection refused" in str(e) and attempt < 2:
-                    # Server crashed — restart and retry
-                    time.sleep(3)
-                    api_proc = _sp.Popen(
-                        [str(venv_python), "-m", "mineru.cli.fast_api",
-                         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                    )
-                    time.sleep(8)
-                    continue
                 if attempt < 2:
-                    continue
+                    if e.code >= 500:
+                        # Server may need restart
+                        print(f"HTTP {e.code} (retry {attempt+1}/3, restarting server)...")
+                        api_proc.terminate()
+                        try: api_proc.wait(timeout=5)
+                        except Exception: api_proc.kill()
+                        time.sleep(3)
+                        api_proc = _sp.Popen(
+                            [str(venv_python), "-m", "mineru.cli.fast_api",
+                             "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
+                            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                        )
+                        time.sleep(5)
+                        continue
+                    else:
+                        print(f"HTTP {e.code} (retry {attempt+1}/3): {err_body[:100]}")
+                        continue
+                else:
+                    print(f"HTTP {e.code} (final): {err_body[:200]}")
+            except Exception as e:
+                if attempt < 2:
+                    if "Connection refused" in str(e):
+                        # Server crashed — restart and retry
+                        print(f"Connection failed (retry {attempt+1}/3, restarting server)...")
+                        time.sleep(3)
+                        api_proc = _sp.Popen(
+                            [str(venv_python), "-m", "mineru.cli.fast_api",
+                             "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
+                            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                        )
+                        time.sleep(8)
+                        continue
+                    else:
+                        print(f"Error (retry {attempt+1}/3): {str(e)[:100]}")
+                        continue
+                else:
+                    print(f"FAILED (final): {str(e)[:200]}")
             break
 
         if not mineru_ok:
