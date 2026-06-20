@@ -19,7 +19,7 @@ from _core import (
 )
 from _llm_api import _retry_jitter, _is_retryable_exception, call_anthropic_protocol
 
-__all__ = ["chunk_text", "build_global_digest_prompt", "stage_1_global_digest", "build_chunk_analysis_prompt", "stage_1_5_chunk_analysis"]
+__all__ = ["chunk_text", "build_global_digest_prompt", "stage_2_1_global_digest", "build_chunk_analysis_prompt", "stage_2_2_chunk_analysis"]
 
 # ---------- Chunking ----------
 
@@ -199,7 +199,7 @@ chunk_plan:
 """
 
 
-def stage_1_global_digest(
+def stage_2_1_global_digest(
     extracted_text: str,
     file_path: Path,
     config: Config,
@@ -207,13 +207,13 @@ def stage_1_global_digest(
     verbose: bool = False,
 ) -> dict:
     """Stage 1: One LLM call for book-level structural summary."""
-    print(f"[stage_1] Global Digest — sending {min(len(extracted_text), config.source_budget):,} chars to LLM...")
+    print(f"[stage 2.1] Global Digest — sending {min(len(extracted_text), config.source_budget):,} chars to LLM...")
     prompt = build_global_digest_prompt(extracted_text, file_path, config, template)
     response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192)
     if verbose:
-        print(f"[stage_1] Raw response ({len(response)} chars, stop={stop_reason}):\n{response[:3000]}...\n")
+        print(f"[stage 2.1] Raw response ({len(response)} chars, stop={stop_reason}):\n{response[:3000]}...\n")
     digest = parse_yaml_block(response)
-    print(f"[stage_1] Done — {len(digest)} top-level keys in digest")
+    print(f"[stage 2.1] Done — {len(digest)} top-level keys in digest")
     return digest
 
 
@@ -406,7 +406,7 @@ _RLOCK = __import__('threading').Lock()
 _RATE_LIMIT_HIT_AT: float = 0.0
 
 
-def stage_1_5_chunk_analysis(
+def stage_2_2_chunk_analysis(
     extracted_text: str,
     global_digest: dict,
     file_path: Path,
@@ -432,7 +432,7 @@ def stage_1_5_chunk_analysis(
     chunks = chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
     chunk_total = len(chunks)
     max_retries = _chunk_retries()
-    print(f"[stage_1_5] Chunk Analysis — {chunk_total} chunks "
+    print(f"[stage 2.2] Chunk Analysis — {chunk_total} chunks "
           f"(target {config.target_chars:,} chars/chunk, overlap {config.chunk_overlap:,}, "
           f"sequential NashSU mode, retries={max_retries})")
 
@@ -444,13 +444,13 @@ def stage_1_5_chunk_analysis(
     # ── Resume from per-chunk checkpoint (NashSU parity: LongSourceCheckpoint) ──
     if source_hash:
         progress = load_progress(config, source_hash)
-        cp = (progress or {}).get("stage_1_5_cp") if progress else None
+        cp = (progress or {}).get("stage_2_2_cp") if progress else None
         if cp and cp.get("chunk_total") == chunk_total:
             analyses = cp.get("analyses", [])
             accumulated_digest = cp.get("accumulated_digest", "")
             start_chunk = len(analyses)
             if start_chunk > 0:
-                print(f"[stage_1_5] Resuming from chunk {start_chunk + 1}/{chunk_total} "
+                print(f"[stage 2.2] Resuming from chunk {start_chunk + 1}/{chunk_total} "
                       f"({start_chunk} completed, digest={len(accumulated_digest)} chars)")
 
     # Build initial digest string from Stage 1.1 global digest (first chunk only)
@@ -503,7 +503,7 @@ def stage_1_5_chunk_analysis(
                 eta = (elapsed / done_count) * (chunk_total - done_count) if done_count > 0 else 0
                 pct = done_count * 100 // chunk_total
                 tag = f" (retry #{attempt})" if attempt > 0 else ""
-                print(f"  [stage_1_5] chunk {i+1}/{chunk_total} OK{tag} — "
+                print(f"  [stage 2.2] chunk {i+1}/{chunk_total} OK{tag} — "
                       f"{n_c} concepts, {n_e} entities, {dt:.0f}s "
                       f"[{pct}% ETA {eta:.0f}s]")
 
@@ -533,12 +533,12 @@ def stage_1_5_chunk_analysis(
                 if attempt < max_retries and _is_retryable_exception(e):
                     wait = _retry_jitter(2.0, attempt)
                     err_label = type(e).__name__
-                    print(f"  [stage_1_5] chunk {i+1}/{chunk_total} attempt {attempt+1} failed "
+                    print(f"  [stage 2.2] chunk {i+1}/{chunk_total} attempt {attempt+1} failed "
                           f"({err_label}: {err_str[:80]}) — retrying in {wait:.1f}s...")
                     time.sleep(wait)
                     continue
                 # Last attempt failed
-                print(f"  [stage_1_5] chunk {i+1}/{chunk_total} FAILED after "
+                print(f"  [stage 2.2] chunk {i+1}/{chunk_total} FAILED after "
                       f"{1 + max_retries} attempts: {err_str[:120]}")
                 analyses.append({
                     "chunk_index": i + 1, "error": str(last_error),
@@ -556,11 +556,11 @@ def stage_1_5_chunk_analysis(
     errored = sum(1 for a in analyses if "error" in a)
     elapsed = time.time() - t0
     speed = chunk_total / elapsed if elapsed > 0 else 0
-    print(f"[stage_1_5] Done — {chunk_total} chunks in {elapsed:.0f}s ({speed:.1f} chunks/s), "
+    print(f"[stage 2.2] Done — {chunk_total} chunks in {elapsed:.0f}s ({speed:.1f} chunks/s), "
           f"{errored} failed, {total_concepts} concepts, {total_entities} entities total")
     if errored > 0:
         failed_indices = [a.get("chunk_index", -1) for a in analyses if "error" in a]
-        print(f"[stage_1_5] ⚠️  Failed chunks: {failed_indices} — Stage 2 synthesis may be incomplete")
+        print(f"[stage 2.2] ⚠️  Failed chunks: {failed_indices} — Stage 2 synthesis may be incomplete")
     return analyses
 
 
@@ -578,7 +578,7 @@ def _analyze_chunk(
     max_retries: int = 2,
     verbose: bool = False,
 ) -> dict:
-    """Analyze a single chunk (extracted from stage_1_5_chunk_analysis).
+    """Analyze a single chunk (extracted from stage_2_2_chunk_analysis).
 
     Used by the barrier-free pipeline in _do_prepare where each chunk is
     analyzed and immediately generated before moving to the next chunk.
@@ -636,8 +636,8 @@ def _checkpoint_1_5(config: Config, source_hash: str, chunk_total: int,
     """Save per-chunk checkpoint for Stage 1.5 resume (NashSU parity)."""
     # Merge into existing progress to preserve other stage data
     progress = load_progress(config, source_hash) or {}
-    progress["stage"] = "stage_1_5_partial"
-    progress["stage_1_5_cp"] = {
+    progress["stage"] = "stage_2_2_partial"
+    progress["stage_2_2_cp"] = {
         "chunk_total": chunk_total,
         "accumulated_digest": accumulated_digest,
         "analyses": analyses,

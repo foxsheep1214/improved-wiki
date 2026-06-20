@@ -19,11 +19,11 @@ from _core import (
 )
 from _llm_api import _retry_jitter, _is_retryable_exception, call_anthropic_protocol
 
-__all__ = ["stage_2_5_review_suggestions", "build_per_chunk_gen_prompt", "_stage_2_per_concept_fallback", "stage_2_0_source_page", "build_query_generation_prompt", "stage_2_3_query_generation", "build_comparison_disambiguation_prompt", "build_comparison_in_source_prompt", "stage_2_5_comparison_generation"]
+__all__ = ["stage_3_3_review_suggestions", "build_per_chunk_gen_prompt", "_stage_2_per_concept_fallback", "stage_2_4_source_page", "build_query_generation_prompt", "stage_2_5_query_generation", "build_comparison_disambiguation_prompt", "build_comparison_in_source_prompt", "stage_2_6_comparison_generation"]
 
 # ---------- Stage 2.5: Review suggestions ----------
 
-def stage_2_5_review_suggestions(config: Config, file_blocks: list[tuple[str, str]],
+def stage_3_3_review_suggestions(config: Config, file_blocks: list[tuple[str, str]],
                                   raw_file: Path, raw_response: str = "",
                                   verbose: bool = False) -> dict:
     """Run LLM review over newly generated wiki pages.
@@ -41,11 +41,11 @@ def stage_2_5_review_suggestions(config: Config, file_blocks: list[tuple[str, st
     # NashSU 3-condition trigger (not just file block count)
     has_review_open = "---REVIEW:" in raw_response and not raw_response.rstrip().endswith("---END REVIEW---")
     if len(file_blocks) < 4 and len(raw_response) < 10000 and not has_review_open:
-        print(f"[stage_2_5] Skipped — {len(file_blocks)} blocks, {len(raw_response)} chars, "
+        print(f"[stage 3.3] Skipped — {len(file_blocks)} blocks, {len(raw_response)} chars, "
               f"no incomplete REVIEW (all below NashSU thresholds)")
         return {"skipped": True, "reason": "below-thresholds"}
 
-    print(f"[stage_2_5] Running review over {len(file_blocks)} new pages + existing wiki...")
+    print(f"[stage 3.3] Running review over {len(file_blocks)} new pages + existing wiki...")
 
     # Collect new page contents
     new_pages: list[str] = []
@@ -110,11 +110,11 @@ def stage_2_5_review_suggestions(config: Config, file_blocks: list[tuple[str, st
     try:
         response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192)
     except RuntimeError as e:
-        print(f"[stage_2_5] LLM call failed: {e}")
+        print(f"[stage 3.3] LLM call failed: {e}")
         return {"error": str(e)}
 
     if verbose:
-        print(f"[stage_2_5] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
+        print(f"[stage 3.3] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
 
     # Parse YAML
     text = response
@@ -193,7 +193,7 @@ _待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 `resolv
         tmp.rename(page_path)
         written += 1
 
-    print(f"[stage_2_5] {written} review pages → wiki/REVIEW/")
+    print(f"[stage 3.3] {written} review pages → wiki/REVIEW/")
 
     # Also write JSON for tooling (backward compat)
     runtime_dir = config.runtime_dir
@@ -415,7 +415,7 @@ def _stage_2_per_concept_fallback(
             name = c.get("name", c) if isinstance(c, dict) else str(c)
             concept_to_chunk[name] = idx
 
-    print(f"[stage_2] Per-concept fallback: {len(unique_concepts)} concepts + "
+    print(f"[stage 2.3] Per-concept fallback: {len(unique_concepts)} concepts + "
           f"{len(unique_entities)} entities, {PER_CONCEPT_BATCH_MAX} per batch, "
           f"max_tokens={gen_tokens}")
 
@@ -531,14 +531,14 @@ START IMMEDIATELY with ---FILE:... No preamble.
         src_blocks = parse_file_blocks(src_response)
         all_file_blocks.extend(src_blocks)
     except Exception as e:
-        print(f"  [stage_2] Source page generation failed: {e}")
+        print(f"  [stage 2.3] Source page generation failed: {e}")
 
     combined = "\n".join(all_responses)
     concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
     entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
     source_blocks = [b for b in all_file_blocks if "sources/" in b[0]]
 
-    print(f"[stage_2] Per-concept fallback done — {time.time()-t0:.0f}s, "
+    print(f"[stage 2.3] Per-concept fallback done — {time.time()-t0:.0f}s, "
           f"{len(all_file_blocks)} blocks ({len(concept_blocks)}c/{len(entity_blocks)}e/{len(source_blocks)}s)")
 
     analysis = {
@@ -824,7 +824,7 @@ def _extract_concept_entity_names(chunk_analyses: list[dict]) -> tuple[list[str]
     return unique_concepts, unique_entities
 
 
-def stage_2_0_source_page(
+def stage_2_4_source_page(
     global_digest: dict,
     file_path: Path,
     config: Config,
@@ -922,9 +922,9 @@ Example:
     gen_tokens = config.compute_max_tokens(8192)
     response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens)
     if verbose:
-        print(f"[stage_2_0] Source page generated ({len(response):,} chars, stop={stop_reason})")
+        print(f"[stage 2.4] Source page generated ({len(response):,} chars, stop={stop_reason})")
     else:
-        print(f"[stage_2_0] Source page ready ({len(response):,} chars)")
+        print(f"[stage 2.4] Source page ready ({len(response):,} chars)")
 
     return response, stop_reason
 
@@ -1040,7 +1040,7 @@ If no worthwhile query exists, output exactly:
 """
 
 
-def stage_2_3_query_generation(
+def stage_2_5_query_generation(
     global_digest: dict,
     chunk_analyses: list[dict],
     file_blocks: list[tuple[str, str]],
@@ -1062,7 +1062,7 @@ def stage_2_3_query_generation(
         src_type = None
     if src_type in ("datasheet", "standard"):
         if verbose:
-            print(f"[stage_2_3] Skipped — {src_type} source type (no meaningful open questions)")
+            print(f"[stage 2.5] Skipped — {src_type} source type (no meaningful open questions)")
         return [], ""
 
     unique_concepts, unique_entities = _extract_concept_entity_names(chunk_analyses)
@@ -1086,7 +1086,7 @@ def stage_2_3_query_generation(
     # If no concepts generated, skip
     if not concept_titles:
         if verbose:
-            print("[stage_2_3] Skipped — no concepts generated")
+            print("[stage 2.5] Skipped — no concepts generated")
         return [], ""
 
     # Detect domain
@@ -1099,28 +1099,28 @@ def stage_2_3_query_generation(
 
     query_tokens = config.compute_max_tokens(4096)
     if verbose:
-        print(f"[stage_2_3] Query generation — {len(concept_titles)} concepts, "
+        print(f"[stage 2.5] Query generation — {len(concept_titles)} concepts, "
               f"{len(key_claims)} claims, prompt {len(prompt):,} chars...")
 
     try:
         response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=query_tokens)
     except Exception as e:
-        print(f"[stage_2_3] LLM call failed: {e}")
+        print(f"[stage 2.5] LLM call failed: {e}")
         return [], ""
 
     if verbose:
-        print(f"[stage_2_3] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
+        print(f"[stage 2.5] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
 
     # Parse query FILE blocks
     query_blocks = parse_file_blocks(response)
     if query_blocks:
-        print(f"[stage_2_3] Generated {len(query_blocks)} query page(s)")
+        print(f"[stage 2.5] Generated {len(query_blocks)} query page(s)")
         for path, _ in query_blocks:
             print(f"  → {path}")
     elif "---QUERIES: 0---" in response or "QUERIES: 0" in response:
-        print("[stage_2_3] No worthwhile queries (---QUERIES: 0---)")
+        print("[stage 2.5] No worthwhile queries (---QUERIES: 0---)")
     else:
-        print("[stage_2_3] No query blocks parsed (may be implicit ---QUERIES: 0---)")
+        print("[stage 2.5] No query blocks parsed (may be implicit ---QUERIES: 0---)")
 
     return query_blocks, response
 
@@ -1284,7 +1284,7 @@ START IMMEDIATELY with ---FILE: or ---COMPARISONS_IN_SOURCE: — no preamble.
 """
 
 
-def stage_2_5_comparison_generation(
+def stage_2_6_comparison_generation(
     global_digest: dict,
     chunk_analyses: list[dict],
     file_blocks: list[tuple[str, str]],
@@ -1311,7 +1311,7 @@ def stage_2_5_comparison_generation(
 
     if not concept_titles and not entity_titles:
         if verbose:
-            print("[stage_2_5_comp] Skipped — no concepts/entities generated")
+            print("[stage 2.6] Skipped — no concepts/entities generated")
         return [], ""
 
     current_domain = global_digest.get("book_meta", {}).get("domain", "general") if isinstance(global_digest.get("book_meta"), dict) else "general"
@@ -1321,53 +1321,53 @@ def stage_2_5_comparison_generation(
 
     # 2.5A: Disambiguation
     if verbose:
-        print(f"[stage_2_5_comp] 2.5A Disambiguation check — {len(concept_titles)} concepts vs {len(existing_slugs)} existing...")
+        print(f"[stage 2.6] 2.5A Disambiguation check — {len(concept_titles)} concepts vs {len(existing_slugs)} existing...")
     prompt_25a = build_comparison_disambiguation_prompt(
         concept_titles, entity_titles, existing_slugs, file_path, config, current_domain
     )
     try:
         response_25a, stop_25a = call_anthropic_protocol(prompt_25a, config, max_tokens=comp_tokens)
     except Exception as e:
-        print(f"[stage_2_5_comp] 2.5A LLM call failed: {e}")
+        print(f"[stage 2.6] 2.5A LLM call failed: {e}")
         response_25a = ""
     if response_25a:
         blocks_25a = parse_file_blocks(response_25a)
         if blocks_25a:
-            print(f"[stage_2_5_comp] 2.5A: {len(blocks_25a)} disambiguation page(s)")
+            print(f"[stage 2.6] 2.5A: {len(blocks_25a)} disambiguation page(s)")
             all_blocks.extend(blocks_25a)
         else:
-            print("[stage_2_5_comp] 2.5A: no disambiguation needed")
+            print("[stage 2.6] 2.5A: no disambiguation needed")
 
     # 2.5B: In-source concept comparison
     response_25b = ""
     if len(concept_titles) >= 2:
         if verbose:
-            print(f"[stage_2_5_comp] 2.5B In-source comparison — {len(concept_titles)} concepts...")
+            print(f"[stage 2.6] 2.5B In-source comparison — {len(concept_titles)} concepts...")
         prompt_25b = build_comparison_in_source_prompt(
             concept_titles, file_path, config, current_domain
         )
         try:
             response_25b, stop_25b = call_anthropic_protocol(prompt_25b, config, max_tokens=comp_tokens)
         except Exception as e:
-            print(f"[stage_2_5_comp] 2.5B LLM call failed: {e}")
+            print(f"[stage 2.6] 2.5B LLM call failed: {e}")
             response_25b = ""
         if response_25b:
             blocks_25b = parse_file_blocks(response_25b)
             if blocks_25b:
-                print(f"[stage_2_5_comp] 2.5B: {len(blocks_25b)} comparison page(s)")
+                print(f"[stage 2.6] 2.5B: {len(blocks_25b)} comparison page(s)")
                 for path, _ in blocks_25b:
                     print(f"  → {path}")
                 all_blocks.extend(blocks_25b)
             else:
-                print("[stage_2_5_comp] 2.5B: no comparison pairs found")
+                print("[stage 2.6] 2.5B: no comparison pairs found")
     else:
         if verbose:
-            print("[stage_2_5_comp] 2.5B skipped — fewer than 2 concepts")
+            print("[stage 2.6] 2.5B skipped — fewer than 2 concepts")
 
     if all_blocks:
-        print(f"[stage_2_5_comp] Total: {len(all_blocks)} comparison page(s)")
+        print(f"[stage 2.6] Total: {len(all_blocks)} comparison page(s)")
     else:
-        print("[stage_2_5_comp] No comparisons generated (---COMPARISONS: 0---)")
+        print("[stage 2.6] No comparisons generated (---COMPARISONS: 0---)")
 
     combined_response = response_25a
     if response_25a and response_25b:

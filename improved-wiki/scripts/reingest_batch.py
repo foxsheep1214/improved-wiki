@@ -121,7 +121,7 @@ def main() -> None:
                 print(f"  ✅ OK ({elapsed:.0f}s)")
                 # Print key lines
                 for line in result.stdout.split("\n"):
-                    if any(kw in line for kw in ["Result:", "[OK]", "[stage_2] Done", "files_written"]):
+                    if any(kw in line for kw in ["Result:", "[OK]", "[stage 2.3] Done", "files_written"]):
                         print(f"  {line.strip()[:120]}")
             else:
                 fail += 1

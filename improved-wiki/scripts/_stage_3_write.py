@@ -18,7 +18,7 @@ from _core import (
 )
 from _llm_api import call_anthropic_protocol
 
-__all__ = ["write_wiki_file", "stage_2_6_aggregate_repair", "canonicalize_sources_field", "stamp_frontmatter_dates", "sanitize_ingested_content", "is_safe_ingest_path", "wiki_path_for_source", "merge_page_content", "_auto_correct_wiki_path", "_contains_cjk", "_make_cjk_slug", "backup_existing_page"]
+__all__ = ["write_wiki_file", "stage_3_4_aggregate_repair", "canonicalize_sources_field", "stamp_frontmatter_dates", "sanitize_ingested_content", "is_safe_ingest_path", "wiki_path_for_source", "merge_page_content", "_auto_correct_wiki_path", "_contains_cjk", "_make_cjk_slug", "backup_existing_page"]
 
 # ---------- File writing ----------
 
@@ -428,7 +428,7 @@ def write_wiki_file(path: Path, content: str, config: Config | None = None, merg
     tmp.rename(path)
 
 
-def stage_2_6_aggregate_repair(
+def stage_3_4_aggregate_repair(
     source_path: Path,
     raw_file: Path,
     analysis: dict,
@@ -481,7 +481,7 @@ def stage_2_6_aggregate_repair(
         OVERVIEW_MAX_CHARS = min(24000, _AGGREGATE_CAP)
         INDEX_MAX_CHARS = _AGGREGATE_CAP
         if len(current_overview) > OVERVIEW_MAX_CHARS:
-            print(f"[stage_2_6] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
+            print(f"[stage 3.4] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
                   f"skipping LLM rewrite to avoid truncation")
             return files_written
 
@@ -489,7 +489,7 @@ def stage_2_6_aggregate_repair(
         if index_path.exists():
             index_size = index_path.stat().st_size
             if index_size > INDEX_MAX_CHARS:
-                print(f"[stage_2_6] Index too large ({index_size} > {INDEX_MAX_CHARS}) — "
+                print(f"[stage 3.4] Index too large ({index_size} > {INDEX_MAX_CHARS}) — "
                       f"skipping aggregate repair to avoid context overflow")
                 return files_written
         source_content = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
@@ -537,15 +537,15 @@ unless the new source directly contradicts or answers them.
             response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=4096)
             # NashSU parity: filter aggregate repair output — reject FILE blocks (ingest.ts L1216-1235)
             if "---FILE:" in response:
-                print(f"[stage_2_6] LLM response contained FILE blocks — discarding")
+                print(f"[stage 3.4] LLM response contained FILE blocks — discarding")
             elif response.strip().startswith("#"):
                 write_wiki_file(overview_path, response.strip() + "\n", config)
                 files_written.append(str(overview_path.relative_to(config.wiki_root)))
-                print(f"[stage_2_6] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
+                print(f"[stage 3.4] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
             else:
-                print(f"[stage_2_6] LLM overview response did not start with '# Overview' — skipping")
+                print(f"[stage 3.4] LLM overview response did not start with '# Overview' — skipping")
         except Exception as e:
-            print(f"[stage_2_6] Overview LLM update failed: {e}")
+            print(f"[stage 3.4] Overview LLM update failed: {e}")
 
     return files_written
 

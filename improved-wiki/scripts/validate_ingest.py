@@ -170,7 +170,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 0: Text extraction
     # ═══════════════════════════════════════════════
-    print("\n[Stage 0] PDF text extraction")
+    print("\n[Stage 1.1] PDF text extraction")
     if entry:
         method = entry.get("method", "")
         check(f"text extracted via {method}", bool(method), f"method={method}")
@@ -193,7 +193,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 0.5: Image extraction
     # ═══════════════════════════════════════════════
-    print("\n[Stage 0.5] Image extraction")
+    print("\n[Stage 1.2] Image extraction")
     if media:
         manifest = media / "_manifest.json"
         imgs = list(media.glob("*.jpeg")) + list(media.glob("*.png")) + list(media.glob("*.jpg"))
@@ -209,7 +209,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 0.6: Image captioning
     # ═══════════════════════════════════════════════
-    print("\n[Stage 0.6] Image captioning")
+    print("\n[Stage 1.3] Image captioning")
     if media:
         imgs = list(media.glob("*.jpeg")) + list(media.glob("*.png")) + list(media.glob("*.jpg"))
         if not imgs:
@@ -237,7 +237,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 1: Global Digest
     # ═══════════════════════════════════════════════
-    print("\n[Stage 1] Global Digest")
+    print("\n[Stage 2.1] Global Digest")
     if entry:
         dk = stages.get("global_digest_keys", 0)
         check(f"global digest complete", dk >= 1,
@@ -248,7 +248,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 1.5: Chunk Analysis (NEVER skipped)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 1.5] Chunk Analysis")
+    print("\n[Stage 2.2] Chunk Analysis")
     if entry:
         chunks = stages.get("chunks_analyzed", 0)
         check(f"{chunks} chunk(s) analyzed", chunks >= 1,
@@ -259,7 +259,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 2: Generation
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2] Generation (synthesis)")
+    print("\n[Stage 2.3] Generation (synthesis)")
     if entry:
         fb = stages.get("file_blocks_generated", 0)
         identified = stages.get("concepts_identified", fb)
@@ -278,7 +278,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 2.3: Query generation (conditional)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.3] Query generation")
+    print("\n[Stage 2.5] Query generation")
     queries_dir = WIKI / "queries"
     query_pages = list(queries_dir.glob("*.md")) if queries_dir.is_dir() else []
     src_query_pages = [p for p in query_pages
@@ -297,7 +297,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 2.5 (cmp): Comparison generation (conditional)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.5 cmp] Comparison generation")
+    print("\n[Stage 2.6 cmp] Comparison generation")
     comparisons_dir = WIKI / "comparisons"
     comp_pages = list(comparisons_dir.glob("*.md")) if comparisons_dir.is_dir() else []
     src_comp_pages = [p for p in comp_pages
@@ -316,7 +316,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 3: Write files (+ source page coverage)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3] Write files")
+    print("\n[Stage 3.1] Write files")
     sources = list((WIKI / "sources").rglob("*.md")) if (WIKI / "sources").is_dir() else []
     entities = list((WIKI / "entities").glob("*.md")) if (WIKI / "entities").is_dir() else []
     concepts = list((WIKI / "concepts").glob("*.md")) if (WIKI / "concepts").is_dir() else []
@@ -343,7 +343,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 3.5: Image injection
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.5] Image injection into source page")
+    print("\n[Stage 3.2] Image injection into source page")
     img_ext_s35 = stages.get("images_extracted", 0)
     if img_ext_s35 == 0:
         note("no images extracted — Stage 3.5 not applicable", "text-only source")
@@ -369,7 +369,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 2.5 (rev): Review suggestions + review items
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.5 rev] Review suggestions + items")
+    print("\n[Stage 3.3 rev] Review suggestions + items")
     rs_path = RUNTIME / "review-suggestions.json"
     if rs_path.exists():
         items = json.loads(rs_path.read_text()).get("items", [])
@@ -408,7 +408,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 2.6: Aggregate pages + hash cache
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.6] Aggregate pages + hash cache")
+    print("\n[Stage 3.4] Aggregate pages + hash cache")
     for name in ("index.md", "log.md", "overview.md"):
         p = WIKI / name
         check(f"wiki/{name} exists and non-empty",
@@ -436,7 +436,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 4: Embeddings (optional)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 4] Embeddings (optional)")
+    print("\n[Stage 3.5] Embeddings (optional)")
     lance = RUNTIME / "lancedb"
     embed_cache = RUNTIME / "embed-cache.json"
     lance_present = lance.is_dir() and bool(list(lance.glob("*.lance")))

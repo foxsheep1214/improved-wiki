@@ -85,6 +85,7 @@ calling agent's model to do that work.
 - `references/known-issues.md` — current bugs and workarounds
 - `references/initial-setup.md` — first-time project bootstrap
 - `references/batch-digest-loop.md` — batch ingest with resume
+- `references/maintenance-cleanup.md` — periodic cleanup of stale files (`.digested`, temp dirs, `.DS_Store`, empty-slug `.md` bug residual)
 - `references/cron-installation.md` — cron-based automation
 - `references/nashsu-lint-source-analysis.md` — NashSU lint.json internals
 - `references/scripting-pitfalls.md` — Python + agent tool pitfalls

@@ -227,6 +227,19 @@ slug = slug.replace("/", "_")
 
 ---
 
+## `.digested` files in `raw/` subdirectories (LEGACY ARTIFACTS)
+
+**Status**: ✅ **Documented (2026-06-20)**. These are markers from an older
+pipeline version. The current pipeline (Stage 0.1) uses `wiki/sources/` as
+the sole dedup signal — zero code references to `.digested`.
+
+HardwareWiki had 109 `.digested` files across `raw/Datasheet/` and `raw/Book/`
+subdirectories, all safely deleted. Other wiki projects likely have them too.
+
+**Cleanup**: see `references/maintenance-cleanup.md` §".digested" files.
+
+---
+
 ## `wiki-lint.sh` 将 `lint-cache.json`/`lint-lock` 写入 `wiki/` 污染内容目录
 
 **Symptom**: `wiki/` 根目录下出现 `lint-cache.json`、`lint-lock` 以及带空格名的过期副本（`lint-cache 2.json`、`lint-cache 3.json` 等）。运行时文件不应该出现在内容目录中。

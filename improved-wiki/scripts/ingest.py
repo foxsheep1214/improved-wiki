@@ -75,31 +75,31 @@ from _core import (
     parse_yaml_block, parse_simple_yaml, parse_file_blocks,
     FOLDER_TO_TEMPLATE,
 )
-from _stage_0_extract import (
-    extract_text, detect_pdf_type, stage_0_pilot, check_text_quality,
+from _stage_1_extract import (
+    extract_text, detect_pdf_type, stage_0_3_pilot, check_text_quality,
     extract_text_pymupdf, extract_text_mineru, extract_text_scanned_pdf,
     _count_running_mineru, _wait_for_mineru_slot, _kill_mineru_servers,
-    stage_0_5_extract_images, stage_0_6_caption_images,
+    stage_1_2_extract_images, stage_1_3_caption_images,
     _media_slug,
     CAPTION_BATCH_SIZE, CAPTION_MAX_WORKERS,
 )
-from _stage_1_analyze import (
-    chunk_text, stage_1_global_digest,
+from _stage_2_analyze import (
+    chunk_text, stage_2_1_global_digest,
     _chunk_retries, _analyze_chunk,
     _resolve_chunk_heading_path,
 )
 from _stage_2_generate import (
-    stage_2_5_review_suggestions, _generate_chunk,
+    stage_3_3_review_suggestions, _generate_chunk,
     _extract_concept_entity_names,
     _stage_2_per_concept_fallback,
-    stage_2_0_source_page,
-    build_query_generation_prompt, stage_2_3_query_generation,
+    stage_2_4_source_page,
+    build_query_generation_prompt, stage_2_5_query_generation,
     build_comparison_disambiguation_prompt,
     build_comparison_in_source_prompt,
-    stage_2_5_comparison_generation,
+    stage_2_6_comparison_generation,
 )
 from _stage_3_write import (
-    write_wiki_file, stage_2_6_aggregate_repair,
+    write_wiki_file, stage_3_4_aggregate_repair,
     canonicalize_sources_field, stamp_frontmatter_dates,
     sanitize_ingested_content, is_safe_ingest_path,
     wiki_path_for_source, merge_page_content,
@@ -172,7 +172,7 @@ def _should_stop_after(config: Config, stage: str, result: dict) -> bool:
     return False
 
 
-def _verify_stage_0_text(raw_file: Path, extracted_text: str, method: str) -> None:
+def _verify_stage_1_1_text(raw_file: Path, extracted_text: str, method: str) -> None:
     """Verify OCR/text extraction produced usable output."""
     _verify_or_die(len(extracted_text) >= 500, "Stage 0",
                    f"Extracted text too short ({len(extracted_text)} chars) from {raw_file.name} "
@@ -184,7 +184,7 @@ def _verify_stage_0_text(raw_file: Path, extracted_text: str, method: str) -> No
                        f"VLM may have deadlocked or produced empty pages.")
 
 
-def _verify_stage_1_digest(global_digest: dict, raw_file: Path) -> None:
+def _verify_stage_2_1_digest(global_digest: dict, raw_file: Path) -> None:
     """Verify global digest has required structural keys."""
     required_keys = {"book_meta", "outline", "key_concepts", "key_claims", "key_entities", "chunk_plan"}
     missing = required_keys - set(global_digest.keys())
@@ -199,7 +199,7 @@ def _verify_stage_1_digest(global_digest: dict, raw_file: Path) -> None:
                    f"Book may be too short or LLM output was incomplete.")
 
 
-def _verify_stage_1_5_chunks(chunk_analyses: list[dict], extracted_text: str) -> None:
+def _verify_stage_2_2_chunks(chunk_analyses: list[dict], extracted_text: str) -> None:
     """Verify chunk analysis produced results for all chunks."""
     _verify_or_die(len(chunk_analyses) >= 1, "Stage 1.5",
                    f"Chunk analysis produced 0 results. "
@@ -210,7 +210,7 @@ def _verify_stage_1_5_chunks(chunk_analyses: list[dict], extracted_text: str) ->
         print(f"  ⚠️  Stage 1.5: {len(empty_chunks)}/{len(chunk_analyses)} chunks have no concepts or entities found")
 
 
-def _verify_stage_2_file_blocks(file_blocks: list[tuple[str, str]], raw_file: Path) -> None:
+def _verify_stage_2_4_file_blocks(file_blocks: list[tuple[str, str]], raw_file: Path) -> None:
     """Verify synthesis produced valid FILE blocks with correct paths."""
     _verify_or_die(len(file_blocks) >= 1, "Stage 2",
                    f"0 FILE blocks parsed from LLM response for {raw_file.name}. "
@@ -249,8 +249,8 @@ def validate_stage_outputs(
     raw_file: Path,
     method: str,
     extracted_text: str,
-    stage_0_5_result: dict,
-    stage_0_6_result: dict,
+    stage_1_2_result: dict,
+    stage_1_3_result: dict,
     file_blocks: list[tuple[str, str]],
     source_path: Path,
 ) -> list[str]:
@@ -267,7 +267,7 @@ def validate_stage_outputs(
         print(f"  ⚠️  {msg}")
 
     # Stage 0.5: image extraction completeness
-    img_count = stage_0_5_result.get("count", 0)
+    img_count = stage_1_2_result.get("count", 0)
     if img_count > 0:
         manifest = config.wiki_dir / "media" / _media_slug(raw_file, config) / "_manifest.json"
         if not manifest.exists():
@@ -276,7 +276,7 @@ def validate_stage_outputs(
 
     # Stage 0.6: caption completeness — every image has .caption.txt >= 20 chars
     if img_count > 0:
-        images = stage_0_5_result.get("images", [])
+        images = stage_1_2_result.get("images", [])
         missing_captions = 0
         for img in images:
             cap_path = config.wiki_dir / "media" / _media_slug(raw_file, config) / (img["filename"] + ".caption.txt")
@@ -286,7 +286,7 @@ def validate_stage_outputs(
             msg = f"Stage 0.6: {missing_captions}/{len(images)} images missing captions"
             warnings.append(msg)
             print(f"  ⚠️  {msg}")
-        if stage_0_6_result.get("captioned", 0) == 0 and not stage_0_6_result.get("skipped"):
+        if stage_1_3_result.get("captioned", 0) == 0 and not stage_1_3_result.get("skipped"):
             warnings.append("Stage 0.6: no captions generated (API may have failed)")
             print(f"  ⚠️  Stage 0.6: 0 captions generated")
 
@@ -417,7 +417,7 @@ def _run_post_ingest_graph(config: Config) -> None:
         print(f"[graph] Failed ({e}) — continuing")
 
 
-def stage_3_5_inject_images(config: Config, raw_file: Path, source_path: Path,
+def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
                               method: str = "") -> dict:
     """Append '## Embedded Images' section to the source page.
 
@@ -461,7 +461,7 @@ def stage_3_5_inject_images(config: Config, raw_file: Path, source_path: Path,
             tmp = source_path.with_suffix(source_path.suffix + ".tmp")
             tmp.write_text(content, encoding="utf-8")
             tmp.rename(source_path)
-            print(f"[stage_3_5] Injected {len(images)} images into {source_path.name}")
+            print(f"[stage 3.2] Injected {len(images)} images into {source_path.name}")
             return {"injected": len(images)}
 
     # Last resort: old cloud OCR caption files (pre-manifest era)
@@ -498,10 +498,10 @@ def stage_3_5_inject_images(config: Config, raw_file: Path, source_path: Path,
         tmp = source_path.with_suffix(source_path.suffix + ".tmp")
         tmp.write_text(content, encoding="utf-8")
         tmp.rename(source_path)
-        print(f"[stage_3_5] Injected {len(images_in_media)} images into {source_path.name}")
+        print(f"[stage 3.2] Injected {len(images_in_media)} images into {source_path.name}")
         return {"injected": len(images_in_media)}
 
-    print("[stage_3_5] No images or figures to inject — skipping")
+    print("[stage 3.2] No images or figures to inject — skipping")
     return {"injected": 0}
 
 
@@ -694,8 +694,8 @@ def ingest_one(
     analysis = prepared["analysis"]
     raw_response = prepared["raw_response"]
     file_blocks = prepared["file_blocks"]
-    stage_0_5_result = prepared["stage_0_5_result"]
-    stage_0_6_result = prepared["stage_0_6_result"]
+    stage_1_2_result = prepared["stage_1_2_result"]
+    stage_1_3_result = prepared["stage_1_3_result"]
     template_name = prepared["template_name"]
 
     # Check stop-after-stage (best-effort; _do_prepare runs all of Stage 0-2)
@@ -709,7 +709,7 @@ def ingest_one(
         "extracted_text": extracted_text, "global_digest": global_digest,
         "chunk_analyses": chunk_analyses, "analysis": analysis,
         "raw_response": raw_response, "file_blocks": file_blocks,
-        "stage_0_5_result": stage_0_5_result, "stage_0_6_result": stage_0_6_result,
+        "stage_1_2_result": stage_1_2_result, "stage_1_3_result": stage_1_3_result,
         "template_name": template_name,
     }
     result = _do_write(prepared, verbose=verbose)
@@ -784,14 +784,14 @@ def _do_prepare(
         else:
             extracted_text, method = extract_text(raw_file, config, pilot_confirmed=pilot_confirmed)
             print(f"  [extract] {method}: {len(extracted_text)} chars")
-            _verify_stage_0_text(raw_file, extracted_text, method)
+            _verify_stage_1_1_text(raw_file, extracted_text, method)
             qr = check_text_quality(extracted_text, raw_file.name)
             if qr["status"] == "severe":
                 print(f"  [extract] ❌ Text quality SEVERE — aborting ingest. "
                       f"Re-run with a different PDF or re-download from source.")
                 return None
             save_progress(config, h, {
-                "stage": "stage_0_done", "extracted_text": extracted_text,
+                "stage": "stage_1_1_done", "extracted_text": extracted_text,
                 "extract_method": method,
             })
 
@@ -801,62 +801,62 @@ def _do_prepare(
         print(f"  [template] {template_name}")
 
         # Stage 0.5: Image extraction
-        stage_0_5_result: dict = {"count": 0}
-        if progress and "stage_0_5" in progress:
-            stage_0_5_result = progress["stage_0_5"]
-            print(f"  [stage_0_5] (cached) {stage_0_5_result.get('count', 0)} images")
+        stage_1_2_result: dict = {"count": 0}
+        if progress and "stage_1_2" in progress:
+            stage_1_2_result = progress["stage_1_2"]
+            print(f"  [stage 1.2] (cached) {stage_1_2_result.get('count', 0)} images")
         elif raw_file.suffix.lower() == ".pdf" and method == "pymupdf":
-            stage_0_5_result = stage_0_5_extract_images(raw_file, config)
+            stage_1_2_result = stage_1_2_extract_images(raw_file, config)
             # Save progress with stage_0_5 data (preserve existing checkpoint data)
-            cp = {"stage": "stage_0_done", "extracted_text": extracted_text,
-                  "extract_method": method, "stage_0_5": stage_0_5_result}
+            cp = {"stage": "stage_1_1_done", "extracted_text": extracted_text,
+                  "extract_method": method, "stage_1_2": stage_1_2_result}
             save_progress(config, h, cp)
 
         # Stage 0.6 (Caption) ∥ Stage 1 (Global Digest) — batch path
         needs_caption = (
-            not progress or "stage_0_6" not in progress
-        ) and stage_0_5_result.get("count", 0) > 0
+            not progress or "stage_1_3" not in progress
+        ) and stage_1_2_result.get("count", 0) > 0
         needs_digest = (
-            not progress or progress.get("stage") not in ("stage_1_done", "stage_1_5_done", "stage_2_done")
+            not progress or progress.get("stage") not in ("stage_2_1_done", "stage_2_2_done", "stage_2_3_done")
         )
-        stage_0_6_result = progress.get("stage_0_6", {"captioned": 0}) if progress and "stage_0_6" in progress else {"captioned": 0}
+        stage_1_3_result = progress.get("stage_1_3", {"captioned": 0}) if progress and "stage_1_3" in progress else {"captioned": 0}
 
         if needs_caption and needs_digest:
             with ThreadPoolExecutor(max_workers=2) as executor:
-                fut_cap = executor.submit(stage_0_6_caption_images, config, stage_0_5_result)
-                fut_dig = executor.submit(stage_1_global_digest, extracted_text, raw_file, config, template_content, verbose=verbose)
-                stage_0_6_result = fut_cap.result()
+                fut_cap = executor.submit(stage_1_3_caption_images, config, stage_1_2_result)
+                fut_dig = executor.submit(stage_2_1_global_digest, extracted_text, raw_file, config, template_content, verbose=verbose)
+                stage_1_3_result = fut_cap.result()
                 global_digest = fut_dig.result()
-            _verify_stage_1_digest(global_digest, raw_file)
+            _verify_stage_2_1_digest(global_digest, raw_file)
             if "extracted_text" not in (progress or {}):
-                save_progress(config, h, {"stage": "stage_0_done", "extracted_text": extracted_text,
-                      "extract_method": method, "stage_0_5": stage_0_5_result, "stage_0_6": stage_0_6_result})
+                save_progress(config, h, {"stage": "stage_1_1_done", "extracted_text": extracted_text,
+                      "extract_method": method, "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result})
         else:
             if needs_caption:
-                stage_0_6_result = stage_0_6_caption_images(config, stage_0_5_result)
-            elif progress and "stage_0_6" in progress:
-                stage_0_6_result = progress["stage_0_6"]
-                print(f"  [stage_0_6] (cached) {stage_0_6_result.get('captioned', 0)} captions")
+                stage_1_3_result = stage_1_3_caption_images(config, stage_1_2_result)
+            elif progress and "stage_1_3" in progress:
+                stage_1_3_result = progress["stage_1_3"]
+                print(f"  [stage 1.3] (cached) {stage_1_3_result.get('captioned', 0)} captions")
 
             if needs_digest:
-                global_digest = stage_1_global_digest(extracted_text, raw_file, config, template_content, verbose=verbose)
-                _verify_stage_1_digest(global_digest, raw_file)
+                global_digest = stage_2_1_global_digest(extracted_text, raw_file, config, template_content, verbose=verbose)
+                _verify_stage_2_1_digest(global_digest, raw_file)
             else:
                 global_digest = progress["global_digest"]
-                print(f"  [stage_1] (cached) Global Digest — {len(global_digest)} keys")
-                _verify_stage_1_digest(global_digest, raw_file)
+                print(f"  [stage 2.1] (cached) Global Digest — {len(global_digest)} keys")
+                _verify_stage_2_1_digest(global_digest, raw_file)
 
             if needs_caption and "extracted_text" not in (progress or {}):
-                save_progress(config, h, {"stage": "stage_0_done", "extracted_text": extracted_text,
-                      "extract_method": method, "stage_0_5": stage_0_5_result, "stage_0_6": stage_0_6_result})
+                save_progress(config, h, {"stage": "stage_1_1_done", "extracted_text": extracted_text,
+                      "extract_method": method, "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result})
 
         # Stage 1.5 + 2.1: Chunk Analysis → Generation
         # Unified barrier-free pipeline (NashSU improved): analyze → generate → next chunk.
         # Works for all chunk counts: 1 chunk = single loop iteration; N chunks = N iterations.
-        if progress and progress.get("stage") in ("stage_1_5_done", "stage_2_done") and "chunk_analyses" in progress:
+        if progress and progress.get("stage") in ("stage_2_2_done", "stage_2_3_done") and "chunk_analyses" in progress:
             chunk_analyses = progress["chunk_analyses"]
-            print(f"  [stage_1_5] (cached) Chunk Analysis — {len(chunk_analyses)} chunks")
-            _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
+            print(f"  [stage 2.2] (cached) Chunk Analysis — {len(chunk_analyses)} chunks")
+            _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
             analysis = progress.get("analysis", {})
             raw_response = progress.get("raw_response", "")
             file_blocks = parse_file_blocks(raw_response) if raw_response else []
@@ -866,7 +866,7 @@ def _do_prepare(
 
             # ── Barrier-free pipeline: analyze → generate → next chunk ──
             est_sec = chunk_total * 75  # ~60s analysis + ~15s generation per chunk
-            print(f"  [stage_1_5∥2.1] Barrier-free — {chunk_total} chunk(s), "
+            print(f"  [stage 2.2∥2.3] Barrier-free — {chunk_total} chunk(s), "
                   f"target {config.target_chars:,} chars/chunk (est. {est_sec/60:.0f} min)")
             _stage_begin("Stage 1.5∥2.1: Barrier-free pipeline")
             t_start = time.time()
@@ -944,7 +944,7 @@ def _do_prepare(
             # before FILE blocks), fall back to per-concept LLM calls.
             if not concept_blocks and unique_concepts and chunk_analyses:
                 n_missed = len(unique_concepts)
-                print(f"  [stage_2] ⚠️  Barrier-free: 0/{n_missed} concepts generated "
+                print(f"  [stage 2.3] ⚠️  Barrier-free: 0/{n_missed} concepts generated "
                       f"— falling back to per-concept generation "
                       f"(pre_existing_slugs={len(generated_slugs)})")
                 fa_analysis, fa_raw, fa_blocks = _stage_2_per_concept_fallback(
@@ -971,15 +971,15 @@ def _do_prepare(
                     if s not in generated_slugs:
                         generated_slugs.append(s)
 
-            _verify_stage_1_5_chunks(chunk_analyses, extracted_text)
+            _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
 
         # Stage 2.0: Source page generation (NashSU two-step — dedicated LLM call)
         current_domain = _detect_domain(raw_file, template_content, global_digest)
-        if progress and progress.get("stage") in ("stage_2_0_done", "stage_2_done") and "source_page_response" in progress:
+        if progress and progress.get("stage") in ("stage_2_4_done", "stage_2_3_done") and "source_page_response" in progress:
             source_page_response = progress["source_page_response"]
-            print(f"  [stage_2_0] (cached) Source page already generated")
+            print(f"  [stage 2.4] (cached) Source page already generated")
         else:
-            source_page_response, _ = stage_2_0_source_page(
+            source_page_response, _ = stage_2_4_source_page(
                 global_digest, raw_file, config,
                 template=template_content, current_domain=current_domain, verbose=verbose
             )
@@ -989,7 +989,7 @@ def _do_prepare(
             source_blocks = parse_file_blocks(source_page_response)
             if source_blocks:
                 file_blocks = source_blocks + list(file_blocks)
-                print(f"  [stage_2_0] Source page block merged ({len(file_blocks)} total)")
+                print(f"  [stage 2.4] Source page block merged ({len(file_blocks)} total)")
             elif source_page_response:
                 # LLM didn't use FILE block format — generate placeholder
                 source_rel = f"sources/{raw_file.relative_to(config.raw_root).with_suffix('.md')}"
@@ -1004,12 +1004,12 @@ def _do_prepare(
                     if "concepts/" in path:
                         stub += f"- [[{Path(path).stem}]]\n"
                 file_blocks.append((source_rel, stub))
-                print(f"  [stage_2_0] Placeholder source page generated ({len(file_blocks)} total)")
+                print(f"  [stage 2.4] Placeholder source page generated ({len(file_blocks)} total)")
 
-        _verify_stage_2_file_blocks(file_blocks, raw_file)
+        _verify_stage_2_4_file_blocks(file_blocks, raw_file)
 
         # ── Stage 2.3: Query generation ──
-        query_blocks, query_response = stage_2_3_query_generation(
+        query_blocks, query_response = stage_2_5_query_generation(
             global_digest, chunk_analyses, file_blocks, raw_file, config,
             template=template_content, verbose=verbose
         )
@@ -1017,7 +1017,7 @@ def _do_prepare(
             file_blocks = list(file_blocks) + query_blocks
 
         # ── Stage 2.5: Comparison generation ──
-        comp_blocks, comp_response = stage_2_5_comparison_generation(
+        comp_blocks, comp_response = stage_2_6_comparison_generation(
             global_digest, chunk_analyses, file_blocks, raw_file, config,
             template=template_content, verbose=verbose
         )
@@ -1037,8 +1037,8 @@ def _do_prepare(
             "global_digest": global_digest, "chunk_analyses": chunk_analyses,
             "analysis": analysis, "raw_response": raw_response,
             "file_blocks": file_blocks,
-            "stage_0_5_result": stage_0_5_result,
-            "stage_0_6_result": stage_0_6_result,
+            "stage_1_2_result": stage_1_2_result,
+            "stage_1_3_result": stage_1_3_result,
             "template_name": template_name,
             "query_count": query_count,
             "comp_count": comp_count,
@@ -1064,8 +1064,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     analysis = prepared["analysis"]
     raw_response = prepared["raw_response"]
     file_blocks = prepared["file_blocks"]
-    stage_0_5_result = prepared["stage_0_5_result"]
-    stage_0_6_result = prepared["stage_0_6_result"]
+    stage_1_2_result = prepared["stage_1_2_result"]
+    stage_1_3_result = prepared["stage_1_3_result"]
     template_name = prepared["template_name"]
     query_count = prepared.get("query_count", 0)
     comp_count = prepared.get("comp_count", 0)
@@ -1210,18 +1210,18 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             hard_failures.append("source-placeholder")
 
     # Stage 3.5: Image injection
-    stage_3_5_result: dict = {"injected": 0}
+    stage_3_2_result: dict = {"injected": 0}
     if source_path.exists():
-        stage_3_5_result = stage_3_5_inject_images(config, raw_file, source_path, method)
+        stage_3_2_result = stage_3_2_inject_images(config, raw_file, source_path, method)
 
     # Stage 2.5: Review
-    stage_2_5_result = stage_2_5_review_suggestions(
+    stage_3_3_result = stage_3_3_review_suggestions(
         config, file_blocks, raw_file, raw_response=raw_response, verbose=verbose)
 
     # Go/no-go validation
     go_nogo_warnings = validate_stage_outputs(
         config, raw_file, method, extracted_text,
-        stage_0_5_result, stage_0_6_result,
+        stage_1_2_result, stage_1_3_result,
         file_blocks, source_path,
     )
 
@@ -1229,7 +1229,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     _run_post_ingest_lint(config)
 
     # Stage 2.6: Aggregate repair
-    index_log_files = stage_2_6_aggregate_repair(source_path, raw_file, analysis, h, method, config)
+    index_log_files = stage_3_4_aggregate_repair(source_path, raw_file, analysis, h, method, config)
 
     # Update cache
     try:
@@ -1256,12 +1256,12 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             "coverage_core": analysis.get("coverage_core", 1.0),
             "coverage_supporting": analysis.get("coverage_supporting", 1.0),
             "coverage_pct": analysis.get("coverage_pct", 1.0),
-            "images_extracted": stage_0_5_result.get("count", 0),
-            "images_captioned": stage_0_6_result.get("captioned", 0),
-            "images_injected": stage_3_5_result.get("injected", 0),
+            "images_extracted": stage_1_2_result.get("count", 0),
+            "images_captioned": stage_1_3_result.get("captioned", 0),
+            "images_injected": stage_3_2_result.get("injected", 0),
             "queries_generated": query_count,
             "comparisons_generated": comp_count,
-            "review_items": stage_2_5_result.get("items", 0),
+            "review_items": stage_3_3_result.get("items", 0),
         },
     }
     if hard_failures:
@@ -1659,7 +1659,7 @@ def _auto_embed_new_pages(config: Config, files_written: list[str]) -> None:
     if not new_files:
         return
 
-    print(f"[stage_6] Auto-embedding {len(new_files)} new pages...")
+    print(f"[stage 3.5] Auto-embedding {len(new_files)} new pages...")
     try:
         from build_embeddings import embed_pages
         embed_pages(config.wiki_dir, config.runtime_dir, new_files)
@@ -1671,7 +1671,7 @@ def _auto_embed_new_pages(config: Config, files_written: list[str]) -> None:
             [sys.executable, str(script), "--project", str(config.wiki_root), "embed"],
             capture_output=True, timeout=300,
         )
-    print(f"[stage_6] Embedding complete")
+    print(f"[stage 3.5] Embedding complete")
 
 
 # ---------- CLI ----------

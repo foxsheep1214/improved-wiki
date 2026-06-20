@@ -50,9 +50,9 @@ __all__ = [
     "extract_text_mineru",
     "extract_text_scanned_pdf",
     "detect_pdf_type",
-    "stage_0_pilot",
-    "stage_0_5_extract_images",
-    "stage_0_6_caption_images",
+    "stage_0_3_pilot",
+    "stage_1_2_extract_images",
+    "stage_1_3_caption_images",
     "_is_caption_failed",
     "_caption_images",
     "_caption_one_batch",
@@ -458,7 +458,7 @@ def detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[str, float]
         doc.close()
 
 
-def stage_0_pilot(file_path: Path, config: Config) -> dict:
+def stage_0_3_pilot(file_path: Path, config: Config) -> dict:
     """Run 5-page pilot OCR for scanned PDF validation using local minerU.
 
     Extracts 5 pages into a temp PDF, runs local minerU CLI, and displays
@@ -1469,7 +1469,7 @@ def _extract_images_from_office(raw_file: Path, media_dir: Path, manifest_path: 
     import io as _io
 
     fmt = raw_file.suffix.lower().lstrip(".")
-    print(f"[stage_0_5] Extracting embedded images from {fmt.upper()}...")
+    print(f"[stage 1.2] Extracting embedded images from {fmt.upper()}...")
 
     # Image dir inside the ZIP
     media_prefix = "ppt/media/" if fmt == "pptx" else "word/media/"
@@ -1525,7 +1525,7 @@ def _extract_images_from_office(raw_file: Path, media_dir: Path, manifest_path: 
                 })
 
     except Exception as e:
-        print(f"[stage_0_5] {fmt.upper()} image extraction failed: {e}")
+        print(f"[stage 1.2] {fmt.upper()} image extraction failed: {e}")
         return {"count": 0, "error": str(e)}
 
     # Write manifest
@@ -1536,12 +1536,12 @@ def _extract_images_from_office(raw_file: Path, media_dir: Path, manifest_path: 
         "images": all_images,
     }
     manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[stage_0_5] {fmt.upper()}: {len(all_images)} images → {media_dir}")
+    print(f"[stage 1.2] {fmt.upper()}: {len(all_images)} images → {media_dir}")
     return {"count": len(all_images), "media_dir": str(media_dir),
             "manifest": str(manifest_path), "images": all_images}
 
 
-def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100) -> dict:
+def stage_1_2_extract_images(raw_file: Path, config: Config, min_size: int = 100) -> dict:
     """Extract embedded images from PDF / PPTX / DOCX.
 
     PDF: PyMuPDF get_images().  PPTX/DOCX: zipfile internal media/ directory
@@ -1558,7 +1558,7 @@ def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100
     if manifest_path.exists():
         try:
             m = json.loads(manifest_path.read_text(encoding="utf-8"))
-            print(f"[stage_0_5] (cached) {m.get('total_images', 0)} images in {media_dir}")
+            print(f"[stage 1.2] (cached) {m.get('total_images', 0)} images in {media_dir}")
             return {"count": m.get("total_images", 0), "cached": True, "media_dir": str(media_dir),
                     "manifest": str(manifest_path), "images": m.get("images", [])}
         except Exception:
@@ -1574,10 +1574,10 @@ def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100
     try:
         import fitz
     except ImportError:
-        print("[stage_0_5] PyMuPDF not installed — skipping image extraction")
+        print("[stage 1.2] PyMuPDF not installed — skipping image extraction")
         return {"count": 0, "skipped": True, "reason": "pymupdf-not-installed"}
 
-    print(f"[stage_0_5] Extracting embedded images from PDF...")
+    print(f"[stage 1.2] Extracting embedded images from PDF...")
 
     doc = fitz.open(raw_file)
     all_images: list[dict] = []
@@ -1613,7 +1613,7 @@ def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100
         doc.close()
 
     if not all_images:
-        print(f"[stage_0_5] No embedded images found (or all < {min_size}px)")
+        print(f"[stage 1.2] No embedded images found (or all < {min_size}px)")
         _write_manifest(manifest_path, str(raw_file), raw_file, [])
         return {"count": 0, "media_dir": str(media_dir), "manifest": str(manifest_path), "images": []}
 
@@ -1626,7 +1626,7 @@ def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100
             seen[sha] = img
 
     deduped = list(seen.values())
-    print(f"[stage_0_5] Raw: {len(all_images)}, after dedup: {len(deduped)}")
+    print(f"[stage 1.2] Raw: {len(all_images)}, after dedup: {len(deduped)}")
 
     # Save files and build metadata
     xref_to_page: dict[int, int] = {}
@@ -1651,7 +1651,7 @@ def stage_0_5_extract_images(raw_file: Path, config: Config, min_size: int = 100
         })
 
     _write_manifest(manifest_path, str(raw_file), raw_file, saved)
-    print(f"[stage_0_5] Done — {len(saved)} images saved to {media_dir}")
+    print(f"[stage 1.2] Done — {len(saved)} images saved to {media_dir}")
     return {"count": len(saved), "media_dir": str(media_dir), "manifest": str(manifest_path), "images": saved}
 
 
@@ -1698,22 +1698,22 @@ def _write_manifest(manifest_path: Path, source: str, raw_file: Path, images: li
 
 # ---------- Stage 0.6: Image captioning ----------
 
-def stage_0_6_caption_images(config: Config, stage_0_5_result: dict, batch_size: int = CAPTION_BATCH_SIZE) -> dict:
+def stage_1_3_caption_images(config: Config, stage_1_2_result: dict, batch_size: int = CAPTION_BATCH_SIZE) -> dict:
     """Caption extracted images using unified caption pipeline (Path A + Path B merged).
 
     Thin wrapper around _caption_images() for backward compatibility with the
     Stage 0.6 pipeline checkpoint. Internal implementation delegates to the
     unified function which supports both PyMuPDF-extracted images (Path A)
     and minerU-extracted images (Path B), with parallel batch dispatch."""
-    images = stage_0_5_result.get("images", [])
+    images = stage_1_2_result.get("images", [])
     if not images:
-        print("[stage_0_6] No images to caption — skipping")
+        print("[stage 1.3] No images to caption — skipping")
         return {"captioned": 0, "total": 0}
     if not config.caption_api_key:
-        print("[stage_0_6] Skipped — no API key for caption provider")
+        print("[stage 1.3] Skipped — no API key for caption provider")
         return {"captioned": 0, "total": len(images), "skipped": True, "reason": "no-api-key"}
 
-    media_dir = Path(stage_0_5_result["media_dir"])
+    media_dir = Path(stage_1_2_result["media_dir"])
     captioned = _caption_images(images, config, media_dir,
                                 source_label="pyMuPDF",
                                 batch_size=batch_size)
