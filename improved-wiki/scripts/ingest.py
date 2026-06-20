@@ -555,7 +555,16 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # file and the wrong answer gets reused across stages. The hash is
     # deterministic, so replay of the same prompt still hits the cache.
     stage = re.sub(r"[^a-zA-Z0-9]+", "-", _infer_stage(prompt)).strip("-")[:40] or "llm-task"
-    content_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:8]
+    # The slug hash must be stable across re-invokes of the same stage. Stage
+    # prompts embed an "Existing wiki pages" snapshot that changes as the wiki
+    # grows (lint pages, new ingests) — hashing the raw prompt made the slug
+    # change every invoke, thrashing the cache and re-prompting Stage 1 forever.
+    # Redact that volatile list (and the prompt's own prior-answer context that
+    # carries it) before hashing. The full prompt is still written to the .md
+    # for the LLM; only the cache *key* is stabilized.
+    stable_prompt = re.sub(
+        r"(Existing wiki pages:)[^\n]*", r"\1 <redacted>", prompt)
+    content_hash = hashlib.sha256(stable_prompt.encode("utf-8")).hexdigest()[:8]
     slug = f"{stage}-{content_hash}"
     prefix = config.conversation_prefix or "00000000"
     conv_dir = config.runtime_dir / "conversation" / prefix

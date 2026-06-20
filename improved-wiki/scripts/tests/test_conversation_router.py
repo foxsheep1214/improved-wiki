@@ -123,6 +123,31 @@ class TestConversationHandoff(unittest.TestCase):
             self.assertEqual(len(md_files), 2,
                              "distinct prompts must get distinct cache files")
 
+    def test_volatile_wiki_page_list_does_not_invalidate_cache(self):
+        # Regression: stage prompts embed an "Existing wiki pages" snapshot
+        # that changes as the wiki grows (lint pages, new ingests). Hashing
+        # the full prompt made the slug change every invoke → cache thrash →
+        # Stage 1 re-prompted forever. The slug hash must redact that volatile
+        # list so two prompts differing ONLY in the wiki-page list share a slug.
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp, conversation=True)
+            base = "build a digest\n- Existing wiki pages: overview, schema\n"
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(base, cfg, max_tokens=2048)
+            conv_dir = cfg.runtime_dir / "conversation" / cfg.conversation_prefix
+            first_md = next(conv_dir.glob("*.md"))
+            # Same prompt but the wiki-page list grew (lint pages added, etc.).
+            grown = "build a digest\n- Existing wiki pages: overview, schema, lint-x, lint-y\n"
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(grown, cfg, max_tokens=2048)
+            md_files = list(conv_dir.glob("*.md"))
+            # Both prompts must map to the SAME cache file (slug stable across
+            # wiki-page-list changes) — not two separate files.
+            self.assertEqual(len(md_files), 1,
+                             f"volatile wiki list must not split the cache; got {[m.name for m in md_files]}")
+            self.assertEqual(md_files[0], first_md)
+
     def test_without_conversation_mode_raises(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
