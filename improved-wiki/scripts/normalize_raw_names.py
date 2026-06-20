@@ -38,20 +38,47 @@ def _parse_yaml_block(text: str) -> dict:
 def _parse_simple_yaml(text: str) -> dict:
     """Minimal YAML parser for the NAMING.md rules block subset.
 
-    Supports nested dicts, string lists (both ['a', 'b'] and flattened
-    'a - b - c' items), and scalar values.
+    Supports nested dicts, scalars, and lists in TWO syntaxes:
+      * inline:  ``key: - a - b - c``            (single line, split on ' - ')
+      * block:   ``key:\\n  - a\\n  - b``          (one item per line)
+
+    Block lists are the form NAMING.md actually uses; the previous impl
+    skipped any line without a colon, silently dropping every ``- item``
+    line and leaving ``vendors`` / ``vendor_prefixes`` empty — which made
+    every datasheet fail the vendor check with a false "未识别的 Vendor".
+
+    A ``key:`` with an empty value is resolved to a list or dict by
+    looking ahead at the next deeper line (``- `` → list, else dict).
+    Duplicate top-level keys: last wins (YAML semantics).
     """
     lines = text.split('\n')
     result: dict = {}
     stack: List[Tuple[int, str, object]] = []
 
-    for line in lines:
+    def _split_inline_list(raw: str) -> List[str]:
+        raw = raw.strip()
+        if raw.startswith('- '):
+            raw = raw[2:]  # strip a leading list marker (inline `key: - a - b`)
+        return [v.strip().strip("'\"") for v in raw.split(' - ')
+                if v.strip().strip("'\"")]
+
+    for idx, line in enumerate(lines):
         stripped = line.rstrip()
-        if not stripped or stripped.startswith('#'):
+        if not stripped or stripped.lstrip().startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip())
+        content = stripped.lstrip()
+
+        # Block list item: "- value" on its own line (no key/colon).
+        # Belongs to the nearest list container on the stack. A single
+        # block item may itself carry several ' - '-separated values
+        # (e.g. "- ADC - ADS - AFE"), matching the inline-list convention.
+        if content.startswith('- '):
+            if stack and isinstance(stack[-1][2], list):
+                stack[-1][2].extend(_split_inline_list(content[2:]))
             continue
 
-        indent = len(line) - len(line.lstrip())
-        key, sep, val = stripped.partition(':')
+        key, sep, val = content.partition(':')
         key = key.strip()
         if not sep:
             continue
@@ -63,11 +90,21 @@ def _parse_simple_yaml(text: str) -> dict:
         parent = stack[-1][2] if stack else result
 
         if val == '':
-            parent[key] = {}
-            stack.append((indent, key, parent[key]))
+            # Look ahead: first deeper non-blank line decides list vs dict.
+            is_list = False
+            for nl in lines[idx + 1:]:
+                nls = nl.rstrip()
+                if not nls or nls.lstrip().startswith('#'):
+                    continue
+                if (len(nl) - len(nl.lstrip())) <= indent:
+                    break
+                is_list = nls.lstrip().startswith('- ')
+                break
+            container: object = [] if is_list else {}
+            parent[key] = container
+            stack.append((indent, key, container))
         elif val.startswith('- '):
-            items = [v.strip().strip("'\"") for v in val.split(' - ')
-                     if v.strip().strip("'\"")]
+            items = _split_inline_list(val)
             if key in parent and isinstance(parent[key], list):
                 parent[key].extend(items)
             else:
