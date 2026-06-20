@@ -1129,6 +1129,7 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
                 if text.endswith("```"):
                     text = text[:-3]
             text = text.strip()
+            text_len = len(text)
             try:
                 captions = json.loads(text)
             except json.JSONDecodeError:
@@ -1140,7 +1141,7 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
                 )
                 if salvaged:
                     captions = [{"idx": int(idx), "caption": cap} for idx, cap in salvaged]
-                    print(f"  batch {bi+1}: JSON truncated — salvaged {len(captions)} captions")
+                    print(f"  batch {bi+1}: JSON truncated ({text_len} chars) — salvaged {len(captions)}/{len(batch)} captions")
                 else:
                     # Recovery 2: single caption truncated mid-string (no closing quote)
                     m = re.search(r'"caption"\s*:\s*"((?:[^"\\]|\\.)*)$', text)
@@ -1148,12 +1149,12 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
                         cap_text = m.group(1).rstrip('，、, \t')
                         if len(cap_text) >= 15:
                             captions = [{"idx": 1, "caption": cap_text}]
-                            print(f"  batch {bi+1}: JSON truncated mid-caption — salvaged 1 caption")
+                            print(f"  batch {bi+1}: JSON truncated mid-caption ({text_len} chars) — salvaged 1/{len(batch)} caption")
                         else:
-                            print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
+                            print(f"  batch {bi+1}: JSON parse failed ({text_len} chars), unable to recover")
                             continue
                     else:
-                        print(f"  batch {bi+1}: JSON parse failed, text[:200]: {text[:200]}")
+                        print(f"  batch {bi+1}: JSON parse failed ({text_len} chars), text[:100]: {text[:100]}")
                         continue
             for cap in captions:
                 idx = cap.get("idx", 0) - 1
@@ -1166,7 +1167,7 @@ def _caption_images(images: list[dict], config: Config, media_dir: Path,
                     cap_path = media_dir / (batch[idx]["filename"] + ".caption.txt")
                     cap_path.write_text(caption_text, encoding="utf-8")
                     captioned += 1
-            print(f"  [{bi+1}/{len(batches)}] {len(captions)} captions")
+            print(f"  [{bi+1}/{len(batches)}] {len(captions)}/{len(batch)} captions ✓")
 
     print(f"[caption] Done — {captioned} captions written")
     return captioned
