@@ -141,6 +141,8 @@ fi
 LINT_SCRIPT=$(mktemp -t wiki-lint-XXXXXX.py)
 trap "rm -f '$LINT_SCRIPT' '$LINT_CACHE.tmp' '$LINT_CACHE.tmp.err'" EXIT
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export SCRIPT_DIR
 cat > "$LINT_SCRIPT" <<'PYEOF'
 import json
 import os
@@ -149,6 +151,9 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from _lint_suggest import run_structural_lint
 
 wiki_dir = Path(os.environ["WIKI_DIR"])
 findings: list[dict] = []
@@ -187,14 +192,12 @@ def resolve_slug(target: str) -> Optional[str]:
         return target
     return slug_map.get(target.lower())
 
-# 2. Scan for [[wikilinks]] in every page
+# 2. Read every page's content (pass 1).
 WIKILINK_RE = re.compile(r"\[\[([^\]\|]+?)(?:\|[^\]]+)?\]\]")
-out_links: dict[str, set[str]] = {stem: set() for stem in pages}
-broken_links: list[dict] = []
-
+contents: dict[str, str] = {}  # stem -> text
 for stem, path in pages.items():
     try:
-        text = path.read_text(encoding="utf-8")
+        contents[stem] = path.read_text(encoding="utf-8")
     except Exception as e:
         findings.append({
             "type": "read-error",
@@ -204,17 +207,44 @@ for stem, path in pages.items():
             "id": f"lint-read-{stem}",
             "createdAt": now_ms,
         })
-        continue
 
+# 2b. NashSU-parity fix suggestions via run_structural_lint (the same engine
+#     validate_ingest.py uses). broken-link → suggested_target,
+#     orphan → suggested_source, no-outlinks → suggested_target.
+#     Computed once here so the detection findings below can attach them.
+structural_pages = [(str(pages[s].relative_to(wiki_dir)), contents[s]) for s in pages if s in contents]
+_orphan_src: dict[str, Optional[str]] = {}
+_nolink_tgt: dict[str, Optional[str]] = {}
+_broken_tgt: dict[tuple, Optional[str]] = {}
+for _f in run_structural_lint(structural_pages):
+    _t = _f["type"]
+    if _t == "orphan":
+        _orphan_src[_f["page"]] = _f.get("suggested_source")
+    elif _t == "no-outlinks":
+        _nolink_tgt[_f["page"]] = _f.get("suggested_target")
+    elif _t == "broken-link":
+        _broken_tgt[(_f["page"], _f.get("broken_target"))] = _f.get("suggested_target")
+
+# 3. Scan for [[wikilinks]] (pass 2) — broken-link findings now carry suggestions.
+out_links: dict[str, set[str]] = {stem: set() for stem in pages}
+broken_links: list[dict] = []
+
+for stem, path in pages.items():
+    text = contents.get(stem)
+    if text is None:
+        continue
     for m in WIKILINK_RE.finditer(text):
         target = m.group(1).strip()
         out_links[stem].add(target)
         if resolve_slug(target) is None:
+            _page = str(path.relative_to(wiki_dir))
             broken_links.append({
                 "type": "broken-link",
                 "severity": "warning",
-                "page": str(path.relative_to(wiki_dir)),
+                "page": _page,
                 "detail": f"Broken link: [[{target}]] — target page not found.",
+                "broken_target": target,
+                "suggested_target": _broken_tgt.get((_page, target)),
                 "id": f"lint-bl-{stem}-{len(broken_links)}",
                 "createdAt": now_ms,
             })
@@ -240,6 +270,7 @@ for stem, path in pages.items():
         "severity": "info",
         "page": str(path.relative_to(wiki_dir)),
         "detail": "No other pages link to this page.",
+        "suggested_source": _orphan_src.get(str(path.relative_to(wiki_dir))),
         "id": f"lint-orphan-{stem}",
         "createdAt": now_ms,
     })
@@ -257,6 +288,7 @@ for stem, path in pages.items():
         "severity": "info",
         "page": str(path.relative_to(wiki_dir)),
         "detail": "This page has no [[wikilink]] references to other pages.",
+        "suggested_target": _nolink_tgt.get(str(path.relative_to(wiki_dir))),
         "id": f"lint-nol-{stem}",
         "createdAt": now_ms,
     })
@@ -435,6 +467,15 @@ for f in findings:
 
     page_path = lint_dir / filename
 
+    # Suggested fix from the NashSU-parity suggestion engine
+    sug_target = f.get('suggested_target')
+    sug_source = f.get('suggested_source')
+    suggestion = ''
+    if sug_target:
+        suggestion = f'\n## Suggested Fix\nLink to [[{sug_target}]] — closest existing page by slug/title similarity.\n'
+    elif sug_source:
+        suggestion = f'\n## Suggested Fix\n[[{sug_source}]] could link to this page (related by shared terms).\n'
+
     # Frontmatter
     fm = f'''---
 type: lint
@@ -448,7 +489,7 @@ created: {date_str}
 # {icon} [{ftype}] {page_ref}
 
 {detail}
-
+{suggestion}
 ## Resolution
 _修复后，将 frontmatter 中 \`resolved: false\` 改为 \`resolved: true\`，下次 lint 时自动清理。_
 '''
