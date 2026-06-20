@@ -1617,7 +1617,7 @@ def _auto_validate_ingest(config: Config, raw_file: Path) -> None:
         env={**os.environ, "IMPROVED_WIKI_ROOT": str(config.wiki_root),
              "SOURCE_SLUG": slug,
              "CACHE_KEY": cache_key},
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=600,
     )
     # Print the validator output (shows per-stage PASS/FAIL)
     stdout = result.stdout.strip()
