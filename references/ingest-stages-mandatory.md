@@ -1,6 +1,6 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——基于 NashSU v0.4.25 autoIngestImpl() 流水线的 ~13 个编号 ingest Stage + 2 个前置门（0.1/0.3）+ lint + graph 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——基于 NashSU v0.4.25 autoIngestImpl() 流水线的 ~13 个编号 ingest Stage + 2 个前置门（0.1/0.3）+ Lint + Graph 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
 tags: [ingest, mandatory, nashsu, pipeline]
 related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 ---
@@ -9,7 +9,7 @@ related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 
 ## 为什么需要"强制"？
 
-Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **~13 个编号 ingest Stage + 2 个前置门（0.1 源页去重 / 0.3 Pilot OCR）+ lint + graph**（编号与 `ingest.py` 代码一致）。**任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。
+Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **~13 个编号 ingest Stage + 2 个前置门（0.1 源页去重 / 0.3 Pilot OCR）+ Lint + Graph**（编号与 `ingest.py` 代码一致）。**Ingest 任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。**Graph 是独立命令**（与 Ingest/Lint 并列，不属于 lint），见下文「Graph 命令」段。
 
 **跳过的代价**：
 1. **raw 是 sacred**（Layer 1 原则）—— PDF 里的图也是 raw 的一部分，跳过图片提取 = 丢了一半知识
@@ -373,11 +373,12 @@ for k, v in cache['entries'].items():
 - **2026-06-19**：`validate_ingest.py` 重编号对齐本文（旧 Stage 4/5/6 → 2.5(rev)/2.6/4，旧 3.7 并入 Stage 3）；新增 Stage 2.3 query / 2.5 cmp 两个验证段；`ingest.py` cache `stages` 新增 `queries_generated`/`comparisons_generated` 字段；修正自动验证表 Stage 1 "5 个 key"→"6 个"、Stage 3 "RuntimeError"→"warning（不中止）"
 - **2026-06-17**：高层知识空缺检测移至 lint 系统（`knowledge-gap-lint.md`）；REVIEW 目录分子目录；Phase 4+5 合并；Stage 3.1 合并入 3.5；Stage 4 合并入 2.5 review
 - **2026-06-17**：新增 **Stage 16-18 知识图谱后处理**（Lint 阶段，不在 ingest 管线内）。四信号加权图构建 + Louvain 社区检测 + 图谱洞察输出。脚本：`scripts/build_knowledge_graph.py`。触发时机：批量 ingest 后按需运行，不在单次 ingest 中自动执行。
+- **2026-06-20**：知识图谱从 lint 剥离，改为独立 **Graph 命令**（与 Ingest / Lint 并列，对齐 NashSU graph-view 架构——KG 在 NashSU 本就由 `graph-view.tsx` 按需构建，不属于 lint）。脚本重命名 `build_knowledge_graph.py` → `graphify.py`。Stage 16-18 框架改为「Graph 命令」段。
 
 
-## Lint 阶段：知识图谱（Stage 16-18）
+## Graph 命令：知识图谱（Stage 16-18）
 
-> **定位**：Lint 阶段（不在单次 ingest 管线中）。Ingest 管线的 16 Stage 不碰图——图建在 lint，图用在 ingest（Stage 2 可通过 `--mode query` 查询已有图为新页面建议 wikilinks）。触发时机：完成一批 ingest（≥10 本新书）后手动运行，或 cron 定期执行。
+> **定位**：**独立命令**（与 Ingest / Lint 并列，**不属于 lint**）。Ingest 管线不碰图——图建在 Graph 命令，图用在 Ingest（Stage 2 可通过 `--mode query` 查询已有图为新页面建议 wikilinks）。触发时机：完成一批 ingest（≥10 本新书）后手动运行，或 cron 定期执行，或 ingest 后由 `AUTO_BUILD_GRAPH=1` 自动触发。NashSU desktop 端这对应 graph-view 组件（`wiki-graph.ts` + `graph-relevance.ts` + `graph-insights.ts`），按需构建，与 lint 完全解耦。
 
 ### Stage 16 · 四信号知识图谱构建
 
@@ -412,21 +413,21 @@ for k, v in cache['entries'].items():
 ### Stage 16-18 使用方式
 
 ```bash
-# 全量分析（lint 阶段，批处理）
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py
+# 全量分析（Graph 命令，批处理）
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py
 
 # 仅查看统计（不写文件）
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py --dry-run
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py --dry-run
 
 # 大 wiki 先小规模测试
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py --dry-run --limit 500
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py --dry-run --limit 500
 
 # ingest 时查询：给新页面推荐 wikilinks
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py \
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py \
   --mode query --slug "my-new-page"
 
 # 调整 cohesion 告警阈值（默认 0.15）
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/build_knowledge_graph.py --min-cohesion 0.10
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py --min-cohesion 0.10
 ```
 
 **依赖**：`pip install networkx python-louvain pyyaml`

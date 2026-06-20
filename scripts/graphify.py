@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
-build_knowledge_graph.py — Post-ingest knowledge graph analysis.
+graphify.py — the Graph command of improved-wiki (knowledge graph build).
 
-Builds a weighted undirected graph from wiki pages using NashSU's four-signal
-model, then runs Louvain community detection to discover knowledge clusters,
-compute cohesion scores, and export graph data for LLM Wiki visualization.
+The Graph command is a peer of Ingest and Lint — a separate phase, not part
+of lint. It is the CLI equivalent of NashSU's desktop graph-view
+(`src/lib/wiki-graph.ts` + `graph-relevance.ts` + `graph-insights.ts`):
+builds a weighted undirected graph from wiki pages using NashSU's four-signal
+model, runs Louvain community detection to discover knowledge clusters,
+computes cohesion scores, and exports graph data for visualization.
 
-Four signals (NashSU v0.4.24 parity):
+Deterministic — no LLM calls (unlike Ingest text-gen / Lint semantic). Pure
+networkx + python-louvain computation.
+
+Four signals (NashSU v0.4.25 parity):
   1. Direct link     (×3.0)  [[wikilinks]] between pages
   2. Source overlap  (×4.0)  pages citing the same raw source
   3. Adamic-Adar     (×1.5)  common neighbors / log(neighbor degree)
-  4. Type affinity   (×1.0)  same type + same domain bonus
+  4. Type affinity   (×1.0)  TYPE_AFFINITY matrix (entity↔concept 1.2, …)
 
 Outputs (written to <state_dir>/):
   graph.json          Full graph: nodes, edges, communities, cohesion — for
@@ -20,17 +26,17 @@ Outputs (written to <state_dir>/):
   clusters/           One hub page per Louvain community with key concepts,
                       suggested cross-links, and cohesion score.
 
-This is a LINT-phase script (not ingest). Run it periodically after batch
-ingests to audit the whole knowledge base at once. For per-book suggestions
-during ingest, use the lightweight read-only query mode (--mode query).
+Run it periodically after batch ingests to audit the whole knowledge base at
+once. For per-book suggestions during ingest, use the lightweight read-only
+query mode (--mode query). ingest.py can also auto-trigger it post-ingest
+behind AUTO_BUILD_GRAPH=1 (30-min staleness guard).
 
 Usage:
-  ./build_knowledge_graph.py                          # full build + outputs
-  ./build_knowledge_graph.py --mode query --slug <s>  # read-only: suggest
-                                                      # wikilinks for a
-                                                      # single new page
-  ./build_knowledge_graph.py --dry-run                # print stats, skip write
-  ./build_knowledge_graph.py --min-cohesion 0.12      # lower warning threshold
+  ./graphify.py                          # full build + outputs
+  ./graphify.py --mode query --slug <s>  # read-only: suggest wikilinks for a
+                                         # single new page
+  ./graphify.py --dry-run                # print stats, skip write
+  ./graphify.py --min-cohesion 0.12      # lower warning threshold
 
 Dependencies:
   pip install networkx python-louvain pyyaml
@@ -589,7 +595,7 @@ def _write_cluster_hubs(
                 "neighboring community."
             )
         lines.append(
-            "- Regenerate this report by running `build_knowledge_graph.py` "
+            "- Regenerate this report by running `graphify.py` "
             "after significant ingest batches."
         )
 
