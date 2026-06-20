@@ -171,10 +171,20 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
   - `digest_updates`：对 global digest 的修正/扩展/矛盾
 - **go/no-go**：`stages.chunks_analyzed ≥ 1`（cache 中记录 ≥1 块）
 
+### Stage 2.2.1 · Incremental Association Detection ⭐ **新增 2026-06-20**
+
+- **作用**：在 chunk 分析完成后、生成页面之前，检测本源的 entities/concepts 与 wiki 已有页面的关联。使新源的概念生成能够自动避免重复、自动识别需要生成 comparison 的对象。
+- **跳过条件**：wiki 为空（首次 ingest）时自动跳过
+- **产物**：progress checkpoint 中的 `incremental_associations`（字典：concept_name → [existing_wiki_page_names]）
+- **go/no-go**：
+  - wiki 非空：`stages.incremental_associations` 已记录
+  - wiki 为空：自动跳过，标记为完成
+
 ### Stage 2.3 · Source/Concept/Entity Generation（统一 barrier-free pipeline）
 
 - **作用**：与 Stage 2.2 合并为 **barrier-free pipeline**：analyze chunk → generate pages → next chunk。对所有 chunk 数统一——1 chunk = 单次循环，N chunks = N 次循环。每个 chunk 分析完立即生成概念/实体页，不等全部分析完成。**仅生成 source / concept / entity 三种 page type**。
 - **为什么统一**：NashSU 对单 chunk 书用 legacy synthesis（多轮追问），但单次 synthesis LLM 调用经常因 token 超限或超时失败。barrier-free 每 chunk 一次小调用，稳定且可恢复。
+- **新增 2026-06-20**：在生成时利用 Stage 2.2.1 的 `incremental_associations`，对匹配的概念自动标记 `existing_wiki_reference` 字段。
 - **产物**：FILE blocks → `parse_file_blocks()` → 写入 `wiki/` 目录
 - **输出格式**：`---FILE:wiki/<path>---\n<markdown content>\n---END FILE---`
 - **go/no-go**：
@@ -183,6 +193,27 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
   - 概念页路径在 `wiki/concepts/` 下（不在 bare `wiki/` 或 `wiki/sources/`）
   - 至少 1 个 chunk 产出 ≥ 1 个 block
 - **fallback**：barrier-free 产出 0 个 concept → 自动降级为 per-concept 生成（每个 concept 一次 LLM 调用）
+
+### Stage 2.3.1 · Concept Dedup & Merge ⭐ **新增 2026-06-20（高优先）**
+
+- **作用**：在 Stage 2.3 生成所有 chunk 的 concept/entity 后，对同一本书内部的概念进行智能去重与合并。防止"同一概念以不同名称和定义在不同 chunk 出现"导致的重复页面。**质量关键环节。**
+- **跳过条件**：单 chunk 书（≤60K 字符）自动跳过
+- **产物**：progress checkpoint 中的 `concept_merge_rules`（列表：[{primary, duplicates, merge_strategy}]）
+- **go/no-go**：
+  - 单 chunk：跳过
+  - 多 chunk：`concept_merge_rules` 已记录（可为 `[]`）
+- **算法**：
+  1. 收集 Stage 2.3 的所有 concept page FILE blocks
+  2. LLM 1 次调用：按名称+定义相似度聚类（>80% 相似合并）
+  3. 对每聚类生成合并定义（取并集 + 补充细节）
+  4. 更新 FILE blocks：用合并 slug 替换所有引用，删除重复
+- **输出给 Stage 2.4**：去重后的 FILE blocks
+
+### Stage 2.4 · Source Page Generation
+
+- **作用**：基于 Stage 2.3.1 的去重结果，生成或更新源页面。源页是本书的索引，列出所有概念、实体、问题、对比。
+- **产物**：唯一的 source page FILE block
+- **go/no-go**：source page 路径为 `wiki/sources/<stem>.md`
 
 ### Stage 2.5 · Query Auto-Generation ⭐ **新增 2026-06-16**
 
@@ -195,16 +226,35 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
   - 每个 query body ≥200 字符（不含 frontmatter）
 - **prompt 模板**：见 `references/query-generation.md`
 
+### Stage 2.5.1 · Cross-source Query Resolution ⭐ **新增 2026-06-20（高优先）**
+
+- **作用**：对 Stage 2.5 生成的 query，自动检索 wiki 已有页面是否包含答案。如果发现答案（wikilink 匹配度 >70%），自动关闭 query；如果答案不完整，转换为 comparison 而非 query。从而把零散的知识自动关联起来，减少"已问过的问题"积累。
+- **跳过条件**：Stage 2.5 无 query 生成，或 wiki 为空时自动跳过
+- **产物**：progress checkpoint 中的 `query_resolutions`（列表：[{query_slug, status, resolution_pages}]）
+  - status: "closed" / "rewritten_as_comparison" / "kept"
+  - resolution_pages: 找到的相关已有页面列表
+- **go/no-go**：
+  - `query_resolutions` 已记录（可为 `[]`）
+  - 关闭或改写的 query 已从 FILE blocks 中移除或重标记
+- **算法**：
+  1. 对每个 Stage 2.5 生成的 query FILE block
+  2. 提取 query title + body 的关键概念
+  3. 在 wiki 中搜索相关页面（semantic search 或关键词匹配，>70% 匹配度）
+  4. LLM 判断：answer_found（直接关闭） / answer_incomplete（建议 comparison） / no_answer（保留 query）
+  5. 更新 FILE blocks：关闭的 query 删除，comparison 建议传给 Stage 2.6
+- **输出给 Stage 2.6**：解析后的 query/comparison 建议
+
 ### Stage 2.6 · Comparison Auto-Generation ⭐ **新增 2026-06-16**（2.5A/B/C）
 
 - **作用**：生成对比分析页面，分三种场景：
-  - **2.5A 域内消歧义**：新 concept 名称与 wiki 已有 concept 同名但不同 domain → 创建/更新消歧义页（`type: comparison`, `domain: general`）。对齐 NashSU `domains.md` 消歧义规则。
-  - **2.5B 源内概念对比**：同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM、EMI vs EMC）→ 生成对比页（对比维度 ≥4）。
-  - **2.5C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 3.3 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
+  - **2.6A 域内消歧义**：新 concept 名称与 wiki 已有 concept 同名但不同 domain → 创建/更新消歧义页（`type: comparison`, `domain: general`）。对齐 NashSU `domains.md` 消歧义规则。
+  - **2.6B 源内概念对比**：同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM、EMI vs EMC）→ 生成对比页（对比维度 ≥4）。
+  - **2.6C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 3.3 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
+  - **2.6D 来自 Stage 2.5.1 的建议**：Stage 2.5.1 发现"答案不完整"的 query 转为 comparison 建议。
 - **跳过条件**：本次无 concept 产出（纯 stub source）时自动跳过。
-- **产物**：0-2 个 `wiki/comparisons/<slug>.md` 页面（消歧义 + 源内对比），或 `---COMPARISONS: 0---` 标记。
+- **产物**：0-3 个 `wiki/comparisons/<slug>.md` 页面（消歧义 + 源内对比 + 不完整答案对比），或 `---COMPARISONS: 0---` 标记。
 - **go/no-go**：
-  - 生成了 0-2 个 comparison FILE block 或 `---COMPARISONS: 0---` 标记
+  - 生成了 0-3 个 comparison FILE block 或 `---COMPARISONS: 0---` 标记
   - 每个 comparison frontmatter 含 `type: comparison` + `title:` + `domain:` 三必填字段
 - **prompt 模板**：见 `references/comparison-generation.md`
 
@@ -245,6 +295,52 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 
 **🚨 2026-06-13 ADL8113 事故**：NashSU 原生让 LLM 同时输出 index/log/overview，但 LLM 不会读到旧的 wiki 文件内容，静默丢失所有历史。improved-wiki 对策：index.md / log.md 纯程序化 append（LLM 不参与）；overview.md LLM 重写但喂入当前全文作上下文。
 
+### Stage 3.4.1 · Quality Scoring Card ⭐ **新增 2026-06-20（中优先）**
+
+- **作用**：对本次 ingest 的质量进行量化评分，生成质量评分卡。快速识别哪些 ingest 有问题需要人工复审，避免低质量内容进入 wiki。
+- **跳过条件**：无（总是执行）
+- **产物**：progress checkpoint 中的 `quality_metrics` 字典 + 可选的 `wiki/lint/audit/<date>-<source>-quality.md` 评分卡
+  - 评分卡格式：
+    ```markdown
+    ---
+    type: audit
+    source: <source-stem>
+    date: <ingest-date>
+    overall_score: <0.0-1.0>
+    ---
+    
+    ## 质量评分
+    | 维度 | 评分 | 权重 | 说明 |
+    |------|------|------|------|
+    | 文本覆盖 | ... | 25% | 提取字符数 / 预期字符数 |
+    | 图片质量 | ... | 20% | 提取图数 / 预期图数 + caption 长度 |
+    | 概念密度 | ... | 25% | 生成页数 / 文本长度 |
+    | Review 质量 | ... | 20% | 1 - (review_count / file_blocks) |
+    | 去重完整性 | ... | 10% | (原始概念数 - 重复数) / 原始概念数 |
+    
+    ## 详细诊断
+    ...
+    ```
+- **go/no-go**：
+  - `quality_metrics` 已记录
+  - 如果 `overall_score < 0.65`，自动标记为 "needs_review"，写入 `wiki/REVIEW/audit/`
+- **算法**：
+  ```
+  text_coverage = len(extracted_text) / len(original_pdf_text)
+  image_quality = (len(extracted_images) / expected_images) * (avg_caption_length / 50)
+  concept_density = len(unique_concepts) / (len(extracted_text) / 1000)
+  review_quality = 1 - min(1.0, review_count / max(1, file_blocks_count))
+  dedup_completeness = (concept_count_before - concept_duplicates) / concept_count_before
+  
+  overall_score = (
+    0.25 * text_coverage +
+    0.20 * image_quality +
+    0.25 * concept_density +
+    0.20 * review_quality +
+    0.10 * dedup_completeness
+  )
+  ```
+
 ### Stage 3.5 · Embeddings
 - **作用**：把 wiki/ 下的页面 chunk 化 + embed，写到 LanceDB
 - **跳过代价**：检索只能用纯关键词（wiki < 100 页可接受，> 100 页必须 embeddings）
@@ -256,22 +352,36 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 ## 强制顺序（不能乱）
 
 ```
-0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 3.1 → 3.2 → 3.3 → 3.4 → [3.5] → 4.1
+0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.2.1 → 2.3 → 2.3.1 → 2.4 → 2.5 → 2.5.1 → 2.6 → 3.1 → 3.2 → 3.3 → 3.4 → 3.4.1 → [3.5] → 4.1
 ```
 
-- **Stage 0.3 Pilot 是强制前置**：任何 PDF 走 Stage 1.1 之前必须先 5-10 页 pilot 验证
+新增 Stage（2026-06-20）：
+- **2.2.1**：增量学习关联检测（wiki 非空时执行）
+- **2.3.1**：概念去重与合并（多 chunk 书执行）
+- **2.5.1**：跨源查询解析（Stage 2.5 产出 query 时执行）
+- **3.4.1**：质量评分卡（总是执行）
+
+执行依赖关系：
+- Stage 0.3 Pilot 是强制前置：任何 PDF 走 Stage 1.1 之前必须先 5-10 页 pilot 验证
 - 1.2 **必须先于** 1.3（先有图才能 caption）
 - 1.2/1.3 **必须先于** 3.2（3.2 注入图引用）
-- Stage 2.1 / 2.2 **永远不能跳过**（短源 1 chunk / 长源 N chunk，都是 2.2 内部逻辑，不是 skip）
-- **Phase 2（Generation）全部在内存中完成**——2.3（concept/entity）→ 2.4（source）→ 2.5（query）→ 2.6（comparison）。串行执行：2.4 依赖 2.3 的 concept 列表，2.5 依赖 2.3 的 concept 列表，2.6 依赖 2.3 的 concept 列表 + wiki 已有页面列表。所有产出统一由 Stage 3.1 写盘。
-  - **Stage 3.3（review）运行在已写盘的文件上**，这样 human reviewer 可以直接看到实际页面内容（包括 2.5/2.6 产出的 query/comparison 页面）
-  - **Stage 3.4（aggregate repair）在所有页面写盘后运行**，确保 index/log/overview 基于完整的磁盘状态
+- Stage 2.1 / 2.2 **永远不能跳过**（短源 1 chunk / 长源 N chunk）
+- **2.2.1 依赖 2.2 完成**（需要 chunk analysis 结果）；wiki 为空时自动跳过
+- **2.3 使用 2.2.1 的增量关联上下文**（优化生成质量）
+- **2.3.1 依赖 2.3 完成**（需要所有 concept FILE blocks）；单 chunk 书自动跳过
+- **Phase 2（Generation）全部在内存中完成**：2.3 → 2.3.1 → 2.4 → 2.5 → 2.5.1 → 2.6，串行执行。所有产出统一由 Stage 3.1 写盘。
+- **2.5.1 依赖 2.5 完成 + wiki 已有内容**（搜索和匹配）
+- **Stage 3.3（review）运行在已写盘的文件上**，human reviewer 可直接看页面内容
+- **Stage 3.4（aggregate repair）在所有页面写盘后运行**
+- **Stage 3.4.1（质量评分）在 3.4 完成后运行**，基于完整的 ingest 结果
 - 2.5 是 conditional（datasheet/standard 自动跳过）
+- 2.5.1 是 conditional（Stage 2.5 无 query 或 wiki 为空时自动跳过）
 - 2.6 是 conditional（无 concept 产出时自动跳过）
 - 3.3 (review) 是 conditional（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）
-- 2.6 程序化 append index/log + LLM 重写 overview（喂入现有内容防丢失）
-- 2.6 在所有 stage 之后（写最终缓存）；hard error（磁盘满/权限）阻止 cache save
-- 4 auto-run 当 `EMBEDDING_BASE_URL` 已设置时；否则手动 `build_embeddings.py`
+- 3.4.1 是 conditional（overall_score < 0.65 时标记为 needs_review）
+- 3.4 程序化 append index/log + LLM 重写 overview（喂入现有内容防丢失）
+- 3.4 在所有 stage 之后（写最终缓存）；hard error（磁盘满/权限）阻止 cache save
+- 3.5 auto-run 当 `EMBEDDING_BASE_URL` 已设置时；否则手动 `build_embeddings.py`
 
 ---
 
@@ -285,24 +395,38 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - [ ] **Stage 1.3：每张图有 .caption.txt（长度 ≥ 20 字符）**
 - [ ] Stage 2.1：global-digest.yaml 合法
 - [ ] Stage 2.2：所有 chunk analysis 合法
+- [ ] **Stage 2.2.1：incremental_associations 已记录**（wiki 非空时）
 - [ ] Stage 2.3：generation_response.txt 的 stop_reason == end_turn（**不是 max_tokens**）
+- [ ] **Stage 2.3.1：concept_merge_rules 已记录**（多 chunk 书）；重复概念已合并
+- [ ] **Stage 2.4**：源页面已生成并包含 concept 列表
 - [ ] **Stage 2.5：query 页面已生成或 `---QUERIES: 0---` 已记录**（datasheet/standard 自动跳过）
-- [ ] **Stage 2.3.5：comparison 页面已生成或 `---COMPARISONS: 0---` 已记录**（无 concept 时自动跳过）
-- [ ] **Stage 2.3.5：review items 已生成并写入 wiki/REVIEW/（即使 0 items）**
+- [ ] **Stage 2.5.1：query_resolutions 已记录**；已关闭或改写的 query 已处理
+- [ ] **Stage 2.6：comparison 页面已生成或 `---COMPARISONS: 0---` 已记录**（无 concept 时自动跳过）
+- [ ] **Stage 3.3：review items 已生成并写入 wiki/REVIEW/（即使 0 items）**
 - [ ] Stage 3.1：所有 FILE 块写盘成功
 - [ ] **Stage 3.2：source 页含 `## Embedded Images` 段**
 - [ ] **Stage 3.4：ingest-cache.json 含本次所有 raw 文件 hash**（且 `validate_ingest.py` 通过；ingest.py 末尾自动运行）
+- [ ] **Stage 3.4.1：quality_metrics 已记录；overall_score 已计算**；如 <0.65 已标记为 needs_review
 - [ ] Stage 3.5：lancedb 表已更新（如启用 embeddings）
 
-**加粗的 9 个 stage 是最容易跳过的**（也是历史上最容易出事的）：
-- Stage 0.3 Pilot（2026-06-11 新增）—— 没 pilot 直接全本 = 浪费数小时
-- 0.5（图提取）— 看似 optional，实际丢一半知识
-- 0.6（图 caption）— 看似 optional，实际让图无法检索
-- 2.3（query 生成）— **2026-06-16 新增**；看似 optional，实际让知识库只有事实没有追问
-- 2.5（comparison 生成）— **2026-06-16 新增**；看似 optional，实际让跨概念理解和消歧义缺失
-- 2.5（review suggestions）— 看似 optional，实际让错误内容永久残留
-- 3.5（图注入 source 页）— 看似 optional，实际让图与 wiki 脱节
-- 2.6（cache 写入）— 看似 optional，实际下次跑会重做所有 stage
+**关键新增 stage**（2026-06-20 优化）：
+- **Stage 2.2.1**（增量学习）—— 避免新源生成孤儿概念
+- **Stage 2.3.1**（概念去重）—— 防止同一本书的重复概念页面
+- **Stage 2.5.1**（跨源查询解析）—— 自动关闭已有答案的 query
+- **Stage 3.4.1**（质量评分）—— 快速识别质量问题的 ingest
+
+**历史上最容易跳过的 stage**：
+- Stage 0.3 Pilot（2026-06-11）—— 没 pilot 直接全本 = 浪费数小时
+- Stage 1.2（图提取）— 丢失图知识
+- Stage 1.3（图 caption）— 图无法检索
+- Stage 2.3.1（概念去重）— **2026-06-20 新增**；重复页面污染 wiki
+- Stage 2.5（query 生成）—— 知识库只有事实没有追问
+- Stage 2.5.1（跨源查询解析）— **2026-06-20 新增**；重复提问浪费资源
+- Stage 2.6（comparison 生成）— 跨概念理解和消歧义缺失
+- Stage 3.3（review 建议）—— 错误内容永久残留
+- Stage 3.2（图注入）—— 图与 wiki 脱节
+- Stage 3.4（cache 写入）—— 下次跑会重做所有 stage
+- Stage 3.4.1（质量评分）—— 无法识别问题 ingest
 
 ---
 

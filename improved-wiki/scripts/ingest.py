@@ -106,6 +106,9 @@ from _stage_3_write import (
     _auto_correct_wiki_path, _contains_cjk, _make_cjk_slug,
     backup_existing_page,
 )
+from _stage_3_5_embeddings import (
+    stage_3_5_embeddings, check_local_bge_m3,
+)
 
 
 # Use shared runtime detection (matches all other scripts)
@@ -1276,8 +1279,14 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         return {"status": "hard-error", "error": str(e),
                 "files_written": files_written_paths + index_log_files}
 
-    # Archive + embed + validate
-    _auto_embed_new_pages(config, files_written_paths + index_log_files)
+    # Stage 3.5: Embeddings (强制执行，2026-06-20)
+    checkpoint = {"files_written": files_written_paths + index_log_files}
+    if not stage_3_5_embeddings(checkpoint, config.wiki_dir, []):
+        print("❌ Stage 3.5 embedding 失败")
+        return {"status": "hard-error", "error": "Stage 3.5 embedding failed",
+                "files_written": files_written_paths + index_log_files}
+
+    # Stage 4.1: Validate + archive
     _auto_validate_ingest(config, raw_file)
 
     return {"status": "ok", "files_written": cache["entries"][rel]["filesWritten"]}
