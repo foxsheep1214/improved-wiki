@@ -53,7 +53,7 @@ calling agent's model to do that work.
 - **Deep Research** ⭐: `/improved-wiki deep-research <topic>` — closed-loop web→wiki research pipeline (NashSU `deep-research.ts` parity). See `references/deep-research.md`.
 - **Save Chat to Wiki** ⭐: say "保存到 wiki" after any conversation — captures chat insight as wiki page + auto-ingests (NashSU `chat-save-to-wiki.ts` parity). See `references/save-chat-to-wiki.md`.
 - **Review Sweep** ⭐: `/improved-wiki sweep-reviews` — auto-resolves review items satisfied by subsequent ingests (NashSU `sweep-reviews.ts` parity). See `references/review-sweep.md`.
-- **Graph** ⭐: `python3 scripts/graphify.py` (or `/graphify`) — build/refresh the knowledge graph. Peer of Ingest/Lint, **not** part of lint. NashSU graph-view CLI parity: four-signal weighted graph + Louvain communities + cohesion + gaps + cluster hubs. Deterministic (no LLM). `--mode query --slug <s>` for read-only per-page suggestions.
+- **Graph** ⭐: `python3 scripts/graph.py` — build/refresh the knowledge graph. Peer of Ingest/Lint, **not** part of lint. NashSU graph-view CLI parity: four-signal weighted graph + Louvain communities + cohesion + gaps + cluster hubs. Deterministic (no LLM). `--mode query --slug <s>` for read-only per-page suggestions.
 - **Stage Checklist**: `references/ingest-stages-mandatory.md` — authoritative ingest-stage checklist with go/no-go gates.
 
 ## Reference map
@@ -102,7 +102,7 @@ calling agent's model to do that work.
 - **Save chat to wiki** ⭐ (NashSU v0.4.25 parity): say "保存到 wiki" after any conversation — captures insight as wiki page with `origin: chat-save` + auto-ingests. Conversations become permanent knowledge. See `references/save-chat-to-wiki.md`.
 - **Review sweep** ⭐ (NashSU v0.4.25 parity): `/improved-wiki sweep-reviews` — scans pending review items, auto-resolves those satisfied by subsequent ingests (rule-based + LLM semantic judge). Keeps review backlog actionable. See `references/review-sweep.md`.
 - **Batch ingest**: `python3 scripts/ingest.py f1.pdf f2.pdf ...` — parallel Stage 0-2 per book, serial Stage 3+ write
-- **Graph** (separate command, peer of Ingest/Lint): `python3 scripts/graphify.py` builds the knowledge graph (NashSU graph-view CLI parity — four-signal weighted graph + Louvain communities + cohesion + gaps + cluster hubs). Deterministic, no LLM. `AUTO_BUILD_GRAPH=1` auto-rebuilds after ingest (30-min staleness guard). `--mode query --slug <s>` for read-only per-page wikilink suggestions during ingest.
+- **Graph** (separate command, peer of Ingest/Lint): `python3 scripts/graph.py` builds the knowledge graph (NashSU graph-view CLI parity — four-signal weighted graph + Louvain communities + cohesion + gaps + cluster hubs). Deterministic, no LLM. `AUTO_BUILD_GRAPH=1` auto-rebuilds after ingest (30-min staleness guard). `--mode query --slug <s>` for read-only per-page wikilink suggestions during ingest.
 - **Unified barrier-free pipeline**: Stage 1.5 + 2.1 merged — analyze chunk → generate pages → next chunk. Works for all chunk counts (1 to N). Accumulating context + per-chunk checkpoint for crash recovery. Legacy multi-round synthesis retired.
 - **Parallel I/O**: caption ∥ digest (Stage 0.6∥1), caption batch dispatch (×6 workers). Pure I/O-bound parallelism only — no quality impact.
 - **Heading path tracking** (NashSU parity): each chunk analysis prompt includes full heading hierarchy (`Chapter 3 > Section 3.2 > Subsec 3.2.1`)
@@ -118,7 +118,7 @@ calling agent's model to do that work.
 - **Queue watch**: `--watch --drain` daemon mode consuming `ingest-queue.json`
 - **Auto-validation**: `validate_ingest.py` runs at end of every ingest; per-stage gate functions (`_verify_stage_0_text`, `_verify_stage_1_5_chunks`, etc.)
 - **NashSU parity**: aligned with `ingest.ts` v0.4.25 on heading path, overlap suffix, accumulating digest, CJK slug, PPTX/DOCX, sources union merge, schema routing, aggregate repair caps, page merge, wikilink enrichment, source lifecycle. Chunk pipeline improved to barrier-free (analyze→generate per chunk, unified for all chunk counts)
-- **Graph 四信号权重** (built-in): `graphify.py` uses NashSU's four-signal model (direct link ×3.0, source overlap ×4.0, Adamic-Adar ×1.5, type affinity ×1.0) for weighted Louvain community detection
+- **Graph 四信号权重** (built-in): `graph.py` uses NashSU's four-signal model (direct link ×3.0, source overlap ×4.0, Adamic-Adar ×1.5, type affinity ×1.0) for weighted Louvain community detection
 - **Per-page 语言门禁** (built-in): `ingest.py` Stage 3.5 detects body language per FILE block, warns on mismatch with expected source language (NashSU contentMatchesTargetLanguage parity)
 - **Schema routing validation** (built-in): `ingest.py` validates `type:` frontmatter against file path directory, auto-corrects mismatches (NashSU validateWikiPageRouting parity)
 - **Path safety validation** (built-in): `ingest.py` rejects FILE blocks with `..` segments, absolute paths, Windows-invalid names, and non-wiki/ destinations (NashSU isSafeIngestPath parity)
@@ -132,7 +132,7 @@ calling agent's model to do that work.
 | Stage Modules | `_stage_0_extract.py`, `_stage_1_analyze.py`, `_stage_2_generate.py`, `_stage_3_write.py` |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `validate_ingest.py`, `validate-frontmatter.sh`, `normalize_raw_names.py` |
-| Graph | `graphify.py` (NashSU graph-view CLI parity; four-signal + Louvain; deterministic, no LLM) |
+| Graph | `graph.py` (NashSU graph-view CLI parity; four-signal + Louvain; deterministic, no LLM) |
 | Queue | `wiki-monitor.sh`, `run-queue.sh` |
 | Embeddings | `build_embeddings.py`, `search_wiki.py` |
 | Repair | `repair_wiki.py`, `repair_stage_38.py`, `reingest_batch.py`, `sweep_reviews.py` |

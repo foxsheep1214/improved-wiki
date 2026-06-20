@@ -373,7 +373,7 @@ for k, v in cache['entries'].items():
 - **2026-06-19**：`validate_ingest.py` 重编号对齐本文（旧 Stage 4/5/6 → 2.5(rev)/2.6/4，旧 3.7 并入 Stage 3）；新增 Stage 2.3 query / 2.5 cmp 两个验证段；`ingest.py` cache `stages` 新增 `queries_generated`/`comparisons_generated` 字段；修正自动验证表 Stage 1 "5 个 key"→"6 个"、Stage 3 "RuntimeError"→"warning（不中止）"
 - **2026-06-17**：高层知识空缺检测移至 lint 系统（`knowledge-gap-lint.md`）；REVIEW 目录分子目录；Phase 4+5 合并；Stage 3.1 合并入 3.5；Stage 4 合并入 2.5 review
 - **2026-06-17**：新增 **Stage 16-18 知识图谱后处理**（Lint 阶段，不在 ingest 管线内）。四信号加权图构建 + Louvain 社区检测 + 图谱洞察输出。脚本：`scripts/build_knowledge_graph.py`。触发时机：批量 ingest 后按需运行，不在单次 ingest 中自动执行。
-- **2026-06-20**：知识图谱从 lint 剥离，改为独立 **Graph 命令**（与 Ingest / Lint 并列，对齐 NashSU graph-view 架构——KG 在 NashSU 本就由 `graph-view.tsx` 按需构建，不属于 lint）。脚本重命名 `build_knowledge_graph.py` → `graphify.py`。Stage 16-18 框架改为「Graph 命令」段。
+- **2026-06-20**：知识图谱从 lint 剥离，改为独立 **Graph 命令**（与 Ingest / Lint 并列，对齐 NashSU graph-view 架构——KG 在 NashSU 本就由 `graph-view.tsx` 按需构建，不属于 lint）。脚本重命名 `build_knowledge_graph.py` → `graph.py`。Stage 16-18 框架改为「Graph 命令」段。
 
 
 ## Graph 命令：知识图谱（Stage 16-18）
@@ -414,20 +414,20 @@ for k, v in cache['entries'].items():
 
 ```bash
 # 全量分析（Graph 命令，批处理）
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graph.py
 
 # 仅查看统计（不写文件）
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py --dry-run
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graph.py --dry-run
 
 # 大 wiki 先小规模测试
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py --dry-run --limit 500
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graph.py --dry-run --limit 500
 
 # ingest 时查询：给新页面推荐 wikilinks
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py \
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graph.py \
   --mode query --slug "my-new-page"
 
 # 调整 cohesion 告警阈值（默认 0.15）
-IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graphify.py --min-cohesion 0.10
+IMPROVED_WIKI_ROOT=/path/to/wiki python3 scripts/graph.py --min-cohesion 0.10
 ```
 
 **依赖**：`pip install networkx python-louvain pyyaml`

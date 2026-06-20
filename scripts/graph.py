@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-graphify.py — the Graph command of improved-wiki (knowledge graph build).
+graph.py — the Graph command of improved-wiki (knowledge graph build).
 
 The Graph command is a peer of Ingest and Lint — a separate phase, not part
 of lint. It is the CLI equivalent of NashSU's desktop graph-view
@@ -32,11 +32,11 @@ query mode (--mode query). ingest.py can also auto-trigger it post-ingest
 behind AUTO_BUILD_GRAPH=1 (30-min staleness guard).
 
 Usage:
-  ./graphify.py                          # full build + outputs
-  ./graphify.py --mode query --slug <s>  # read-only: suggest wikilinks for a
+  ./graph.py                          # full build + outputs
+  ./graph.py --mode query --slug <s>  # read-only: suggest wikilinks for a
                                          # single new page
-  ./graphify.py --dry-run                # print stats, skip write
-  ./graphify.py --min-cohesion 0.12      # lower warning threshold
+  ./graph.py --dry-run                # print stats, skip write
+  ./graph.py --min-cohesion 0.12      # lower warning threshold
 
 Dependencies:
   pip install networkx python-louvain pyyaml
@@ -595,7 +595,7 @@ def _write_cluster_hubs(
                 "neighboring community."
             )
         lines.append(
-            "- Regenerate this report by running `graphify.py` "
+            "- Regenerate this report by running `graph.py` "
             "after significant ingest batches."
         )
 

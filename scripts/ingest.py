@@ -388,9 +388,9 @@ def _run_post_ingest_graph(config: Config) -> None:
     """
     if os.environ.get("AUTO_BUILD_GRAPH") != "1":
         return
-    graph_script = Path(__file__).parent / "graphify.py"
+    graph_script = Path(__file__).parent / "graph.py"
     if not graph_script.exists():
-        print("[graph] graphify.py not found — skipping")
+        print("[graph] graph.py not found — skipping")
         return
 
     # Staleness guard: don't rebuild more than once per 30 minutes

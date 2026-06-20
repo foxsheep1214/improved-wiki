@@ -134,7 +134,7 @@ Python script that:
 6. Claude reads the JSON and applies semantic judgment
 7. Script updates resolved items
 
-Best for large wikis. Share the same wiki index building logic as `graphify.py`.
+Best for large wikis. Share the same wiki index building logic as `graph.py`.
 
 ## Review Item Format
 
