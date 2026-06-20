@@ -22,6 +22,43 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _core  # noqa: E402
+from _core import ConversationPending  # noqa: E402
+
+
+class TestConversationPendingNotSwallowed(unittest.TestCase):
+    """ConversationPending is a control-flow signal (pause for the calling
+    agent), not an error. It must propagate through the broad ``except
+    Exception`` retry/fallback blocks that wrap LLM calls in the stage
+    modules — otherwise Stage 2 concept/entity generation silently produces
+    0 blocks and the ingest never advances.
+
+    Regression: ConversationPending subclassed Exception, so every
+    ``except Exception`` around an LLM call swallowed it. Fix: subclass
+    BaseException (like KeyboardInterrupt) so ``except Exception`` no longer
+    catches it; the top-level ``except ConversationPending`` handler still does.
+    """
+
+    def test_broad_except_does_not_swallow_pending(self):
+        def llm_call():
+            raise ConversationPending()
+
+        def stage_fn():
+            try:
+                llm_call()
+            except Exception:
+                return []  # HTTP-retry style swallow — must NOT catch Pending
+            return ["block"]
+
+        with self.assertRaises(ConversationPending):
+            stage_fn()
+
+    def test_explicit_except_pending_still_catches(self):
+        caught = []
+        try:
+            raise ConversationPending()
+        except ConversationPending:
+            caught.append(True)
+        self.assertEqual(caught, [True])
 
 
 class TestIsSafeIngestPath(unittest.TestCase):

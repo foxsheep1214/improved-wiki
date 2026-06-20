@@ -98,8 +98,15 @@ def rate_limit_cooldown_remaining() -> float:
         return max(0.0, 60.0 - elapsed)
 
 
-class ConversationPending(Exception):
-    """Raised in --conversation mode when a prompt is written and awaits agent."""
+class ConversationPending(BaseException):
+    """Raised in --conversation mode when a prompt is written and awaits agent.
+
+    Subclasses BaseException (not Exception) so the broad ``except Exception``
+    retry/fallback blocks around LLM calls in the stage modules do NOT swallow
+    it — ConversationPending is control flow (pause for the calling agent),
+    not a transient HTTP error. It still propagates to the top-level
+    ``except ConversationPending`` handler (ingest.py main) which exits 101.
+    """
 
 
 # ── Configuration ──
