@@ -1,9 +1,10 @@
 """Tests for the _lint_suggest wiring in validate_ingest.
 
-Exercises validate_ingest.collect_structural_lint_findings over a tmp wiki,
-verifying broken-link suggestions, orphan suggestions, and anchor exclusion.
-Does NOT call validate_ingest.main() (that needs a real cache); the function
-under test takes wiki_dir explicitly and uses no module globals.
+Exercises validate_ingest.collect_structural_lint_findings over a tmp wiki.
+validate runs detection-only (with_suggestions=False) — the O(n^2) suggestion
+scan is left to wiki-lint.sh. These tests verify detection still works and
+suggested_* are None. Does NOT call validate_ingest.main() (that needs a real
+cache); the function under test takes wiki_dir explicitly, no module globals.
 
 Run:  python3 scripts/tests/test_validate_lint_suggest.py
 """
@@ -27,7 +28,8 @@ def _write(p: Path, text: str) -> None:
 
 
 class TestCollectStructuralLintFindings(unittest.TestCase):
-    def test_broken_link_with_close_typo_gets_suggestion(self):
+    def test_broken_link_detected_without_suggestion(self):
+        # validate is detection-only; the suggestion scan lives in wiki-lint.sh.
         with tempfile.TemporaryDirectory() as t:
             wiki = Path(t) / "wiki"
             _write(wiki / "concepts/transformer.md",
@@ -37,9 +39,9 @@ class TestCollectStructuralLintFindings(unittest.TestCase):
             findings = vi.collect_structural_lint_findings(wiki)
             broken = next(f for f in findings if f["type"] == "broken-link")
             self.assertEqual(broken["broken_target"], "transfomer")
-            self.assertEqual(broken["suggested_target"], "concepts/transformer.md")
+            self.assertIsNone(broken.get("suggested_target"))
 
-    def test_orphan_gets_suggested_source(self):
+    def test_orphan_detected_without_suggestion(self):
         with tempfile.TemporaryDirectory() as t:
             wiki = Path(t) / "wiki"
             _write(wiki / "concepts/rag.md",
@@ -49,7 +51,7 @@ class TestCollectStructuralLintFindings(unittest.TestCase):
             findings = vi.collect_structural_lint_findings(wiki)
             orphan = next(f for f in findings if f["type"] == "orphan"
                           and f["page"] == "concepts/rag.md")
-            self.assertEqual(orphan["suggested_source"], "concepts/vector-search.md")
+            self.assertIsNone(orphan.get("suggested_source"))
 
     def test_excludes_anchors(self):
         with tempfile.TemporaryDirectory() as t:
@@ -75,7 +77,7 @@ class TestCollectStructuralLintFindings(unittest.TestCase):
             findings = vi.collect_structural_lint_findings(wiki)
             broken = next(f for f in findings if f["type"] == "broken-link")
             self.assertEqual(broken["broken_target"], "cat")
-            self.assertIsNone(broken["suggested_target"])
+            self.assertIsNone(broken.get("suggested_target"))
 
 
 if __name__ == "__main__":

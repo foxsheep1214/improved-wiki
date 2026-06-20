@@ -68,6 +68,22 @@ class TestRunStructuralLint(unittest.TestCase):
         self.assertEqual(broken["broken_target"], "transfomer")
         self.assertEqual(broken["suggested_target"], "transformer.md")
 
+    def test_with_suggestions_false_skips_slow_suggestion_engine(self):
+        # validate_ingest.py runs over the whole wiki; the O(n^2) suggestion
+        # engine (suggest_related_page / suggest_broken_target) is too slow on
+        # large wikis. with_suggestions=False must still DETECT broken-link /
+        # orphan / no-outlinks but leave suggested_* = None (no suggestion scan).
+        pages = [
+            ("transformer.md", "---\ntitle: Transformer\n---\n# Transformer\nAttention model."),
+            ("attention.md", "# Attention\nSee [[transfomer]] for the architecture."),
+        ]
+        results = ls.run_structural_lint(pages, with_suggestions=False)
+        broken = finding(results, type="broken-link")
+        self.assertIsNotNone(broken, "detection must still run with suggestions off")
+        self.assertEqual(broken["broken_target"], "transfomer")
+        self.assertIsNone(broken.get("suggested_target"),
+                          "suggested_target must be skipped with with_suggestions=False")
+
     def test_suggests_related_for_orphan_and_no_outlinks(self):
         pages = [
             ("rag.md", "# RAG\nRetrieval augmented generation uses vector search."),

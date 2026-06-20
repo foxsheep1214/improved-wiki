@@ -130,7 +130,10 @@ def collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
             pages.append((str(rel), path.read_text(encoding="utf-8")))
         except OSError:
             continue
-    return run_structural_lint(pages)
+    # with_suggestions=False: detection only (O(n)). The O(n^2) suggestion
+    # scan is left to wiki-lint.sh; running it here on a 7594-page wiki took
+    # minutes and blew the ingest's final-validation subprocess timeout.
+    return run_structural_lint(pages, with_suggestions=False)
 
 
 def main():

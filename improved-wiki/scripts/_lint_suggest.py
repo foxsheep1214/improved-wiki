@@ -154,13 +154,19 @@ def _build_slug_map(pages: list[_PageData]) -> dict[str, str]:
 
 # ── structural lint ─────────────────────────────────────────────────────────
 
-def run_structural_lint(pages: list[tuple[str, str]]) -> list[dict]:
+def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = True) -> list[dict]:
     """Run structural lint over in-memory pages.
 
     pages: list of (short_name, content), short_name relative to wiki/.
     Returns a list of finding dicts:
         {type, severity, page, detail,
          broken_target?, suggested_target?, suggested_source?}
+
+    with_suggestions=False skips the O(n^2) suggestion engine
+    (suggest_related_page / suggest_broken_target) and the per-page
+    tokenization that feeds it — detection (broken-link / orphan /
+    no-outlinks) still runs in O(n). Used by validate_ingest.py over the
+    whole wiki; the suggestion scan is left to the dedicated wiki-lint.sh.
     """
     content_pages = [
         (name, content)
@@ -174,8 +180,10 @@ def run_structural_lint(pages: list[tuple[str, str]]) -> list[dict]:
         title = _extract_title(content, short_name)
         outlinks = extract_wikilinks(content)
         slug_name = _get_file_name(slug)
-        tokens = tokenize_for_suggestion(
-            f"{title}\n{slug_name}\n{content[:SUGGESTION_TOKEN_WINDOW]}"
+        tokens = (
+            tokenize_for_suggestion(
+                f"{title}\n{slug_name}\n{content[:SUGGESTION_TOKEN_WINDOW]}"
+            ) if with_suggestions else set()
         )
         data.append(_PageData(short_name, short_name, slug, title, content, outlinks, tokens))
 
@@ -248,7 +256,7 @@ def run_structural_lint(pages: list[tuple[str, str]]) -> list[dict]:
 
         # Orphan: no inbound links.
         if inbound_counts.get(p.slug.lower(), 0) == 0:
-            suggested_source = suggest_related_page(p, "source")
+            suggested_source = suggest_related_page(p, "source") if with_suggestions else None
             results.append({
                 "type": "orphan",
                 "severity": "info",
@@ -259,7 +267,7 @@ def run_structural_lint(pages: list[tuple[str, str]]) -> list[dict]:
 
         # No outbound links.
         if len(p.outlinks) == 0:
-            suggested_target = suggest_related_page(p, "target")
+            suggested_target = suggest_related_page(p, "target") if with_suggestions else None
             results.append({
                 "type": "no-outlinks",
                 "severity": "info",
@@ -274,7 +282,7 @@ def run_structural_lint(pages: list[tuple[str, str]]) -> list[dict]:
             basename = re.sub(r"\.md$", "", _get_file_name(link)).lower()
             if lookup in slug_map or basename in slug_map:
                 continue
-            suggested_target = suggest_broken_target(link)
+            suggested_target = suggest_broken_target(link) if with_suggestions else None
             results.append({
                 "type": "broken-link",
                 "severity": "warning",
