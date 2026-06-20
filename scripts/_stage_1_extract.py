@@ -715,6 +715,49 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
         doc.close()
         raise RuntimeError(f"minerU API failed to start on port {MINERU_API_PORT}")
 
+    # Warmup: initialize model with a small 1-page test to avoid cold-start delay
+    # First chunk typically takes 134s; warmup reduces this to ~74s (60s savings)
+    print(f"[ocr] Warmup: initializing model...", end=" ", flush=True)
+    warmup_start = time.time()
+    try:
+        # Create a 1-page warmup PDF
+        warmup_pdf = out_dir / "_warmup.pdf"
+        warmup_doc = fitz.open()
+        warmup_doc.insert_pdf(doc, from_page=0, to_page=0)  # First page only
+        warmup_doc.save(warmup_pdf)
+        warmup_doc.close()
+
+        # Send warmup request (same format as real chunks)
+        boundary = "----FormBoundary" + os.urandom(8).hex()
+        body_parts = []
+        body_parts.append(f"--{boundary}".encode())
+        body_parts.append(b'Content-Disposition: form-data; name="files"; filename="warmup.pdf"')
+        body_parts.append(b"Content-Type: application/pdf")
+        body_parts.append(b"")
+        body_parts.append(warmup_pdf.read_bytes())
+        body_parts.append(f"--{boundary}".encode())
+        body_parts.append(b'Content-Disposition: form-data; name="data"')
+        body_parts.append(b"")
+        body_parts.append(json.dumps({"lang": "ch"}).encode())
+        body_parts.append(f"--{boundary}--".encode())
+        body = b"\r\n".join(body_parts)
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        r = urllib.request.urlopen(req, timeout=120)
+        resp = json.loads(r.read())
+        warmup_pdf.unlink(missing_ok=True)
+        warmup_time = time.time() - warmup_start
+        print(f"OK ({warmup_time:.0f}s) — model ready")
+    except Exception as e:
+        warmup_time = time.time() - warmup_start
+        warmup_pdf.unlink(missing_ok=True)
+        print(f"skipped ({warmup_time:.0f}s, {type(e).__name__})")
+        # Continue even if warmup fails — not critical
+
     # Run minerU on each pending chunk (with progress tracking)
     # Caller: extract_text_mineru() which is called by ingest.py during Stage 0
     # Data schema: chunk_times (list of float) tracks completed chunk times for ETA estimation
