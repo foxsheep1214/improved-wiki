@@ -110,12 +110,14 @@ def _is_retryable_exception(exc: Exception) -> bool:
 
 _DIRECT_MAX_RETRIES = 3
 
-# Per-call HTTP socket timeout. Default 180s: a 4K-token call takes ~45s and a
-# 16K-token generation ~2-3 min on GLM, so 180s fits normal generation while
-# ensuring a dropped connection retries in ~3 min instead of hanging 10 min on
-# the old 600s default (which made flaky endpoints look like a frozen ingest).
-# Override with the LLM_HTTP_TIMEOUT env var (seconds).
-_HTTP_TIMEOUT_DEFAULT = int(os.environ.get("LLM_HTTP_TIMEOUT", "180"))
+# Per-call HTTP socket timeout. Default 300s: GLM generates ~4K tokens in ~45s,
+# so a 16K-token page generation takes ~3 min; 300s gives margin for the largest
+# generation calls while still retrying a dropped connection in ~5 min (vs the
+# old 600s default that made flaky endpoints look like a frozen ingest). Note:
+# with stream=False the server generates the full response before sending, so
+# this timeout is effectively the max generation time — keep it ≥ worst-case
+# generation. Override with the LLM_HTTP_TIMEOUT env var (seconds).
+_HTTP_TIMEOUT_DEFAULT = int(os.environ.get("LLM_HTTP_TIMEOUT", "300"))
 
 
 def _direct_http_post(url: str, headers: dict, body: dict, timeout: int | None = None
