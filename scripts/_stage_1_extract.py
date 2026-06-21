@@ -70,25 +70,6 @@ MINERU_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Decorators
-# ══════════════════════════════════════════════════════════════════════════════
-
-def _retry(max_attempts: int = 3, delay: float = 1.0):
-    """Decorator for automatic retry with exponential backoff (问题8：统一重试逻辑)."""
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_attempts):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    if attempt == max_attempts - 1:
-                        raise
-                    time.sleep(delay ** attempt)
-        return wrapper
-    return decorator
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # Utility Functions
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -429,8 +410,7 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[
         text_pages = 0
         img_pages = 0
         garbled_chars = 0
-        n = min(sample_pages, len(doc) - 2)  # skip page 0 and last page
-        middle_pages = max(0, len(doc) - 2)
+        middle_pages = max(0, len(doc) - 2)  # skip page 0 and last page
         n = min(sample_pages, middle_pages)
         if middle_pages <= 0:
             sample_indices = list(range(len(doc)))  # too short, take all
@@ -483,7 +463,6 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[
 
 
 MINERU_CHUNK_SIZE = 50  # pages per minerU invocation
-MINERU_MAX_CONCURRENT = 1  # max parallel minerU OCR jobs system-wide (串行执行，避免 VLM 内存竞争)
 
 
 def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
@@ -502,6 +481,7 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
 
         fd = os.open(str(MINERU_LOCK_FILE), os.O_RDWR)
         start = time.time()
+        last_print_minute = -1
         while True:
             try:
                 # Non-blocking attempt
@@ -513,7 +493,12 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
                 elapsed = time.time() - start
                 if elapsed > timeout:
                     raise RuntimeError(f"minerU lock timeout after {elapsed:.0f}s")
-                if int(elapsed) % 60 == 0:  # Print every minute
+                # Print once per minute boundary crossed — `% 60 == 0` drifts
+                # past exact multiples due to the 5s sleep + work-time jitter
+                # and can silently stop firing for many minutes.
+                minute = int(elapsed // 60)
+                if minute != last_print_minute:
+                    last_print_minute = minute
                     print(f"[mineru] Waiting for lock... ({elapsed:.0f}s elapsed)")
                 time.sleep(5)
     except Exception as e:

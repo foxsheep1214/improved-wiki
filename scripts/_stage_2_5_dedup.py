@@ -110,7 +110,9 @@ def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
     for group in duplicate_groups:
         group_concepts = [concepts[i] for i in group]
         primary_slug = ""
-        should_merge = True
+        # Conservative default: never merge without an LLM confirmation — a
+        # missing config must not silently merge every Jaccard-candidate group.
+        should_merge = False
         if config is not None:
             should_merge, primary_slug = _stage_2_5_confirm_merge_with_llm(group_concepts, config)
         if not should_merge:
@@ -132,17 +134,44 @@ def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
     return rules
 
 
+_WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(\|[^\]]+)?\]\]")
+
+
+def _stage_2_5_rewrite_wikilinks(content, slug_map):
+    """Redirect [[target]] / [[target|text]] wikilinks pointing at a merged
+    duplicate slug to the merge's primary slug instead. Handles both the bare
+    stem and the `concepts/<slug>` path form (case-insensitive per
+    naming-conventions.md), since merging deletes the duplicate's FILE block
+    and any sibling block still pointing at it would otherwise become a
+    permanently broken link the moment Stage 3.1 writes to disk.
+    """
+    def _sub(m):
+        target, pipe = m.group(1), m.group(2) or ""
+        bare = target.rsplit("/", 1)[-1]
+        new_slug = slug_map.get(bare.lower())
+        if new_slug is None:
+            return m.group(0)
+        new_target = target.rsplit("/", 1)[0] + "/" + new_slug if "/" in target else new_slug
+        return f"[[{new_target}{pipe}]]"
+    return _WIKILINK_RE.sub(_sub, content)
+
+
 def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
     if not merge_rules:
         return file_blocks
     slugs_to_delete = set()
+    slug_map = {}
     for rule in merge_rules:
         slugs_to_delete.update(rule["duplicate_slugs"])
+        for dup_slug in rule["duplicate_slugs"]:
+            slug_map[dup_slug.lower()] = rule["primary_slug"]
     result = []
     for path, content in file_blocks:
         slug = Path(path).stem
         if ("/concepts/" in path or path.startswith("concepts/")) and slug in slugs_to_delete:
             continue
+        if slug_map:
+            content = _stage_2_5_rewrite_wikilinks(content, slug_map)
         result.append((path, content))
     return result
 

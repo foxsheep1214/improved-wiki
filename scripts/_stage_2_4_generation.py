@@ -238,7 +238,7 @@ def _stage_2_4_per_concept_fallback(
                 concept_info = c if isinstance(c, dict) else {"name": c}
                 break
 
-        slug = slugify(name)
+        slug = slugify(concept_name)
         if slug in generated_slugs:
             continue
 
@@ -276,7 +276,7 @@ def _stage_2_4_per_concept_fallback(
                 break
 
     for entity_name in unique_entities[:min(len(unique_entities), 20)]:
-        slug = slugify(name)
+        slug = slugify(entity_name)
         if slug in generated_slugs:
             continue
         prompt = _stage_2_4_build_per_entity_prompt(

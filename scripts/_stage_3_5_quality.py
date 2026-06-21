@@ -76,6 +76,27 @@ def _stage_3_5_verify_quality_scoring(checkpoint):
     return "quality_metrics" in checkpoint
 
 
+def _stage_3_5_estimate_expected_chars(raw_file) -> int:
+    """Estimate expected extracted-text volume from the raw source's page count.
+
+    Without this, text_coverage compared extracted_text's length against
+    itself (always ~1.0) and could never detect truncated/botched
+    extraction. 500 chars/page matches the text/scanned-PDF threshold used
+    by _stage_1_extract.py's PDF-type detection (signal ①), so a PDF that
+    legitimately extracts less than that per page is already considered
+    suspect there too.
+    """
+    EXPECTED_CHARS_PER_PAGE = 500
+    if raw_file.suffix.lower() == ".pdf":
+        try:
+            import fitz
+            with fitz.open(raw_file) as doc:
+                return max(len(doc) * EXPECTED_CHARS_PER_PAGE, 1000)
+        except Exception:
+            pass
+    return 1000  # no page-count signal available (pptx/docx/txt/md) — floor only
+
+
 def stage_3_5_quality(raw_file, config, extracted_text, images_extracted,
                       images_captioned, file_blocks, review_items,
                       concept_merge_stats, dedup_was_run, *, verbose: bool = False) -> dict:
@@ -85,7 +106,8 @@ def stage_3_5_quality(raw_file, config, extracted_text, images_extracted,
     REVIEW/audit/ when needs_review. Returns the quality_result dict.
     """
     quality_result = _stage_3_5_calculate_quality_score(
-        extracted_text, len(extracted_text), images_extracted, images_captioned,
+        extracted_text, _stage_3_5_estimate_expected_chars(raw_file),
+        images_extracted, images_captioned,
         file_blocks, review_items, concept_merge_stats, dedup_was_run)
     print(f"  [stage 3.5] Quality score: {quality_result['overall_score']:.1%}"
           f"{' ⚠️ needs_review' if quality_result['needs_review'] else ' ✅'}")

@@ -128,7 +128,7 @@ def stage_2_10_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: 
         rtype = it.get("type", "suggestion")
         title = it.get("title", "Untitled")
         desc = it.get("description", "")
-        affected = it.get("affected_pages", it.get("affected_pages", []))
+        affected = it.get("affected_pages", [])
         if isinstance(affected, str):
             affected = [affected]
         severity = it.get("severity", "medium")

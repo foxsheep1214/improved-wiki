@@ -8,9 +8,7 @@ match is a future enhancement.)
 from pathlib import Path
 import re
 
-
-def _title_words(title: str) -> set:
-    return set(w.lower() for w in re.split(r"[\s/]+", title) if len(w) > 1)
+from _stage_2_base import _stage_2_frontmatter_title, _stage_2_title_words
 
 
 def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: list[dict]) -> dict:
@@ -38,14 +36,14 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
         for f in page_dir.glob("*.md"):
             try:
                 content = f.read_text(encoding="utf-8", errors="ignore")
-                tm = re.search(r"title:\s*([^\n]+)", content)
-                if tm:
-                    existing[f.stem] = _title_words(tm.group(1).strip())
+                title = _stage_2_frontmatter_title(content)
+                if title:
+                    existing[f.stem] = _stage_2_title_words(title)
             except Exception:
                 pass
 
     for name in found:
-        name_words = _title_words(name)
+        name_words = _stage_2_title_words(name)
         matches = []
         slug_form = name.lower().replace(" ", "-")
         for slug, words in existing.items():

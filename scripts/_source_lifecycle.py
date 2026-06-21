@@ -7,11 +7,13 @@ delete_source(): removes source page, cache entry, derived concept/entity pages
 list_source_pages(): list all pages derived from a given source.
 """
 
-import json, re, shutil, time
+import json, shutil, time
 from pathlib import Path
 from typing import Optional
 
 from _paths import detect_runtime_dir
+from _core import source_slug_from_raw_path
+from _frontmatter_array import parse_frontmatter_array
 
 
 def delete_source(raw_file: Path, config) -> int:
@@ -25,12 +27,17 @@ def delete_source(raw_file: Path, config) -> int:
         rel = str(raw_file.relative_to(raw_root))
     except ValueError:
         rel = raw_file.name
-    source_rel = rel.replace(".pdf", ".md").replace("\\", "/")
 
     removed = 0
 
     # 1. Delete source page
-    src_path = wiki_root / "wiki" / "sources" / source_rel
+    # source_slug_from_raw_path() is the canonical path-derivation helper
+    # (used by ingest dedup too) — a naive ".pdf" -> ".md" string replace
+    # left PPTX/DOCX sources' page paths un-rewritten (extension never
+    # became .md), so --delete silently found nothing to remove for them.
+    src_path = source_slug_from_raw_path(raw_file, wiki_root)
+    if src_path is None:
+        src_path = wiki_root / "wiki" / "sources" / Path(rel).with_suffix(".md")
     if src_path.exists():
         # Backup before delete
         history_dir = wiki_root / "page-history"
@@ -78,6 +85,7 @@ def delete_source(raw_file: Path, config) -> int:
 def _cleanup_orphan_pages(wiki_root: Path, source_stem: str) -> int:
     """Remove concept/entity pages whose ONLY source reference is this book."""
     removed = 0
+    history_dir = wiki_root / "page-history"
     for page_type in ("concepts", "entities"):
         page_dir = wiki_root / "wiki" / page_type
         if not page_dir.exists():
@@ -87,14 +95,19 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str) -> int:
                 text = page.read_text()
             except Exception:
                 continue
-            # Check if this page's only source is our book
-            m = re.search(r'^sources:\s*\[(.+?)\]', text, re.MULTILINE)
-            if not m:
+            # Naive sources_str.split(",") breaks when a source filename
+            # itself contains a comma — use the shared frontmatter-array
+            # parser (same fix already applied in _stage_3_write.py).
+            sources = parse_frontmatter_array(text, "sources")
+            if not sources:
                 continue
-            sources_str = m.group(1)
-            sources = [s.strip().strip('"').strip("'") for s in sources_str.split(",")]
-            # If this book is the ONLY source, delete the page
-            if len(sources) == 1 and source_stem in sources[0]:
+            # Exact basename-stem match, not substring — "LM2596" must not
+            # match a sibling source like "raw/.../LM25960.pdf".
+            if len(sources) == 1 and Path(sources[0]).stem == source_stem:
+                history_dir.mkdir(parents=True, exist_ok=True)
+                ts = time.strftime("%Y%m%d-%H%M%S")
+                shutil.copy2(page, history_dir / f"{ts}_{page.name}")
+                print(f"[lifecycle] Deleted orphan page: {page_type}/{page.name}")
                 page.unlink()
                 removed += 1
     return removed

@@ -127,13 +127,7 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
                 pass  # can't read existing page, proceed with original slug
 
     # ── CJK slug rewriting (NashSU parity: rewriteIngestPathFromTitleForTargetLanguage) ──
-    fm_title = None
-    if fm_match:
-        for line in fm_match.group(1).split("\n"):
-            tm = re.match(r'title:\s*["\']?(.+?)["\']?\s*$', line)
-            if tm:
-                fm_title = tm.group(1).strip()
-                break
+    fm_title = _extract_fm_field(content, "title").strip("\"'") or None
     if fm_title and _stage_3_1_contains_cjk(fm_title) and not _stage_3_1_contains_cjk(slug):
         cjk_slug = _stage_3_1_make_cjk_slug(fm_title)
         if cjk_slug and _stage_3_1_contains_cjk(cjk_slug):

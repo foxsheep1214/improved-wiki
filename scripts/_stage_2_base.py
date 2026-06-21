@@ -46,6 +46,25 @@ from _llm_api import (
 )
 from _stage_1_extract import _stage_1_2_media_slug
 
+
+def _stage_2_frontmatter_title(content: str) -> str:
+    """Extract a page's `title:` frontmatter value, quotes stripped.
+
+    Shared by Stage 2.3 / 2.8's title-Jaccard matching — frontmatter titles
+    are written as `title: "Foo Bar"`, and feeding the raw quoted string into
+    a word-split silently weakens every match by one token on each end (the
+    first/last word carries a stray `"`).
+    """
+    m = re.search(r"title:\s*([^\n]+)", content)
+    if not m:
+        return ""
+    return m.group(1).strip().strip("\"'")
+
+
+def _stage_2_title_words(title: str) -> set:
+    """Word-level token set for title-overlap Jaccard matching (case-insensitive, len>1)."""
+    return set(w.lower() for w in re.split(r"[\s/]+", title) if len(w) > 1)
+
 # Explicitly re-export underscore-prefixed helpers. Without __all__, the
 # `from _stage_2_base import *` used by every Stage 2.x module EXCLUDES
 # _-prefixed names (Python default), so _retry_jitter / _is_retryable_exception

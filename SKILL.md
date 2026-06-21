@@ -134,7 +134,7 @@ Two other external-API dependencies (not text generation):
 | Category | Scripts |
 |----------|---------|
 | Core | `ingest.py`, `_core.py`, `_llm_api.py`, `_paths.py`, `_language.py`, `_frontmatter.py` |
-| Stage Modules (Phase 0-4) | `_stage_0_3_pilot.py` (0.3), `_stage_1_extract.py` (1.1-1.3), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_2_10_review.py` (2.10), `_stage_2_base.py` (公共导入), `_stage_2_generate.py` (向后兼容别名), `_stage_3_write.py` (3.1-3.2, 3.4), `_stage_3_5_quality.py` (3.5) |
+| Stage Modules (Phase 0-4) | `_stage_0_3_pilot.py` (0.3), `_stage_1_extract.py` (1.1-1.3), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_2_10_review.py` (2.10), `_stage_2_base.py` (公共导入), `_stage_3_write.py` (3.1-3.2, 3.4), `_stage_3_5_quality.py` (3.5) |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `validate_ingest.py`, `validate-frontmatter.sh`, `normalize_raw_names.py` |
 | Graph | `graph.py` (NashSU graph-view CLI parity; four-signal + Louvain; deterministic, no LLM) |

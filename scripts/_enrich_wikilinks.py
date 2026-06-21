@@ -92,8 +92,8 @@ with an EXACT slug match below. Output ONLY a JSON array:
         escaped = re.escape(term)
         if re.search(rf'\[\[{escaped}\]\]|\[\[{escaped}\|', body):
             continue  # already linked
-        if escaped in body:
-            body = body.replace(escaped, f"[[{target}]]", 1)
+        if term in body:
+            body = body.replace(term, f"[[{target}]]", 1)
             changed = True
 
     if changed:

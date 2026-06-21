@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from _core import Config
+from _stage_1_extract import _stage_1_1_acquire_mineru_lock, _stage_1_1_release_mineru_lock
 
 
 def stage_0_3_pilot(file_path: Path, config: Config) -> dict:
@@ -32,15 +33,16 @@ def stage_0_3_pilot(file_path: Path, config: Config) -> dict:
     if not mineru_bin.exists():
         return {"status": "error", "error": "缺失minerU工具"}
 
-    pilot_pages = min(5, len(fitz.open(file_path)))
     pilot_dir = config.extract_tmp_dir / ".pilot"
     pilot_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create a small 5-page pilot PDF
+    # Create a small 5-page pilot PDF (single fitz.open — reused for both the
+    # page count and the page copy, avoiding a leaked Document handle)
     doc = fitz.open(file_path)
-    pilot_pdf = pilot_dir / f"{file_path.stem}-pilot.pdf"
-    pilot_pdf.unlink(missing_ok=True)
     try:
+        pilot_pages = min(5, len(doc))
+        pilot_pdf = pilot_dir / f"{file_path.stem}-pilot.pdf"
+        pilot_pdf.unlink(missing_ok=True)
         new_doc = fitz.open()
         new_doc.insert_pdf(doc, from_page=0, to_page=pilot_pages - 1)
         new_doc.save(pilot_pdf)
@@ -53,6 +55,9 @@ def stage_0_3_pilot(file_path: Path, config: Config) -> dict:
 
     out_dir = pilot_dir / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Same system-wide lock the full-OCR path uses (MINERU_MAX_CONCURRENT=1) —
+    # without it, a pilot run can race a concurrent full-OCR job for VLM/memory.
+    lock_fd = _stage_1_1_acquire_mineru_lock()
     try:
         backend = os.environ.get("MINERU_BACKEND", "vlm-engine")
         result = subprocess.run(
@@ -65,6 +70,8 @@ def stage_0_3_pilot(file_path: Path, config: Config) -> dict:
         return {"status": "error", "error": "Pilot OCR timed out (>10 min)"}
     except Exception as e:
         return {"status": "error", "error": f"minerU failed: {e}"}
+    finally:
+        _stage_1_1_release_mineru_lock(lock_fd)
 
     if result.returncode != 0:
         return {"status": "error", "error": f"minerU exit {result.returncode}: {result.stderr[-300:]}"}

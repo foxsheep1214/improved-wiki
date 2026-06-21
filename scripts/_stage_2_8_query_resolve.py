@@ -10,14 +10,14 @@ Refactored 2026-06-21 for explicit stage naming.
 from pathlib import Path
 import re
 from _llm_api import call_anthropic_protocol
+from _stage_2_base import _stage_2_frontmatter_title, _stage_2_title_words
 
 
 def _stage_2_8_extract_query_blocks(file_blocks):
     queries = []
     for idx, (path, content) in enumerate(file_blocks):
         if "/queries/" in path or path.startswith("queries/"):
-            title_match = re.search(r"title:\s*([^\n]+)", content)
-            title = title_match.group(1).strip() if title_match else path.split("/")[-1]
+            title = _stage_2_frontmatter_title(content) or path.split("/")[-1]
             body = re.sub(r"^---\n.*?\n---\n", "", content, flags=re.DOTALL)
             queries.append({
                 "slug": Path(path).stem,
@@ -34,7 +34,7 @@ def _stage_2_8_find_related_wiki_pages(wiki_root, query_title, threshold=0.6):
     if not wiki_root.is_dir():
         return []
     related = []
-    q_words = set(w.lower() for w in re.split(r"[\s/]+", query_title) if len(w) > 1)
+    q_words = _stage_2_title_words(query_title)
     if not q_words:
         return related
     for page_dir in [wiki_root / "concepts", wiki_root / "entities"]:
@@ -43,11 +43,10 @@ def _stage_2_8_find_related_wiki_pages(wiki_root, query_title, threshold=0.6):
         for page_file in page_dir.glob("*.md"):
             try:
                 content = page_file.read_text(encoding="utf-8", errors="ignore")
-                tm = re.search(r"title:\s*([^\n]+)", content)
-                if not tm:
+                title = _stage_2_frontmatter_title(content)
+                if not title:
                     continue
-                title = tm.group(1).strip()
-                p_words = set(w.lower() for w in re.split(r"[\s/]+", title) if len(w) > 1)
+                p_words = _stage_2_title_words(title)
                 if not p_words:
                     continue
                 if len(q_words & p_words) / len(q_words | p_words) >= threshold:

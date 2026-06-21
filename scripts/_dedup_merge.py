@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -180,6 +181,36 @@ def merge_group(pages: list[Page], canonical: Page) -> Page:
     return canonical
 
 
+def write_dedup_audit_record(wiki: Path, discarded: Page, kept_short_name: str) -> None:
+    """Log what merge_group() is about to throw away before its file is unlinked.
+
+    merge_group() keeps only the richest page's body verbatim — same-title
+    pages aren't guaranteed to be content supersets of each other, so this is
+    a recovery record (human-reviewable), not a guarantee the merge was
+    lossless.
+    """
+    audit_dir = wiki / "REVIEW" / "audit"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    safe_slug = re.sub(r"[^\w-]", "-", discarded.slug)[:60]
+    out = audit_dir / f"{time.strftime('%Y-%m-%d')}-dedup-merge-{safe_slug}.md"
+    out.write_text(
+        "---\n"
+        "type: audit\n"
+        "source: dedup-merge\n"
+        f"date: {time.strftime('%Y-%m-%d')}\n"
+        "---\n\n"
+        f"## Discarded duplicate: {discarded.short_name}\n\n"
+        f"Merged into: [[{kept_short_name}]]\n\n"
+        f"Title: {discarded.title}\n\n"
+        "Body content discarded by phase-1 dedup (richest-page-wins — not "
+        "guaranteed lossless; review before assuming nothing of value was lost):\n\n"
+        "```markdown\n"
+        f"{discarded.body}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+
 def serialize(page: Page) -> str:
     fm = page.raw_fm
     if any(c in page.title for c in '":[]{}'):
@@ -255,6 +286,7 @@ def run(wiki_root: Path, *, apply: bool = True,
     redundant = sum(len(g) - 1 for g in groups)
 
     redirects: dict[str, str] = {}
+    discarded_pages: dict[str, Page] = {}
     merged_canonicals: list[Page] = []
     for g in groups:
         canon = pick_canonical(g)
@@ -263,6 +295,7 @@ def run(wiki_root: Path, *, apply: bool = True,
         for p in g:
             if p.short_name != canon.short_name:
                 redirects[p.short_name] = canon.short_name
+                discarded_pages[p.short_name] = p
 
     report: dict = {
         "groups": len(groups),
@@ -299,10 +332,13 @@ def run(wiki_root: Path, *, apply: bool = True,
             files_touched += 1
 
     deleted = 0
-    for old_short, _ in redirects.items():
+    for old_short, kept_short in redirects.items():
         folder, slug = old_short.split("/", 1)
         target = wiki / folder / f"{slug}.md"
         if target.exists():
+            discarded = discarded_pages.get(old_short)
+            if discarded is not None:
+                write_dedup_audit_record(wiki, discarded, kept_short)
             target.unlink()
             deleted += 1
 

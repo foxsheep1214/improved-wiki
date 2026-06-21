@@ -22,7 +22,7 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
     - Scanned PDFs:   reads .caption.txt files from OCR output dir
     """
     content = source_path.read_text(encoding="utf-8")
-    content = re.sub(r"## Embedded Images.*?(?=^## |\Z)", "", content, flags=re.MULTILINE | re.DOTALL)
+    content = re.sub(r"^## Embedded Images.*?(?=^## |\Z)", "", content, flags=re.MULTILINE | re.DOTALL)
     content = content.rstrip() + "\n\n"
 
     # Unified image injection: reads _manifest.json (the single source of truth

@@ -66,7 +66,7 @@ created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 tags: [tag1, tag2, tag3]
 related: []
-sources: ["raw/{source_rel}.pdf"]
+sources: ["raw/{source_rel}{file_path.suffix}"]
 ---
 
 ## Book Summary
@@ -99,9 +99,9 @@ Example:
     gen_tokens = config.compute_max_tokens(8192)
     response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens, label="source page")
     if verbose:
-        print(f"[stage 2.4] Source page generated ({len(response):,} chars, stop={stop_reason})")
+        print(f"[stage 2.6] Source page generated ({len(response):,} chars, stop={stop_reason})")
     else:
-        print(f"[stage 2.4] Source page ready ({len(response):,} chars)")
+        print(f"[stage 2.6] Source page ready ({len(response):,} chars)")
 
     return response, stop_reason
 

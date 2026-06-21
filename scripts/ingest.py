@@ -89,7 +89,6 @@ from _stage_1_extract import (
 )
 from _stage_2_analyze import (
     stage_2_1_global_digest,
-    stage_2_2_chunk_analysis,
     _stage_2_1_chunk_text,
     _stage_2_2_analyze_chunk,
     _stage_2_2_chunk_retries,
@@ -119,10 +118,7 @@ from _stage_3_write import (
 )
 from _stage_3_2_inject_images import stage_3_2_inject_images
 from _enrich_wikilinks import enrich_wikilinks
-from _stage_validators import (
-    verify_stage_0, verify_stage_1, verify_stage_2,
-    verify_stage_3,     StageValidationError,
-)
+from _stage_validators import verify_stage_0, StageValidationError
 
 
 # Use shared runtime detection (matches all other scripts)
@@ -1011,11 +1007,11 @@ def _do_prepare(
             if progress and "stage_1_2" in progress:
                 stage_1_2_result = progress["stage_1_2"]
                 print(f"  [stage 1.2] (cached) {stage_1_2_result.get('count', 0)} images")
-            elif method == "pymupdf" and raw_file.suffix.lower() == ".pdf":
-                # 改进2：检查是否从 minerU 输出提取
-                stage_1_2_result = stage_1_2_extract_images(raw_file, config)
-            elif method in ("mineru", "mineru-local-ocr"):
-                # 改进2：从 minerU 输出提取图片
+            elif method.startswith("mineru"):
+                # Covers "mineru", "mineru-local-ocr", "mineru-local-ocr-low-quality"
+                # (low-quality OCR still ran and produced images on disk —
+                # excluding it here silently dropped every image from those
+                # sources even though minerU already extracted them).
                 ocr_out = config.extract_tmp_dir / raw_file.stem
                 if ocr_out.exists():
                     stage_1_2_result = _stage_1_2_extract_from_mineru(ocr_out, config, raw_file)
@@ -1023,6 +1019,13 @@ def _do_prepare(
                 cp = {"stage": "stage_1_1_done", "extracted_text": extracted_text,
                       "extract_method": method, "stage_1_2": stage_1_2_result}
                 save_progress(config, h, cp)
+            elif raw_file.suffix.lower() in (".pdf", ".pptx", ".docx"):
+                # Covers "pymupdf", "pymupdf-mixed", "zipfile-pptx", "zipfile-docx".
+                # stage_1_2_extract_images() branches on file suffix internally
+                # and handles all three formats (NashSU parity) — the previous
+                # exact-match on method=="pymupdf" missed "pymupdf-mixed" PDFs
+                # and never extracted PPTX/DOCX embedded images at all.
+                stage_1_2_result = stage_1_2_extract_images(raw_file, config)
 
             # Stage 1.3: Caption extracted images (runs if 1.2 found images)
             stage_1_3_result = {"captioned": 0}
@@ -1046,6 +1049,20 @@ def _do_prepare(
                                         template_content, verbose=verbose) if needs_digest else None
 
             stage_1_2_result, stage_1_3_result = fut_images.result()
+
+            # Persist Stage 1.2/1.3 immediately, before awaiting the digest future.
+            # fut_digest.result() below can raise ConversationPending (conversation-
+            # mode cache miss), which propagates out of this function before a
+            # later save_progress call would ever be reached — every subsequent
+            # conversation-mode round-trip would otherwise re-run
+            # _run_image_pipeline() from scratch for this source, forever.
+            if not progress or "stage_1_2" not in progress:
+                save_progress(config, h, {
+                    "stage": "stage_1_1_done", "extracted_text": extracted_text,
+                    "extract_method": method,
+                    "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result,
+                })
+
             global_digest = fut_digest.result() if fut_digest else progress.get("global_digest", {})
 
         if needs_digest:
@@ -1053,11 +1070,6 @@ def _do_prepare(
         else:
             print(f"  [stage 2.1] (cached) Global Digest — {len(global_digest)} keys")
             _verify_stage_2_1_digest(global_digest, raw_file)
-
-        # Save progress checkpoint
-        if "extracted_text" not in (progress or {}):
-            save_progress(config, h, {"stage": "stage_1_1_done", "extracted_text": extracted_text,
-                  "extract_method": method, "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result})
 
         # Stage 2.2 + 2.4: Chunk Analysis → Generation (barrier-free pipeline)
         chunk_analyses, analysis, raw_response, file_blocks, incremental_associations = _run_chunk_pipeline(
@@ -1469,7 +1481,18 @@ def batch_ingest(
                 )] = f
 
             for future in as_completed(futures):
-                prepared = future.result()
+                # Isolate prepare-phase failures per book, the same way the
+                # write phase below is isolated — one bad source (e.g. a
+                # corrupt PDF) must not abort the rest of the batch.
+                try:
+                    prepared = future.result()
+                except Exception as e:
+                    prepared_count += 1
+                    print(f"\n[batch] {prepared_count}/{total_books} prepare FAILED for "
+                          f"{futures[future].name}: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    continue
                 prepared_count += 1
                 if prepared is None:
                     print(f"\n[batch] {prepared_count}/{total_books} prepared (skipped)", flush=True)
