@@ -1,0 +1,46 @@
+"""Phase 2 common imports — shared by all Stage 2.x modules.
+
+Reduces 15-line import blocks duplicated across 6 files to a single import.
+Created 2026-06-21 as part of Phase 2 consolidation.
+"""
+from __future__ import annotations
+
+import json, os, re, sys, time
+from pathlib import Path
+
+_script_dir = Path(__file__).resolve().parent
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
+
+from _core import (
+    Config,
+    heartbeat as _heartbeat,
+    stage_begin as _stage_begin,
+    stage_end as _stage_end,
+    llm_call_progress as _llm_call_progress,
+    llm_call_done as _llm_call_done,
+    record_rate_limit as _record_rate_limit,
+    load_template,
+    load_progress,
+    save_progress,
+    clear_progress,
+    progress_path,
+    load_cache,
+    save_cache,
+    detect_domain,
+    list_existing_slugs,
+    str_distance as _str_distance,
+    FOLDER_TO_TEMPLATE,
+    detect_template_type,
+    parse_yaml_block,
+    parse_file_blocks,
+    parse_simple_yaml,
+    slugify,
+    atomic_write,
+    call_with_retry,
+)
+from _llm_api import (
+    _retry_jitter,
+    _is_retryable_exception,
+    call_anthropic_protocol,
+)

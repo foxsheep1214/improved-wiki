@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 
-def check_local_bge_m3() -> bool:
+def _stage_3_6_check_local_bge_m3() -> bool:
     """检查本地 Ollama 是否有 bge-m3 模型。"""
     try:
         import requests
@@ -31,7 +31,7 @@ def check_local_bge_m3() -> bool:
     return False
 
 
-def embed_with_local_bge_m3(wiki_root: Path) -> bool:
+def _stage_3_6_embed_with_local_bge_m3(wiki_root: Path) -> bool:
     """使用本地 Ollama bge-m3 模型生成 embedding。"""
     try:
         print("📊 使用本地 BGE-M3 生成 embedding...")
@@ -54,7 +54,7 @@ def embed_with_local_bge_m3(wiki_root: Path) -> bool:
         return False
 
 
-def verify_embeddings(wiki_root: Path, checkpoint: dict) -> bool:
+def _stage_3_6_verify_embeddings(wiki_root: Path, checkpoint: dict) -> bool:
     """验证 embedding 是否成功。"""
     lancedb_path = wiki_root / "lancedb"
 
@@ -106,7 +106,7 @@ def stage_3_6_embeddings(
     print("Stage 3.6: Embeddings（强制执行）")
     print("=" * 70)
 
-    if not check_local_bge_m3():
+    if not _stage_3_6_check_local_bge_m3():
         print("⚠️  本地 BGE-M3 未检测到，跳过 Stage 3.6 同步 embedding。")
         print("    真正的向量由 ingest 主流程的 _auto_embed_new_pages 生成"
               "（需设置 EMBEDDING_BASE_URL）。")
@@ -115,13 +115,19 @@ def stage_3_6_embeddings(
         checkpoint["embedding_mode"] = "skipped"
         return True
 
-    if not embed_with_local_bge_m3(wiki_root):
+    if not _stage_3_6_embed_with_local_bge_m3(wiki_root):
         return False
 
-    if not verify_embeddings(wiki_root, checkpoint):
+    if not _stage_3_6_verify_embeddings(wiki_root, checkpoint):
         return False
 
     checkpoint["embeddings_completed"] = True
     checkpoint["embedding_mode"] = "local_bge_m3"
     print("✓ Stage 3.6 完成")
     return True
+
+
+# ── Backward-compat aliases ──
+check_local_bge_m3 = _stage_3_6_check_local_bge_m3
+embed_with_local_bge_m3 = _stage_3_6_embed_with_local_bge_m3
+verify_embeddings = _stage_3_6_verify_embeddings

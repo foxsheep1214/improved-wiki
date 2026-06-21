@@ -1,27 +1,27 @@
 ---
 name: improved-wiki
-description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). ~13 numbered ingest stages + 2 pre-gates. Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode (the calling agent spawns sub-agents using the current conversation's model — no external API key). Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
+description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). ~17 numbered ingest stages in 5 Phases (0-4). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode (the calling agent spawns sub-agents using the current conversation's model — no external API key). Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
 tags: [ingest, mandatory, nashsu, pipeline, scan-pdf, mineru, local-ocr, knowledge-graph, louvain]
 related_skills: [karpathy-llm-wiki, llm-wiki-local]
 ---
 
 # improved-wiki
 
-Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (~13 numbered Stages in 4 Phases + 2 pre-gates 0.1 dedup / 0.3 pilot OCR), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint). Graph auto-triggers post-ingest behind `AUTO_BUILD_GRAPH=1`.
+Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (~17 numbered Stages in 5 Phases: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write → 4 embeddings), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint). Graph auto-triggers post-ingest behind `AUTO_BUILD_GRAPH=1`.
 
 ```
-Pre-gates: [0.1 raw-naming] → [0.2 source dedup] → [0.3 pilot OCR]   (gate ingest; not in the numbered data-flow below)
-Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→3.1→3.2→3.3→3.4→3.5→[3.6]→4.1
-        (numbered stages per ingest.py; "2.x" = per-chunk concept/entity gen; "3" = file write)
+Phase 0: [0.1 raw-naming] → [0.2 source dedup] → [0.3 pilot OCR]  (pre-processing gates)
+Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→2.10→3.1→3.2→3.4→3.5→[3.6]→4.1
+        (numbered stages per ingest.py; "2.x" = per-chunk concept/entity gen + quality review; "3" = file write)
 
-Phase 0: Pre-processing (text extraction, image extract, caption, pilot OCR)
-Phase 1: Analysis        (global digest, sequential chunk analysis)
-Phase 2: Generation      (source page, per-chunk concept/entity, queries, comparisons, review)
-Phase 3: Write & Enrich  (file write, image injection, aggregate repair)
-Phase 4: Embeddings      (auto-triggered if EMBEDDING_BASE_URL set)
+Phase 0: Pre-processing gates  (raw naming, source dedup, pilot OCR)
+Phase 1: Extraction            (text extraction, image extract, caption)
+Phase 2: Analysis & Generation (global digest, chunk analysis, concept/entity gen, queries, comparisons, quality review)
+Phase 3: Write & Enrich        (file write, image injection, aggregate repair, scoring)
+Phase 4: Embeddings            (auto-triggered if EMBEDDING_BASE_URL set)
 
 Barrier-free: 2.2∥2.4 analyze→generate per chunk (unified, all chunk counts)
-Parallel (I/O only): 1.3∥2.1 caption∥digest + 1.3 caption batch dispatch
+Parallel (I/O only): 1.2→1.3∥2.1 image-pipeline∥digest + 1.3 caption batch dispatch
 
 Lint:  [structural] → [semantic (LLM, conversation mode)]
 Graph: [Build Graph (4-signal)] → [Louvain communities] → [cohesion + gaps + clusters]
@@ -134,7 +134,7 @@ Two other external-API dependencies (not text generation):
 | Category | Scripts |
 |----------|---------|
 | Core | `ingest.py`, `_core.py`, `_llm_api.py`, `_paths.py`, `_language.py`, `_frontmatter.py` |
-| Stage Modules | `_stage_1_extract.py`, `_stage_2_analyze.py`, `_stage_2_generate.py`, `_stage_3_write.py` |
+| Stage Modules (Phase 0-4) | `_stage_0_3_pilot.py` (0.3), `_stage_1_extract.py` (1.1-1.3), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_2_10_review.py` (2.10), `_stage_2_base.py` (公共导入), `_stage_2_generate.py` (向后兼容别名), `_stage_3_write.py` (3.1-3.2, 3.4), `_stage_3_5_quality.py` (3.5), `_stage_3_6_embeddings.py` (3.6) |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `validate_ingest.py`, `validate-frontmatter.sh`, `normalize_raw_names.py` |
 | Graph | `graph.py` (NashSU graph-view CLI parity; four-signal + Louvain; deterministic, no LLM) |

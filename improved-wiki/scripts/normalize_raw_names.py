@@ -136,17 +136,23 @@ def _resolve_rule(rules: dict, folder_type: str) -> dict:
 
 
 def _flatten_prefixes(vendor_prefixes: dict) -> Dict[str, str]:
-    """Flatten vendor_prefixes into {lower_prefix: vendor_name}."""
+    """Flatten vendor_prefixes into {lower_prefix: vendor_name}.
+
+    Robust against malformed YAML: only process list values for each vendor,
+    skipping non-list types to prevent silent failures.
+    """
     result: Dict[str, str] = {}
     for vendor, groups in vendor_prefixes.items():
+        if not isinstance(groups, list):
+            continue
         for group in groups:
             if isinstance(group, list):
                 for prefix in group:
                     prefix = str(prefix).strip().strip("'\"")
                     if prefix:
                         result[prefix.lower()] = vendor
-            else:
-                for prefix in str(group).split():
+            elif isinstance(group, str):
+                for prefix in group.split():
                     prefix = prefix.strip().strip("'\"")
                     if prefix:
                         result[prefix.lower()] = vendor
@@ -179,17 +185,17 @@ def _check_rule(filepath: Path, rule: dict, vendors: List[str],
         return issues
 
     vf = rule.get('vendor_field')
-    if vf is not None and vf < len(parts):
+    if vf is not None and isinstance(vf, int) and 0 <= vf < len(parts):
         if parts[vf] not in vendors:
             issues.append(f"未识别的 Vendor：「{parts[vf]}」")
 
     yf = rule.get('year_field')
-    if yf is not None and yf < len(parts):
+    if yf is not None and isinstance(yf, int) and 0 <= yf < len(parts):
         if not re.match(r'^\d{4}$', parts[yf]):
             issues.append(f"年份格式不正确：「{parts[yf]}」")
 
     df = rule.get('date_field')
-    if df is not None and df < len(parts):
+    if df is not None and isinstance(df, int) and 0 <= df < len(parts):
         if not re.match(r'^\d{4}-\d{2}-\d{2}$', parts[df]):
             issues.append(f"日期格式不正确：「{parts[df]}」")
 
@@ -198,7 +204,7 @@ def _check_rule(filepath: Path, rule: dict, vendors: List[str],
 
 def _fix_file(filepath: Path, rule: dict, vendors: List[str],
               prefix_map: Dict[str, str], dry_run: bool = True) -> Optional[Tuple[Path, str]]:
-    """Try to fix a filename. Only handles 'add vendor prefix' for now."""
+    """Try to fix a filename. Handles 'add vendor prefix' or report unfixable."""
     stem = filepath.stem
 
     if rule.get('vendor_field') != 0:
@@ -215,11 +221,17 @@ def _fix_file(filepath: Path, rule: dict, vendors: List[str],
 
     new_stem = f"{vendor} - {stem}"
     new_path = filepath.with_name(new_stem + filepath.suffix)
+
     if dry_run:
         return (new_path, f"推断 Vendor={vendor}")
     else:
-        filepath.rename(new_path)
-        return (new_path, f"已改名：Vendor={vendor}")
+        try:
+            if new_path.exists():
+                return (filepath, f"ERROR: 目标文件已存在「{new_path.name}」")
+            filepath.rename(new_path)
+            return (new_path, f"已改名：Vendor={vendor}")
+        except OSError as e:
+            return (filepath, f"ERROR: 改名失败 — {e}")
 
 
 # ── Scanner ─────────────────────────────────────────────────────

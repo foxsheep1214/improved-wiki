@@ -179,7 +179,7 @@ digest_updates:
 {所有 chunk 分析的汇总}
 </all_analyses>
 
-生成 5 类审查项（YAML 格式，与 ingest.py stage_3_3_review_suggestions 一致）：
+生成 5 类审查项（YAML 格式，与 ingest.py stage_2_10_review_suggestions 一致）：
 1. **confirm** — 需要确认的可疑内容
 2. **suggestion** — 改进建议
 3. **missing-page** — 缺少的重要页面

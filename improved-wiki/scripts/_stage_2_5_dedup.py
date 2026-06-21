@@ -4,6 +4,8 @@ Deterministic phase finds candidate duplicate groups (title word-overlap or
 definition Jaccard >= 0.6). LLM phase confirms each group and picks the
 canonical primary; unconfirmed groups are left intact (conservative — never
 merge on LLM failure).
+
+Refactored 2026-06-21 for explicit stage naming.
 """
 from pathlib import Path
 import re
@@ -12,7 +14,7 @@ from _llm_api import call_anthropic_protocol
 DEDUP_JACCARD_THRESHOLD = 0.6
 
 
-def extract_concept_blocks(file_blocks):
+def _stage_2_5_extract_concept_blocks(file_blocks):
     concepts = []
     for idx, (path, content) in enumerate(file_blocks):
         if "/concepts/" in path or path.startswith("concepts/"):
@@ -35,12 +37,12 @@ _STOPWORDS = {"the", "a", "an", "of", "in", "on", "for", "and", "or", "to",
               "it", "its", "into", "using", "use", "used", "via", "per", "than"}
 
 
-def _word_set(s):
+def _stage_2_5_word_set(s):
     return set(w for w in re.split(r"[\s,，。.;:、]+", s.lower())
                if len(w) > 1 and w not in _STOPWORDS)
 
 
-def find_duplicate_concepts(concepts):
+def _stage_2_5_find_duplicate_concepts(concepts):
     duplicates = []
     processed = set()
     for i, c1 in enumerate(concepts):
@@ -48,14 +50,14 @@ def find_duplicate_concepts(concepts):
             continue
         group = [i]
         processed.add(i)
-        w1 = _word_set(c1["title"] + " " + c1["definition_snippet"])
+        w1 = _stage_2_5_word_set(c1["title"] + " " + c1["definition_snippet"])
         for j in range(i + 1, len(concepts)):
             if j in processed:
                 continue
             c2 = concepts[j]
             t_overlap = (c1["title"].lower() in c2["title"].lower() or
                          c2["title"].lower() in c1["title"].lower())
-            w2 = _word_set(c2["title"] + " " + c2["definition_snippet"])
+            w2 = _stage_2_5_word_set(c2["title"] + " " + c2["definition_snippet"])
             overlap = len(w1 & w2) / max(len(w1 | w2), 1)
             if (t_overlap and overlap >= 0.4) or overlap >= DEDUP_JACCARD_THRESHOLD:
                 group.append(j)
@@ -65,7 +67,7 @@ def find_duplicate_concepts(concepts):
     return duplicates
 
 
-def _confirm_prompt(group_concepts):
+def _stage_2_5_confirm_prompt(group_concepts):
     items = "\n\n".join(
         "### Concept {n}: {title}\nslug: {slug}\n{defn}".format(
             n=i + 1, title=c["title"], slug=c["slug"], defn=c["definition_snippet"])
@@ -83,8 +85,8 @@ When unsure, reply `MERGE: no`.
 """.format(items=items)
 
 
-def confirm_merge_with_llm(group_concepts, config):
-    prompt = _confirm_prompt(group_concepts)
+def _stage_2_5_confirm_merge_with_llm(group_concepts, config):
+    prompt = _stage_2_5_confirm_prompt(group_concepts)
     try:
         response, _ = call_anthropic_protocol(prompt, config, max_tokens=200, label="dedup-confirm")
     except Exception as e:
@@ -98,14 +100,14 @@ def confirm_merge_with_llm(group_concepts, config):
     return True, primary
 
 
-def generate_merge_rules(concepts, duplicate_groups, config=None):
+def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
     rules = []
     for group in duplicate_groups:
         group_concepts = [concepts[i] for i in group]
         primary_slug = ""
         should_merge = True
         if config is not None:
-            should_merge, primary_slug = confirm_merge_with_llm(group_concepts, config)
+            should_merge, primary_slug = _stage_2_5_confirm_merge_with_llm(group_concepts, config)
         if not should_merge:
             continue
         group_slugs = [c["slug"] for c in group_concepts]
@@ -125,7 +127,7 @@ def generate_merge_rules(concepts, duplicate_groups, config=None):
     return rules
 
 
-def apply_merge_rules(file_blocks, merge_rules):
+def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
     if not merge_rules:
         return file_blocks
     slugs_to_delete = set()
@@ -140,8 +142,17 @@ def apply_merge_rules(file_blocks, merge_rules):
     return result
 
 
-def verify_dedup_merge(checkpoint, chunk_count):
+def _stage_2_5_verify_dedup_merge(checkpoint, chunk_count):
     if chunk_count <= 1:
         checkpoint["concept_merge_rules"] = []
         return True
     return "concept_merge_rules" in checkpoint
+
+
+# ── Backward-compat aliases ──
+extract_concept_blocks = _stage_2_5_extract_concept_blocks
+find_duplicate_concepts = _stage_2_5_find_duplicate_concepts
+confirm_merge_with_llm = _stage_2_5_confirm_merge_with_llm
+generate_merge_rules = _stage_2_5_generate_merge_rules
+apply_merge_rules = _stage_2_5_apply_merge_rules
+verify_dedup_merge = _stage_2_5_verify_dedup_merge

@@ -1,29 +1,7 @@
-from __future__ import annotations
 
-import json, os, re, sys, time
-from pathlib import Path
+from _stage_2_base import *
 
-_script_dir = Path(__file__).resolve().parent
-if str(_script_dir) not in sys.path:
-    sys.path.insert(0, str(_script_dir))
-from _core import (
-    Config,
-    set_current_file as _set_current_file, get_current_file as _get_current_file,
-    file_tag as _file_tag,
-    heartbeat as _heartbeat, stage_begin as _stage_begin, stage_end as _stage_end,
-    llm_call_progress as _llm_call_progress, llm_call_done as _llm_call_done,
-    record_rate_limit as _record_rate_limit,
-    load_template, list_existing_slugs, detect_domain,
-    load_progress, save_progress, progress_path, clear_progress,
-    parse_yaml_block,
-)
-from _llm_api import _retry_jitter, _is_retryable_exception, call_anthropic_protocol
-
-__all__ = ["chunk_text", "build_global_digest_prompt", "stage_2_1_global_digest", "build_chunk_analysis_prompt", "stage_2_2_chunk_analysis"]
-
-# ---------- Chunking ----------
-
-def chunk_text(text: str, target_chars: int, overlap_chars: int) -> list[str]:
+def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int) -> list[str]:
     """Split text into overlapping chunks.
 
     NashSU parity (ingest.ts L2107-2205): prefers markdown heading boundaries
@@ -84,7 +62,7 @@ def chunk_text(text: str, target_chars: int, overlap_chars: int) -> list[str]:
     return chunks
 
 
-def _resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> str:
+def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> str:
     """Find the heading hierarchy that a chunk falls under (NashSU parity).
 
     Scans backwards from chunk_start to find the nearest H1-H6 heading, then
@@ -111,7 +89,7 @@ def _resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> 
 
 # ---------- Stage 1: Global Digest ----------
 
-def build_global_digest_prompt(
+def _stage_2_1_build_prompt(
     extracted_text: str,
     file_path: Path,
     config: Config,
@@ -208,7 +186,7 @@ def stage_2_1_global_digest(
 ) -> dict:
     """Stage 1: One LLM call for book-level structural summary."""
     print(f"[stage 2.1] Global Digest — sending {min(len(extracted_text), config.source_budget):,} chars to LLM...")
-    prompt = build_global_digest_prompt(extracted_text, file_path, config, template)
+    prompt = _stage_2_1_build_prompt(extracted_text, file_path, config, template)
     response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192, label="global digest")
     if verbose:
         print(f"[stage 2.1] Raw response ({len(response)} chars, stop={stop_reason}):\n{response[:3000]}...\n")
@@ -219,7 +197,58 @@ def stage_2_1_global_digest(
 
 # ---------- Stage 2.2: Chunk Analysis ----------
 
-def build_chunk_analysis_prompt(
+def _stage_2_2_build_template_section(template: str, file_path: Path, max_chars: int = 4000) -> str:
+    """Build the template injection section for a Stage 2.2 prompt.
+
+    Truncates the template to *max_chars* and wraps it in a
+    ``# Document Type Instructions`` block.  Returns an empty string when
+    *template* is falsy.
+    """
+    if not template:
+        return ""
+    template_trimmed = template[:max_chars]
+    return f"""
+# Document Type Instructions
+The source is a **{file_path.parent.name}** document. Follow these type-specific conventions:
+<template>
+{template_trimmed}
+</template>
+
+"""
+
+
+def _stage_2_2_build_overlap_section(overlap_before: str) -> str:
+    """Format the overlap boundary text for continuity context (NashSU parity).
+
+    Uses paragraph/sentence-aware boundary trimming (not a raw tail slice)
+    to give the LLM clean context when a concept spans a chunk boundary.
+    Returns an empty string when *overlap_before* is falsy.
+    """
+    if not overlap_before:
+        return ""
+    overlap_for_boundary = overlap_before[-800:]  # search in last 800 chars
+    boundary = -1
+    # Priority 1: paragraph break in overlap window
+    boundary = overlap_for_boundary.rfind("\n\n")
+    # Priority 2: sentence boundary
+    if boundary == -1:
+        m = re.search(r'[.!?。！？]\s+', overlap_for_boundary)
+        if m:
+            boundary = m.start() + 1
+    # Fallback: start at a word boundary
+    if boundary == -1:
+        boundary = max(0, len(overlap_for_boundary) - 500)
+    overlap_trimmed = overlap_for_boundary[boundary:][-500:]
+    return f"""
+# Continuity: text right before this chunk (may span sentence boundary)
+<overlap>
+{overlap_trimmed}
+</overlap>
+
+"""
+
+
+def _stage_2_2_build_prompt(
     chunk_text: str,
     chunk_index: int,
     chunk_total: int,
@@ -259,43 +288,9 @@ def build_chunk_analysis_prompt(
         digest_str = digest_str[:6000] + "\n... (truncated)"
     existing_slugs = list_existing_slugs(config)
 
-    # Inject type-specific template for concept/entity extraction guidance (first 2000 chars)
-    template_section = ""
-    if template:
-        template_trimmed = template[:2000]
-        template_section = f"""
-# Document Type Instructions
-<template>
-{template_trimmed}
-</template>
+    template_section = _stage_2_2_build_template_section(template, file_path, max_chars=2000)
 
-"""
-
-    # ── Overlap context (NashSU parity: overlapBefore + overlapSuffix) ──
-    overlap_section = ""
-    if overlap_before:
-        # NashSU parity: paragraph/sentence-aware boundary, not raw tail slice
-        overlap_for_boundary = overlap_before[-800:]  # search in last 800 chars
-        boundary = -1
-        # Priority 1: paragraph break in overlap window
-        boundary = overlap_for_boundary.rfind("\n\n")
-        # Priority 2: sentence boundary
-        if boundary == -1:
-            import re as _re2
-            m = _re2.search(r'[.!?。！？]\s+', overlap_for_boundary)
-            if m:
-                boundary = m.start() + 1
-        # Fallback: start at a word boundary
-        if boundary == -1:
-            boundary = max(0, len(overlap_for_boundary) - 500)
-        overlap_trimmed = overlap_for_boundary[boundary:][-500:]
-        overlap_section = f"""
-# Continuity: text right before this chunk (may span sentence boundary)
-<overlap>
-{overlap_trimmed}
-</overlap>
-
-"""
+    overlap_section = _stage_2_2_build_overlap_section(overlap_before)
 
     # ── Heading path (NashSU parity: chunk.headingPath) ──
     heading_section = ""
@@ -390,7 +385,7 @@ updated_global_digest: |
 """
 
 
-def _chunk_retries() -> int:
+def _stage_2_2_chunk_retries() -> int:
     """Max attempts per chunk (1 initial + N retries). Default 2 retries → 3 total attempts."""
     env = os.environ.get("LLM_CHUNK_RETRIES", "")
     if env:
@@ -401,9 +396,135 @@ def _chunk_retries() -> int:
     return 2
 
 
-# Rate-limit tracker shared across chunk workers (thread-safe via lock)
-_RLOCK = __import__('threading').Lock()
-_RATE_LIMIT_HIT_AT: float = 0.0
+
+
+def _stage_2_2_locate_chunk_text(
+    extracted_text: str,
+    chunks: list[str],
+    i: int,
+    config: Config,
+) -> tuple[int, str]:
+    """Locate chunk *i* in the full extracted text and resolve its heading path.
+
+    Returns ``(chunk_pos, heading_path)``.  For chunk 0 the position is
+    always 0; for subsequent chunks ``str.find`` is used with a char-offset
+    fallback when the exact substring is not found.
+    """
+    chunk = chunks[i]
+    chunk_len = len(chunk)
+    if i == 0:
+        chunk_pos = 0
+    else:
+        chunk_pos = extracted_text.find(chunk)
+        if chunk_pos == -1:
+            chunk_pos = i * config.target_chars  # fallback estimate
+    heading_path = _stage_2_2_resolve_chunk_heading_path(
+        extracted_text, chunk_pos, chunk_pos + chunk_len,
+    )
+    return chunk_pos, heading_path
+
+
+def _stage_2_2_analyze_one_chunk(
+    chunk_text: str,
+    chunk_idx: int,
+    chunk_total: int,
+    config: Config,
+    accumulated_digest_str: str,
+    t0: float,
+    global_digest: dict,
+    file_path: Path,
+    template: str,
+    overlap_before: str,
+    heading_path: str,
+    max_retries: int,
+) -> tuple[dict | None, str | None, Exception | None, str]:
+    """Analyze a single chunk with retries.
+
+    Returns a 4-tuple ``(analysis, updated_digest, error, last_error_str)``.
+    On success *analysis* is a dict and *error*/*last_error_str* are ``None``.
+    On failure *analysis* is ``None`` and *error* carries the exception.
+
+    *accumulated_digest_str* is **not** mutated — the caller decides whether
+    to adopt the returned *updated_digest*.
+    """
+    chunk_len = len(chunk_text)
+    last_error = None
+
+    for attempt in range(1 + max_retries):
+        prompt = _stage_2_2_build_prompt(
+            chunk_text, chunk_idx, chunk_total, global_digest, file_path, config,
+            template=template, accumulated_digest=accumulated_digest_str,
+            overlap_before=overlap_before, heading_path=heading_path,
+        )
+
+        try:
+            t_chunk = time.time()
+            response, stop_reason = call_anthropic_protocol(
+                prompt, config, max_tokens=8192, label=f"chunk {chunk_idx+1} analysis",
+            )
+            analysis = parse_yaml_block(response)
+            analysis["_chunk_index"] = chunk_idx + 1
+            analysis["_chunk_size"] = chunk_len
+            analysis["_attempts"] = attempt + 1
+            dt = time.time() - t_chunk
+            n_c = len(analysis.get("concepts_found") or [])
+            n_e = len(analysis.get("entities_found") or [])
+            elapsed = time.time() - t0
+            done_count = chunk_idx + 1
+            eta = (elapsed / done_count) * (chunk_total - done_count) if done_count > 0 else 0
+            pct = done_count * 100 // chunk_total
+            tag = f" (retry #{attempt})" if attempt > 0 else ""
+            print(f"  [stage 2.2] chunk {chunk_idx+1}/{chunk_total} OK{tag} — "
+                  f"{n_c} concepts, {n_e} entities, {dt:.0f}s "
+                  f"[{pct}% ETA {eta:.0f}s]")
+
+            # Extract updated global digest from this chunk's analysis
+            updated_digest = analysis.get("updated_global_digest", "")
+            if isinstance(updated_digest, str) and len(updated_digest.strip()) > 50:
+                new_digest = updated_digest.strip()
+            elif isinstance(updated_digest, dict):
+                new_digest = json.dumps(updated_digest, ensure_ascii=False, indent=2)
+            else:
+                new_digest = accumulated_digest_str  # keep previous
+
+            return analysis, new_digest, None, None
+
+        except Exception as e:
+            err_str = str(e)[:200]
+            last_error = e
+            if _is_retryable_exception(e):
+                _record_rate_limit()
+            if attempt < max_retries and _is_retryable_exception(e):
+                wait = _retry_jitter(2.0, attempt)
+                err_label = type(e).__name__
+                print(f"  [stage 2.2] chunk {chunk_idx+1}/{chunk_total} attempt {attempt+1} failed "
+                      f"({err_label}: {err_str[:80]}) — retrying in {wait:.1f}s...")
+                time.sleep(wait)
+                continue
+            print(f"  [stage 2.2] chunk {chunk_idx+1}/{chunk_total} FAILED after "
+                  f"{1 + max_retries} attempts: {err_str[:120]}")
+            return None, accumulated_digest_str, e, err_str
+
+    # Should be unreachable (loop always returns), but satisfy the type checker
+    return None, accumulated_digest_str, last_error, str(last_error)[:200] if last_error else ""
+
+
+def _stage_2_2_update_digest_and_checkpoint(
+    config: Config,
+    source_hash: str,
+    chunk_total: int,
+    accumulated_digest: str,
+    analyses: list[dict],
+    analysis: dict,
+) -> list[dict]:
+    """Append *analysis* to *analyses* and save a per-chunk checkpoint.
+
+    Returns a **new** list (immutable convention) with the appended analysis.
+    """
+    updated_analyses = [*analyses, analysis]
+    if source_hash:
+        _stage_2_2_checkpoint(config, source_hash, chunk_total, accumulated_digest, updated_analyses)
+    return updated_analyses
 
 
 def stage_2_2_chunk_analysis(
@@ -429,9 +550,9 @@ def stage_2_2_chunk_analysis(
 
     Still supports per-chunk retries (LLM_CHUNK_RETRIES, default 2 → 3 total).
     """
-    chunks = chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
+    chunks = _stage_2_1_chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
     chunk_total = len(chunks)
-    max_retries = _chunk_retries()
+    max_retries = _stage_2_2_chunk_retries()
     print(f"[stage 2.2] Chunk Analysis — {chunk_total} chunks "
           f"(target {config.target_chars:,} chars/chunk, overlap {config.chunk_overlap:,}, "
           f"sequential NashSU mode, retries={max_retries})")
@@ -464,92 +585,39 @@ def stage_2_2_chunk_analysis(
     for i in range(start_chunk, chunk_total):
         chunk = chunks[i]
         chunk_len = len(chunk)
-        chunk_ok = False
-        last_error = None
-        # NashSU parity: pass tail text from previous chunk as overlap context
         overlap_before = chunks[i - 1] if i > 0 else ""
-        # NashSU parity: find heading hierarchy for this chunk
-        heading_path = ""
-        if i == 0:
-            chunk_pos = 0
+        _chunk_pos, heading_path = _stage_2_2_locate_chunk_text(
+            extracted_text, chunks, i, config,
+        )
+
+        analysis, new_digest, error, err_str = _stage_2_2_analyze_one_chunk(
+            chunk_text=chunk,
+            chunk_idx=i,
+            chunk_total=chunk_total,
+            config=config,
+            accumulated_digest_str=accumulated_digest,
+            t0=t0,
+            global_digest=global_digest,
+            file_path=file_path,
+            template=template,
+            overlap_before=overlap_before,
+            heading_path=heading_path,
+            max_retries=max_retries,
+        )
+
+        if error is not None:
+            # All retries exhausted — record failure and checkpoint
+            analyses.append({
+                "chunk_index": i + 1, "error": str(error),
+                "chunk_text_length": chunk_len, "_attempts": 1 + max_retries,
+            })
+            if source_hash:
+                _stage_2_2_checkpoint(config, source_hash, chunk_total, accumulated_digest, analyses)
         else:
-            # Find this chunk's start position in extracted text
-            chunk_pos = extracted_text.find(chunk)
-            if chunk_pos == -1:
-                chunk_pos = i * config.target_chars  # fallback estimate
-        heading_path = _resolve_chunk_heading_path(extracted_text, chunk_pos, chunk_pos + chunk_len)
-
-        for attempt in range(1 + max_retries):
-            # Build prompt with current accumulated digest
-            prompt = build_chunk_analysis_prompt(
-                chunk, i, chunk_total, global_digest, file_path, config,
-                template=template, accumulated_digest=accumulated_digest,
-                overlap_before=overlap_before,
-                heading_path=heading_path,
+            accumulated_digest = new_digest
+            analyses = _stage_2_2_update_digest_and_checkpoint(
+                config, source_hash, chunk_total, accumulated_digest, analyses, analysis,
             )
-
-            try:
-                t_chunk = time.time()
-                response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192, label=f"chunk {i+1} analysis")
-                analysis = parse_yaml_block(response)
-                analysis["_chunk_index"] = i + 1
-                analysis["_chunk_size"] = chunk_len
-                analysis["_attempts"] = attempt + 1
-                dt = time.time() - t_chunk
-                n_c = len(analysis.get("concepts_found") or [])
-                n_e = len(analysis.get("entities_found") or [])
-                elapsed = time.time() - t0
-                done_count = i + 1
-                eta = (elapsed / done_count) * (chunk_total - done_count) if done_count > 0 else 0
-                pct = done_count * 100 // chunk_total
-                tag = f" (retry #{attempt})" if attempt > 0 else ""
-                print(f"  [stage 2.2] chunk {i+1}/{chunk_total} OK{tag} — "
-                      f"{n_c} concepts, {n_e} entities, {dt:.0f}s "
-                      f"[{pct}% ETA {eta:.0f}s]")
-
-                # Extract updated global digest from this chunk's analysis
-                updated_digest = analysis.get("updated_global_digest", "")
-                if isinstance(updated_digest, str) and len(updated_digest.strip()) > 50:
-                    accumulated_digest = updated_digest.strip()
-                elif isinstance(updated_digest, dict):
-                    # Some LLMs return nested dict instead of string
-                    accumulated_digest = json.dumps(updated_digest, ensure_ascii=False, indent=2)
-                # else: keep the previous accumulated_digest unchanged
-
-                analyses.append(analysis)
-                chunk_ok = True
-
-                # ── Per-chunk checkpoint ──
-                if source_hash:
-                    _checkpoint_1_5(config, source_hash, chunk_total, accumulated_digest, analyses)
-
-                break
-
-            except Exception as e:
-                err_str = str(e)[:200]
-                last_error = e
-                if _is_retryable_exception(e):
-                    _record_rate_limit()
-                if attempt < max_retries and _is_retryable_exception(e):
-                    wait = _retry_jitter(2.0, attempt)
-                    err_label = type(e).__name__
-                    print(f"  [stage 2.2] chunk {i+1}/{chunk_total} attempt {attempt+1} failed "
-                          f"({err_label}: {err_str[:80]}) — retrying in {wait:.1f}s...")
-                    time.sleep(wait)
-                    continue
-                # Last attempt failed
-                print(f"  [stage 2.2] chunk {i+1}/{chunk_total} FAILED after "
-                      f"{1 + max_retries} attempts: {err_str[:120]}")
-                analyses.append({
-                    "chunk_index": i + 1, "error": str(last_error),
-                    "chunk_text_length": chunk_len, "_attempts": 1 + max_retries,
-                })
-                # Checkpoint even failed chunks (so we don't re-process them)
-                if source_hash:
-                    _checkpoint_1_5(config, source_hash, chunk_total, accumulated_digest, analyses)
-
-        if not chunk_ok and last_error:
-            pass
 
     total_concepts = sum(len(a.get("concepts_found") or []) for a in analyses)
     total_entities = sum(len(a.get("entities_found") or []) for a in analyses)
@@ -564,7 +632,7 @@ def stage_2_2_chunk_analysis(
     return analyses
 
 
-def _analyze_chunk(
+def _stage_2_2_analyze_chunk(
     chunk: str,
     chunk_idx: int,
     chunk_total: int,
@@ -588,7 +656,7 @@ def _analyze_chunk(
     _chunk_size, _attempts.
     On failure: returns dict with chunk_index + error key.
     """
-    prompt = build_chunk_analysis_prompt(
+    prompt = _stage_2_2_build_prompt(
         chunk, chunk_idx, chunk_total, global_digest, file_path, config,
         template=template, accumulated_digest=accumulated_digest,
         overlap_before=overlap_before, heading_path=heading_path,
@@ -631,7 +699,7 @@ def _analyze_chunk(
             }
 
 
-def _checkpoint_1_5(config: Config, source_hash: str, chunk_total: int,
+def _stage_2_2_checkpoint(config: Config, source_hash: str, chunk_total: int,
                     accumulated_digest: str, analyses: list[dict]) -> None:
     """Save per-chunk checkpoint for Stage 2.2 resume (NashSU parity)."""
     # Merge into existing progress to preserve other stage data
