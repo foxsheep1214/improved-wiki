@@ -1,7 +1,7 @@
-"""Phase 0 Stage 0.3: Pilot OCR quality validation for scanned PDFs.
+"""Stage 0.3: Pilot OCR quality validation for scanned PDFs.
 
-Extracted from _stage_1_extract.py on 2026-06-21.
-Separate module to clarify that Phase 0 is pre-processing gates before Phase 1 extraction.
+Part of the pregate (Stage 0) pre-processing gates, run before Stage 1
+extraction. Extracted from _stage_1_extract.py on 2026-06-21.
 """
 from __future__ import annotations
 

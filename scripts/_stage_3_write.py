@@ -700,6 +700,32 @@ def _stage_3_3_build_collision_warning(
     return "\n".join(lines)
 
 
+def stage_3_3_slug_collision_review(file_blocks, current_domain, config, *, verbose: bool = False) -> dict:
+    """Stage 3.3: Detect new concept slugs colliding with existing concepts in OTHER domains.
+
+    Cross-domain collisions are flagged for disambiguation; same-domain overlaps
+    are legitimate merges (handled by Stage 2.5). Reads newly written concept
+    pages from file_blocks and the existing wiki. Returns a dict with the
+    collision count (items), the collision tuples, and a warning prompt section.
+    """
+    existing_domains = _stage_3_3_list_existing_concepts_with_domains(config)
+    new_concept_names = []
+    for path, content in file_blocks:
+        if "/concepts/" in path or path.startswith("concepts/"):
+            title = _extract_fm_field(content, "title")
+            if title:
+                new_concept_names.append(title)
+    collisions = _stage_3_3_find_slug_collisions(
+        new_concept_names, existing_domains, current_domain)
+    warning = _stage_3_3_build_collision_warning(collisions, existing_domains)
+    if collisions:
+        print(f"  [stage 3.3] {len(collisions)} cross-domain slug collision(s) — "
+              f"disambiguation suggested")
+    elif verbose:
+        print(f"  [stage 3.3] No cross-domain slug collisions")
+    return {"items": len(collisions), "collisions": collisions, "warning": warning}
+
+
 # TODO: migrate callers and remove — backward-compat aliases (internal use)
 write_wiki_file = stage_3_1_write_wiki_file
 merge_page_content = _stage_3_1_merge_page_content

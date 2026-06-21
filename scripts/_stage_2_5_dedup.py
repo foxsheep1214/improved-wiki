@@ -149,10 +149,39 @@ def _stage_2_5_verify_dedup_merge(checkpoint, chunk_count):
     return "concept_merge_rules" in checkpoint
 
 
-# ── Backward-compat aliases ──
-extract_concept_blocks = _stage_2_5_extract_concept_blocks
-find_duplicate_concepts = _stage_2_5_find_duplicate_concepts
-confirm_merge_with_llm = _stage_2_5_confirm_merge_with_llm
-generate_merge_rules = _stage_2_5_generate_merge_rules
-apply_merge_rules = _stage_2_5_apply_merge_rules
-verify_dedup_merge = _stage_2_5_verify_dedup_merge
+def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = False) -> dict:
+    """Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
+
+    Runs before the source page so the index lists de-duplicated concepts.
+    Single-chunk sources skip dedup. Returns a dict with the new file_blocks,
+    dedup_was_run flag, before/after concept counts, and the merge_rules list.
+    """
+    concept_count_before = sum(1 for p, _ in file_blocks if "/concepts/" in p)
+    dedup_was_run = len(chunk_analyses) > 1
+    if not dedup_was_run:
+        print(f"  [stage 2.5] Skipped (single chunk; {concept_count_before} concepts)")
+        return {
+            "file_blocks": file_blocks,
+            "dedup_was_run": False,
+            "concept_count_before": concept_count_before,
+            "concept_count_after": concept_count_before,
+            "merge_rules": [],
+        }
+
+    concepts = _stage_2_5_extract_concept_blocks(file_blocks)
+    merge_rules = _stage_2_5_generate_merge_rules(
+        concepts, _stage_2_5_find_duplicate_concepts(concepts), config=config)
+    file_blocks = _stage_2_5_apply_merge_rules(file_blocks, merge_rules)
+    concept_count_after = sum(1 for p, _ in file_blocks if "/concepts/" in p)
+    if merge_rules:
+        print(f"  [stage 2.5] Dedup: {concept_count_before} → {concept_count_after} "
+              f"concepts ({len(merge_rules)} merge rule(s))")
+    else:
+        print(f"  [stage 2.5] No duplicate concepts ({concept_count_after} concepts)")
+    return {
+        "file_blocks": file_blocks,
+        "dedup_was_run": True,
+        "concept_count_before": concept_count_before,
+        "concept_count_after": concept_count_after,
+        "merge_rules": merge_rules,
+    }

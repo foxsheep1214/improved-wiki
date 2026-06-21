@@ -94,7 +94,7 @@ from _stage_2_analyze import (
 )
 from _stage_2_generate import (
     _stage_2_4_build_prompt,
-    _stage_2_4_generate_chunk,
+    stage_2_4_generate_chunk,
     _stage_2_4_extract_names,
     _stage_2_4_per_concept_fallback,
     stage_2_6_source_page,
@@ -115,6 +115,7 @@ from _stage_3_write import (
     # Backward-compat aliases
     write_wiki_file, merge_page_content,
 )
+from _stage_3_2_inject_images import stage_3_2_inject_images
 from _stage_3_6_embeddings import stage_3_6_embeddings
 from _enrich_wikilinks import enrich_wikilinks
 from _stage_validators import (
@@ -434,94 +435,6 @@ def _run_post_ingest_graph(config: Config) -> None:
         print(f"[graph] Failed ({e}) — continuing")
 
 
-def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
-                              method: str = "") -> dict:
-    """Append '## Embedded Images' section to the source page.
-
-    Two paths:
-    - Text-layer PDFs: reads _manifest.json from wiki/media/<raw-subpath>/<slug>/
-    - Scanned PDFs:   reads .caption.txt files from OCR output dir
-    """
-    content = source_path.read_text(encoding="utf-8")
-    content = re.sub(r"## Embedded Images.*?(?=^## |\Z)", "", content, flags=re.MULTILINE | re.DOTALL)
-    content = content.rstrip() + "\n\n"
-
-    # Unified image injection: reads _manifest.json (the single source of truth
-    # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
-    # renders are filtered via source != "page-render" for backward compat.
-    slug = _stage_1_2_media_slug(raw_file, config)
-    media_dir = config.wiki_dir / "media" / slug
-    manifest_path = media_dir / "_manifest.json"
-
-    # Also check legacy _figures.json (older minerU ingests before unification)
-    figures_path = media_dir / "_figures.json"
-    source_path_to_read = figures_path if figures_path.exists() else manifest_path
-
-    if source_path_to_read.exists():
-        m = json.loads(source_path_to_read.read_text(encoding="utf-8"))
-        images = m.get("images", [])
-        # Filter out legacy page-render entries (pre-2026-06-19 ingests)
-        images = [i for i in images if i.get("source") != "page-render"]
-        if images:
-            is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
-            section = f"## Embedded Images\n\n"
-            section += f"本书共抽出 {len(images)} 张{'图表' if is_mineru else '嵌入图'}。\n\n"
-            section += "| 页号 | Caption | 文件 |\n|------|---------|------|\n"
-            for img in sorted(images, key=lambda x: (x["page"], x.get("img_idx_in_page", 0))):
-                cap_path = media_dir / (img["filename"] + ".caption.txt")
-                cap = cap_path.read_text(encoding="utf-8").strip() if cap_path.exists() else "（无 caption）"
-                if len(cap) > 80:
-                    cap = cap[:80] + "..."
-                section += f"| p{img['page']} | {cap} | `{img['path']}` |\n"
-            section += f"\n> 图片由 {'minerU VLM' if is_mineru else 'PyMuPDF'} 提取，caption 由 {config.caption_model} 生成。详细 manifest 见 `wiki/media/{slug}/`\n"
-            content += section
-            tmp = source_path.with_suffix(source_path.suffix + ".tmp")
-            tmp.write_text(content, encoding="utf-8")
-            tmp.rename(source_path)
-            print(f"[stage 3.2] Injected {len(images)} images into {source_path.name}")
-            return {"injected": len(images)}
-
-    # Last resort: old cloud OCR caption files (pre-manifest era)
-    images_in_media: list[tuple[str, str]] = []  # (filename, caption)
-    if media_dir.exists():
-        for f in sorted(media_dir.iterdir()):
-            if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
-                cap_path = media_dir / (f.name + ".caption.txt")
-                if cap_path.exists() and cap_path.stat().st_size >= 20:
-                    images_in_media.append((f.name, cap_path.read_text(encoding="utf-8").strip()[:80]))
-
-    # Also check old cloud OCR path
-    ocr_dir = config.extract_tmp_dir / raw_file.stem
-    if ocr_dir.exists():
-        for cf in sorted(ocr_dir.glob("p*.caption.txt")):
-            cap = cf.read_text(encoding="utf-8").strip()
-            for line in cap.split("\n"):
-                if line.strip():
-                    pn_match = re.match(r'p(\d+)', cf.name)
-                    pn = int(pn_match.group(1)) if pn_match else 0
-                    images_in_media.append((f"p{pn} (cloud OCR)", line.strip()[:80]))
-
-    if images_in_media:
-        section = f"## Embedded Images\n\n"
-        section += f"本书共提取 {len(images_in_media)} 张图表。\n\n"
-        section += "| 文件/页码 | Caption |\n|------------|----------|\n"
-        for name, cap in images_in_media[:200]:  # cap at 200 rows
-            cap_short = cap[:80] + "..." if len(cap) > 80 else cap
-            section += f"| `{name}` | {cap_short} |\n"
-        if len(images_in_media) > 200:
-            section += f"| ... | ({len(images_in_media) - 200} more) |\n"
-        section += f"\n> Caption 由 {config.caption_model} 生成。图片文件见 `wiki/media/{slug}/`\n"
-        content += section
-        tmp = source_path.with_suffix(source_path.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.rename(source_path)
-        print(f"[stage 3.2] Injected {len(images_in_media)} images into {source_path.name}")
-        return {"injected": len(images_in_media)}
-
-    print("[stage 3.2] No images or figures to inject — skipping")
-    return {"injected": 0}
-
-
 # ---------- LLM API call ----------
 
 def call_anthropic_protocol(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
@@ -741,7 +654,7 @@ def ingest_one(
 BATCH_MAX_CONCURRENT = 4
 
 
-def _should_skip_prepare(raw_file: Path, config: Config) -> bool:
+def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
     """Return True if the source page already exists and is reasonably complete.
 
     Stage 0.2: Re-ingest when source page is missing >80% of linked concept/entity
@@ -892,7 +805,7 @@ def _generate_all_chunks(
         ca = chunk_analyses[i]
         if "error" in ca:
             continue
-        blocks = _stage_2_4_generate_chunk(
+        blocks = stage_2_4_generate_chunk(
             ca, i, generated_slugs, raw_file, config, template_content,
             verbose=verbose, chunk_text=chunk, existing_refs=existing_refs)
         all_file_blocks.extend(blocks)
@@ -963,8 +876,8 @@ def _run_chunk_pipeline(
         template_content, chunk_total, t_start, verbose)
 
     # \u2500\u2500 Stage 2.3: incremental association detection (existing-wiki overlap) \u2500\u2500
-    from _stage_2_3_incremental import _stage_2_3_detect_incremental_associations
-    incremental_associations = _stage_2_3_detect_incremental_associations(
+    from _stage_2_3_incremental import stage_2_3_detect_incremental_associations
+    incremental_associations = stage_2_3_detect_incremental_associations(
         config.wiki_dir, chunk_analyses)
     if incremental_associations:
         print(f"  [stage 2.3] {len(incremental_associations)} new concept(s) "
@@ -1087,7 +1000,7 @@ def _do_prepare(
     print(f"\n=== [prepare] {raw_file.name} ===")
     try:
         # Dedup check — skip if source page exists and is reasonably complete
-        if _should_skip_prepare(raw_file, config):
+        if _stage_0_2_should_skip(raw_file, config):
             return None
 
         h = file_sha256(raw_file)
@@ -1185,24 +1098,12 @@ def _do_prepare(
 
         # Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
         # Runs before the source page so the index lists de-duplicated concepts.
-        concept_count_before = sum(1 for p, _ in file_blocks if "/concepts/" in p)
-        dedup_was_run = len(chunk_analyses) > 1
-        if dedup_was_run:
-            from _stage_2_5_dedup import (extract_concept_blocks,
-                find_duplicate_concepts, generate_merge_rules, apply_merge_rules)
-            concepts = extract_concept_blocks(file_blocks)
-            merge_rules = generate_merge_rules(
-                concepts, find_duplicate_concepts(concepts), config=config)
-            file_blocks = apply_merge_rules(file_blocks, merge_rules)
-            concept_count_after = sum(1 for p, _ in file_blocks if "/concepts/" in p)
-            if merge_rules:
-                print(f"  [stage 2.5] Dedup: {concept_count_before} → {concept_count_after} "
-                      f"concepts ({len(merge_rules)} merge rule(s))")
-            else:
-                print(f"  [stage 2.5] No duplicate concepts ({concept_count_after} concepts)")
-        else:
-            concept_count_after = concept_count_before
-            print(f"  [stage 2.5] Skipped (single chunk; {concept_count_after} concepts)")
+        from _stage_2_5_dedup import stage_2_5_dedup
+        _stage_2_5 = stage_2_5_dedup(file_blocks, chunk_analyses, config, verbose=verbose)
+        file_blocks = _stage_2_5["file_blocks"]
+        dedup_was_run = _stage_2_5["dedup_was_run"]
+        concept_count_before = _stage_2_5["concept_count_before"]
+        concept_count_after = _stage_2_5["concept_count_after"]
 
         # Stage 2.6: Source page generation + merge
         file_blocks = _prepare_source_page(
@@ -1220,11 +1121,12 @@ def _do_prepare(
 
         # ── Stage 2.8: Cross-source query resolution ──
         # LLM judge closes queries already answered elsewhere; defaults to "kept".
-        from _stage_2_8_query_resolve import resolve_queries, update_file_blocks_after_resolution
-        query_resolutions = resolve_queries(file_blocks, config.wiki_dir, config)
+        from _stage_2_8_query_resolve import (stage_2_8_resolve_queries,
+                                               _stage_2_8_update_file_blocks_after_resolution)
+        query_resolutions = stage_2_8_resolve_queries(file_blocks, config.wiki_dir, config)
         if any(r["status"] == "closed" for r in query_resolutions.values()):
             before_q = len(file_blocks)
-            file_blocks = update_file_blocks_after_resolution(file_blocks, query_resolutions)
+            file_blocks = _stage_2_8_update_file_blocks_after_resolution(file_blocks, query_resolutions)
             print(f"  [stage 2.8] Removed {before_q - len(file_blocks)} closed query block(s)")
 
         # ── Stage 2.9: Comparison generation ──
@@ -1255,6 +1157,7 @@ def _do_prepare(
             "comp_count": comp_count,
             "concept_merge_stats": (concept_count_before, concept_count_after),
             "dedup_was_run": dedup_was_run,
+            "current_domain": current_domain,
             "incremental_associations": incremental_associations,
             "query_resolutions": query_resolutions,
             "enrich_enabled": getattr(config, "enrich_enabled", True),
@@ -1463,9 +1366,14 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     if source_path.exists():
         stage_3_2_result = stage_3_2_inject_images(config, raw_file, source_path, method)
 
+    # Stage 3.3: Cross-domain slug collision review
+    from _stage_3_write import stage_3_3_slug_collision_review
+    stage_3_3_result = stage_3_3_slug_collision_review(
+        file_blocks, prepared.get("current_domain", "general"), config, verbose=verbose)
+
     # Stage 2.10: Review (quality review of generated pages)
     stage_2_10_result = stage_2_10_review_suggestions(
-        config, file_blocks, raw_file, raw_response=raw_response, verbose=verbose)
+        file_blocks, raw_file, config, raw_response=raw_response, verbose=verbose)
 
     # Go/no-go validation
     go_nogo_warnings = validate_stage_outputs(
@@ -1526,23 +1434,14 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 "files_written": files_written_paths + index_log_files}
 
     # Stage 3.5: Quality scoring card (always runs; flags needs_review < 0.65)
-    from _stage_3_5_quality import calculate_quality_score, generate_quality_card_md
+    from _stage_3_5_quality import stage_3_5_quality
     _q_review = stage_3_3_result.get("items", 0)
     _q_stats = prepared.get("concept_merge_stats", (0, 0))
     _q_dedup_ran = prepared.get("dedup_was_run", False)
-    quality_result = calculate_quality_score(
-        extracted_text, len(extracted_text),
+    quality_result = stage_3_5_quality(
+        raw_file, config, extracted_text,
         stage_1_2_result.get("count", 0), stage_1_3_result.get("captioned", 0),
-        file_blocks, _q_review, _q_stats, _q_dedup_ran)
-    print(f"  [stage 3.5] Quality score: {quality_result['overall_score']:.1%}"
-          f"{' ⚠️ needs_review' if quality_result['needs_review'] else ' ✅'}")
-    if quality_result["needs_review"]:
-        _audit_dir = config.wiki_dir / "REVIEW" / "audit"
-        _audit_dir.mkdir(parents=True, exist_ok=True)
-        _card = generate_quality_card_md(raw_file.stem, quality_result)
-        (_audit_dir / f"{time.strftime('%Y-%m-%d')}-{raw_file.stem}-quality.md"
-         ).write_text(_card, encoding="utf-8")
-        print(f"  [stage 3.5] Wrote quality card → REVIEW/audit/")
+        file_blocks, _q_review, _q_stats, _q_dedup_ran, verbose=verbose)
 
     # Stage 3.6: Embeddings (强制执行，2026-06-20)
     checkpoint = {"files_written": files_written_paths + index_log_files}

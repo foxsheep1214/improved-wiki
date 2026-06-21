@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Generic raw/ file name normalizer for any wiki project.
+"""Stage 0.1: raw/ file name normalizer for any wiki project.
 
-Reads <project>/raw/NAMING.md and extracts machine-readable rules from the
-```yaml rules``` block.  Checks all (or recent) files against those rules.
-In --fix mode, renames files that can be automatically corrected.
+The pregate (Stage 0) pre-processing gate. Reads <project>/raw/NAMING.md and
+extracts machine-readable rules from the ```yaml rules``` block. Checks all
+(or recent) files against those rules. In --fix mode, renames files that can
+be automatically corrected.
 
 Usage:
   # Auto-detect project from CWD
@@ -27,15 +28,15 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 
 # ── Lightweight YAML block parser (no PyYAML dependency) ────────
 
-def _parse_yaml_block(text: str) -> dict:
+def _stage_0_1_parse_yaml_block(text: str) -> dict:
     """Parse the ```yaml rules``` block from NAMING.md."""
     m = re.search(r'```yaml\s*\n(.*?)\n```', text, re.DOTALL)
     if not m:
         return {}
-    return _parse_simple_yaml(m.group(1))
+    return _stage_0_1_parse_simple_yaml(m.group(1))
 
 
-def _parse_simple_yaml(text: str) -> dict:
+def _stage_0_1_parse_simple_yaml(text: str) -> dict:
     """Minimal YAML parser for the NAMING.md rules block subset.
 
     Supports nested dicts, scalars, and lists in TWO syntaxes:
@@ -122,20 +123,20 @@ def _parse_simple_yaml(text: str) -> dict:
 
 # ── Rule resolution ─────────────────────────────────────────────
 
-def _resolve_rule(rules: dict, folder_type: str) -> dict:
+def _stage_0_1_resolve_rule(rules: dict, folder_type: str) -> dict:
     """Resolve a rule, following 'extends' chains."""
     if folder_type not in rules:
         return {}
     rule = dict(rules[folder_type])
     if 'extends' in rule:
-        parent = _resolve_rule(rules, rule['extends'])
+        parent = _stage_0_1_resolve_rule(rules, rule['extends'])
         for k, v in parent.items():
             if k not in rule:
                 rule[k] = v
     return rule
 
 
-def _flatten_prefixes(vendor_prefixes: dict) -> Dict[str, str]:
+def _stage_0_1_flatten_prefixes(vendor_prefixes: dict) -> Dict[str, str]:
     """Flatten vendor_prefixes into {lower_prefix: vendor_name}.
 
     Robust against malformed YAML: only process list values for each vendor,
@@ -159,7 +160,7 @@ def _flatten_prefixes(vendor_prefixes: dict) -> Dict[str, str]:
     return result
 
 
-def _infer_vendor(part_number: str, prefix_map: Dict[str, str]) -> Optional[str]:
+def _stage_0_1_infer_vendor(part_number: str, prefix_map: Dict[str, str]) -> Optional[str]:
     """Infer vendor from part number prefix. Longest match (4→3→2 chars) wins."""
     pn = part_number.upper().replace('-', '').replace('_', '')
     for length in (4, 3, 2):
@@ -171,7 +172,7 @@ def _infer_vendor(part_number: str, prefix_map: Dict[str, str]) -> Optional[str]
 
 # ── Check & Fix ─────────────────────────────────────────────────
 
-def _check_rule(filepath: Path, rule: dict, vendors: List[str],
+def _stage_0_1_check_rule(filepath: Path, rule: dict, vendors: List[str],
                 prefix_map: Dict[str, str]) -> List[str]:
     """Check a file against its folder's naming rule."""
     stem = filepath.stem
@@ -202,7 +203,7 @@ def _check_rule(filepath: Path, rule: dict, vendors: List[str],
     return issues
 
 
-def _fix_file(filepath: Path, rule: dict, vendors: List[str],
+def _stage_0_1_fix_file(filepath: Path, rule: dict, vendors: List[str],
               prefix_map: Dict[str, str], dry_run: bool = True) -> Optional[Tuple[Path, str]]:
     """Try to fix a filename. Handles 'add vendor prefix' or report unfixable."""
     stem = filepath.stem
@@ -215,7 +216,7 @@ def _fix_file(filepath: Path, rule: dict, vendors: List[str],
         if parts[0] in vendors:
             return None
 
-    vendor = _infer_vendor(stem, prefix_map)
+    vendor = _stage_0_1_infer_vendor(stem, prefix_map)
     if vendor is None:
         return None
 
@@ -236,14 +237,14 @@ def _fix_file(filepath: Path, rule: dict, vendors: List[str],
 
 # ── Scanner ─────────────────────────────────────────────────────
 
-def scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
+def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
              verbose: bool = False, recent_minutes: Optional[int] = None) -> Dict:
     """Scan raw/ files against parsed rules from NAMING.md."""
     results = {"ok": 0, "issues": 0, "fixed": 0, "unfixable": 0}
     cutoff = _time.time() - (recent_minutes * 60) if recent_minutes else 0
     files_skipped = 0
     vendors = rules.get('vendors', [])
-    prefix_map = _flatten_prefixes(rules.get('vendor_prefixes', {}))
+    prefix_map = _stage_0_1_flatten_prefixes(rules.get('vendor_prefixes', {}))
     folder_rules = rules.get('rules', {})
 
     for folder_name, _rule_def in folder_rules.items():
@@ -251,7 +252,7 @@ def scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
         if not folder.exists():
             continue
 
-        rule = _resolve_rule(folder_rules, folder_name)
+        rule = _stage_0_1_resolve_rule(folder_rules, folder_name)
 
         for filepath in sorted(folder.rglob('*')):
             if not filepath.is_file():
@@ -272,7 +273,7 @@ def scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
                     continue
 
             rel = filepath.relative_to(raw_root)
-            issues = _check_rule(filepath, rule, vendors, prefix_map)
+            issues = _stage_0_1_check_rule(filepath, rule, vendors, prefix_map)
 
             if not issues:
                 results["ok"] += 1
@@ -286,7 +287,7 @@ def scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
                 print(f"      {issue}")
 
             if fix:
-                outcome = _fix_file(filepath, rule, vendors, prefix_map, dry_run=False)
+                outcome = _stage_0_1_fix_file(filepath, rule, vendors, prefix_map, dry_run=False)
                 if outcome:
                     new_path, reason = outcome
                     print(f"      → {new_path.relative_to(raw_root)}  ({reason})")
@@ -303,7 +304,7 @@ def scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
 
 # ── CLI ─────────────────────────────────────────────────────────
 
-def find_project_root() -> Optional[Path]:
+def _stage_0_1_find_project_root() -> Optional[Path]:
     """Walk up from CWD to find a project with raw/NAMING.md."""
     cwd = Path.cwd()
     for p in [cwd] + list(cwd.parents):
@@ -324,7 +325,7 @@ def main():
                         help='Only check files modified within the last N minutes')
     args = parser.parse_args()
 
-    project_root = args.project or find_project_root()
+    project_root = args.project or _stage_0_1_find_project_root()
     if project_root is None:
         print("Error: Could not find raw/NAMING.md. "
               "Run from a wiki project or use --project.")
@@ -337,7 +338,7 @@ def main():
         print(f"Error: {naming_md} not found. Create it first.")
         return 1
 
-    rules = _parse_yaml_block(naming_md.read_text(encoding='utf-8'))
+    rules = _stage_0_1_parse_yaml_block(naming_md.read_text(encoding='utf-8'))
     if not rules:
         print(f"Error: No ```yaml rules``` block found in {naming_md}")
         return 1
@@ -346,7 +347,7 @@ def main():
     scope = f"（最近 {args.recent} 分钟内修改的文件）" if args.recent else ""
     print(f"{mode}模式{scope} — {project_root.name}\n")
 
-    results = scan_raw(raw_root, rules, check=True, fix=args.fix,
+    results = stage_0_1_scan_raw(raw_root, rules, check=True, fix=args.fix,
                        verbose=args.verbose, recent_minutes=args.recent)
 
     print(f"\n── 结果 ──")

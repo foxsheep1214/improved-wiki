@@ -489,7 +489,7 @@ Generate the page NOW. Start with ---FILE:...
 """
 
 
-def _stage_2_4_generate_chunk(
+def stage_2_4_generate_chunk(
     analysis: dict,
     chunk_idx: int,
     generated_slugs: list[str],

@@ -13,7 +13,7 @@ def _title_words(title: str) -> set:
     return set(w.lower() for w in re.split(r"[\s/]+", title) if len(w) > 1)
 
 
-def _stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: list[dict]) -> dict:
+def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: list[dict]) -> dict:
     associations = {}
     concepts_dir = wiki_root / "concepts"
     entities_dir = wiki_root / "entities"

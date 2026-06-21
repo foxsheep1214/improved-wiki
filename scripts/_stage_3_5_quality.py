@@ -2,6 +2,7 @@
 
 Refactored 2026-06-21 for explicit stage naming.
 """
+import time
 from datetime import datetime
 
 
@@ -75,7 +76,24 @@ def _stage_3_5_verify_quality_scoring(checkpoint):
     return "quality_metrics" in checkpoint
 
 
-# ── Backward-compat aliases ──
-calculate_quality_score = _stage_3_5_calculate_quality_score
-generate_quality_card_md = _stage_3_5_generate_quality_card_md
-verify_quality_scoring = _stage_3_5_verify_quality_scoring
+def stage_3_5_quality(raw_file, config, extracted_text, images_extracted,
+                      images_captioned, file_blocks, review_items,
+                      concept_merge_stats, dedup_was_run, *, verbose: bool = False) -> dict:
+    """Stage 3.5: Quality scoring card (always runs; flags needs_review < 0.65).
+
+    Computes the quality score, prints it, and writes a quality card to
+    REVIEW/audit/ when needs_review. Returns the quality_result dict.
+    """
+    quality_result = _stage_3_5_calculate_quality_score(
+        extracted_text, len(extracted_text), images_extracted, images_captioned,
+        file_blocks, review_items, concept_merge_stats, dedup_was_run)
+    print(f"  [stage 3.5] Quality score: {quality_result['overall_score']:.1%}"
+          f"{' ⚠️ needs_review' if quality_result['needs_review'] else ' ✅'}")
+    if quality_result["needs_review"]:
+        audit_dir = config.wiki_dir / "REVIEW" / "audit"
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        card = _stage_3_5_generate_quality_card_md(raw_file.stem, quality_result)
+        (audit_dir / f"{time.strftime('%Y-%m-%d')}-{raw_file.stem}-quality.md"
+         ).write_text(card, encoding="utf-8")
+        print(f"  [stage 3.5] Wrote quality card → REVIEW/audit/")
+    return quality_result
