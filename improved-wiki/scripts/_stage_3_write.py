@@ -325,7 +325,7 @@ with duplicates consolidated and new information integrated.
     )
 
 
-def _stage_3_2_canonicalize_sources_field(content: str, canonical_source: str) -> str:
+def _stage_3_1_canonicalize_sources_field(content: str, canonical_source: str) -> str:
     """NashSU parity (ingest.ts L1298-1324): union-merge sources[] with dedup.
 
     Preserves existing sources from prior ingests. Only adds the canonical

@@ -107,7 +107,7 @@ from _stage_2_generate import (
 )
 from _stage_3_write import (
     stage_3_1_write_wiki_file, stage_3_4_aggregate_repair,
-    _stage_3_2_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
+    _stage_3_1_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
     _stage_3_1_sanitize_ingested_content,
     _stage_3_1_wiki_path_for_source, _stage_3_1_merge_page_content,
     _stage_3_1_auto_correct_wiki_path, _stage_3_1_contains_cjk, _stage_3_1_make_cjk_slug,
@@ -1256,7 +1256,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 except ImportError:
                     pass
 
-        content = _stage_3_2_canonicalize_sources_field(content, canonical_source)
+        content = _stage_3_1_canonicalize_sources_field(content, canonical_source)
         content = _stage_3_1_stamp_frontmatter_dates(content, today_str)
 
         full_path = config.wiki_dir / rel_path
