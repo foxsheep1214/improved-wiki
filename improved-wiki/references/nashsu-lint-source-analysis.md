@@ -289,6 +289,17 @@ are lost. The next session has empty findings until they click "Run Lint" again.
 Improved-wiki persists them, so cron / scripts / future-sessions can act on
 historical findings without re-running.
 
+**Human-browsable lint pages location (2026-06-21)**: NashSU has no on-disk lint
+pages at all (app UI renders findings from `useLintStore`). improved-wiki writes
+one `.md` per finding for CLI browsing — these live under `<state_dir>/lint/`
+(i.e. `.llm-wiki/lint/`), **not** under `wiki/`. Rationale: lint pages are
+derived diagnostic output, not source knowledge; keeping them out of `wiki/`
+prevents `collect_summaries` (semantic lint's `wiki_dir.rglob("*.md")`) and any
+future wiki-tree scan from ingesting its own previous findings. `wiki-lint.sh`
+auto-migrates a legacy `wiki/lint/` into `<state_dir>/lint/` on first run.
+Machine-readable caches (`lint-cache.json`, `lint-semantic.json`) were already
+under `<state_dir>/` and are unchanged.
+
 **One-writer discipline** (per `llm-wiki-local` skill): never run
 `wiki-lint.sh --semantic` and the desktop app's "Run Lint" button at the same
 time. Both write the same `useLintStore` (in app memory) AND (now) the same

@@ -325,10 +325,10 @@ N 为单调递增计数器（`lint.ts` 实现）。improved-wiki 使用更具体
 ### 7.2 Lint 页面文件
 
 ```
-wiki/lint/<type>-<safe_page>-<NN>.md
+.llm-wiki/lint/<type>-<safe_page>-<NN>.md
 ```
 
-Lint 页面含 frontmatter `resolved: false`，修复后改 `true`，下次 lint 自动清理。
+Lint 页面位于运行时目录（不在 `wiki/` 下）——它们是派生诊断产物，非源知识；放在 `.llm-wiki/` 下避免污染 search/graph 扫描，与 NashSU「lint state 属 runtime，非 wiki 内容」的边界一致。首次运行时旧 `wiki/lint/` 会自动迁移到此处。Lint 页面含 frontmatter `resolved: false`，修复后改 `true`，下次 lint 自动清理。
 
 ### 7.3 6 种 structural lint 类型
 
@@ -422,7 +422,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | Raw 布局 | `raw/sources/<type>/<file>` | `raw/<type>/<任意子目录>/<file>` | 刻意设计，人类友好 |
 | 聚合页排除 | `index.md` + `log.md` | 额外排除 `schema.md` + `overview.md` | NashSU 无 schema.md |
 | Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 1.2 独有产物 |
-| Lint 页面 | app UI 直接展示 | `wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出 |
+| Lint 页面 | app UI 直接展示（内存） | `.llm-wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出；属 runtime 状态，不放入 wiki/ |
 | Review 页面 | `review.json`（app UI） | `wiki/REVIEW/<type>/<date>-<stem>-<NNN>.md` + `review.json` | 人类可浏览 + 机器可读双输出 |
 | 页面合并 | 3-layer LLM merge | 同 NashSU（2026-06-14 实现） | — |
 | 路径安全 | 8 项 `isSafeIngestPath` | 同 NashSU（2026-06-14 实现） | — |

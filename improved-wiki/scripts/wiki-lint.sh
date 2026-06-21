@@ -5,7 +5,7 @@
 #   Phase 0 · 前置检查     — lock + cleanup resolved lint pages
 #   Phase 1 · 结构扫描     — collect pages, run structural detection (6 categories)
 #   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic)
-#   Phase 3 · 写入         — write .lint-cache.json + wiki/lint/*.md + summary
+#   Phase 3 · 写入         — write .lint-cache.json + .llm-wiki/lint/*.md + summary
 #   Phase 4 · 自动修复     — optional --fix / --fix-links
 #
 # Detects 6 categories of issues:
@@ -20,21 +20,21 @@
 #   5. semantic       — LLM-driven contradiction/stale/missing-page/suggestion
 #
 # Output:
-#   - wiki/lint/*.md              — human-browsable lint pages (each finding one .md)
+#   - .llm-wiki/lint/*.md         — human-browsable lint pages (each finding one .md)
 #                                    Frontmatter: resolved: false → true to mark fixed
 #   - Cleanup: resolved-lint pages auto-deleted on next run
-#   - wiki/.lint-cache.json       — JSON array (for tooling)
+#   - .llm-wiki/lint-cache.json   — JSON array (for tooling)
 #   - stdout: summary line
 #
 # Usage:
-#   $ ./wiki-lint.sh                            # scan + write wiki/lint/ pages
+#   $ ./wiki-lint.sh                            # scan + write .llm-wiki/lint/ pages
 #   $ ./wiki-lint.sh --verbose                  # show every finding
 #   $ ./wiki-lint.sh --summary                  # one-line summary only
 #   $ ./wiki-lint.sh --strict                   # exit 1 for critical issues
 #   $ ./wiki-lint.sh --semantic                 # also run LLM semantic lint
 #   $ ./wiki-lint.sh --fix                      # auto-fix: missing-frontmatter, missing-domain
 #   $ ./wiki-lint.sh --fix-links                # apply suggested_target/source wikilink fixes
-#   $ ./wiki-lint.sh --json-only                # old behavior: JSON only, no wiki/lint/ pages
+#   $ ./wiki-lint.sh --json-only                # old behavior: JSON only, no .llm-wiki/lint/ pages
 #   $ ./wiki-lint.sh --sweep                    # also report auto-resolvable review items (read-only)
 #
 # Configuration via env:
@@ -53,7 +53,6 @@ set -uo pipefail
 WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
 WIKI_DIR="$WIKI_ROOT/wiki"
 export WIKI_DIR
-LINT_PAGES_DIR="$WIKI_DIR/lint"
 # Detect runtime dir (aligned with _paths.py detect_runtime_dir()):
 # Priority: 1) .iwiki-runtime/ → migrate  2) .llm-wiki/  3) wiki/ (legacy)  4) .llm-wiki/ (default)
 # Auto-migrate from .iwiki-runtime/ if it still exists
@@ -75,6 +74,17 @@ else
     RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
 fi
 mkdir -p "$RUNTIME_DIR"
+# Lint pages live under the runtime dir (not wiki/) — they are derived
+# diagnostic output, not source knowledge; keeping them out of wiki/ avoids
+# polluting search/graph scans and matches NashSU's "lint state is runtime,
+# not wiki content" boundary. Auto-migrate legacy wiki/lint/ on first run.
+LINT_PAGES_DIR="$RUNTIME_DIR/lint"
+if [ -d "$WIKI_DIR/lint" ] && [ "$WIKI_DIR/lint" != "$LINT_PAGES_DIR" ]; then
+    mkdir -p "$LINT_PAGES_DIR"
+    mv "$WIKI_DIR/lint"/*.md "$LINT_PAGES_DIR/" 2>/dev/null || true
+    rmdir "$WIKI_DIR/lint" 2>/dev/null || true
+    echo "[lint] Migrated wiki/lint/ → $LINT_PAGES_DIR" >&2
+fi
 LINT_CACHE="$RUNTIME_DIR/lint-cache.json"
 LINT_LOCK="$RUNTIME_DIR/lint-lock"
 # Semantic cache: prefer runtime dir, fall back to .llm-wiki (backward compat)
@@ -135,13 +145,16 @@ touch "$LINT_LOCK"
 # ---------- Cleanup: remove resolved lint pages ----------
 if [ "$JSON_ONLY" != true ] && [ -d "$LINT_PAGES_DIR" ]; then
   REMOVED=0
-  for f in "$LINT_PAGES_DIR"/*.md; do
+  # find -print0 + read -d '' so filenames with spaces (macOS " 2.md"
+  # collision suffixes) survive — unquoted `for f in *.md` word-splits spaced
+  # names into two tokens and rm silently fails on both halves.
+  while IFS= read -r -d '' f; do
     [ -f "$f" ] || continue
     if grep -q '^resolved:\s*true\s*$' "$f"; then
       rm -f "$f"
       REMOVED=$((REMOVED + 1))
     fi
-  done
+  done < <(find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' -print0)
   if [ "$REMOVED" -gt 0 ]; then
     echo "[lint] Cleaned $REMOVED resolved lint page(s)"
   fi
@@ -341,18 +354,17 @@ print(' | '.join(parts))
 
 echo "[lint] $SUMMARY_LINE"
 
-# ---------- Write lint pages to wiki/lint/ (human-browsable) ----------
+# ---------- Write lint pages to .llm-wiki/lint/ (human-browsable) ----------
 if [ "$JSON_ONLY" != true ]; then
   mkdir -p "$LINT_PAGES_DIR"
 
-  # Delete old lint pages to regenerate with latest scan results
-  # (lint pages regenerated below)
-  # Remove all existing unresolved lint pages (they get regenerated)
-  for old_f in "$LINT_PAGES_DIR"/*.md; do
-    [ -f "$old_f" ] || continue
-    # Keep resolved pages (they will have been cleaned above)
-    rm -f "$old_f"
-  done
+  # Delete old lint pages to regenerate with latest scan results.
+  # find -print0 | xargs -0 rm handles filenames with spaces (macOS " 2.md"
+  # collision suffixes) — the old `for old_f in *.md; rm "$old_f"` word-split
+  # on spaces and silently failed to delete them, causing stale pages to
+  # accumulate across runs.
+  find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' -print0 \
+    | xargs -0 rm -f
 
   # Write one .md per finding
   python3 -c "
@@ -360,7 +372,7 @@ import json, os, time, re
 from pathlib import Path
 
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
-lint_dir = Path(os.environ.get('LINT_PAGES_DIR', '$WIKI_DIR/lint'))
+lint_dir = Path(os.environ.get('LINT_PAGES_DIR', '$RUNTIME_DIR/lint'))
 lint_dir.mkdir(parents=True, exist_ok=True)
 date_str = time.strftime('%Y-%m-%d')
 

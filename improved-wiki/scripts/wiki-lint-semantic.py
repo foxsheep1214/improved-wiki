@@ -319,8 +319,10 @@ def main() -> int:
         c = Counter(f["severity"] for f in findings)
         print(f"[semantic-lint] severity: warning={c.get('warning', 0)} info={c.get('info', 0)}")
 
-    # ── Write lint pages to wiki/lint/ (human-browsable, same format as structural) ──
-    lint_dir = wiki_dir / "lint"
+    # ── Write lint pages to <state_dir>/lint/ (human-browsable, same format as structural) ──
+    # Lives under the runtime dir (not wiki/) — derived diagnostic output, not
+    # source knowledge; matches wiki-lint.sh's LINT_PAGES_DIR=$RUNTIME_DIR/lint.
+    lint_dir = state_dir / "lint"
     lint_dir.mkdir(parents=True, exist_ok=True)
     date_str = time.strftime("%Y-%m-%d")
     severity_icon = {"warning": "⚠️", "info": "ℹ️"}

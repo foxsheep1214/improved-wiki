@@ -299,7 +299,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 
 - **作用**：对本次 ingest 的质量进行量化评分，生成质量评分卡。快速识别哪些 ingest 有问题需要人工复审，避免低质量内容进入 wiki。
 - **跳过条件**：无（总是执行）
-- **产物**：progress checkpoint 中的 `quality_metrics` 字典 + 可选的 `wiki/lint/audit/<date>-<source>-quality.md` 评分卡
+- **产物**：progress checkpoint 中的 `quality_metrics` 字典 + 可选的 `.llm-wiki/lint/audit/<date>-<source>-quality.md` 评分卡
   - 评分卡格式：
     ```markdown
     ---
