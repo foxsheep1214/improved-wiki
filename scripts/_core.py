@@ -867,3 +867,45 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
             continue
         blocks.append((path, content))
     return blocks
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Shared utilities (used by multiple stage modules)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def slugify(text: str) -> str:
+    """Convert a concept/entity name to a kebab-case wiki slug.
+
+    Standardized across all stage modules. Used in 15+ places.
+    """
+    return text.lower().replace(" ", "-").replace("/", "-")
+
+
+def atomic_write(path, content: str, encoding: str = "utf-8") -> None:
+    """Write file atomically via tmp + rename. Prevents partial writes."""
+    import os
+    p = str(path)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding=encoding) as f:
+        f.write(content)
+    os.replace(tmp, p)
+
+
+def call_with_retry(fn, max_retries: int = 3, base_wait: float = 1.0, label: str = ""):
+    """Call a function with exponential-backoff retry and jitter.
+
+    Replaces 5 copy-pasted retry loops across Phase 2.
+    """
+    import time
+    from _llm_api import _retry_jitter, _is_retryable_exception
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if _is_retryable_exception(e) and attempt < max_retries - 1:
+                _retry_jitter(attempt, label)
+                time.sleep(base_wait ** (attempt + 1))
+                continue
+            raise
+    raise last_err  # unreachable but satisfies type checker

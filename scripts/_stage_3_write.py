@@ -1,3 +1,14 @@
+"""Phase 3 Stage 3.1-3.5: Write pages to disk, inject images, repair aggregates, quality scoring.
+
+Pipeline stages:
+  Stage 3.1: Write wiki files to disk
+  Stage 3.2: Inject embedded images section
+  Stage 3.3: Review suggestions (defined in _stage_2_generate.py)
+  Stage 3.4: Aggregate repair + cache save
+  Stage 3.5: Quality scoring
+
+Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
+"""
 from __future__ import annotations
 
 import json, os, re, sys, time
@@ -19,11 +30,20 @@ from _core import (
 from _llm_api import call_anthropic_protocol
 from _frontmatter_array import parse_frontmatter_array
 
-__all__ = ["write_wiki_file", "stage_3_4_aggregate_repair", "canonicalize_sources_field", "stamp_frontmatter_dates", "sanitize_ingested_content", "is_safe_ingest_path", "wiki_path_for_source", "merge_page_content", "_auto_correct_wiki_path", "_contains_cjk", "_make_cjk_slug", "backup_existing_page"]
+__all__ = [
+    "stage_3_1_write_wiki_file",  # Stage 3.1
+    "stage_3_4_aggregate_repair", # Stage 3.4
+]
 
 # ---------- File writing ----------
 
-def _contains_cjk(text: str) -> bool:
+def _extract_fm_field(content: str, field_name: str) -> str:
+    """Extract a frontmatter YAML field from markdown content."""
+    m = re.search(rf'^{field_name}:\s*(.+)$', content, re.MULTILINE)
+    return m.group(1).strip() if m else ""
+
+
+def _stage_3_1_contains_cjk(text: str) -> bool:
     """Check if text contains CJK characters (NashSU parity: containsCjk)."""
     for ch in text:
         cp = ord(ch)
@@ -38,7 +58,7 @@ def _contains_cjk(text: str) -> bool:
     return False
 
 
-def _make_cjk_slug(title: str) -> str:
+def _stage_3_1_make_cjk_slug(title: str) -> str:
     """Create a readable CJK slug from a page title.
 
     Rules (NashSU parity):
@@ -48,12 +68,11 @@ def _make_cjk_slug(title: str) -> str:
     - Trim to 120 chars
     - Preserve proper nouns and technical identifiers in original form
     """
-    import re as _re
     # Keep CJK, alphanumeric, spaces, hyphens, parentheses (for units like "Cauer/Foster")
-    slug = _re.sub(r'[^\w\s\-\(\)一-鿿㐀-䶿豈-﫿぀-ゟ゠-ヿ가-힯]', '-', title, flags=_re.UNICODE)
+    slug = re.sub(r'[^\w\s\-\(\)一-鿿㐀-䶿豈-﫿぀-ゟ゠-ヿ가-힯]', '-', title, flags=re.UNICODE)
     # Collapse whitespace and hyphens
-    slug = _re.sub(r'[\s_]+', '-', slug)
-    slug = _re.sub(r'-{2,}', '-', slug)
+    slug = re.sub(r'[\s_]+', '-', slug)
+    slug = re.sub(r'-{2,}', '-', slug)
     slug = slug.strip('-')
     # Replace problematic chars for macOS filenames
     slug = slug.replace('/', '-').replace(':', '-').replace('\\', '-')
@@ -62,7 +81,7 @@ def _make_cjk_slug(title: str) -> str:
     return slug if slug else ""
 
 
-def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None) -> str | None:
+def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None) -> str | None:
     """Auto-correct malformed wiki paths from LLM output.
 
     LLM sometimes outputs:
@@ -76,7 +95,6 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
 
     Returns corrected path (relative to wiki/ dir, NO "wiki/" prefix) or None if uncorrectable.
     """
-    import re as _re
     basename = Path(rel_path).name
     stem = Path(rel_path).stem
 
@@ -89,17 +107,8 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
         rel_path += ".md"
 
     # Read frontmatter type and domain from content (used by all cases below)
-    fm_type = None
-    fm_domain = None
-    fm_match = _re.match(r'^---\s*\n(.*?)\n---', content, _re.DOTALL)
-    if fm_match:
-        for line in fm_match.group(1).split("\n"):
-            m = _re.match(r'type:\s*(\S+)', line)
-            if m:
-                fm_type = m.group(1).strip()
-            m = _re.match(r'domain:\s*(\S+)', line)
-            if m:
-                fm_domain = m.group(1).strip()
+    fm_type = _extract_fm_field(content, "type") or None
+    fm_domain = _extract_fm_field(content, "domain") or None
 
     # Plan B: Check for cross-domain slug collisions
     slug = stem
@@ -110,14 +119,7 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
             # Read existing page's domain
             try:
                 existing_text = existing_path.read_text(encoding="utf-8")
-                ex_match = _re.match(r'^---\s*\n(.*?)\n---', existing_text, _re.DOTALL)
-                existing_domain = "general"
-                if ex_match:
-                    for line in ex_match.group(1).split("\n"):
-                        dm = _re.match(r'domain:\s*(\S+)', line)
-                        if dm:
-                            existing_domain = dm.group(1).strip()
-                            break
+                existing_domain = _extract_fm_field(existing_text, "domain") or "general"
                 if existing_domain != fm_domain and existing_domain != "general" and fm_domain != "general":
                     new_slug = f"{slug}-{fm_domain}"
                     print(f"  ⚠️  [disambig] Slug collision: '{slug}' exists in domain '{existing_domain}', "
@@ -130,13 +132,13 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
     fm_title = None
     if fm_match:
         for line in fm_match.group(1).split("\n"):
-            tm = _re.match(r'title:\s*["\']?(.+?)["\']?\s*$', line)
+            tm = re.match(r'title:\s*["\']?(.+?)["\']?\s*$', line)
             if tm:
                 fm_title = tm.group(1).strip()
                 break
-    if fm_title and _contains_cjk(fm_title) and not _contains_cjk(slug):
-        cjk_slug = _make_cjk_slug(fm_title)
-        if cjk_slug and _contains_cjk(cjk_slug):
+    if fm_title and _stage_3_1_contains_cjk(fm_title) and not _stage_3_1_contains_cjk(slug):
+        cjk_slug = _stage_3_1_make_cjk_slug(fm_title)
+        if cjk_slug and _stage_3_1_contains_cjk(cjk_slug):
             print(f"  ⚠️  [cjk] Slug '{slug}' → '{cjk_slug}' (CJK title detected)")
             slug = cjk_slug
 
@@ -230,7 +232,7 @@ def _auto_correct_wiki_path(rel_path: str, content: str, config: Config | None =
     return None
 
 
-def wiki_path_for_source(raw_file: Path, config: Config) -> Path:
+def _stage_3_1_wiki_path_for_source(raw_file: Path, config: Config) -> Path:
     """Return wiki/sources/<raw-rel-path>.md mirroring raw/ directory structure.
 
     Delegates to ``source_slug_from_raw_path()`` in _core.py for canonical
@@ -243,7 +245,7 @@ def wiki_path_for_source(raw_file: Path, config: Config) -> Path:
     return config.wiki_dir / "sources" / raw_file.with_suffix(".md").name
 
 
-def sanitize_ingested_content(content: str) -> str:
+def _stage_3_1_sanitize_ingested_content(content: str) -> str:
     """NashSU parity (ingest-sanitize.ts): fix common LLM formatting errors."""
     # Fix stray opening code fences without closing
     fence_count = content.count("\n```")
@@ -257,7 +259,7 @@ def sanitize_ingested_content(content: str) -> str:
     return content
 
 
-def backup_existing_page(path: Path, config: Config) -> None:
+def _stage_3_1_backup_existing_page(path: Path, config: Config) -> None:
     """NashSU parity (ingest.ts L2575-2584): snapshot existing page before overwrite."""
     if not path.exists():
         return
@@ -279,13 +281,13 @@ from _frontmatter import (
     lock_fields,
 )
 
-# Backward-compat aliases (internal use; not exported)
+# TODO: migrate callers and remove — backward-compat aliases (internal use; not exported)
 _parse_frontmatter = parse_frontmatter
 _merge_frontmatter_arrays = union_arrays
 _fmt_frontmatter = write_frontmatter
 
 
-def merge_page_content(existing_text: str, new_text: str, config: Config) -> str:
+def _stage_3_1_merge_page_content(existing_text: str, new_text: str, config: Config) -> str:
     """NashSU 3-layer merge: delegates to _frontmatter.merge_page_content.
 
     Layers: array-union → LLM body merge → lock fields.
@@ -323,7 +325,7 @@ with duplicates consolidated and new information integrated.
     )
 
 
-def canonicalize_sources_field(content: str, canonical_source: str) -> str:
+def _stage_3_2_canonicalize_sources_field(content: str, canonical_source: str) -> str:
     """NashSU parity (ingest.ts L1298-1324): union-merge sources[] with dedup.
 
     Preserves existing sources from prior ingests. Only adds the canonical
@@ -380,7 +382,7 @@ def canonicalize_sources_field(content: str, canonical_source: str) -> str:
     return "---\n" + "\n".join(new_lines) + "\n---" + body
 
 
-def stamp_frontmatter_dates(content: str, today: str) -> str:
+def _stage_3_1_stamp_frontmatter_dates(content: str, today: str) -> str:
     """NashSU parity (ingest.ts L1440-1468): stamp created/updated dates."""
     if not content.startswith("---"):
         return content
@@ -414,13 +416,13 @@ def stamp_frontmatter_dates(content: str, today: str) -> str:
     return "---\n" + "\n".join(new_lines) + "\n---" + body
 
 
-def write_wiki_file(path: Path, content: str, config: Config | None = None, merge: bool = False) -> None:
-    content = sanitize_ingested_content(content)
+def stage_3_1_write_wiki_file(path: Path, content: str, config: Config | None = None, merge: bool = False) -> None:
+    content = _stage_3_1_sanitize_ingested_content(content)
     if config is not None:
-        backup_existing_page(path, config)
+        _stage_3_1_backup_existing_page(path, config)
         if merge and path.exists():
             existing = path.read_text(encoding="utf-8")
-            content = merge_page_content(existing, content, config)
+            content = _stage_3_1_merge_page_content(existing, content, config)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content, encoding="utf-8")
@@ -454,7 +456,7 @@ def stage_3_4_aggregate_repair(
         f"- Method: {extract_method}\n"
     )
     log_text += entry
-    write_wiki_file(log_path, log_text, config)
+    stage_3_1_write_wiki_file(log_path, log_text, config)
     files_written.append(str(log_path.relative_to(config.wiki_root)))
 
     # index.md — append link to new source page
@@ -466,7 +468,7 @@ def stage_3_4_aggregate_repair(
     new_link = f"- [[{source_path.stem}]]\n"
     if "## Sources" in index_text and new_link not in index_text:
         index_text = index_text.replace("## Sources\n", f"## Sources\n\n{new_link}", 1)
-        write_wiki_file(index_path, index_text, config)
+        stage_3_1_write_wiki_file(index_path, index_text, config)
         files_written.append(str(index_path.relative_to(config.wiki_root)))
 
     # overview.md — NashSU aggregate repair: LLM rewrite with existing content as context.
@@ -538,7 +540,7 @@ unless the new source directly contradicts or answers them.
             if "---FILE:" in response:
                 print(f"[stage 3.4] LLM response contained FILE blocks — discarding")
             elif response.strip().startswith("#"):
-                write_wiki_file(overview_path, response.strip() + "\n", config)
+                stage_3_1_write_wiki_file(overview_path, response.strip() + "\n", config)
                 files_written.append(str(overview_path.relative_to(config.wiki_root)))
                 print(f"[stage 3.4] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
             else:
@@ -607,7 +609,7 @@ _TEMPLATE_DOMAIN: dict[str, str] = {
 }
 
 
-def _list_existing_concepts_with_domains(config) -> dict[str, str]:
+def _stage_3_3_list_existing_concepts_with_domains(config) -> dict[str, str]:
     """Scan wiki/concepts/ and return dict of slug → domain for all concept pages.
 
     Reads frontmatter to extract the domain field. Pages without domain default to 'general'.
@@ -621,21 +623,14 @@ def _list_existing_concepts_with_domains(config) -> dict[str, str]:
         slug = f.stem
         try:
             text = f.read_text(encoding="utf-8")
-            fm_match = re.match(r'^---\s*\n(.*?)\n---', text, re.DOTALL)
-            if fm_match:
-                for line in fm_match.group(1).split("\n"):
-                    m = re.match(r'domain:\s*(\S+)', line)
-                    if m:
-                        result[slug] = m.group(1).strip()
-                        break
-            if slug not in result:
-                result[slug] = "general"
+            domain = _extract_fm_field(text, "domain")
+            result[slug] = domain if domain else "general"
         except Exception:
             result[slug] = "general"
     return result
 
 
-def _find_slug_collisions(
+def _stage_3_3_find_slug_collisions(
     new_concepts: list[str],
     existing_domains: dict[str, str],
     current_domain: str,
@@ -657,7 +652,7 @@ def _find_slug_collisions(
     return collisions
 
 
-def _disambiguate_slug(slug: str, domain: str, existing_domains: dict[str, str]) -> str:
+def _stage_3_3_disambiguate_slug(slug: str, domain: str, existing_domains: dict[str, str]) -> str:
     """Resolve a slug collision by appending the domain suffix.
 
     Only appends if the slug already exists with a DIFFERENT domain.
@@ -683,7 +678,7 @@ def _disambiguate_slug(slug: str, domain: str, existing_domains: dict[str, str])
     return f"{slug}-{domain}"
 
 
-def _build_collision_warning(
+def _stage_3_3_build_collision_warning(
     collisions: list[tuple[str, str, str]],
     existing_domains: dict[str, str],
 ) -> str:
@@ -699,12 +694,13 @@ def _build_collision_warning(
         "",
     ]
     for slug, existing_domain, current_domain in collisions:
-        lines.append(f"- **{slug}** — already exists in `{existing_domain}`, new use is in `{current_domain}` → use `{_disambiguate_slug(slug, current_domain, existing_domains)}`")
+        lines.append(f"- **{slug}** — already exists in `{existing_domain}`, new use is in `{current_domain}` → use `{_stage_3_3_disambiguate_slug(slug, current_domain, existing_domains)}`")
 
     lines.append("")
     return "\n".join(lines)
 
 
-
-
+# TODO: migrate callers and remove — backward-compat aliases (internal use)
+write_wiki_file = stage_3_1_write_wiki_file
+merge_page_content = _stage_3_1_merge_page_content
 

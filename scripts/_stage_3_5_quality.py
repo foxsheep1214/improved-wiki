@@ -1,8 +1,11 @@
-"""Stage 3.5: Quality Scoring Card"""
+"""Stage 3.5: Quality Scoring Card
+
+Refactored 2026-06-21 for explicit stage naming.
+"""
 from datetime import datetime
 
 
-def calculate_quality_score(extracted_text, original_char_estimate, extracted_images,
+def _stage_3_5_calculate_quality_score(extracted_text, original_char_estimate, extracted_images,
     captioned_images, file_blocks, review_items, concept_merge_stats, dedup_was_run):
     metrics = {}
     text_coverage = min(1.0, len(extracted_text) / max(original_char_estimate, 1000))
@@ -40,7 +43,7 @@ def calculate_quality_score(extracted_text, original_char_estimate, extracted_im
             "needs_review": overall_score < 0.65}
 
 
-def generate_quality_card_md(source_stem, quality_result):
+def _stage_3_5_generate_quality_card_md(source_stem, quality_result):
     score = quality_result["overall_score"]
     metrics = quality_result["metrics"]
     needs_review = quality_result["needs_review"]
@@ -68,5 +71,11 @@ def generate_quality_card_md(source_stem, quality_result):
     return md
 
 
-def verify_quality_scoring(checkpoint):
+def _stage_3_5_verify_quality_scoring(checkpoint):
     return "quality_metrics" in checkpoint
+
+
+# ── Backward-compat aliases ──
+calculate_quality_score = _stage_3_5_calculate_quality_score
+generate_quality_card_md = _stage_3_5_generate_quality_card_md
+verify_quality_scoring = _stage_3_5_verify_quality_scoring

@@ -7,9 +7,9 @@ This guide is the "first run" recipe for getting `improved-wiki` working on a br
 ## Scenario A: brand-new project (start from scratch)
 
 ```bash
-# 1. Create the project root + ALL 10 wiki/ subfolders (matches NashSU app convention) + mandatory raw/ subfolders
+# 1. Create the project root + ALL 11 wiki/ subfolders (matches NashSU app convention) + mandatory raw/ subfolders
 PROJECT=~/Documents/知识库/MyNewWiki
-mkdir -p $PROJECT/wiki/{sources,concepts,entities,queries,comparisons,findings,synthesis,media,thesis}
+mkdir -p $PROJECT/wiki/{sources,concepts,entities,queries,comparisons,findings,synthesis,media,thesis,REVIEW}
 # Mandatory 3 — every knowledge base needs these:
 mkdir -p $PROJECT/raw/{Book,Paper,Presentation}
 # Optional — add per domain (HardwareWiki: Datasheet/Applicationnote/Designexample; RadarWiki: Standard; etc.):
@@ -177,5 +177,5 @@ Plan accordingly. The cron at 02:00 daily will only have time to process 1-2 sca
 ## See also
 
 - `SKILL.md` — End-to-end pipeline reference
-- `references/ingest-stages-mandatory.md` — ingest stage checklist (~13 numbered stages + 2 pre-gates)
+- `references/ingest-stages-mandatory.md` — ingest stage checklist (~17 numbered stages in 5 Phases (0-4))
 - `references/cron-installation.md` — How to install the cron job, with crontab snippets

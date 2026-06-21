@@ -4,13 +4,15 @@ For each generated query, search existing wiki pages and use an LLM judge to
 decide: closed (answer exists), incomplete (-> comparison), or kept (open).
 Defaults to "kept" on any uncertainty or LLM failure — never auto-deletes
 a query without explicit LLM confirmation.
+
+Refactored 2026-06-21 for explicit stage naming.
 """
 from pathlib import Path
 import re
 from _llm_api import call_anthropic_protocol
 
 
-def extract_query_blocks(file_blocks):
+def _stage_2_8_extract_query_blocks(file_blocks):
     queries = []
     for idx, (path, content) in enumerate(file_blocks):
         if "/queries/" in path or path.startswith("queries/"):
@@ -28,7 +30,7 @@ def extract_query_blocks(file_blocks):
     return queries
 
 
-def find_related_wiki_pages(wiki_root, query_title, threshold=0.6):
+def _stage_2_8_find_related_wiki_pages(wiki_root, query_title, threshold=0.6):
     if not wiki_root.is_dir():
         return []
     related = []
@@ -55,7 +57,7 @@ def find_related_wiki_pages(wiki_root, query_title, threshold=0.6):
     return related
 
 
-def _judge_prompt(query, related):
+def _stage_2_8_judge_prompt(query, related):
     pages = "\n".join("- [[{}]]: {}".format(slug, title) for slug, title in related[:8])
     if not pages:
         pages = "(none found)"
@@ -79,10 +81,10 @@ Reply with exactly one line: STATUS: <closed|incomplete|kept> | REASON: <one sen
 """.format(title=query["title"], body=query["body"], pages=pages)
 
 
-def judge_query_resolution(query, related, config):
+def _stage_2_8_judge_query_resolution(query, related, config):
     if not related:
         return "kept", "no related wiki pages"
-    prompt = _judge_prompt(query, related)
+    prompt = _stage_2_8_judge_prompt(query, related)
     try:
         response, _ = call_anthropic_protocol(prompt, config, max_tokens=200, label="query-resolve")
     except Exception as e:
@@ -100,12 +102,12 @@ def judge_query_resolution(query, related, config):
     return status, reason
 
 
-def resolve_queries(file_blocks, wiki_root, config):
+def _stage_2_8_resolve_queries(file_blocks, wiki_root, config):
     resolutions = {}
-    queries = extract_query_blocks(file_blocks)
+    queries = _stage_2_8_extract_query_blocks(file_blocks)
     for query in queries:
-        related = find_related_wiki_pages(wiki_root, query["title"])
-        status, reason = judge_query_resolution(query, related, config)
+        related = _stage_2_8_find_related_wiki_pages(wiki_root, query["title"])
+        status, reason = _stage_2_8_judge_query_resolution(query, related, config)
         resolutions[query["slug"]] = {
             "status": status,
             "resolution_pages": [s for s, _ in related],
@@ -115,7 +117,7 @@ def resolve_queries(file_blocks, wiki_root, config):
     return resolutions
 
 
-def update_file_blocks_after_resolution(file_blocks, resolutions):
+def _stage_2_8_update_file_blocks_after_resolution(file_blocks, resolutions):
     closed_slugs = {slug for slug, res in resolutions.items() if res["status"] == "closed"}
     result = []
     for path, content in file_blocks:
@@ -126,5 +128,14 @@ def update_file_blocks_after_resolution(file_blocks, resolutions):
     return result
 
 
-def verify_query_resolution(checkpoint):
+def _stage_2_8_verify_query_resolution(checkpoint):
     return "query_resolutions" in checkpoint
+
+
+# ── Backward-compat aliases ──
+extract_query_blocks = _stage_2_8_extract_query_blocks
+find_related_wiki_pages = _stage_2_8_find_related_wiki_pages
+judge_query_resolution = _stage_2_8_judge_query_resolution
+resolve_queries = _stage_2_8_resolve_queries
+update_file_blocks_after_resolution = _stage_2_8_update_file_blocks_after_resolution
+verify_query_resolution = _stage_2_8_verify_query_resolution

@@ -9,7 +9,7 @@ related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 
 ## 为什么需要"强制"？
 
-Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **~13 个编号 ingest Stage + 2 个前置门（0.1 源页去重 / 0.3 Pilot OCR）+ Lint + Graph**（编号与 `ingest.py` 代码一致）。**Ingest 任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。**Graph 是独立命令**（与 Ingest/Lint 并列，不属于 lint），见下文「Graph 命令」段。
+Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **Phase 0（3 个前置门：0.1 源页去重 / 0.2 / 0.3 Pilot OCR）+ ~13 个编号 ingest Stage + Lint + Graph**（编号与 `ingest.py` 代码一致）。**Ingest 任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。**Graph 是独立命令**（与 Ingest/Lint 并列，不属于 lint），见下文「Graph 命令」段。
 
 **跳过的代价**：
 1. **raw 是 sacred**（Layer 1 原则）—— PDF 里的图也是 raw 的一部分，跳过图片提取 = 丢了一半知识
@@ -25,29 +25,37 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - **本文编号**：各章节 `### Stage X.Y` 使用的编号（与代码一致）
 - **代码函数名**：代码中对应的实现函数
 
+**Phase 编号体系**（优先级：Phase > Stage）：
+- **Phase 0**：Pre-processing gates（0.1-0.3）
+- **Phase 1**：Extraction（1.1-1.3）
+- **Phase 2**：Analysis & Generation（2.1-2.10）
+- **Phase 3**：Write & Enrich（3.1-3.6）
+- **Phase 4**：Validation（4.1）
+
 | 本文编号 | 代码函数名 | 说明 |
 |---------|-----------|------|
 | 0.1 | `normalize_raw_names.py --check` | raw 命名规范检查（前置门） |
 | 0.2 | 源页存在性检查（`wiki/sources/<rel>.md`） | 源页去重 |
 | 0.3 | `stage_0_3_pilot` | Pilot OCR 质量验证 |
-| 1.1 | `extract_text` / `detect_pdf_type` | 文本提取 + PDF 类型检测 |
+| 1.1 | `stage_1_1_extract_text` / `_stage_1_1_detect_pdf_type` | 文本提取 + PDF 类型检测 |
 | 1.2 | `stage_1_2_extract_images` | 图片提取 |
 | 1.3 | `stage_1_3_caption_images` | 图片 caption |
 | 2.1 | `stage_2_1_global_digest` | 全局摘要 |
 | 2.2 | `stage_2_2_chunk_analysis` | 逐 chunk 分析（NashSU 顺序递进） |
-| 2.3 | `detect_incremental_associations`（`_stage_2_3_incremental`） | 增量关联检测（现有 wiki 重叠） |
-| 2.4 | `_generate_chunk`（barrier-free 循环，per-chunk）+ `_stage_2_per_concept_fallback`（0 块时兜底） | 概念/实体逐 chunk 生成 |
-| 2.5 | `extract_concept_blocks`/`apply_merge_rules`（`_stage_2_5_dedup`） | 源内概念去重合并（多 chunk） |
+| 2.3 | `_stage_2_3_detect_incremental_associations`（`_stage_2_3_incremental.py`） | 增量关联检测（现有 wiki 重叠） |
+| 2.4 | `_stage_2_4_generate_chunk`（barrier-free 循环，per-chunk）+ `_stage_2_4_per_concept_fallback`（0 块时兜底） | 概念/实体逐 chunk 生成 |
+| 2.5 | `_stage_2_5_extract_concept_blocks`/`_stage_2_5_apply_merge_rules`（`_stage_2_5_dedup.py`） | 源内概念去重合并（多 chunk） |
 | 2.6 | `stage_2_6_source_page` | 源页面生成 |
 | 2.7 | `stage_2_7_query_generation` | 问题生成 |
-| 2.8 | `resolve_queries`（`_stage_2_8_query_resolve`） | 跨源 query 解析（LLM judge） |
+| 2.8 | `_stage_2_8_resolve_queries`（`_stage_2_8_query_resolve.py`） | 跨源 query 解析（LLM judge） |
 | 2.9 | `stage_2_9_comparison_generation` | 对比生成（2.9A/B/C） |
-| 3.1 | `write_wiki_file`（主写入循环） | 文件写盘 |
+| 2.10 | `stage_2_10_review_suggestions`（`_stage_2_10_review.py`） | 生成内容质量审查（发现问题，不修复） |
+| 3.1 | `stage_3_1_write_wiki_file`（主写入循环）| 文件写盘 |
 | 3.2 | `stage_3_2_inject_images` | 图片注入 |
-| 3.3 | `stage_3_3_review_suggestions` | 审查建议 |
+| 2.10 | `stage_2_10_review_suggestions`（`_stage_2_10_review.py`） | 生成内容质量审查 |
 | 3.4 | `stage_3_4_aggregate_repair` | 聚合修复 + 缓存 |
-| 3.5 | `calculate_quality_score`（`_stage_3_5_quality`） | 质量评分卡 |
-| 3.6 | `_auto_embed_new_pages` | 嵌入向量化 |
+| 3.5 | `_stage_3_5_calculate_quality_score`（`_stage_3_5_quality.py`） | 质量评分卡 |
+| 3.6 | `stage_3_6_embeddings`（`_stage_3_6_embeddings.py`） | 嵌入向量化 |
 | 4.1 | `_auto_validate_ingest`（`validate_ingest.py`） | 最终验证 |
 
 > **编号即执行顺序**：本文 Stage 编号采用「Phase.Stage」形式（Phase 0 前置检查 / 1 原始素材提取 / 2 消化主流程 / 3 材料写入 / 4 验证检查），编号从上到下严格递增，与代码实际执行顺序一致（2026-06-20 重编号，旧编号 2.0/2.5rev/2.6 实际在 Stage 3 之后执行的错位已消除）。
@@ -60,9 +68,13 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - **产物**：Stage 完成后必须存在的文件
 - **go/no-go 判断**：怎么知道这个 Stage 算"真的完成"了
 
-## Pre-Ingest Gate：Raw 文件命名规范检查 ⭐ **Stage 0.2 之前强制执行**
+## Phase 0：Pre-Ingest Gates
 
-> **定位**：此 gate 不属于 ingest pipeline 的阶段编号。它检查的是 raw/ 目录的**管理状态**（命名规则是否存在、新文件是否合规），而非单个文件的消化进度。有独立的检查逻辑，不应与 Stage 0.2 的去重耦合。
+Phase 0 包含 3 个前置检查，必须按顺序执行：
+
+### Stage 0.1：Raw 文件命名规范检查 ⭐ **强制执行**
+
+> **定位**：此阶段检查的是 raw/ 目录的**管理状态**（命名规则是否存在、新文件是否合规），而非单个文件的消化进度。有独立的检查逻辑。
 
 - **作用**：确保 raw/ 下的候选文件符合该项目的命名规范。**每个知识库项目的 raw 命名规则是项目特定的，记录在 `<project>/raw/NAMING.md`**。
 - **跳过代价**：不规范的文件名导致 source 页面路径混乱、wikilink 不可解析，且一旦 ingest 完成后再改 raw 文件名会导致已有 wiki 页面变孤儿。
@@ -79,7 +91,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
   - `raw/NAMING.md` 存在 **且** 候选文件全部合规 → 进入 Stage 0.2
   - 否则 → 🛑 阻止 ingest
 
-### Stage 0.2 · 源页去重检查 ⭐ **任何文件选取前强制执行**
+### Stage 0.2：源页去重检查 ⭐ **任何文件选取前强制执行**
 
 - **作用**：检查候选文件是否已消化。**唯一判断依据：`wiki/sources/<raw-rel-path>.md` 是否存在。** `<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），镜像 `raw/` 的目录结构。源页是 Stage 3.2 写入的不可变记录，永远不会被 pipeline 删除或覆盖。源页存在 = 消化完成 → 跳过。不存在 → 进入 Stage 0.3。
 - **跳过代价**：重复消化已完成的书籍，浪费 LLM token、OCR 时间，且并行场景下可能导致 index.md / log.md 竞态覆盖。
@@ -93,7 +105,9 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
   - `wiki/sources/<raw-rel-path>.md` 不存在 → 未消化，进入 Stage 0.3。
   - **不依赖对话历史、agent 记忆、`ingest-cache.json`、或文件名猜测。**
 
-### Stage 1.1 · PDF 文本提取（按 PDF 类型分两路径）
+## Phase 1：Extraction（文本、图片、字幕）
+
+### Stage 1.1：PDF 文本提取（按 PDF 类型分两路径）
 
 **先判断 PDF 类型**（2026-06-18 改为跳过首尾随机采样 + 四信号检测），采样方式：跳过首页（封面/扉页）和末页（索引/封底），从剩余中间页中随机挑 5 页。不足 5 页的短 PDF 全量采样中间页，不足 3 页的采全部页面。空白页（<10 chars）自动跳过不计入统计。按结果走不同路径：
 
@@ -116,10 +130,15 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - **go/no-go**：每页 chars >100；无幻觉（chars<100 且无中文字符 → 重跑）；确认 minerU 输出的 `images/` 目录包含图表
 - **关键实操**：扫描版 PDF 全本 OCR 使用本地 minerU（`~/.venv/bin/mineru -b vlm-engine`），免费、自动提取图片、无需 API key。可通过 `MINERU_BACKEND` 环境变量切换后端（vlm-engine / hybrid-engine / pipeline）。**并发限制**：系统级最多 1 个 minerU OCR 任务串行执行（`MINERU_MAX_CONCURRENT=1`）。`ingest.py` 在每次 minerU 调用前通过 `_wait_for_mineru_slot()` 自动排队，等待时显示当前占用文件名和累计等待时间（如 `[mineru] ⏳ 并发槽已满 (1/1)「图解传热学」— 已等待 X 分钟，30s 后重试...`），无需人工协调。
 
-**Stage 0.3 Pilot：OCR 质量验证（2026-06-17 改为 auto-fallback，不再阻塞）**
-- **交互模式**（`--pilot-confirmed`）：先本地 minerU 切 5-10 页 → OCR → 人工看输出质量 → 确认后全本。适用于调试/单本消化时希望先看质量。
-- **批处理/默认模式**（无 `--pilot-confirmed`）：自动 OCR 降级，不阻塞。OCR 输出 <2000 chars 时标记 `low-quality` 警告但不中断。**避免批处理被 pilot 阻塞数小时无人看管。**
-- **仍会运行**：`scanned` 和 `mixed` PDF 始终走 minerU OCR 路径，只是不再需要人工确认 gate。
+**Stage 0.3 Pilot：OCR 质量验证（2026-06-21 改进质量阈值）**
+- **作用**：在正式 OCR 前先抽 5 页验证 minerU 质量，避免浪费 OCR 时间在已损坏/已保护的 PDF 上。
+- **运行条件**：PDF 类型检测为 `scanned` 或 `mixed` 时自动执行，不需人工确认。
+- **质量检查**（双信号）：
+  - 信号 ①：文字密度 — chars/page（反映 OCR 文字层质量）
+  - 信号 ②：图片密度 — images/page（反映图表提取质量）
+  - **通过条件**：`chars_per_page > 600`（文字密集型）OR `(chars_per_page > 200 AND images_per_page >= 0.5)`（均衡混合型）
+- **缺失 minerU**：提示"缺失minerU工具"并中断 ingest，不做自动 fallback。
+- **产物**：pilot 阶段的 OCR 输出（前 3000 字）+ 质量评分
 
 ### Stage 1.2 · 图片提取 ⭐ **永远不能跳**
 - **作用**：用 PyMuPDF `get_images()` 抽取 PDF 每页的嵌入图，存到 `wiki/media/<type>/<pdf-stem>/`。**`<pdf-stem>` = PDF 文件名去 `.pdf` 后缀，与 `wiki/sources/<pdf-stem>.md` 共用同一个 stem。2026-06-15: 出现同一 PDF 被两次 Stage 1.2 用不同 slug 命名产生两个 media 目录的 bug，根因是 `source-slug` 未强制等于 PDF stem。**
@@ -253,7 +272,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - **作用**：生成对比分析页面，分三种场景：
   - **2.9A 域内消歧义**：新 concept 名称与 wiki 已有 concept 同名但不同 domain → 创建/更新消歧义页（`type: comparison`, `domain: general`）。对齐 NashSU `domains.md` 消歧义规则。
   - **2.9B 源内概念对比**：同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM、EMI vs EMC）→ 生成对比页（对比维度 ≥4）。
-  - **2.9C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 3.3 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
+  - **2.9C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 2.10 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
   - **2.9D 来自 Stage 2.8 的建议**：Stage 2.8 发现"答案不完整"的 query 转为 comparison 建议。
 - **跳过条件**：本次无 concept 产出（纯 stub source）时自动跳过。
 - **产物**：0-3 个 `wiki/comparisons/<slug>.md` 页面（消歧义 + 源内对比 + 不完整答案对比），或 `---COMPARISONS: 0---` 标记。
@@ -262,7 +281,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
   - 每个 comparison frontmatter 含 `type: comparison` + `title:` + `domain:` 三必填字段
 - **prompt 模板**：见 `references/comparison-generation.md`
 
-### Stage 3.3 · Review ⭐ **永远不能跳**（3.3 review，但低于阈值时自动 skip）
+### Stage 2.10 · Review ⭐ **永远不能跳**（2.10 review，但低于阈值时自动 skip）
 
 - **作用**：Phase 4 的 LLM 质量审查，分两步：
   1. **生成 review items**：当满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时，跑一次 LLM 调用输出 5 类 review items：confirm / suggestion / missing-page / contradiction / duplicate。
@@ -356,7 +375,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 ## 强制顺序（不能乱）
 
 ```
-0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9 → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → [3.6] → 4.1
+0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9 → 3.1 → 3.2 → 2.10 → 3.1 → 3.2 → 3.4 → 3.5 → [3.6] → 4.1
 ```
 
 新增 Stage（2026-06-20）：
@@ -375,13 +394,13 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - **2.5 依赖 2.4 完成**（需要所有 concept FILE blocks）；单 chunk 书自动跳过
 - **Phase 2（Generation）全部在内存中完成**：2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9，串行执行。所有产出统一由 Stage 3.1 写盘。
 - **2.8 依赖 2.7 完成 + wiki 已有内容**（搜索和匹配）
-- **Stage 3.3（review）运行在已写盘的文件上**，human reviewer 可直接看页面内容
+- **Stage 2.10（review）运行在已写盘的文件上**，human reviewer 可直接看页面内容
 - **Stage 3.4（aggregate repair）在所有页面写盘后运行**
 - **Stage 3.5（质量评分）在 3.4 完成后运行**，基于完整的 ingest 结果
 - 2.7 是 conditional（datasheet/standard 自动跳过）
 - 2.8 是 conditional（2.7 无 query 或 wiki 为空时自动跳过）
 - 2.9 是 conditional（无 concept 产出时自动跳过）
-- 3.3 (review) 是 conditional（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）
+- 2.10 (review) 是 conditional（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）
 - 3.5 是 conditional（overall_score < 0.65 时标记为 needs_review）
 - 3.4 程序化 append index/log + LLM 重写 overview（喂入现有内容防丢失）
 - 3.4 在所有 stage 之后（写最终缓存）；hard error（磁盘满/权限）阻止 cache save
@@ -406,7 +425,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - [ ] **2.7：query 页面已生成或 `---QUERIES: 0---` 已记录**（datasheet/standard 自动跳过）
 - [ ] **Stage 2.8：query_resolutions 已记录**；已关闭或改写的 query 已处理
 - [ ] **2.9：comparison 页面已生成或 `---COMPARISONS: 0---` 已记录**（无 concept 时自动跳过）
-- [ ] **Stage 3.3：review items 已生成并写入 wiki/REVIEW/（即使 0 items）**
+- [ ] **Stage 2.10：review items 已生成并写入 wiki/REVIEW/（即使 0 items）**
 - [ ] Stage 3.1：所有 FILE 块写盘成功
 - [ ] **Stage 3.2：source 页含 `## Embedded Images` 段**
 - [ ] **Stage 3.4：ingest-cache.json 含本次所有 raw 文件 hash**（且 `validate_ingest.py` 通过；ingest.py 末尾自动运行）
@@ -427,7 +446,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - 2.7（query 生成）—— 知识库只有事实没有追问
 - Stage 2.8（跨源查询解析）— **2026-06-20 新增**；重复提问浪费资源
 - 2.9（comparison 生成）— 跨概念理解和消歧义缺失
-- Stage 3.3（review 建议）—— 错误内容永久残留
+- Stage 2.10（review 建议）—— 错误内容永久残留
 - Stage 3.2（图注入）—— 图与 wiki 脱节
 - Stage 3.4（cache 写入）—— 下次跑会重做所有 stage
 - Stage 3.5（质量评分）—— 无法识别问题 ingest
@@ -502,7 +521,7 @@ for k, v in cache['entries'].items():
 - **2026-06-14**：Stage 0.2 去重检查新增；Stage 1.1 三信号检测升级（Johnson 事故）；NashSU v0.4.23 parity audit 完成
 - **2026-06-16**：新增 Stage 2.5 Query + 2.5 Comparison；阶段间实时验证门禁
 - **2026-06-19**：全面重编号对齐 `ingest.py` 代码（废弃 Phase.序列），清理所有过时引用
-- **2026-06-19**：`validate_ingest.py` 重编号对齐本文（旧 Stage 3.5/5/6 → 3.3/2.6/4，旧 3.7 并入 Stage 3.1）；新增 Stage 2.5 query / 2.5 cmp 两个验证段；`ingest.py` cache `stages` 新增 `queries_generated`/`comparisons_generated` 字段；修正自动验证表 Stage 2.1 "5 个 key"→"6 个"、Stage 3.1 "RuntimeError"→"warning（不中止）"
+- **2026-06-19**：`validate_ingest.py` 重编号对齐本文（旧 Stage 3.5/5/6 → 2.10/2.6/4，旧 3.7 并入 Stage 3.1）；新增 Stage 2.5 query / 2.5 cmp 两个验证段；`ingest.py` cache `stages` 新增 `queries_generated`/`comparisons_generated` 字段；修正自动验证表 Stage 2.1 "5 个 key"→"6 个"、Stage 3.1 "RuntimeError"→"warning（不中止）"
 - **2026-06-17**：高层知识空缺检测移至 lint 系统（`knowledge-gap-lint.md`）；REVIEW 目录分子目录；Phase 4+5 合并；Stage 3.1.1 合并入 3.5；Stage 3.5 合并入 2.5 review
 - **2026-06-17**：新增 **Stage 16-18 知识图谱后处理**（Lint 阶段，不在 ingest 管线内）。四信号加权图构建 + Louvain 社区检测 + 图谱洞察输出。脚本：`scripts/build_knowledge_graph.py`。触发时机：批量 ingest 后按需运行，不在单次 ingest 中自动执行。
 - **2026-06-20**：知识图谱从 lint 剥离，改为独立 **Graph 命令**（与 Ingest / Lint 并列，对齐 NashSU graph-view 架构——KG 在 NashSU 本就由 `graph-view.tsx` 按需构建，不属于 lint）。脚本重命名 `build_knowledge_graph.py` → `graph.py`。Stage 16-18 框架改为「Graph 命令」段。

@@ -75,36 +75,45 @@ from _core import (
     parse_yaml_block, parse_simple_yaml, parse_file_blocks,
     FOLDER_TO_TEMPLATE,
 )
+from _stage_0_3_pilot import stage_0_3_pilot
 from _stage_1_extract import (
-    extract_text, detect_pdf_type, stage_0_3_pilot, check_text_quality,
-    extract_text_pymupdf, extract_text_mineru, extract_text_scanned_pdf,
-    _count_running_mineru, _wait_for_mineru_slot, _kill_mineru_servers,
-    stage_1_2_extract_images, stage_1_3_caption_images,
-    _media_slug,
+    stage_1_1_extract_text,
+    stage_1_2_extract_images,
+    _stage_1_2_extract_from_mineru,
+    stage_1_3_caption_images,
+    _stage_1_1_check_text_quality,
+    _stage_1_2_media_slug,
     CAPTION_BATCH_SIZE, CAPTION_MAX_WORKERS,
 )
 from _stage_2_analyze import (
-    chunk_text, stage_2_1_global_digest,
-    _chunk_retries, _analyze_chunk,
-    _resolve_chunk_heading_path,
+    stage_2_1_global_digest,
+    stage_2_2_chunk_analysis,
+    _stage_2_1_chunk_text,
+    _stage_2_2_analyze_chunk,
+    _stage_2_2_chunk_retries,
 )
 from _stage_2_generate import (
-    stage_3_3_review_suggestions, _generate_chunk,
-    _extract_concept_entity_names,
-    _stage_2_per_concept_fallback,
+    _stage_2_4_build_prompt,
+    _stage_2_4_generate_chunk,
+    _stage_2_4_extract_names,
+    _stage_2_4_per_concept_fallback,
     stage_2_6_source_page,
-    build_query_generation_prompt, stage_2_7_query_generation,
-    build_comparison_disambiguation_prompt,
-    build_comparison_in_source_prompt,
+    _stage_2_7_build_prompt,
+    stage_2_7_query_generation,
+    _stage_2_9_build_prompt_disambiguation,
+    _stage_2_9_build_prompt_in_source,
     stage_2_9_comparison_generation,
+    stage_2_10_review_suggestions,
 )
 from _stage_3_write import (
-    write_wiki_file, stage_3_4_aggregate_repair,
-    canonicalize_sources_field, stamp_frontmatter_dates,
-    sanitize_ingested_content, is_safe_ingest_path,
-    wiki_path_for_source, merge_page_content,
-    _auto_correct_wiki_path, _contains_cjk, _make_cjk_slug,
-    backup_existing_page,
+    stage_3_1_write_wiki_file, stage_3_4_aggregate_repair,
+    _stage_3_2_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
+    _stage_3_1_sanitize_ingested_content,
+    _stage_3_1_wiki_path_for_source, _stage_3_1_merge_page_content,
+    _stage_3_1_auto_correct_wiki_path, _stage_3_1_contains_cjk, _stage_3_1_make_cjk_slug,
+    _stage_3_1_backup_existing_page,
+    # Backward-compat aliases
+    write_wiki_file, merge_page_content,
 )
 from _stage_3_6_embeddings import stage_3_6_embeddings
 from _enrich_wikilinks import enrich_wikilinks
@@ -277,7 +286,7 @@ def validate_stage_outputs(
     # Stage 1.2: image extraction completeness
     img_count = stage_1_2_result.get("count", 0)
     if img_count > 0:
-        manifest = config.wiki_dir / "media" / _media_slug(raw_file, config) / "_manifest.json"
+        manifest = config.wiki_dir / "media" / _stage_1_2_media_slug(raw_file, config) / "_manifest.json"
         if not manifest.exists():
             warnings.append("Stage 1.2: images extracted but _manifest.json missing")
             print(f"  ⚠️  Stage 1.2: _manifest.json missing")
@@ -287,7 +296,7 @@ def validate_stage_outputs(
         images = stage_1_2_result.get("images", [])
         missing_captions = 0
         for img in images:
-            cap_path = config.wiki_dir / "media" / _media_slug(raw_file, config) / (img["filename"] + ".caption.txt")
+            cap_path = config.wiki_dir / "media" / _stage_1_2_media_slug(raw_file, config) / (img["filename"] + ".caption.txt")
             if not cap_path.exists() or cap_path.stat().st_size < 20:
                 missing_captions += 1
         if missing_captions > 0:
@@ -440,7 +449,7 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
     # Unified image injection: reads _manifest.json (the single source of truth
     # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
     # renders are filtered via source != "page-render" for backward compat.
-    slug = _media_slug(raw_file, config)
+    slug = _stage_1_2_media_slug(raw_file, config)
     media_dir = config.wiki_dir / "media" / slug
     manifest_path = media_dir / "_manifest.json"
 
@@ -735,28 +744,68 @@ BATCH_MAX_CONCURRENT = 4
 def _should_skip_prepare(raw_file: Path, config: Config) -> bool:
     """Return True if the source page already exists and is reasonably complete.
 
-    Re-ingest when the source page is missing >80% of its linked concept/entity
+    Stage 0.2: Re-ingest when source page is missing >80% of linked concept/entity
     pages (corrupt / partial prior run); otherwise skip.
+
+    Verification checklist:
+    1. Source page file exists
+    2. Frontmatter type == "source"
+    3. ≥80% of wikilinks point to existing concept/entity pages
     """
-    source_page = wiki_path_for_source(raw_file, config)
+    source_page = _stage_3_1_wiki_path_for_source(raw_file, config)
     if not source_page.exists():
         return False
+
+    # Verify source page is readable and has valid frontmatter
     try:
-        source_text = source_page.read_text(encoding="utf-8")
-    except Exception:
-        source_text = ""
-    refs = re.findall(r'\[\[([^\]]+)\]\]', source_text)
+        source_text = source_page.read_text(encoding="utf-8", errors="strict")
+    except Exception as e:
+        print(f"  [skip:error] Source page unreadable ({e}) — re-ingesting")
+        return False
+
+    # Verify frontmatter type is "source"
+    if not source_text.startswith("---"):
+        print(f"  [skip:error] Source page missing frontmatter — re-ingesting")
+        return False
+
+    try:
+        fm_end = source_text.find("---", 3)
+        if fm_end == -1:
+            print(f"  [skip:error] Source page frontmatter unclosed — re-ingesting")
+            return False
+        frontmatter_block = source_text[3:fm_end]
+        fm_type = None
+        for line in frontmatter_block.split("\n"):
+            if line.strip().startswith("type:"):
+                fm_type = line.split(":", 1)[1].strip().strip("'\"")
+                break
+        if fm_type != "source":
+            print(f"  [skip:error] Source page type is '{fm_type}', not 'source' — re-ingesting")
+            return False
+    except Exception as e:
+        print(f"  [skip:error] Frontmatter parse error ({e}) — re-ingesting")
+        return False
+
+    # Extract wikilinks: [[slug]] or [[slug|display]]
+    # Improved regex: match [[ ... ]] with no nested brackets
+    refs = re.findall(r'\[\[([^\[\]]+)\]\]', source_text)
     missing = []
-    for slug in refs:
-        slug = slug.split("|")[0].strip()
+    for ref in refs:
+        slug = ref.split("|")[0].strip()
+        if not slug:
+            continue
         concept_path = config.wiki_dir / "concepts" / f"{slug}.md"
         entity_path = config.wiki_dir / "entities" / f"{slug}.md"
         if not concept_path.exists() and not entity_path.exists():
             missing.append(slug)
+
     if not refs or len(missing) > len(refs) * 0.8:
-        print(f"  [skip:warn] Source page exists but {len(missing)}/{len(refs)} linked pages missing — re-ingesting")
+        ratio_str = f"{len(missing)}/{len(refs)}" if refs else "0/0"
+        print(f"  [skip:warn] Source page exists but {ratio_str} linked pages missing — re-ingesting")
         return False
-    print(f"  [skip] Source page exists ({len(refs)-len(missing)}/{len(refs)} linked pages found)")
+
+    ratio_found = len(refs) - len(missing)
+    print(f"  [skip] Source page exists ({ratio_found}/{len(refs)} linked pages found)")
     return True
 
 
@@ -776,10 +825,10 @@ def _analyze_all_chunks(
 
     if config.conversation_mode or chunk_total <= 1:
         for i, chunk, overlap_before, heading_path in chunk_meta:
-            ca = _analyze_chunk(
+            ca = _stage_2_2_analyze_chunk(
                 chunk, i, chunk_total, global_digest, accumulated_digest,
                 overlap_before, heading_path, raw_file, config, template_content,
-                max_retries=_chunk_retries(), verbose=verbose)
+                max_retries=_stage_2_2_chunk_retries(), verbose=verbose)
             chunk_analyses.append(ca)
             updated = ca.get("updated_global_digest", "")
             if isinstance(updated, str) and len(updated.strip()) > 50:
@@ -798,7 +847,7 @@ def _analyze_all_chunks(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                _analyze_chunk, chunk, i, chunk_total, global_digest,
+                _stage_2_2_analyze_chunk, chunk, i, chunk_total, global_digest,
                 "", overlap_before, heading_path, raw_file, config,
                 template_content, max_retries=_chunk_retries(), verbose=verbose,
             ): i
@@ -833,7 +882,7 @@ def _generate_all_chunks(
     all_responses: list[str] = []
     generated_slugs: list[str] = []
 
-    unique_concepts_pre, unique_entities_pre = _extract_concept_entity_names(chunk_analyses)
+    unique_concepts_pre, unique_entities_pre = _stage_2_4_extract_names(chunk_analyses)
     for name in (*unique_concepts_pre, *unique_entities_pre):
         slug = name.strip().lower().replace(" ", "-").replace("/", "-")
         if slug and slug not in generated_slugs:
@@ -843,7 +892,7 @@ def _generate_all_chunks(
         ca = chunk_analyses[i]
         if "error" in ca:
             continue
-        blocks = _generate_chunk(
+        blocks = _stage_2_4_generate_chunk(
             ca, i, generated_slugs, raw_file, config, template_content,
             verbose=verbose, chunk_text=chunk, existing_refs=existing_refs)
         all_file_blocks.extend(blocks)
@@ -883,7 +932,7 @@ def _run_chunk_pipeline(
         incremental_associations = progress.get("incremental_associations", {})
         return chunk_analyses, analysis, raw_response, file_blocks, incremental_associations
 
-    chunks = chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
+    chunks = _stage_2_1_chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
     chunk_total = len(chunks)
 
     est_sec = chunk_total * 75
@@ -914,8 +963,8 @@ def _run_chunk_pipeline(
         template_content, chunk_total, t_start, verbose)
 
     # \u2500\u2500 Stage 2.3: incremental association detection (existing-wiki overlap) \u2500\u2500
-    from _stage_2_3_incremental import detect_incremental_associations
-    incremental_associations = detect_incremental_associations(
+    from _stage_2_3_incremental import _stage_2_3_detect_incremental_associations
+    incremental_associations = _stage_2_3_detect_incremental_associations(
         config.wiki_dir, chunk_analyses)
     if incremental_associations:
         print(f"  [stage 2.3] {len(incremental_associations)} new concept(s) "
@@ -930,7 +979,7 @@ def _run_chunk_pipeline(
         template_content, chunk_total, t_start, verbose)
 
     # Build combined analysis
-    unique_concepts, _ = _extract_concept_entity_names(chunk_analyses)
+    unique_concepts, _ = _stage_2_4_extract_names(chunk_analyses)
     concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
     entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
     analysis = {
@@ -952,7 +1001,7 @@ def _run_chunk_pipeline(
         print(f"  [stage 2.4] \u26a0\ufe0f  0/{n_missed} concepts generated "
               f"\u2014 falling back to per-concept generation "
               f"(pre_existing_slugs={len(generated_slugs)})")
-        fa_analysis, fa_raw, fa_blocks = _stage_2_per_concept_fallback(
+        fa_analysis, fa_raw, fa_blocks = _stage_2_4_per_concept_fallback(
             chunk_analyses, global_digest, raw_file, config,
             template_content, verbose=verbose,
             pre_existing_slugs=generated_slugs,
@@ -1050,7 +1099,7 @@ def _do_prepare(
             method = progress.get("extract_method", "cached")
             print(f"  [extract] (cached) {method}: {len(extracted_text)} chars")
         else:
-            extracted_text, method = extract_text(raw_file, config, pilot_confirmed=pilot_confirmed)
+            extracted_text, method = stage_1_1_extract_text(raw_file, config, pilot_confirmed=pilot_confirmed)
             print(f"  [extract] {method}: {len(extracted_text)} chars")
             _verify_stage_1_1_text(raw_file, extracted_text, method)
 
@@ -1059,7 +1108,7 @@ def _do_prepare(
                 print(f"  [validate] ❌ Stage 0 failed: text extraction insufficient")
                 raise StageValidationError("Stage 0: text extraction failed")
 
-            qr = check_text_quality(extracted_text, raw_file.name)
+            qr = _stage_1_1_check_text_quality(extracted_text, raw_file.name)
             if qr["status"] == "severe":
                 print(f"  [extract] ❌ Text quality SEVERE — aborting ingest. "
                       f"Re-run with a different PDF or re-download from source.")
@@ -1074,55 +1123,60 @@ def _do_prepare(
         template_content = load_template(template_name)
         print(f"  [template] {template_name}")
 
-        # Stage 1.2: Image extraction
-        stage_1_2_result: dict = {"count": 0}
-        if progress and "stage_1_2" in progress:
-            stage_1_2_result = progress["stage_1_2"]
-            print(f"  [stage 1.2] (cached) {stage_1_2_result.get('count', 0)} images")
-        elif raw_file.suffix.lower() == ".pdf" and method == "pymupdf":
-            stage_1_2_result = stage_1_2_extract_images(raw_file, config)
-            # Save progress with stage_0_5 data (preserve existing checkpoint data)
-            cp = {"stage": "stage_1_1_done", "extracted_text": extracted_text,
-                  "extract_method": method, "stage_1_2": stage_1_2_result}
-            save_progress(config, h, cp)
+        # ── Stage 1.2 + 1.3 pipeline (1.2 → 1.3 sequential) ∥ Stage 2.1 (parallel) ──
+        # Helper: run 1.2→1.3 together (1.3 depends on 1.2 output)
+        def _run_image_pipeline():
+            stage_1_2_result: dict = {"count": 0}
+            if progress and "stage_1_2" in progress:
+                stage_1_2_result = progress["stage_1_2"]
+                print(f"  [stage 1.2] (cached) {stage_1_2_result.get('count', 0)} images")
+            elif method == "pymupdf" and raw_file.suffix.lower() == ".pdf":
+                # 改进2：检查是否从 minerU 输出提取
+                stage_1_2_result = stage_1_2_extract_images(raw_file, config)
+            elif method in ("mineru", "mineru-local-ocr"):
+                # 改进2：从 minerU 输出提取图片
+                ocr_out = config.extract_tmp_dir / raw_file.stem
+                if ocr_out.exists():
+                    stage_1_2_result = _stage_1_2_extract_from_mineru(ocr_out, config, raw_file)
+                # Save progress immediately after 1.2 completes
+                cp = {"stage": "stage_1_1_done", "extracted_text": extracted_text,
+                      "extract_method": method, "stage_1_2": stage_1_2_result}
+                save_progress(config, h, cp)
 
-        # Stage 1.3 (Caption) ∥ Stage 2.1 (Global Digest) — batch path
-        needs_caption = (
-            not progress or "stage_1_3" not in progress
-        ) and stage_1_2_result.get("count", 0) > 0
-        needs_digest = (
-            not progress or progress.get("stage") not in ("stage_2_1_done", "stage_2_2_done", "stage_2_3_done")
-        )
-        stage_1_3_result = progress.get("stage_1_3", {"captioned": 0}) if progress and "stage_1_3" in progress else {"captioned": 0}
-
-        if needs_caption and needs_digest:
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                fut_cap = executor.submit(stage_1_3_caption_images, config, stage_1_2_result)
-                fut_dig = executor.submit(stage_2_1_global_digest, extracted_text, raw_file, config, template_content, verbose=verbose)
-                stage_1_3_result = fut_cap.result()
-                global_digest = fut_dig.result()
-            _verify_stage_2_1_digest(global_digest, raw_file)
-            if "extracted_text" not in (progress or {}):
-                save_progress(config, h, {"stage": "stage_1_1_done", "extracted_text": extracted_text,
-                      "extract_method": method, "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result})
-        else:
+            # Stage 1.3: Caption extracted images (runs if 1.2 found images)
+            stage_1_3_result = {"captioned": 0}
+            needs_caption = (not progress or "stage_1_3" not in progress) and stage_1_2_result.get("count", 0) > 0
             if needs_caption:
                 stage_1_3_result = stage_1_3_caption_images(config, stage_1_2_result)
             elif progress and "stage_1_3" in progress:
                 stage_1_3_result = progress["stage_1_3"]
                 print(f"  [stage 1.3] (cached) {stage_1_3_result.get('captioned', 0)} captions")
 
-            if needs_digest:
-                global_digest = stage_2_1_global_digest(extracted_text, raw_file, config, template_content, verbose=verbose)
-                _verify_stage_2_1_digest(global_digest, raw_file)
-            else:
-                global_digest = progress["global_digest"]
-                print(f"  [stage 2.1] (cached) Global Digest — {len(global_digest)} keys")
-                _verify_stage_2_1_digest(global_digest, raw_file)
+            return stage_1_2_result, stage_1_3_result
 
-            if needs_caption and "extracted_text" not in (progress or {}):
-                save_progress(config, h, {"stage": "stage_1_1_done", "extracted_text": extracted_text,
-                      "extract_method": method, "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result})
+        # Parallel execution: 1.2→1.3 pipeline vs 2.1 global digest
+        needs_digest = (
+            not progress or progress.get("stage") not in ("stage_2_1_done", "stage_2_2_done", "stage_2_3_done")
+        )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            fut_images = executor.submit(_run_image_pipeline)
+            fut_digest = executor.submit(stage_2_1_global_digest, extracted_text, raw_file, config,
+                                        template_content, verbose=verbose) if needs_digest else None
+
+            stage_1_2_result, stage_1_3_result = fut_images.result()
+            global_digest = fut_digest.result() if fut_digest else progress.get("global_digest", {})
+
+        if needs_digest:
+            _verify_stage_2_1_digest(global_digest, raw_file)
+        else:
+            print(f"  [stage 2.1] (cached) Global Digest — {len(global_digest)} keys")
+            _verify_stage_2_1_digest(global_digest, raw_file)
+
+        # Save progress checkpoint
+        if "extracted_text" not in (progress or {}):
+            save_progress(config, h, {"stage": "stage_1_1_done", "extracted_text": extracted_text,
+                  "extract_method": method, "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result})
 
         # Stage 2.2 + 2.4: Chunk Analysis → Generation (barrier-free pipeline)
         chunk_analyses, analysis, raw_response, file_blocks, incremental_associations = _run_chunk_pipeline(
@@ -1276,7 +1330,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         if basename in _LISTING_PAGES:
             pass
         elif top_dir not in _VALID_SUBDIRS:
-            corrected = _auto_correct_wiki_path(rel_path, content, config)
+            corrected = _stage_3_1_auto_correct_wiki_path(rel_path, content, config)
             if corrected:
                 print(f"  [write] Auto-corrected: {rel_path} → {corrected}")
                 rel_path = corrected
@@ -1299,8 +1353,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 except ImportError:
                     pass
 
-        content = canonicalize_sources_field(content, canonical_source)
-        content = stamp_frontmatter_dates(content, today_str)
+        content = _stage_3_2_canonicalize_sources_field(content, canonical_source)
+        content = _stage_3_1_stamp_frontmatter_dates(content, today_str)
 
         full_path = config.wiki_dir / rel_path
         is_listing = basename in _LISTING_PAGES
@@ -1409,8 +1463,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     if source_path.exists():
         stage_3_2_result = stage_3_2_inject_images(config, raw_file, source_path, method)
 
-    # Stage 3.3: Review
-    stage_3_3_result = stage_3_3_review_suggestions(
+    # Stage 2.10: Review (quality review of generated pages)
+    stage_2_10_result = stage_2_10_review_suggestions(
         config, file_blocks, raw_file, raw_response=raw_response, verbose=verbose)
 
     # Go/no-go validation
