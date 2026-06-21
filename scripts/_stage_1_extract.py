@@ -65,6 +65,29 @@ MINERU_MAX_CONCURRENT = 1  # max parallel minerU OCR jobs system-wide
 MINERU_API_PORT = int(os.environ.get("MINERU_API_PORT", "19999"))  # fixed API port
 CAPTION_BATCH_SIZE = int(os.environ.get("CAPTION_BATCH_SIZE", "8"))
 
+# ── Module-level structured logging (shared by extract_text_scanned_pdf and _caption_images) ──
+
+import datetime as _dt
+
+_log_file: Path | None = None  # set by extract_text_scanned_pdf(); _caption_images uses media_dir fallback
+
+def log_event(event_type: str, **kwargs):
+    """Write structured event to JSON Lines log.
+
+    Module-level so both extract_text_scanned_pdf() and _caption_images() can call it.
+    If _log_file is not set (caption path), writes to a fallback path derived from kwargs.
+    """
+    target = _log_file
+    entry = {
+        "timestamp": _dt.datetime.now().isoformat(),
+        "event_type": event_type,
+        **kwargs
+    }
+    if target is None:
+        return  # no log file configured yet — skip silently
+    with open(target, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
 # ---------- Text extraction ----------
 
 def _find_pymupdf_python() -> Path | None:
@@ -684,17 +707,8 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
         stats = json.loads(stats_path.read_text(encoding="utf-8"))
 
     # Initialize structured logging (JSON Lines format)
-    log_file = out_dir / "ocr_log.jsonl"
-    def log_event(event_type: str, **kwargs):
-        """Write structured event to JSON Lines log."""
-        import datetime as _dt
-        entry = {
-            "timestamp": _dt.datetime.now().isoformat(),
-            "event_type": event_type,
-            **kwargs
-        }
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    global _log_file
+    _log_file = out_dir / "ocr_log.jsonl"
 
     # Start a persistent minerU API server (one per book, shared across chunks)
     pending = [c for c in chunks if f"{c[0]}-{c[1]}" not in stats["completed_chunks"]]

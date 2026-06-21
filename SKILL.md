@@ -30,21 +30,22 @@ Graph: [Build Graph (4-signal)] → [Louvain communities] → [cohesion + gaps +
 
 ## LLM execution model
 
-All text-generation LLM work in this skill runs in **conversation mode**: the
-calling agent (the current Claude Code conversation) spawns sub-agents that do
-each LLM step — digest, chunk analysis, concept/entity generation, queries,
-comparisons, review, wikilink enrichment, dedup, semantic lint — **using the
-current conversation's model**. No external LLM API key is needed for these
-stages. Mechanically, `ingest.py --conversation` writes a prompt file at each
-LLM step and hands off (exit 101); the calling agent answers it and re-invokes
-(see `references/delegate-mode.md`).
+Text generation has two paths (round iii, 2026-06-21), routed by
+`_llm_api.call_anthropic_protocol`:
 
-Two exceptions that still call an external API:
+- **Direct API** (default, no `--conversation`) — `call_anthropic_direct` makes a
+  real HTTP call to the configured provider (OpenAI or Anthropic protocol). Fast,
+  parallelizable (the only path that can run concurrent chunk analysis). Needs
+  `LLM_API_KEY`. **Wikilink enrichment uses this path unconditionally** (high-volume,
+  low-value-per-call), even when the rest of the pipeline runs in conversation mode.
+- **Conversation mode** (`--conversation`) — `ingest.py` writes a prompt file at each
+  LLM step and hands off (exit 101); the calling agent (the current Claude Code
+  conversation) answers with the current model and re-invokes
+  (see `references/delegate-mode.md`). Serial only — each call exits the process.
+
+Two other external-API dependencies (not text generation):
 - **Stage 1.3 image captioning** → MiniMax VLM (`anthropic/v1/messages` multi-image batch). This is the only MiniMax dependency; it needs `MINIMAX_CN_API_KEY` / `LLM_API_KEY` for the caption endpoint only.
 - **Stage 3.5 embeddings** → optional; configured separately if you want vector retrieval. Not routed through MiniMax.
-
-There is no http-direct LLM path for text generation — the pipeline expects the
-calling agent's model to do that work.
 
 ## Entry points
 
@@ -69,8 +70,8 @@ calling agent's model to do that work.
 - `references/deep-research.md` ⭐ — closed-loop web→wiki research pipeline (NashSU deep-research.ts parity)
 - `references/save-chat-to-wiki.md` ⭐ — save any conversation as wiki page + auto-ingest (NashSU chat-save-to-wiki.ts parity)
 - `references/review-sweep.md` ⭐ — auto-resolve review items satisfied by new ingests (NashSU sweep-reviews.ts parity)
-- `references/conversation-mode.md` — **primary LLM execution mode**: the current conversation does each ingest LLM step with its own model (no scripts, no API key)
-- `references/delegate-mode.md` — **primary LLM execution mode** for batch/automated ingest: `ingest.py --conversation` hands each LLM step to the calling agent
+- `references/conversation-mode.md` — **conversation mode** (`--conversation`): the current conversation does each text-gen LLM step with its own model (serial, prompt-file handoff)
+- `references/delegate-mode.md` — **agent invocation** via `ingest.py --conversation`: how a calling agent (Claude Code/Hermes) answers each LLM step; notes that direct API is the default path without `--conversation`
 - `references/nashsu-search-architecture.md` — NashSU 源码实证：graph-relevance.ts（纯确定性 4 信号）+ search.rs（hybrid keyword+vector+RRF，远程 embedding API，无本地模型）。澄清 "NashSU parity" 在搜索侧的实际覆盖范围
 
 **Conventions**:

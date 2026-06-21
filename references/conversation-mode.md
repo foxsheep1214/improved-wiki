@@ -6,7 +6,7 @@
 
 ---
 
-> **例外**：图片 caption（Stage 1.3）仍调用 MiniMax VLM，需要 `MINIMAX_CN_API_KEY`；除此之外不依赖任何外部 LLM API。Embedding（Stage 3.5）可选，独立配置，不走 MiniMax。本技能不再有 http-direct 文本生成路径。
+> **例外**：图片 caption（Stage 1.3）走 MiniMax VLM（需 `MINIMAX_CN_API_KEY`）；Embedding（Stage 3.5）可选，独立配置（`EMBEDDING_BASE_URL`），不走 MiniMax。文本生成在 conversation 模式下由当前对话完成，但 **wikilink enrichment 即便在 conversation 模式下也走 direct API**（`call_anthropic_direct`，需 `LLM_API_KEY`，高频低值调用）。round iii（2026-06-21）起，direct API 也是未加 `--conversation` 时的默认文本生成路径。
 
 ## Mode Comparison
 

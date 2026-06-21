@@ -35,6 +35,7 @@
 #   $ ./wiki-lint.sh --fix                      # auto-fix: missing-frontmatter, missing-domain
 #   $ ./wiki-lint.sh --fix-links                # apply suggested_target/source wikilink fixes
 #   $ ./wiki-lint.sh --json-only                # old behavior: JSON only, no wiki/lint/ pages
+#   $ ./wiki-lint.sh --sweep                    # also report auto-resolvable review items (read-only)
 #
 # Configuration via env:
 #   IMPROVED_WIKI_ROOT — path to project root (default: cwd)
@@ -90,6 +91,7 @@ SEMANTIC=false
 AUTO_FIX=false
 FIX_LINKS=false
 JSON_ONLY=false
+SWEEP=false
 SEMANTIC_LIMIT=""
 SEMANTIC_TOKENS=""
 SEM_ARGS=()
@@ -102,6 +104,7 @@ for arg in "$@"; do
     --fix)        AUTO_FIX=true ;;
     --fix-links)  FIX_LINKS=true ;;
     --json-only)  JSON_ONLY=true ;;
+    --sweep)       SWEEP=true ;;
     --semantic-limit=*) SEMANTIC_LIMIT="${arg#*=}" ;;
     --semantic-tokens=*) SEMANTIC_TOKENS="${arg#*=}" ;;
     --help|-h)
@@ -445,6 +448,31 @@ if [ "$SEMANTIC" = true ]; then
     IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/wiki-lint-semantic.py" "${SEM_ARGS[@]}" || \
       echo "[lint] --semantic: sub-script exited non-zero, continuing" >&2
   fi
+fi
+
+# ---------- Optional: review sweep report (read-only, --sweep) ----------
+# Runs sweep_reviews.py in dry-run (never --apply) so lint stays non-mutating.
+# Surfaces how many pending wiki/REVIEW/ items are now auto-resolvable; closing
+# them still requires the standalone `sweep_reviews.py --apply` command.
+if [ "$SWEEP" = true ]; then
+  echo "[lint] --sweep: scanning wiki/REVIEW/ for auto-resolvable items..."
+  SWEEP_SUMMARY=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
+      --project "$WIKI_ROOT" --json 2>/dev/null \
+    | sed -n '/^--- JSON ---$/,$p' | sed '1d' \
+    | python3 -c "
+import json, sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print('no review items (or sweep_reviews.py unavailable)')
+else:
+    try:
+        d = json.loads(raw)
+        print(f\"{d.get('resolved',0)} of {d.get('total',0)} auto-resolvable, {d.get('pending',0)} still pending\")
+    except Exception:
+        print('parse error')
+")
+  echo "[lint] --sweep: $SWEEP_SUMMARY"
+  echo "[lint] --sweep: read-only report — run 'sweep_reviews.py --project <root> --apply' to close resolved items"
 fi
 
 # ---------- Combined summary line (with --semantic) ----------

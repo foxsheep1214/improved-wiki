@@ -106,9 +106,8 @@ from _stage_3_write import (
     _auto_correct_wiki_path, _contains_cjk, _make_cjk_slug,
     backup_existing_page,
 )
-from _stage_3_5_embeddings import (
-    stage_3_5_embeddings, check_local_bge_m3,
-)
+from _stage_3_5_embeddings import stage_3_5_embeddings
+from _enrich_wikilinks import enrich_wikilinks
 from _stage_validators import (
     verify_stage_0, verify_stage_1, verify_stage_2,
     verify_stage_3, verify_stage_3_5,
@@ -123,6 +122,7 @@ from _paths import detect_runtime_dir  # noqa: E402
 from _llm_api import (  # noqa: E402
     _retry_jitter,
     _is_retryable_exception,
+    conversation_handoff,
     set_progress_hook,
     set_conversation_router,
 )
@@ -554,6 +554,9 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     The calling agent (Hermes) reads the prompt file, executes it with its own
     LLM, writes the result back, and re-invokes ingest.py.  On re-invoke,
     ingest.py finds the result file and continues.
+
+    Delegates the cache-read / prompt-write / raise to
+    :func:`_llm_api.conversation_handoff` (shared with the sweep tools).
     """
     # Stage-name slug + content-hash suffix. The stage name (Stage-1-Global-
     # Digest, Stage-2-Synthesis, LLM-task, ...) gives human-readable grouping;
@@ -576,33 +579,15 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     slug = f"{stage}-{content_hash}"
     prefix = config.conversation_prefix or "00000000"
     conv_dir = config.runtime_dir / "conversation" / prefix
-    conv_dir.mkdir(parents=True, exist_ok=True)
-    pending_md = conv_dir / f"{slug}.md"
-    result_file = conv_dir / f"{slug}.txt"
 
-    if result_file.exists():
-        response = result_file.read_text(encoding="utf-8")
-        if _is_stale_result(response, prompt):
-            print(f"[conv:{slug}] Result appears to be a prompt copy — regenerating")
-            result_file.unlink(missing_ok=True)
-        else:
-            # Keep the .txt (and .md) on disk: ingest.py replays every stage
-            # from the top on each re-invoke, so earlier stages must still
-            # find their cached result or the pipeline re-prompts stage 1
-            # forever and never advances. Deletion is only for the stale
-            # (prompt-copy) case above.
-            print(f"[conv:{slug}] Read response ({len(response)} chars)")
-            _mark_task_done(config, slug)
-            return response, "end_turn"
-
-    pending_md.write_text(prompt, encoding="utf-8")
-    _mark_task_pending(config, slug)
-    print(f"\n{'='*60}")
-    print(f"  CONVERSATION → {slug}")
-    print(f"  Prompt:  {pending_md}")
-    print(f"  Result:  {result_file}")
-    print(f"{'='*60}\n")
-    raise ConversationPending()
+    response = conversation_handoff(
+        conv_dir, slug, prompt,
+        label=slug,
+        stale_check=_is_stale_result,
+        on_cached=lambda _response: _mark_task_done(config, slug),
+        on_prompt_written=lambda: _mark_task_pending(config, slug),
+    )
+    return response, "end_turn"
 
 
 def _task_manifest_path(config: Config) -> Path:
@@ -719,6 +704,7 @@ def ingest_one(
         "raw_response": raw_response, "file_blocks": file_blocks,
         "stage_1_2_result": stage_1_2_result, "stage_1_3_result": stage_1_3_result,
         "template_name": template_name,
+        "enrich_enabled": getattr(config, "enrich_enabled", True),
     }
     result = _do_write(prepared, verbose=verbose)
     if result["status"] != "ok":
@@ -746,6 +732,338 @@ def ingest_one(
 BATCH_MAX_CONCURRENT = 4
 
 
+def _should_skip_prepare(raw_file: Path, config: Config) -> bool:
+    """Return True if the source page already exists and is reasonably complete.
+
+    Re-ingest when the source page is missing >80% of its linked concept/entity
+    pages (corrupt / partial prior run); otherwise skip.
+    """
+    source_page = wiki_path_for_source(raw_file, config)
+    if not source_page.exists():
+        return False
+    try:
+        source_text = source_page.read_text(encoding="utf-8")
+    except Exception:
+        source_text = ""
+    refs = re.findall(r'\[\[([^\]]+)\]\]', source_text)
+    missing = []
+    for slug in refs:
+        slug = slug.split("|")[0].strip()
+        concept_path = config.wiki_dir / "concepts" / f"{slug}.md"
+        entity_path = config.wiki_dir / "entities" / f"{slug}.md"
+        if not concept_path.exists() and not entity_path.exists():
+            missing.append(slug)
+    if not refs or len(missing) > len(refs) * 0.8:
+        print(f"  [skip:warn] Source page exists but {len(missing)}/{len(refs)} linked pages missing — re-ingesting")
+        return False
+    print(f"  [skip] Source page exists ({len(refs)-len(missing)}/{len(refs)} linked pages found)")
+    return True
+
+
+def _chunk_pipeline_serial(
+    chunk_meta: list, global_digest: dict, accumulated_digest: str,
+    raw_file: Path, config: Config, template_content: str,
+    chunk_total: int, t_start: float, verbose: bool,
+) -> tuple[list, list, list[str], list[str]]:
+    """Serial barrier-free: analyze → generate → next chunk.
+
+    Preserves cross-chunk refinement via ``accumulated_digest`` (each chunk's
+    analysis may update it for the next). Used in conversation mode — each LLM
+    call raises ConversationPending and exits the process, so no thread pool —
+    or for single-chunk inputs.
+    """
+    chunk_analyses: list = []
+    all_file_blocks: list = []
+    all_responses: list[str] = []
+    generated_slugs: list[str] = []
+
+    for i, chunk, overlap_before, heading_path in chunk_meta:
+        ca = _analyze_chunk(
+            chunk, i, chunk_total, global_digest, accumulated_digest,
+            overlap_before, heading_path, raw_file, config, template_content,
+            max_retries=_chunk_retries(), verbose=verbose)
+        chunk_analyses.append(ca)
+
+        # Update accumulated digest (serial cross-chunk refinement)
+        updated = ca.get("updated_global_digest", "")
+        if isinstance(updated, str) and len(updated.strip()) > 50:
+            accumulated_digest = updated.strip()
+        elif isinstance(updated, dict):
+            accumulated_digest = json.dumps(updated, ensure_ascii=False, indent=2)
+
+        if "error" in ca:
+            continue
+
+        blocks = _generate_chunk(
+            ca, i, generated_slugs, raw_file, config, template_content,
+            verbose=verbose, chunk_text=chunk)
+        all_file_blocks.extend(blocks)
+        all_responses.extend([b[1] for b in blocks])
+        for path, _ in blocks:
+            slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+            if slug not in generated_slugs:
+                generated_slugs.append(slug)
+
+        done = i + 1
+        pct = done * 100 // chunk_total
+        eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
+        print(f"  [pipeline] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
+
+    return chunk_analyses, all_file_blocks, all_responses, generated_slugs
+
+
+def _chunk_pipeline_parallel(
+    chunk_meta: list, global_digest: dict, raw_file: Path, config: Config,
+    template_content: str, chunk_total: int, t_start: float, verbose: bool,
+) -> tuple[list, list, list[str], list[str]]:
+    """Direct-API parallel pipeline: Phase A (parallel analysis) → B (merge) → C (serial gen).
+
+    ``accumulated_digest`` is empty here — each chunk analyzes against the static
+    ``global_digest`` (cross-chunk refinement sacrificed for parallelism; the
+    static digest already carries book-level outline / key entities / key concepts
+    from Stage 2.1). Only viable when text-gen goes through ``call_anthropic_direct``
+    (no process-exit handoff). ~N/parallelism× faster analysis.
+    """
+    chunk_analyses: list = []
+    all_file_blocks: list = []
+    all_responses: list[str] = []
+    generated_slugs: list[str] = []
+
+    # ── Phase A: parallel analysis (direct API, concurrent HTTP) ──
+    max_workers = min(
+        chunk_total,
+        int(os.environ.get("LLM_MAX_CONCURRENCY", "6")),
+    )
+    print(f"  [pipeline] Phase A: parallel analysis "
+          f"({chunk_total} chunks, {max_workers} workers)")
+    results: dict[int, dict] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                _analyze_chunk, chunk, i, chunk_total, global_digest,
+                "", overlap_before, heading_path, raw_file, config,
+                template_content, max_retries=_chunk_retries(),
+                verbose=verbose,
+            ): i
+            for (i, chunk, overlap_before, heading_path) in chunk_meta
+        }
+        for fut in as_completed(futures):
+            i = futures[fut]
+            try:
+                results[i] = fut.result()
+            except Exception as e:
+                # A worker crash shouldn't kill the whole batch — record an
+                # error analysis so Phase C can skip it, matching
+                # _analyze_chunk's own failure shape.
+                results[i] = {
+                    "chunk_index": i + 1, "error": str(e),
+                    "_attempts": 1,
+                }
+                print(f"  [chunk {i+1}/{chunk_total}] analyze worker FAILED: {e}")
+    chunk_analyses = [results[i] for i in range(chunk_total)]
+    t_analyze = time.time() - t_start
+    ok = sum(1 for ca in chunk_analyses if "error" not in ca)
+    print(f"  [pipeline] Phase A done — {ok}/{chunk_total} analyzed "
+          f"in {t_analyze:.0f}s")
+
+    # ── Phase B: merge / dedup ──
+    # generated_slugs seeds from concepts/entities the analyses already
+    # identified as cross-references; the real dedup list accumulates during
+    # Phase C generation (same as serial).
+    unique_concepts_pre, unique_entities_pre = _extract_concept_entity_names(chunk_analyses)
+    for name in (*unique_concepts_pre, *unique_entities_pre):
+        slug = name.strip().lower().replace(" ", "-").replace("/", "-")
+        if slug and slug not in generated_slugs:
+            generated_slugs.append(slug)
+    print(f"  [pipeline] Phase B: merged — "
+          f"{len(unique_concepts_pre)} concepts, "
+          f"{len(unique_entities_pre)} entities identified")
+
+    # ── Phase C: sequential generation (accumulated dedup list) ──
+    print(f"  [pipeline] Phase C: sequential generation")
+    for i, chunk, _overlap_before, _heading_path in chunk_meta:
+        ca = chunk_analyses[i]
+        if "error" in ca:
+            continue
+        blocks = _generate_chunk(
+            ca, i, generated_slugs, raw_file, config, template_content,
+            verbose=verbose, chunk_text=chunk)
+        all_file_blocks.extend(blocks)
+        all_responses.extend([b[1] for b in blocks])
+        for path, _ in blocks:
+            slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+            if slug not in generated_slugs:
+                generated_slugs.append(slug)
+
+        done = i + 1
+        pct = done * 100 // chunk_total
+        eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
+        print(f"  [pipeline] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
+
+    return chunk_analyses, all_file_blocks, all_responses, generated_slugs
+
+
+def _run_chunk_pipeline(
+    extracted_text: str, global_digest: dict, raw_file: Path, config: Config,
+    template_content: str, progress: dict | None, verbose: bool,
+) -> tuple[list, dict, str, list]:
+    """Stage 1.5+2.1: barrier-free chunk analyze→generate pipeline.
+
+    Unified pipeline (NashSU improved): analyze → generate → next chunk. Works
+    for any chunk count (1 chunk = single iteration; N chunks = N iterations).
+
+    Returns ``(chunk_analyses, analysis, raw_response, file_blocks)``.
+
+    Two modes (round iii, 2026-06-21):
+      * Conversation mode (--conversation) or single chunk: serial barrier-free
+        (``_chunk_pipeline_serial``) — preserves cross-chunk refinement.
+      * Direct API (default, multi-chunk): 3-phase parallel
+        (``_chunk_pipeline_parallel``) — Phase A parallel analysis, Phase B
+        merge/dedup, Phase C sequential generation.
+    """
+    # Cached: chunk analysis already complete
+    if progress and progress.get("stage") in ("stage_2_2_done", "stage_2_3_done") and "chunk_analyses" in progress:
+        chunk_analyses = progress["chunk_analyses"]
+        print(f"  [stage 2.2] (cached) Chunk Analysis — {len(chunk_analyses)} chunks")
+        _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
+        analysis = progress.get("analysis", {})
+        raw_response = progress.get("raw_response", "")
+        file_blocks = parse_file_blocks(raw_response) if raw_response else []
+        return chunk_analyses, analysis, raw_response, file_blocks
+
+    chunks = chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
+    chunk_total = len(chunks)
+
+    est_sec = chunk_total * 75  # ~60s analysis + ~15s generation per chunk
+    print(f"  [stage 2.2∥2.3] Barrier-free — {chunk_total} chunk(s), "
+          f"target {config.target_chars:,} chars/chunk (est. {est_sec/60:.0f} min)")
+    _stage_begin("Stage 1.5∥2.1: Barrier-free pipeline")
+    t_start = time.time()
+    accumulated_digest = json.dumps(
+        {k: global_digest[k] for k in
+         ("book_meta", "outline", "key_entities", "key_concepts")
+         if k in global_digest},
+        ensure_ascii=False, indent=2)
+
+    # Pre-compute per-chunk read-only metadata (overlap, heading path) once —
+    # reused by both the serial and parallel paths.
+    chunk_meta: list[tuple[int, str, str, str]] = []
+    for i in range(chunk_total):
+        chunk = chunks[i]
+        overlap_before = chunks[i - 1][-config.chunk_overlap:] if i > 0 else ""
+        chunk_pos = extracted_text.find(chunk)
+        if chunk_pos == -1:
+            chunk_pos = i * config.target_chars
+        heading_path = _resolve_chunk_heading_path(
+            extracted_text, chunk_pos, chunk_pos + len(chunk))
+        chunk_meta.append((i, chunk, overlap_before, heading_path))
+
+    if config.conversation_mode or chunk_total <= 1:
+        chunk_analyses, all_file_blocks, all_responses, generated_slugs = _chunk_pipeline_serial(
+            chunk_meta, global_digest, accumulated_digest, raw_file, config,
+            template_content, chunk_total, t_start, verbose)
+    else:
+        chunk_analyses, all_file_blocks, all_responses, generated_slugs = _chunk_pipeline_parallel(
+            chunk_meta, global_digest, raw_file, config, template_content,
+            chunk_total, t_start, verbose)
+
+    # Build combined analysis
+    unique_concepts, _ = _extract_concept_entity_names(chunk_analyses)
+    concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
+    entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
+    analysis = {
+        "book_meta": global_digest.get("book_meta", {}),
+        "outline": global_digest.get("outline", []),
+        "concepts_identified": len(unique_concepts),
+        "concepts_generated": len(concept_blocks),
+        "entities_generated": len(entity_blocks),
+        "coverage_pct": round(len(concept_blocks) / max(len(unique_concepts), 1), 2),
+        "total_chunks": chunk_total,
+        "method": "barrier-free",
+    }
+    raw_response = "\n".join(all_responses)
+    file_blocks = all_file_blocks
+
+    # ── Fallback: per-concept generation ──
+    # If barrier-free produced 0 concept blocks (LLM max_tokens/timeout before
+    # FILE blocks), fall back to per-concept LLM calls.
+    if not concept_blocks and unique_concepts and chunk_analyses:
+        n_missed = len(unique_concepts)
+        print(f"  [stage 2.3] ⚠️  Barrier-free: 0/{n_missed} concepts generated "
+              f"— falling back to per-concept generation "
+              f"(pre_existing_slugs={len(generated_slugs)})")
+        fa_analysis, fa_raw, fa_blocks = _stage_2_per_concept_fallback(
+            chunk_analyses, global_digest, raw_file, config,
+            template_content, verbose=verbose,
+            pre_existing_slugs=generated_slugs,
+        )
+        fa_concept_entity = [(p, c) for p, c in fa_blocks
+                             if not p.startswith("sources/")]
+        all_file_blocks = fa_concept_entity
+        if fa_concept_entity:
+            all_responses.append(fa_raw)
+            raw_response = "\n".join(all_responses)
+        file_blocks = all_file_blocks
+        concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
+        entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
+        analysis["concepts_generated"] = len(concept_blocks)
+        analysis["entities_generated"] = len(entity_blocks)
+        analysis["coverage_pct"] = round(
+            len(concept_blocks) / max(len(unique_concepts), 1), 2)
+        analysis["method"] = "barrier-free+fallback"
+        for path, _ in fa_concept_entity:
+            s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+            if s not in generated_slugs:
+                generated_slugs.append(s)
+
+    _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
+
+    return chunk_analyses, analysis, raw_response, file_blocks
+
+
+def _prepare_source_page(
+    global_digest: dict, raw_file: Path, config: Config,
+    template_content: str, progress: dict | None, file_blocks: list,
+    verbose: bool,
+) -> list:
+    """Stage 2.4: generate the source page (dedicated LLM call) and merge into file_blocks."""
+    current_domain = _detect_domain(raw_file, template_content, global_digest)
+    if progress and progress.get("stage") in ("stage_2_4_done", "stage_2_3_done") and "source_page_response" in progress:
+        source_page_response = progress["source_page_response"]
+        print(f"  [stage 2.4] (cached) Source page already generated")
+    else:
+        source_page_response, _ = stage_2_4_source_page(
+            global_digest, raw_file, config,
+            template=template_content, current_domain=current_domain, verbose=verbose
+        )
+
+    if not source_page_response:
+        return file_blocks
+
+    source_blocks = parse_file_blocks(source_page_response)
+    if source_blocks:
+        file_blocks = source_blocks + list(file_blocks)
+        print(f"  [stage 2.4] Source page block merged ({len(file_blocks)} total)")
+        return file_blocks
+
+    # LLM didn't use FILE block format — generate placeholder
+    source_rel = f"sources/{raw_file.relative_to(config.raw_root).with_suffix('.md')}"
+    book_meta = global_digest.get("book_meta", {})
+    title = book_meta.get("title", raw_file.stem) if isinstance(book_meta, dict) else raw_file.stem
+    stub = f"---\ntype: source\ntitle: \"{title}\"\ndomain: general\n"
+    stub += f"created: {time.strftime('%Y-%m-%d')}\nupdated: {time.strftime('%Y-%m-%d')}\n"
+    stub += f"tags: []\nrelated: []\nsources: [\"raw/{raw_file.relative_to(config.raw_root)}\"]\n---\n\n"
+    stub += f"**Title:** {title}\n**Author:** {raw_file.stem}\n\n"
+    stub += f"## Global Digest\n\n```yaml\n{json.dumps(global_digest, ensure_ascii=False, indent=2)[:4000]}\n```\n\n"
+    stub += f"## Key Concepts\n\n"
+    for path, _ in file_blocks:
+        if "concepts/" in path:
+            stub += f"- [[{Path(path).stem}]]\n"
+    file_blocks.append((source_rel, stub))
+    print(f"  [stage 2.4] Placeholder source page generated ({len(file_blocks)} total)")
+    return file_blocks
+
+
 def _do_prepare(
     raw_file: Path, config: Config,
     template_override: str | None = None,
@@ -760,31 +1078,14 @@ def _do_prepare(
     _set_current_file(raw_file.name)
     print(f"\n=== [prepare] {raw_file.name} ===")
     try:
-        # Dedup check — verify completeness, not just source page existence
-        source_page = wiki_path_for_source(raw_file, config)
-        if source_page.exists():
-            try:
-                source_text = source_page.read_text(encoding="utf-8")
-            except Exception:
-                source_text = ""
-            refs = re.findall(r'\[\[([^\]]+)\]\]', source_text)
-            missing = []
-            for slug in refs:
-                slug = slug.split("|")[0].strip()
-                concept_path = config.wiki_dir / "concepts" / f"{slug}.md"
-                entity_path = config.wiki_dir / "entities" / f"{slug}.md"
-                if not concept_path.exists() and not entity_path.exists():
-                    missing.append(slug)
-            if not refs or len(missing) > len(refs) * 0.8:
-                print(f"  [skip:warn] Source page exists but {len(missing)}/{len(refs)} linked pages missing — re-ingesting")
-            else:
-                print(f"  [skip] Source page exists ({len(refs)-len(missing)}/{len(refs)} linked pages found)")
-                return None
+        # Dedup check — skip if source page exists and is reasonably complete
+        if _should_skip_prepare(raw_file, config):
+            return None
 
         h = file_sha256(raw_file)
         progress = load_progress(config, h)
 
-            # Stage 0: Text extraction
+        # Stage 0: Text extraction
         if progress and "extracted_text" in progress:
             extracted_text = progress["extracted_text"]
             method = progress.get("extract_method", "cached")
@@ -864,162 +1165,15 @@ def _do_prepare(
                 save_progress(config, h, {"stage": "stage_1_1_done", "extracted_text": extracted_text,
                       "extract_method": method, "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result})
 
-        # Stage 1.5 + 2.1: Chunk Analysis → Generation
-        # Unified barrier-free pipeline (NashSU improved): analyze → generate → next chunk.
-        # Works for all chunk counts: 1 chunk = single loop iteration; N chunks = N iterations.
-        if progress and progress.get("stage") in ("stage_2_2_done", "stage_2_3_done") and "chunk_analyses" in progress:
-            chunk_analyses = progress["chunk_analyses"]
-            print(f"  [stage 2.2] (cached) Chunk Analysis — {len(chunk_analyses)} chunks")
-            _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
-            analysis = progress.get("analysis", {})
-            raw_response = progress.get("raw_response", "")
-            file_blocks = parse_file_blocks(raw_response) if raw_response else []
-        else:
-            chunks = chunk_text(extracted_text, config.target_chars, config.chunk_overlap)
-            chunk_total = len(chunks)
+        # Stage 1.5 + 2.1: Chunk Analysis → Generation (barrier-free pipeline)
+        chunk_analyses, analysis, raw_response, file_blocks = _run_chunk_pipeline(
+            extracted_text, global_digest, raw_file, config, template_content,
+            progress, verbose)
 
-            # ── Barrier-free pipeline: analyze → generate → next chunk ──
-            est_sec = chunk_total * 75  # ~60s analysis + ~15s generation per chunk
-            print(f"  [stage 2.2∥2.3] Barrier-free — {chunk_total} chunk(s), "
-                  f"target {config.target_chars:,} chars/chunk (est. {est_sec/60:.0f} min)")
-            _stage_begin("Stage 1.5∥2.1: Barrier-free pipeline")
-            t_start = time.time()
-            chunk_analyses = []
-            all_file_blocks: list = []
-            all_responses: list[str] = []
-            generated_slugs: list[str] = []
-            accumulated_digest = json.dumps(
-                {k: global_digest[k] for k in
-                 ("book_meta", "outline", "key_entities", "key_concepts")
-                 if k in global_digest},
-                ensure_ascii=False, indent=2)
-
-            for i in range(chunk_total):
-                chunk = chunks[i]
-                # ── Analyze ──
-                overlap_before = chunks[i - 1][-config.chunk_overlap:] if i > 0 else ""
-                chunk_pos = extracted_text.find(chunk)
-                if chunk_pos == -1:
-                    chunk_pos = i * config.target_chars
-                heading_path = _resolve_chunk_heading_path(
-                    extracted_text, chunk_pos, chunk_pos + len(chunk))
-
-                ca = _analyze_chunk(
-                    chunk, i, chunk_total, global_digest, accumulated_digest,
-                    overlap_before, heading_path, raw_file, config, template_content,
-                    max_retries=_chunk_retries(), verbose=verbose)
-                chunk_analyses.append(ca)
-
-                # Update accumulated digest
-                updated = ca.get("updated_global_digest", "")
-                if isinstance(updated, str) and len(updated.strip()) > 50:
-                    accumulated_digest = updated.strip()
-                elif isinstance(updated, dict):
-                    accumulated_digest = json.dumps(updated, ensure_ascii=False, indent=2)
-
-                if "error" in ca:
-                    continue
-
-                # ── Generate (immediately after analysis) ──
-                blocks = _generate_chunk(
-                    ca, i, generated_slugs, raw_file, config, template_content,
-                    verbose=verbose, chunk_text=chunk)
-                all_file_blocks.extend(blocks)
-                all_responses.extend([b[1] for b in blocks])
-                for path, _ in blocks:
-                    slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
-                    if slug not in generated_slugs:
-                        generated_slugs.append(slug)
-
-                done = i + 1
-                pct = done * 100 // chunk_total
-                eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
-                print(f"  [pipeline] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
-
-            # Build combined analysis
-            unique_concepts, _ = _extract_concept_entity_names(chunk_analyses)
-            concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
-            entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
-            analysis = {
-                "book_meta": global_digest.get("book_meta", {}),
-                "outline": global_digest.get("outline", []),
-                "concepts_identified": len(unique_concepts),
-                "concepts_generated": len(concept_blocks),
-                "entities_generated": len(entity_blocks),
-                "coverage_pct": round(len(concept_blocks) / max(len(unique_concepts), 1), 2),
-                "total_chunks": chunk_total,
-                "method": "barrier-free",
-            }
-            raw_response = "\n".join(all_responses)
-            file_blocks = all_file_blocks
-
-            # ── Fallback: per-concept generation ──
-            # If barrier-free produced 0 concept blocks (LLM max_tokens/timeout
-            # before FILE blocks), fall back to per-concept LLM calls.
-            if not concept_blocks and unique_concepts and chunk_analyses:
-                n_missed = len(unique_concepts)
-                print(f"  [stage 2.3] ⚠️  Barrier-free: 0/{n_missed} concepts generated "
-                      f"— falling back to per-concept generation "
-                      f"(pre_existing_slugs={len(generated_slugs)})")
-                fa_analysis, fa_raw, fa_blocks = _stage_2_per_concept_fallback(
-                    chunk_analyses, global_digest, raw_file, config,
-                    template_content, verbose=verbose,
-                    pre_existing_slugs=generated_slugs,
-                )
-                fa_concept_entity = [(p, c) for p, c in fa_blocks
-                                     if not p.startswith("sources/")]
-                all_file_blocks = fa_concept_entity
-                if fa_concept_entity:
-                    all_responses.append(fa_raw)
-                    raw_response = "\n".join(all_responses)
-                file_blocks = all_file_blocks
-                concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
-                entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
-                analysis["concepts_generated"] = len(concept_blocks)
-                analysis["entities_generated"] = len(entity_blocks)
-                analysis["coverage_pct"] = round(
-                    len(concept_blocks) / max(len(unique_concepts), 1), 2)
-                analysis["method"] = "barrier-free+fallback"
-                for path, _ in fa_concept_entity:
-                    s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
-                    if s not in generated_slugs:
-                        generated_slugs.append(s)
-
-            _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
-
-        # Stage 2.0: Source page generation (NashSU two-step — dedicated LLM call)
-        current_domain = _detect_domain(raw_file, template_content, global_digest)
-        if progress and progress.get("stage") in ("stage_2_4_done", "stage_2_3_done") and "source_page_response" in progress:
-            source_page_response = progress["source_page_response"]
-            print(f"  [stage 2.4] (cached) Source page already generated")
-        else:
-            source_page_response, _ = stage_2_4_source_page(
-                global_digest, raw_file, config,
-                template=template_content, current_domain=current_domain, verbose=verbose
-            )
-
-        # Merge Stage 2.0 source page into file_blocks (before verification)
-        if source_page_response:
-            source_blocks = parse_file_blocks(source_page_response)
-            if source_blocks:
-                file_blocks = source_blocks + list(file_blocks)
-                print(f"  [stage 2.4] Source page block merged ({len(file_blocks)} total)")
-            elif source_page_response:
-                # LLM didn't use FILE block format — generate placeholder
-                source_rel = f"sources/{raw_file.relative_to(config.raw_root).with_suffix('.md')}"
-                title = global_digest.get("book_meta", {}).get("title", raw_file.stem) if isinstance(global_digest.get("book_meta"), dict) else raw_file.stem
-                stub = f"---\ntype: source\ntitle: \"{title}\"\ndomain: general\n"
-                stub += f"created: {time.strftime('%Y-%m-%d')}\nupdated: {time.strftime('%Y-%m-%d')}\n"
-                stub += f"tags: []\nrelated: []\nsources: [\"raw/{raw_file.relative_to(config.raw_root)}\"]\n---\n\n"
-                stub += f"**Title:** {title}\n**Author:** {raw_file.stem}\n\n"
-                stub += f"## Global Digest\n\n```yaml\n{json.dumps(global_digest, ensure_ascii=False, indent=2)[:4000]}\n```\n\n"
-                stub += f"## Key Concepts\n\n"
-                for path, _ in file_blocks:
-                    if "concepts/" in path:
-                        stub += f"- [[{Path(path).stem}]]\n"
-                file_blocks.append((source_rel, stub))
-                print(f"  [stage 2.4] Placeholder source page generated ({len(file_blocks)} total)")
-
+        # Stage 2.4: Source page generation + merge
+        file_blocks = _prepare_source_page(
+            global_digest, raw_file, config, template_content, progress,
+            file_blocks, verbose)
         _verify_stage_2_4_file_blocks(file_blocks, raw_file)
 
         # ── Stage 2.3: Query generation ──
@@ -1056,6 +1210,7 @@ def _do_prepare(
             "template_name": template_name,
             "query_count": query_count,
             "comp_count": comp_count,
+            "enrich_enabled": getattr(config, "enrich_enabled", True),
         }
     except Exception as e:
         print(f"  [prepare] ❌ FAILED: {e}")
@@ -1104,6 +1259,18 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
     canonical_source = f"raw/{raw_file.relative_to(config.raw_root)}"
     today_str = time.strftime("%Y-%m-%d")
+
+    # ── Wikilink enrichment setup (round iii, 2026-06-21) ──
+    # After each page is written, ask the LLM (direct API) to suggest
+    # [[wikilinks]] for body terms matching existing wiki pages. Gated by
+    # --enrich-wikilinks / --no-enrich. existing_slugs is a pre-loop snapshot
+    # of the wiki; written_slugs accumulates this ingest's new pages so later
+    # pages in the same batch can link to earlier ones. Listing pages are
+    # skipped (auto-managed). Soft-fails if no API key (returns content
+    # unchanged) — see _enrich_wikilinks.
+    enrich_enabled = prepared.get("enrich_enabled", True)
+    existing_slugs = list_existing_slugs(config) if enrich_enabled else []
+    written_slugs: list[str] = []
 
     for rel_path, content in file_blocks:
         if ".." in rel_path or rel_path.startswith("/"):
@@ -1158,6 +1325,27 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             source_block = (rel_path, content)
         action = "[merge]" if do_merge else "[overwrite]" if is_listing and full_path.exists() else "[write]"
         print(f"  {action} {rel_path}")
+
+        # ── Wikilink enrichment (direct API, post-write) ──
+        # Enrich the ACTUAL written content (post-merge) so links target real
+        # pages. Skip listing pages (auto-managed) and very short bodies.
+        this_slug = Path(rel_path).stem
+        if enrich_enabled and not is_listing:
+            try:
+                written_content = full_path.read_text(encoding="utf-8")
+                enriched = enrich_wikilinks(
+                    written_content,
+                    existing_slugs + written_slugs,
+                    config,
+                )
+                if enriched != written_content:
+                    full_path.write_text(enriched, encoding="utf-8")
+                    print(f"  [enrich] {rel_path} (+wikilinks)")
+            except Exception as e:
+                # Enrichment is best-effort — never fail the ingest over it.
+                print(f"  [enrich] {rel_path} skipped ({type(e).__name__})")
+        if this_slug not in written_slugs:
+            written_slugs.append(this_slug)
 
     if not source_block:
         # Build NashSU-quality source page from digest data (no LLM needed)
@@ -1757,6 +1945,7 @@ def main() -> int:
     if args.watch:
         config = Config.from_env()
         config.conversation_mode = args.conversation
+        config.enrich_enabled = args.enrich_wikilinks and not args.no_enrich
         config.runtime_dir.mkdir(parents=True, exist_ok=True)
         max_conc = args.parallel if args.parallel > 0 else BATCH_MAX_CONCURRENT
         ingest_watch(
@@ -1786,6 +1975,7 @@ def main() -> int:
 
     config = Config.from_env()
     config.conversation_mode = args.conversation
+    config.enrich_enabled = args.enrich_wikilinks and not args.no_enrich
     config.stop_after_stage = args.stop_after_stage
 
     raw_files = []

@@ -7,6 +7,11 @@ in the body that match existing wiki pages. The LLM returns (term→target)
 JSON; this module does the actual string replacement — the LLM never
 rewrites page content.
 
+Uses the direct HTTP API (``call_anthropic_direct``) unconditionally, even in
+``--conversation`` mode: enrichment is high-volume / low-value per call, so
+the conversation handoff (which made it ~8× slower) is bypassed. If no API
+key is configured the call fails soft — the page is returned unchanged.
+
 Usage:
     from _enrich_wikilinks import enrich_wikilinks
     enriched = enrich_wikilinks(content, existing_slugs, config)
@@ -15,7 +20,7 @@ Usage:
 import json, re
 from pathlib import Path
 from _frontmatter import parse_frontmatter, write_frontmatter
-from _llm_api import call_anthropic_protocol
+from _llm_api import call_anthropic_direct
 
 
 def enrich_wikilinks(
@@ -63,7 +68,7 @@ with an EXACT slug match below. Output ONLY a JSON array:
 {body_sample}"""
 
     try:
-        response, _ = call_anthropic_protocol(prompt, config, max_tokens=2048)
+        response, _ = call_anthropic_direct(prompt, config, max_tokens=2048)
         text = response.strip()
         if text.startswith("```"):
             text = text.split("```", 2)[1]
