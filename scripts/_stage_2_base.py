@@ -44,3 +44,10 @@ from _llm_api import (
     _is_retryable_exception,
     call_anthropic_protocol,
 )
+from _stage_1_extract import _stage_1_2_media_slug
+
+# Explicitly re-export underscore-prefixed helpers. Without __all__, the
+# `from _stage_2_base import *` used by every Stage 2.x module EXCLUDES
+# _-prefixed names (Python default), so _retry_jitter / _is_retryable_exception
+# / _record_rate_limit / _stage_1_2_media_slug would NameError on retry paths.
+__all__ = [n for n in dir() if not n.startswith("__")]

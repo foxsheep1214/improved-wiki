@@ -90,7 +90,11 @@ def _stage_2_4_build_prompt(
     # The LLM should wikilink to these instead of regenerating them.
     if existing_refs:
         ref_lines = []
-        for name, slugs in existing_refs.items():
+        # Sort for deterministic prompt text → stable conversation-handoff cache
+        # key. Without sorting, set/dict iteration order (Python hash randomization)
+        # varies across runs, changing the prompt hash and re-prompting Stage 2.4
+        # forever (cache never hits on resume).
+        for name, slugs in sorted(existing_refs.items()):
             links = ", ".join("[[{}]]".format(s) for s in slugs)
             ref_lines.append("  - {} → already exists as: {}".format(name, links))
         existing_refs_str = "\n".join(ref_lines)
@@ -234,7 +238,7 @@ def _stage_2_4_per_concept_fallback(
                 concept_info = c if isinstance(c, dict) else {"name": c}
                 break
 
-        slug = concept_slugify(name)
+        slug = slugify(name)
         if slug in generated_slugs:
             continue
 
@@ -272,7 +276,7 @@ def _stage_2_4_per_concept_fallback(
                 break
 
     for entity_name in unique_entities[:min(len(unique_entities), 20)]:
-        slug = entity_slugify(name)
+        slug = slugify(name)
         if slug in generated_slugs:
             continue
         prompt = _stage_2_4_build_per_entity_prompt(

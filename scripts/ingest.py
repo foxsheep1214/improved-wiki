@@ -74,6 +74,7 @@ from _core import (
     list_existing_slugs,
     parse_yaml_block, parse_simple_yaml, parse_file_blocks,
     FOLDER_TO_TEMPLATE,
+    is_safe_ingest_path,
 )
 from _stage_0_3_pilot import stage_0_3_pilot
 from _stage_1_extract import (
@@ -92,6 +93,7 @@ from _stage_2_analyze import (
     _stage_2_1_chunk_text,
     _stage_2_2_analyze_chunk,
     _stage_2_2_chunk_retries,
+    _stage_2_2_resolve_chunk_heading_path,
 )
 from _stage_2_4_generation import (
     _stage_2_4_build_prompt,
@@ -362,37 +364,6 @@ def validate_stage_outputs(
     return warnings
 
 
-def _run_post_ingest_lint(config: Config) -> None:
-    """Run wiki-lint.sh after ingest (structural lint only; semantic lint via standalone command).
-
-    Set SKIP_POST_INGEST_LINT=1 to skip during batch runs (lint once at end).
-    """
-    if os.environ.get("SKIP_POST_INGEST_LINT") == "1":
-        print("[lint] Skipped (SKIP_POST_INGEST_LINT=1)")
-        return
-    lint_script = Path(__file__).parent / "wiki-lint.sh"
-    if not lint_script.exists():
-        print("[lint] wiki-lint.sh not found — skipping")
-        return
-    import subprocess
-
-    cmd = ["bash", str(lint_script), "--summary"]
-    try:
-        result = subprocess.run(
-            cmd, cwd=config.wiki_root, capture_output=True, text=True, timeout=600,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.strip().split("\n"):
-                if "findings" in line or "Pages:" in line:
-                    print(line.strip())
-            if result.stderr.strip():
-                print(f"[lint] {result.stderr.strip()[:200]}")
-        else:
-            print(f"[lint] wiki-lint.sh exited {result.returncode}: {result.stderr.strip()[:200]}")
-    except Exception as e:
-        print(f"[lint] Lint failed ({e}) — continuing")
-
-
 def _run_post_ingest_graph(config: Config) -> None:
     """Rebuild knowledge graph after ingest (once per session, stale-guarded).
 
@@ -633,7 +604,6 @@ def ingest_one(
     files_written = result["files_written"]
 
     # ── Post-ingest (unique to single-book path) ──
-    _run_post_ingest_lint(config)
     _run_post_ingest_graph(config)
     stage_3_6_embed_new_pages(config, files_written)
     stage_4_1_validate_ingest(config, raw_file)
@@ -760,7 +730,7 @@ def _analyze_all_chunks(
             executor.submit(
                 _stage_2_2_analyze_chunk, chunk, i, chunk_total, global_digest,
                 "", overlap_before, heading_path, raw_file, config,
-                template_content, max_retries=_chunk_retries(), verbose=verbose,
+                template_content, max_retries=_stage_2_2_chunk_retries(), verbose=verbose,
             ): i
             for (i, chunk, overlap_before, heading_path) in chunk_meta
         }
@@ -864,7 +834,7 @@ def _run_chunk_pipeline(
         chunk_pos = extracted_text.find(chunk)
         if chunk_pos == -1:
             chunk_pos = i * config.target_chars
-        heading_path = _resolve_chunk_heading_path(
+        heading_path = _stage_2_2_resolve_chunk_heading_path(
             extracted_text, chunk_pos, chunk_pos + len(chunk))
         chunk_meta.append((i, chunk, overlap_before, heading_path))
 
@@ -1142,6 +1112,7 @@ def _do_prepare(
         analysis["__extract_method"] = method
 
         print(f"  [prepare] ✅ done — {len(file_blocks)} blocks")
+        current_domain = _detect_domain(raw_file, template_content, global_digest)
         return {
             "raw_file": raw_file, "config": config,
             "h": h, "method": method, "extracted_text": extracted_text,
@@ -1164,7 +1135,7 @@ def _do_prepare(
         print(f"  [prepare] ❌ FAILED: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        raise
 
 
 def _do_write(prepared: dict, verbose: bool = False) -> dict:
@@ -1190,7 +1161,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     print(f"\n=== [write] {raw_file.name} ===")
 
     # Write wiki files (same logic as ingest_one Stage 3+)
-    source_path = wiki_path_for_source(raw_file, config)
+    source_path = _stage_3_1_wiki_path_for_source(raw_file, config)
     files_written_paths: list[str] = []
     hard_failures: list[str] = []
     source_block: tuple[str, str] | None = None
@@ -1380,8 +1351,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         file_blocks, source_path,
     )
 
-    # Post-ingest lint
-    _run_post_ingest_lint(config)
 
     # Stage 3.4: Aggregate repair
     index_log_files = stage_3_4_aggregate_repair(source_path, raw_file, analysis, h, method, config)
