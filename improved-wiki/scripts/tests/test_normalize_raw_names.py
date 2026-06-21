@@ -1,4 +1,4 @@
-"""Tests for normalize_raw_names._parse_simple_yaml — block-list parsing.
+"""Tests for normalize_raw_names._stage_0_1_parse_simple_yaml — block-list parsing.
 
 The NAMING.md rules block uses YAML block-list syntax (``- item`` on its own
 line). The parser previously skipped any line without a colon, so block lists
@@ -43,30 +43,30 @@ rules:
 
 class TestParseSimpleYaml(unittest.TestCase):
     def test_block_list_vendors_parsed(self):
-        rules = nrn._parse_simple_yaml(BLOCK_YAML)
+        rules = nrn._stage_0_1_parse_simple_yaml(BLOCK_YAML)
         self.assertEqual(rules["vendors"], ["TI", "ADI", "ST"])
 
     def test_block_list_vendor_prefixes_parsed(self):
-        rules = nrn._parse_simple_yaml(BLOCK_YAML)
+        rules = nrn._stage_0_1_parse_simple_yaml(BLOCK_YAML)
         self.assertEqual(rules["vendor_prefixes"]["TI"],
                          ["ADC", "ADS", "AFE", "TMAG", "TMP"])
 
     def test_block_scalars_and_nested_dict(self):
-        rules = nrn._parse_simple_yaml(BLOCK_YAML)
+        rules = nrn._stage_0_1_parse_simple_yaml(BLOCK_YAML)
         self.assertEqual(rules["rules"]["Datasheet"]["min_parts"], 2)
         self.assertEqual(rules["rules"]["Datasheet"]["vendor_field"], 0)
         self.assertEqual(rules["rules"]["Datasheet"]["pattern"],
                          "Vendor - PartNumber")
 
     def test_inline_list_still_supported(self):
-        rules = nrn._parse_simple_yaml(INLINE_YAML)
+        rules = nrn._stage_0_1_parse_simple_yaml(INLINE_YAML)
         self.assertEqual(rules["vendors"], ["TI", "ADI", "ST"])
 
     def test_last_duplicate_key_wins(self):
         # NAMING.md has two `vendors:` blocks; YAML semantics = last wins.
         text = ("vendors:\n  - TI\n  - ADI\nrules:\n  Datasheet:\n"
                 "    min_parts: 2\nvendors:\n  - TI\n  - AMD\n")
-        rules = nrn._parse_simple_yaml(text)
+        rules = nrn._stage_0_1_parse_simple_yaml(text)
         self.assertEqual(rules["vendors"], ["TI", "AMD"])
 
 

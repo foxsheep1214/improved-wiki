@@ -4,7 +4,7 @@ Pipeline stages:
   Phase 1 Stage 1.1: Extract text from PDF/PPTX/DOCX (PyMuPDF or minerU)
   Phase 1 Stage 1.2: Extract embedded images from PDF
   Phase 1 Stage 1.3: Generate image captions via VLM
-  (Phase 0 Stage 0.3 Pilot OCR moved to _stage_0_3_pilot.py)
+  (Stage 0.3 Pilot OCR lives in _stage_0_3_pilot.py)
 
 Extracted from ingest.py on 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
 Imports shared infrastructure from _core.
@@ -575,6 +575,428 @@ def _stage_1_1_extract_text_scanned(file_path: Path, config: Config) -> str:
     return _stage_1_1_extract_text_scanned_locked(file_path, config)
 
 
+_log_file: Path | None = None
+
+
+def log_event(event_type: str, **kwargs) -> None:
+    """Append a structured JSONL event to _log_file (best-effort)."""
+    if _log_file is None:
+        return
+    try:
+        entry = {
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "event_type": event_type,
+            **kwargs,
+        }
+        with open(_log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # logging must never break OCR
+
+
+def _stage_1_1_scanned_load_stats(out_dir: Path) -> tuple[dict, Path]:
+    """Load _mineru_stats.json for crash-recovery, or init empty stats."""
+    stats_path = out_dir / "_mineru_stats.json"
+    stats: dict = {"completed_chunks": [], "failed_chunks": [], "images": {}}
+    if stats_path.exists():
+        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    return stats, stats_path
+
+
+def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
+    """Start a persistent minerU API server (one per book) and wait for health.
+
+    Returns (api_proc, venv_python). Raises RuntimeError if the API never
+    becomes healthy (caller must close any open fitz doc on failure).
+    """
+    import subprocess as _sp
+    venv_python = Path.home() / ".venv" / "bin" / "python3"
+    if not venv_python.exists():
+        venv_python = Path(sys.executable)
+    api_proc = _sp.Popen(
+        [str(venv_python), "-m", "mineru.cli.fast_api",
+         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
+        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+    )
+    for _ in range(30):
+        time.sleep(2)
+        try:
+            r = urllib.request.urlopen(
+                f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
+            if json.loads(r.read()).get("status") == "healthy":
+                print(f"[ocr] minerU API ready on port {MINERU_API_PORT}")
+                return api_proc, venv_python
+        except Exception:
+            pass
+    api_proc.terminate()
+    api_proc.wait()
+    raise RuntimeError(f"minerU API failed to start on port {MINERU_API_PORT}")
+
+
+def _stage_1_1_scanned_restart_server(venv_python: Path):
+    """Spawn a fresh minerU API server (after a crash / 5xx)."""
+    import subprocess as _sp
+    return _sp.Popen(
+        [str(venv_python), "-m", "mineru.cli.fast_api",
+         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
+        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+    )
+
+
+def _stage_1_1_scanned_warmup(doc, out_dir: Path) -> None:
+    """1-page warmup to initialize the model and avoid cold-start delay.
+
+    First chunk typically takes 134s; warmup reduces to ~74s (60s savings).
+    Non-critical: failures are logged and skipped.
+    """
+    try:
+        import fitz
+    except ImportError:
+        return
+    print("[ocr] Warmup: initializing model...", end=" ", flush=True)
+    warmup_start = time.time()
+    warmup_pdf = out_dir / "_warmup.pdf"
+    try:
+        warmup_doc = fitz.open()
+        warmup_doc.insert_pdf(doc, from_page=0, to_page=0)
+        warmup_doc.save(warmup_pdf)
+        warmup_doc.close()
+        body, boundary = _stage_1_1_scanned_build_parse_body(
+            warmup_pdf, "warmup.pdf", with_images=False)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        urllib.request.urlopen(req, timeout=120).read()
+        warmup_pdf.unlink(missing_ok=True)
+        print(f"OK ({time.time() - warmup_start:.0f}s) — model ready")
+    except Exception as e:
+        warmup_pdf.unlink(missing_ok=True)
+        print(f"skipped ({time.time() - warmup_start:.0f}s, {type(e).__name__})")
+
+
+def _stage_1_1_scanned_build_parse_body(
+    pdf_path: Path, upload_filename: str, *, with_images: bool = False
+) -> tuple[bytes, str]:
+    """Build a multipart/form-data body for minerU /file_parse.
+
+    upload_filename is the filename declared in the Content-Disposition (the
+    minerU API keys its results by this name — historically hardcoded, NOT
+    pdf_path.name). with_images requests return_images + return_content_list
+    so figures can be harvested and mapped to source pages.
+    """
+    boundary = "----FormBoundary" + os.urandom(8).hex()
+    parts: list[bytes] = []
+    parts.append(f"--{boundary}".encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="files"; filename="{upload_filename}"'.encode())
+    parts.append(b"Content-Type: application/pdf")
+    parts.append(b"")
+    parts.append(pdf_path.read_bytes())
+    parts.append(f"--{boundary}".encode())
+    parts.append(b'Content-Disposition: form-data; name="data"')
+    parts.append(b"")
+    parts.append(json.dumps({"lang": "ch"}).encode())
+    if with_images:
+        for field in ("return_images", "return_content_list"):
+            parts.append(f"--{boundary}".encode())
+            parts.append(
+                f'Content-Disposition: form-data; name="{field}"'.encode())
+            parts.append(b"")
+            parts.append(b"true")
+    parts.append(f"--{boundary}--".encode())
+    return b"\r\n".join(parts), boundary
+
+
+def _stage_1_1_scanned_extract_md(
+    results: dict, chunk_pdf: Path, out_dir: Path, start: int, end: int,
+    file_path: Path, config,
+) -> tuple[str, "Path | None"]:
+    """Extract md_content from API results, write it, and harvest figures.
+
+    Returns (md, md_path); md is "" and md_path is None when no content found.
+    """
+    md = ""
+    for rk in (chunk_pdf.name, chunk_pdf.stem):
+        if rk in results and isinstance(results[rk], dict):
+            md = results[rk].get("md_content", "")
+            if md:
+                break
+    if not md:
+        for rv in results.values():
+            if isinstance(rv, dict):
+                md = rv.get("md_content", "")
+                if md:
+                    break
+    if not md:
+        return "", None
+    chunk_out = out_dir / f"_chunk_{start:04d}-{end:04d}"
+    chunk_out.mkdir(parents=True, exist_ok=True)
+    md_path = chunk_out / f"{chunk_pdf.stem}.md"
+    md_path.write_text(md, encoding="utf-8")
+    _stage_1_2_harvest_images(results, start, file_path, config, chunk_out)
+    return md, md_path
+
+
+def _stage_1_1_scanned_poll_task(
+    task_id: str, chunk_pdf: Path, out_dir: Path, start: int, end: int,
+    file_path: Path, config, t0: float,
+) -> tuple["Path | None", bool]:
+    """Poll a minerU async task until completion. Returns (md_path, ok)."""
+    for _ in range(60):
+        time.sleep(5)
+        tr = urllib.request.urlopen(
+            f"http://127.0.0.1:{MINERU_API_PORT}/tasks/{task_id}")
+        td = json.loads(tr.read())
+        if td.get("status") == "completed":
+            tdr = td.get("results", {})
+            md, md_path = _stage_1_1_scanned_extract_md(
+                tdr, chunk_pdf, out_dir, start, end, file_path, config)
+            chunk_time = time.time() - t0
+            if md:
+                print(f"OK ({chunk_time:.0f}s, {len(md)} chars)")
+            else:
+                md_path = None
+                print(f"EMPTY ({chunk_time:.0f}s)")
+            return md_path, True
+        if td.get("status") == "failed":
+            print(f"TASK FAILED: {td.get('error_message', str(td)[:200])}")
+            return None, False
+    return None, False  # poll timeout (5 min)
+
+
+def _stage_1_1_scanned_submit_chunk_with_retries(
+    chunk_pdf: Path, start: int, end: int, out_dir: Path, file_path: Path,
+    config, api_proc, venv_python: Path, ci: int, total_chunks: int,
+):
+    """Submit one chunk to minerU /file_parse with up to 3 retries + server restart.
+
+    Returns (md_path, chunk_time, ok, api_proc). chunk_time is None on failure.
+    api_proc may be replaced if the server is restarted mid-retry.
+    """
+    t0 = time.time()
+    md_path = None
+    for attempt in range(3):
+        if attempt > 0:
+            time.sleep(2)
+        try:
+            body, boundary = _stage_1_1_scanned_build_parse_body(
+                chunk_pdf, "chunk.pdf", with_images=True)
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
+                data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+            r = urllib.request.urlopen(req, timeout=1200)
+            resp = json.loads(r.read())
+            if resp.get("status") == "completed":
+                results = resp.get("results", {})
+                md, md_path = _stage_1_1_scanned_extract_md(
+                    results, chunk_pdf, out_dir, start, end, file_path, config)
+                chunk_time = time.time() - t0
+                if md:
+                    print(f"OK ({chunk_time:.0f}s, {len(md)} chars)")
+                    log_event("chunk_complete", chunk=ci + 1, total=total_chunks,
+                              elapsed_sec=round(chunk_time, 2), chars=len(md),
+                              attempt=attempt + 1)
+                else:
+                    md_path = None
+                    print(f"EMPTY ({chunk_time:.0f}s)")
+                    log_event("chunk_complete", chunk=ci + 1, total=total_chunks,
+                              elapsed_sec=round(chunk_time, 2), chars=0,
+                              attempt=attempt + 1)
+                return md_path, chunk_time, True, api_proc
+            elif resp.get("status") == "failed":
+                err = resp.get("error_message", resp.get("error", "unknown"))
+                if attempt < 2:
+                    print(f"API FAILED (retry {attempt+1}/3): {err[:100]}")
+                    continue
+                print(f"API FAILED (final): {err[:200]}")
+            else:
+                task_id = resp.get("task_id", "")
+                if task_id:
+                    md_path, ok = _stage_1_1_scanned_poll_task(
+                        task_id, chunk_pdf, out_dir, start, end, file_path,
+                        config, t0)
+                    if ok:
+                        return md_path, time.time() - t0, True, api_proc
+                else:
+                    print("NO TASK ID")
+                    continue
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode() if e.fp else ""
+            if attempt < 2:
+                if e.code >= 500:
+                    print(f"HTTP {e.code} (retry {attempt+1}/3, restarting server)...")
+                    api_proc.terminate()
+                    try:
+                        api_proc.wait(timeout=5)
+                    except Exception:
+                        api_proc.kill()
+                    time.sleep(3)
+                    api_proc = _stage_1_1_scanned_restart_server(venv_python)
+                    time.sleep(5)
+                    continue
+                print(f"HTTP {e.code} (retry {attempt+1}/3): {err_body[:100]}")
+                continue
+            print(f"HTTP {e.code} (final): {err_body[:200]}")
+        except Exception as e:
+            if attempt < 2:
+                if "Connection refused" in str(e):
+                    print(f"Connection failed (retry {attempt+1}/3, restarting server)...")
+                    time.sleep(3)
+                    api_proc = _stage_1_1_scanned_restart_server(venv_python)
+                    time.sleep(8)
+                    continue
+                print(f"Error (retry {attempt+1}/3): {str(e)[:100]}")
+                continue
+            print(f"FAILED (final): {str(e)[:200]}")
+        break
+    return None, None, False, api_proc
+
+
+def _stage_1_1_scanned_print_failure_banner(start: int, end: int, chunk_pdf: Path) -> None:
+    """Print a visible banner when a chunk exhausts all retries."""
+    w = 64
+    lines = [
+        "ALL RETRIES EXHAUSTED — CHUNK PERMANENTLY FAILED",
+        "",
+        f"Chunk:  pages {start+1}-{end}",
+        f"File:   {chunk_pdf.name}",
+        "",
+        "Action: re-run ingest to retry this chunk, or check",
+        "        _mineru_stats.json for error details",
+    ]
+    print("")
+    print(f"  ╔{'═'*w}╗")
+    for i, line in enumerate(lines):
+        if i == 0:
+            print(f"  ║  ⚠️  {line:<{w-5}} ║")
+        else:
+            print(f"  ║     {line:<{w-4}} ║")
+    print(f"  ╚{'═'*w}╝")
+    print("")
+
+
+def _stage_1_1_scanned_process_chunk(
+    ci: int, start: int, end: int, chunks, doc, out_dir: Path, stats: dict,
+    stats_path: Path, chunk_times: list, api_proc, venv_python: Path,
+    file_path: Path, config,
+):
+    """Process one chunk: create chunk PDF, submit with retries, persist stats.
+
+    Returns api_proc (may change on server restart). Raises RuntimeError if
+    cumulative failure rate exceeds 30% (fatal abort).
+    """
+    chunk_key = f"{start}-{end}"
+    if chunk_key in stats["completed_chunks"]:
+        percent = (ci + 1) * 100 // len(chunks)
+        print(f"  [{ci+1:3d}/{len(chunks)}] [{percent:3d}%] pages {start+1}-{end} — (cached)")
+        return api_proc
+
+    # Create chunk PDF
+    try:
+        import fitz
+    except ImportError:
+        raise RuntimeError("Scanned PDF OCR requires PyMuPDF")
+    chunk_pdf = out_dir / f"_chunk_{start:04d}-{end:04d}.pdf"
+    chunk_pdf.unlink(missing_ok=True)
+    try:
+        new_doc = fitz.open()
+        new_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
+        new_doc.save(chunk_pdf)
+        new_doc.close()
+    except Exception as e:
+        print(f"  [{ci+1:3d}/{len(chunks)}] pages {start+1}-{end} — FAILED to create chunk: {e}")
+        stats["failed_chunks"].append({"chunk": chunk_key, "error": str(e)})
+        return api_proc
+
+    # Progress + ETA
+    percent = (ci + 1) * 100 // len(chunks)
+    if chunk_times:
+        avg_time = sum(chunk_times) / len(chunk_times)
+        remaining = len(chunks) - ci - 1
+        eta_sec = remaining * avg_time
+        eta_str = f"ETA: {int(eta_sec)}s" if eta_sec < 60 else f"ETA: {int(eta_sec/60):.1f}m"
+    else:
+        eta_str = "computing ETA..."
+    print(f"  [{ci+1:3d}/{len(chunks)}] [{percent:3d}%] pages {start+1}-{end} — minerU API ({eta_str})...",
+          end=" ", flush=True)
+
+    md_path, chunk_time, ok, api_proc = _stage_1_1_scanned_submit_chunk_with_retries(
+        chunk_pdf, start, end, out_dir, file_path, config, api_proc, venv_python,
+        ci, len(chunks))
+    if chunk_time is not None:
+        chunk_times.append(chunk_time)
+
+    if not ok:
+        stats["failed_chunks"].append({"chunk": chunk_key, "error": "minerU API failed after retries"})
+        _stage_1_1_save_mineru_stats(stats_path, stats)
+        log_event("chunk_error", chunk=ci + 1, total=len(chunks),
+                  error="max retries exceeded")
+        _stage_1_1_scanned_print_failure_banner(start, end, chunk_pdf)
+        if len(stats["failed_chunks"]) > len(chunks) * 0.3:
+            _stage_1_1_kill_mineru_servers()
+            raise RuntimeError(
+                f"minerU OCR: {len(stats['failed_chunks'])}/{len(chunks)} chunks failed. "
+                f"Aborting. Check _mineru_stats.json in extract_tmp_dir.")
+        return api_proc
+
+    # API wrote .md — read it (EMPTY → md_path None → record as failed, no fatal check)
+    if md_path is None or not md_path.exists():
+        print(f"  [{ci+1:3d}/{len(chunks)}] FAILED — no output file")
+        stats["failed_chunks"].append({"chunk": chunk_key, "error": "no .md output from API"})
+        _stage_1_1_save_mineru_stats(stats_path, stats)
+        return api_proc
+
+    md_text = md_path.read_text(encoding="utf-8")
+    _media_slug = _stage_1_2_media_slug(file_path, config)
+    media_dir = config.wiki_dir / "media" / _media_slug
+    media_dir.mkdir(parents=True, exist_ok=True)
+    _stage_1_1_save_mineru_chunk_text(md_text, start, end, out_dir, stats, [])
+    stats["completed_chunks"].append(chunk_key)
+    _stage_1_1_save_mineru_stats(stats_path, stats)
+    print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars")
+    chunk_pdf.unlink(missing_ok=True)
+    return api_proc
+
+
+def _stage_1_1_scanned_assemble_manifest(
+    out_dir: Path, stats: dict, file_path: Path, config, total_pages: int,
+) -> str:
+    """Assemble per-page OCR text into full text and write _manifest.json."""
+    page_nums = list(range(total_pages))
+    full_text = _stage_1_1_assemble_ocr_text(out_dir, page_nums)
+    total_imgs = sum(len(v) for v in stats.get("images", {}).values())
+    print(f"[ocr] Done — {len(full_text):,} chars OCR text, {total_imgs} images extracted")
+
+    slug = _stage_1_2_media_slug(file_path, config)
+    media_dir = config.wiki_dir / "media" / slug
+    manifest_path = media_dir / "_manifest.json"
+    extracted_figures: list[dict] = []
+    for f in sorted(media_dir.glob("p*-mineru_*.*")):
+        page_num = 0
+        m = re.match(r"p(\d+)-mineru_", f.stem)
+        if m:
+            page_num = int(m.group(1))
+        extracted_figures.append({
+            "filename": f.name, "page": page_num,
+            "path": str(f.relative_to(config.wiki_root)),
+        })
+    if extracted_figures:
+        _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, extracted_figures)
+        print(f"[ocr] {len(extracted_figures)} extracted figures → _manifest.json")
+        pending = _stage_1_2_find_uncaptioned_images(media_dir)
+        if pending and config.caption_api_key:
+            _stage_1_3_caption_images_batch(
+                pending, config, media_dir, source_label="mineru-extracted", batch_size=6)
+    else:
+        _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, [])
+        print("[ocr] No extracted figures — empty manifest written")
+    return full_text
+
+
 def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str:
     """OCR a scanned PDF using local minerU (vlm-engine backend, configurable via MINERU_BACKEND env).
 
@@ -595,7 +1017,6 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
 
     doc = fitz.open(file_path)
     total_pages = len(doc)
-
     out_dir = config.extract_tmp_dir / file_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -605,398 +1026,42 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
         end = min(start + MINERU_CHUNK_SIZE, total_pages)
         chunks.append((start, end))  # 0-indexed, [start, end)
 
-    print(f"[ocr] Local minerU: {total_pages} pages → {len(chunks)} chunks ({MINERU_CHUNK_SIZE} pages/chunk)")
+    print(f"[ocr] Local minerU: {total_pages} pages → {len(chunks)} chunks "
+          f"({MINERU_CHUNK_SIZE} pages/chunk)")
 
-    # Load or init stats
-    stats_path = out_dir / "_mineru_stats.json"
-    stats: dict = {"completed_chunks": [], "failed_chunks": [], "images": {}}
-    if stats_path.exists():
-        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    stats, stats_path = _stage_1_1_scanned_load_stats(out_dir)
 
     # Initialize structured logging (JSON Lines format)
     global _log_file
     _log_file = out_dir / "ocr_log.jsonl"
 
-    # Start a persistent minerU API server (one per book, shared across chunks)
+    # Early exit if all chunks already cached
     pending = [c for c in chunks if f"{c[0]}-{c[1]}" not in stats["completed_chunks"]]
     if not pending:
         doc.close()
         return _stage_1_1_assemble_ocr_text(out_dir, [end for _, end in chunks])
 
-    import subprocess as _sp
-    # Use venv python (minerU is only installed in venv, not system python)
-    venv_python = Path.home() / ".venv" / "bin" / "python3"
-    if not venv_python.exists():
-        venv_python = Path(sys.executable)
-    api_proc = _sp.Popen(
-        [str(venv_python), "-m", "mineru.cli.fast_api",
-         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-    )
-    # Wait for API to become healthy
-    for _ in range(30):
-        time.sleep(2)
-        try:
-            r = urllib.request.urlopen(f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
-            if json.loads(r.read()).get("status") == "healthy":
-                print(f"[ocr] minerU API ready on port {MINERU_API_PORT}")
-                break
-        except Exception:
-            pass
-    else:
-        api_proc.terminate()
-        api_proc.wait()
+    api_proc = None
+    try:
+        api_proc, venv_python = _stage_1_1_scanned_start_api_server()
+        _stage_1_1_scanned_warmup(doc, out_dir)
+
+        # Run minerU on each pending chunk (with progress tracking)
+        chunk_times: list[float] = []  # completion times for ETA estimation
+        for ci, (start, end) in enumerate(chunks):
+            api_proc = _stage_1_1_scanned_process_chunk(
+                ci, start, end, chunks, doc, out_dir, stats, stats_path,
+                chunk_times, api_proc, venv_python, file_path, config)
+    finally:
         doc.close()
-        raise RuntimeError(f"minerU API failed to start on port {MINERU_API_PORT}")
-
-    # Warmup: initialize model with a small 1-page test to avoid cold-start delay
-    # First chunk typically takes 134s; warmup reduces this to ~74s (60s savings)
-    print(f"[ocr] Warmup: initializing model...", end=" ", flush=True)
-    warmup_start = time.time()
-    try:
-        # Create a 1-page warmup PDF
-        warmup_pdf = out_dir / "_warmup.pdf"
-        warmup_doc = fitz.open()
-        warmup_doc.insert_pdf(doc, from_page=0, to_page=0)  # First page only
-        warmup_doc.save(warmup_pdf)
-        warmup_doc.close()
-
-        # Send warmup request (same format as real chunks)
-        boundary = "----FormBoundary" + os.urandom(8).hex()
-        body_parts = []
-        body_parts.append(f"--{boundary}".encode())
-        body_parts.append(b'Content-Disposition: form-data; name="files"; filename="warmup.pdf"')
-        body_parts.append(b"Content-Type: application/pdf")
-        body_parts.append(b"")
-        body_parts.append(warmup_pdf.read_bytes())
-        body_parts.append(f"--{boundary}".encode())
-        body_parts.append(b'Content-Disposition: form-data; name="data"')
-        body_parts.append(b"")
-        body_parts.append(json.dumps({"lang": "ch"}).encode())
-        body_parts.append(f"--{boundary}--".encode())
-        body = b"\r\n".join(body_parts)
-
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
-            data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        )
-        r = urllib.request.urlopen(req, timeout=120)
-        resp = json.loads(r.read())
-        warmup_pdf.unlink(missing_ok=True)
-        warmup_time = time.time() - warmup_start
-        print(f"OK ({warmup_time:.0f}s) — model ready")
-    except Exception as e:
-        warmup_time = time.time() - warmup_start
-        warmup_pdf.unlink(missing_ok=True)
-        print(f"skipped ({warmup_time:.0f}s, {type(e).__name__})")
-        # Continue even if warmup fails — not critical
-
-    # Run minerU on each pending chunk (with progress tracking)
-    # Caller: extract_text_mineru() which is called by ingest.py during Stage 0
-    # Data schema: chunk_times (list of float) tracks completed chunk times for ETA estimation
-    chunk_times = []  # Track completion times for ETA estimation
-    total_start = time.time()
-
-    for ci, (start, end) in enumerate(chunks):
-        chunk_key = f"{start}-{end}"
-        if chunk_key in stats["completed_chunks"]:
-            percent = (ci + 1) * 100 // len(chunks)
-            print(f"  [{ci+1:3d}/{len(chunks)}] [{percent:3d}%] pages {start+1}-{end} — (cached)")
-            continue
-
-        # Create chunk PDF
-        chunk_pdf = out_dir / f"_chunk_{start:04d}-{end:04d}.pdf"
-        chunk_pdf.unlink(missing_ok=True)
-        try:
-            new_doc = fitz.open()
-            new_doc.insert_pdf(doc, from_page=start, to_page=end - 1)
-            new_doc.save(chunk_pdf)
-            new_doc.close()
-        except Exception as e:
-            print(f"  [{ci+1:3d}/{len(chunks)}] pages {start+1}-{end} — FAILED to create chunk: {e}")
-            stats["failed_chunks"].append({"chunk": chunk_key, "error": str(e)})
-            continue
-
-        # Submit chunk to minerU API (direct HTTP) with progress tracking
-        percent = (ci + 1) * 100 // len(chunks)
-        # Calculate ETA based on completed chunks
-        if chunk_times:
-            avg_time = sum(chunk_times) / len(chunk_times)
-            remaining_chunks = len(chunks) - ci - 1
-            eta_sec = remaining_chunks * avg_time
-            eta_str = f"ETA: {int(eta_sec)}s" if eta_sec < 60 else f"ETA: {int(eta_sec/60):.1f}m"
-        else:
-            eta_str = "computing ETA..."
-        print(f"  [{ci+1:3d}/{len(chunks)}] [{percent:3d}%] pages {start+1}-{end} — minerU API ({eta_str})...", end=" ", flush=True)
-        t0 = time.time()
-        mineru_ok = False
-        md_path: Path | None = None
-        for attempt in range(3):
-            if attempt > 0:
-                time.sleep(2)
+        if api_proc is not None:
+            api_proc.terminate()
             try:
-                boundary = "----FormBoundary" + os.urandom(8).hex()
-                body_parts = []
-                body_parts.append(f"--{boundary}".encode())
-                body_parts.append(b'Content-Disposition: form-data; name="files"; filename="chunk.pdf"')
-                body_parts.append(b"Content-Type: application/pdf")
-                body_parts.append(b"")
-                body_parts.append(chunk_pdf.read_bytes())
-                data_json = json.dumps({"lang": "ch"})
-                body_parts.append(f"--{boundary}".encode())
-                body_parts.append(b'Content-Disposition: form-data; name="data"')
-                body_parts.append(b"")
-                body_parts.append(data_json.encode())
-                # Request minerU-extracted figures (not just full-page renders).
-                # return_images → base64-encoded images; return_content_list → per-block
-                # page_idx so we can map each figure to its source page.
-                for field in ("return_images", "return_content_list"):
-                    body_parts.append(f"--{boundary}".encode())
-                    body_parts.append(f'Content-Disposition: form-data; name="{field}"'.encode())
-                    body_parts.append(b"")
-                    body_parts.append(b"true")
-                body_parts.append(f"--{boundary}--".encode())
-                body = b"\r\n".join(body_parts)
+                api_proc.wait(timeout=10)
+            except Exception:
+                api_proc.kill()
 
-                req = urllib.request.Request(
-                    f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
-                    data=body,
-                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-                )
-                r = urllib.request.urlopen(req, timeout=1200)
-                resp = json.loads(r.read())
-                if resp.get("status") == "completed":
-                    results = resp.get("results", {})
-                    # API returns key as original filename (may be stem without .pdf)
-                    md = ""
-                    for rk in (chunk_pdf.name, chunk_pdf.stem):
-                        if rk in results and isinstance(results[rk], dict):
-                            md = results[rk].get("md_content", "")
-                            if md:
-                                break
-                    # Fallback: take first result
-                    if not md:
-                        for rk, rv in results.items():
-                            if isinstance(rv, dict):
-                                md = rv.get("md_content", "")
-                                if md:
-                                    break
-                    if md:
-                        chunk_out = out_dir / f"_chunk_{start:04d}-{end:04d}"
-                        chunk_out.mkdir(parents=True, exist_ok=True)
-                        md_path = chunk_out / f"{chunk_pdf.stem}.md"
-                        md_path.write_text(md, encoding="utf-8")
-                        # Harvest minerU-extracted figures (not just full-page renders).
-                        # results[rk]["images"] = {basename: "data:image/...;base64,..."}
-                        # results[rk]["content_list"] = [{type, img_path, page_idx}, ...]
-                        _stage_1_2_harvest_images(results, start, file_path, config, chunk_out)
-                        chunk_time = time.time() - t0
-                        chunk_times.append(chunk_time)  # Track for ETA calculation
-                        print(f"OK ({chunk_time:.0f}s, {len(md)} chars)")
-                        log_event("chunk_complete", chunk=ci+1, total=len(chunks),
-                                 elapsed_sec=round(chunk_time, 2), chars=len(md), attempt=attempt+1)
-                        mineru_ok = True
-                    else:
-                        chunk_time = time.time() - t0
-                        chunk_times.append(chunk_time)  # Track for ETA calculation
-                        print(f"EMPTY ({chunk_time:.0f}s)")
-                        log_event("chunk_complete", chunk=ci+1, total=len(chunks),
-                                 elapsed_sec=round(chunk_time, 2), chars=0, attempt=attempt+1)
-                        mineru_ok = True
-                    break
-                elif resp.get("status") == "failed":
-                    err = resp.get("error_message", resp.get("error", "unknown"))
-                    if attempt < 2:
-                        print(f"API FAILED (retry {attempt+1}/3): {err[:100]}")
-                        continue
-                    else:
-                        print(f"API FAILED (final): {err[:200]}")
-                else:
-                    # Poll for completion
-                    task_id = resp.get("task_id", "")
-                    if task_id:
-                        for pi in range(60):
-                            time.sleep(5)
-                            tr = urllib.request.urlopen(f"http://127.0.0.1:{MINERU_API_PORT}/tasks/{task_id}")
-                            td = json.loads(tr.read())
-                            if td.get("status") == "completed":
-                                tdr = td.get("results", {})
-                                md = ""
-                                for rk in (chunk_pdf.name, chunk_pdf.stem):
-                                    if rk in tdr and isinstance(tdr[rk], dict):
-                                        md = tdr[rk].get("md_content", "")
-                                        if md: break
-                                if not md:
-                                    for rk, rv in tdr.items():
-                                        if isinstance(rv, dict):
-                                            md = rv.get("md_content", "")
-                                            if md: break
-                                if md:
-                                    chunk_out = out_dir / f"_chunk_{start:04d}-{end:04d}"
-                                    chunk_out.mkdir(parents=True, exist_ok=True)
-                                    md_path = chunk_out / f"{chunk_pdf.stem}.md"
-                                    md_path.write_text(md, encoding="utf-8")
-                                    _stage_1_2_harvest_images(tdr, start, file_path, config, chunk_out)
-                                    chunk_time = time.time() - t0
-                                    chunk_times.append(chunk_time)  # Track for ETA calculation
-                                    print(f"OK ({chunk_time:.0f}s, {len(md)} chars)")
-                                    mineru_ok = True
-                                else:
-                                    chunk_time = time.time() - t0
-                                    chunk_times.append(chunk_time)  # Track for ETA calculation
-                                    print(f"EMPTY ({chunk_time:.0f}s)")
-                                    mineru_ok = True
-                                break
-                            elif td.get("status") == "failed":
-                                print(f"TASK FAILED: {td.get('error_message', str(td)[:200])}")
-                                break
-                        if mineru_ok:
-                            break
-                    else:
-                        print(f"NO TASK ID")
-                        continue
-            except urllib.error.HTTPError as e:
-                err_body = e.read().decode() if e.fp else ""
-                if attempt < 2:
-                    if e.code >= 500:
-                        # Server may need restart
-                        print(f"HTTP {e.code} (retry {attempt+1}/3, restarting server)...")
-                        api_proc.terminate()
-                        try: api_proc.wait(timeout=5)
-                        except Exception: api_proc.kill()
-                        time.sleep(3)
-                        api_proc = _sp.Popen(
-                            [str(venv_python), "-m", "mineru.cli.fast_api",
-                             "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-                            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                        )
-                        time.sleep(5)
-                        continue
-                    else:
-                        print(f"HTTP {e.code} (retry {attempt+1}/3): {err_body[:100]}")
-                        continue
-                else:
-                    print(f"HTTP {e.code} (final): {err_body[:200]}")
-            except Exception as e:
-                if attempt < 2:
-                    if "Connection refused" in str(e):
-                        # Server crashed — restart and retry
-                        print(f"Connection failed (retry {attempt+1}/3, restarting server)...")
-                        time.sleep(3)
-                        api_proc = _sp.Popen(
-                            [str(venv_python), "-m", "mineru.cli.fast_api",
-                             "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-                            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                        )
-                        time.sleep(8)
-                        continue
-                    else:
-                        print(f"Error (retry {attempt+1}/3): {str(e)[:100]}")
-                        continue
-                else:
-                    print(f"FAILED (final): {str(e)[:200]}")
-            break
-
-        if not mineru_ok:
-            stats["failed_chunks"].append({"chunk": chunk_key, "error": "minerU API failed after retries"})
-            _save_mineru_stats(stats_path, stats)
-            log_event("chunk_error", chunk=ci+1, total=len(chunks), error="max retries exceeded")
-            w = 64
-            lines = [
-                f"ALL RETRIES EXHAUSTED — CHUNK PERMANENTLY FAILED",
-                f"",
-                f"Chunk:  pages {start+1}-{end}",
-                f"File:   {chunk_pdf.name}",
-                f"",
-                f"Action: re-run ingest to retry this chunk, or check",
-                f"        _mineru_stats.json for error details",
-            ]
-            print(f"")
-            print(f"  ╔{'═'*w}╗")
-            for i, line in enumerate(lines):
-                if i == 0:
-                    print(f"  ║  ⚠️  {line:<{w-5}} ║")
-                else:
-                    print(f"  ║     {line:<{w-4}} ║")
-            print(f"  ╚{'═'*w}╝")
-            print(f"")
-            if len(stats["failed_chunks"]) > len(chunks) * 0.3:
-                doc.close()
-                _kill_mineru_servers()
-                raise RuntimeError(
-                    f"minerU OCR: {len(stats['failed_chunks'])}/{len(chunks)} chunks failed. "
-                    f"Aborting. Check _mineru_stats.json in extract_tmp_dir."
-                )
-            continue
-
-        # API already wrote .md — read it
-        if md_path is None or not md_path.exists():
-            print(f"  [{ci+1:3d}/{len(chunks)}] FAILED — no output file")
-            stats["failed_chunks"].append({"chunk": chunk_key, "error": "no .md output from API"})
-            _save_mineru_stats(stats_path, stats)
-            continue
-        md_text = md_path.read_text(encoding="utf-8")
-
-        # minerU-extracted figures are already saved by _harvest_mineru_figures()
-        # (called immediately after the API response).  No full-page renders needed —
-        # minerU VLM already provides OCR text + independently extracted figures.
-        slug = _media_slug(file_path, config)
-        media_dir = config.wiki_dir / "media" / slug
-        media_dir.mkdir(parents=True, exist_ok=True)
-
-        _save_mineru_chunk_text(md_text, start, end, out_dir, stats, [])
-        stats["completed_chunks"].append(chunk_key)
-        _save_mineru_stats(stats_path, stats)
-
-        print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars")
-        chunk_pdf.unlink(missing_ok=True)
-
-    doc.close()
-
-    # Stop API server
-    api_proc.terminate()
-    try:
-        api_proc.wait(timeout=10)
-    except Exception:
-        api_proc.kill()
-
-    # Assemble full text from per-page files
-    page_nums = list(range(total_pages))
-    full_text = _assemble_ocr_text(out_dir, page_nums)
-    total_imgs = sum(len(v) for v in stats.get("images", {}).values())
-    print(f"[ocr] Done — {len(full_text):,} chars OCR text, {total_imgs} images extracted")
-
-    # Write _manifest.json with minerU-extracted figures.
-    # No full-page renders — they were OCR intermediates and have been removed.
-    slug = _media_slug(file_path, config)
-    media_dir = config.wiki_dir / "media" / slug
-    manifest_path = media_dir / "_manifest.json"
-
-    extracted_figures: list[dict] = []
-    for f in sorted(media_dir.glob("p*-mineru_*.*")):
-        page_num = 0
-        m = re.match(r"p(\d+)-mineru_", f.stem)
-        if m:
-            page_num = int(m.group(1))
-        extracted_figures.append({
-            "filename": f.name, "page": page_num,
-            "path": str(f.relative_to(config.wiki_root)),
-        })
-
-    if extracted_figures:
-        _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, extracted_figures)
-        print(f"[ocr] {len(extracted_figures)} extracted figures → _manifest.json")
-
-        pending = _stage_1_2_find_uncaptioned_images(media_dir)
-        if pending and config.caption_api_key:
-            _stage_1_3_caption_images_batch(pending, config, media_dir, source_label="minerU-extracted", batch_size=6)
-    else:
-        _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, [])
-        print("[ocr] No extracted figures — empty manifest written")
-
-    return full_text
-
+    return _stage_1_1_scanned_assemble_manifest(out_dir, stats, file_path, config, total_pages)
 
 def _stage_1_1_save_mineru_stats(stats_path: Path, stats: dict) -> None:
     """Atomically persist minerU stats for crash recovery."""

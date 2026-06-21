@@ -102,7 +102,7 @@ def _stage_2_8_judge_query_resolution(query, related, config):
     return status, reason
 
 
-def _stage_2_8_resolve_queries(file_blocks, wiki_root, config):
+def stage_2_8_resolve_queries(file_blocks, wiki_root, config):
     resolutions = {}
     queries = _stage_2_8_extract_query_blocks(file_blocks)
     for query in queries:
@@ -130,12 +130,3 @@ def _stage_2_8_update_file_blocks_after_resolution(file_blocks, resolutions):
 
 def _stage_2_8_verify_query_resolution(checkpoint):
     return "query_resolutions" in checkpoint
-
-
-# ── Backward-compat aliases ──
-extract_query_blocks = _stage_2_8_extract_query_blocks
-find_related_wiki_pages = _stage_2_8_find_related_wiki_pages
-judge_query_resolution = _stage_2_8_judge_query_resolution
-resolve_queries = _stage_2_8_resolve_queries
-update_file_blocks_after_resolution = _stage_2_8_update_file_blocks_after_resolution
-verify_query_resolution = _stage_2_8_verify_query_resolution

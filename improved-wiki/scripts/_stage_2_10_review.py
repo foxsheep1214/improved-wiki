@@ -1,8 +1,8 @@
 
 from _stage_2_base import *
 
-def stage_2_10_review_suggestions(config: Config, file_blocks: list[tuple[str, str]],
-                                  raw_file: Path, raw_response: str = "",
+def stage_2_10_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: Path,
+                                  config: Config, *, raw_response: str = "",
                                   verbose: bool = False) -> dict:
     """Stage 2.10: Run LLM review over newly generated wiki pages (quality assurance).
 
