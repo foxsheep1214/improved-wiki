@@ -92,19 +92,20 @@ from _stage_2_analyze import (
     _stage_2_2_analyze_chunk,
     _stage_2_2_chunk_retries,
 )
-from _stage_2_generate import (
+from _stage_2_4_generation import (
     _stage_2_4_build_prompt,
     stage_2_4_generate_chunk,
     _stage_2_4_extract_names,
     _stage_2_4_per_concept_fallback,
-    stage_2_6_source_page,
-    _stage_2_7_build_prompt,
-    stage_2_7_query_generation,
+)
+from _stage_2_6_source_page import stage_2_6_source_page
+from _stage_2_7_query_generation import stage_2_7_query_generation, _stage_2_7_build_prompt
+from _stage_2_9_comparison import (
+    stage_2_9_comparison_generation,
     _stage_2_9_build_prompt_disambiguation,
     _stage_2_9_build_prompt_in_source,
-    stage_2_9_comparison_generation,
-    stage_2_10_review_suggestions,
 )
+from _stage_2_10_review import stage_2_10_review_suggestions
 from _stage_3_write import (
     stage_3_1_write_wiki_file, stage_3_4_aggregate_repair,
     _stage_3_1_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
@@ -112,8 +113,6 @@ from _stage_3_write import (
     _stage_3_1_wiki_path_for_source, _stage_3_1_merge_page_content,
     _stage_3_1_auto_correct_wiki_path, _stage_3_1_contains_cjk, _stage_3_1_make_cjk_slug,
     _stage_3_1_backup_existing_page,
-    # Backward-compat aliases
-    write_wiki_file, merge_page_content,
 )
 from _stage_3_2_inject_images import stage_3_2_inject_images
 from _enrich_wikilinks import enrich_wikilinks
@@ -1262,7 +1261,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         do_merge = full_path.exists() and not is_listing
 
         try:
-            write_wiki_file(full_path, content, config, merge=do_merge)
+            stage_3_1_write_wiki_file(full_path, content, config, merge=do_merge)
         except OSError as e:
             print(f"  [write] HARD ERROR: {rel_path} — {e}")
             hard_failures.append(rel_path)
@@ -1354,7 +1353,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
         placeholder_content = "\n".join(lines) + "\n"
         try:
-            write_wiki_file(source_path, placeholder_content, config)
+            stage_3_1_write_wiki_file(source_path, placeholder_content, config)
             files_written_paths.append(str(source_path.relative_to(config.wiki_root)))
         except OSError as e:
             hard_failures.append("source-placeholder")

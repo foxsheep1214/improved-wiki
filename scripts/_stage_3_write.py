@@ -1,11 +1,9 @@
-"""Phase 3 Stage 3.1-3.5: Write pages to disk, inject images, repair aggregates, quality scoring.
+"""Phase 3: Write pages to disk, slug collision review, aggregate repair.
 
-Pipeline stages:
-  Stage 3.1: Write wiki files to disk
-  Stage 3.2: Inject embedded images section
-  Stage 3.3: Review suggestions (defined in _stage_2_generate.py)
-  Stage 3.4: Aggregate repair + cache save
-  Stage 3.5: Quality scoring
+This module holds Stage 3.1 (write), 3.3 (slug collision review), and 3.4
+(aggregate repair + cache). Sibling modules: _stage_3_2_inject_images.py
+(image injection) and _stage_3_5_quality.py (quality scoring). Stage 3.6
+(embeddings) runs from ingest.py post-ingest.
 
 Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
 """
@@ -724,9 +722,3 @@ def stage_3_3_slug_collision_review(file_blocks, current_domain, config, *, verb
     elif verbose:
         print(f"  [stage 3.3] No cross-domain slug collisions")
     return {"items": len(collisions), "collisions": collisions, "warning": warning}
-
-
-# TODO: migrate callers and remove — backward-compat aliases (internal use)
-write_wiki_file = stage_3_1_write_wiki_file
-merge_page_content = _stage_3_1_merge_page_content
-

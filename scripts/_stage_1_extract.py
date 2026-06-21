@@ -97,26 +97,6 @@ def _is_image_too_small(width: int, height: int) -> bool:
     return width < MINERU_IMG_MIN_WIDTH or height < MINERU_IMG_MIN_HEIGHT
 
 
-def _classify_pdf_type(file_path: Path, sample_pages: int = 5) -> str:
-    """Classify PDF as 'text' or 'scanned'. Returns 'text' for text-heavy PDFs."""
-    try:
-        import fitz
-        doc = fitz.open(file_path)
-        total_pages = len(doc)
-        sample_count = min(sample_pages, total_pages)
-        total_chars = 0
-
-        for i in range(sample_count):
-            text = doc[i].get_text()
-            total_chars += len([c for c in text if c.isprintable()])
-
-        doc.close()
-        chars_per_page = total_chars / max(1, sample_count)
-        return "text" if chars_per_page > 200 else "scanned"
-    except Exception:
-        return "unknown"
-
-
 # ---------- Text extraction ----------
 
 def _stage_1_1_find_pymupdf_python() -> Path | None:

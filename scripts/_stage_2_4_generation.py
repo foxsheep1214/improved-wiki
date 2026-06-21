@@ -238,7 +238,7 @@ def _stage_2_4_per_concept_fallback(
         if slug in generated_slugs:
             continue
 
-        prompt = _build_per_concept_prompt(
+        prompt = _stage_2_4_build_per_concept_prompt(
             concept_info, slug, file_path, config, global_digest,
             analysis, generated_slugs, existing_slugs, template,
         )
@@ -275,7 +275,7 @@ def _stage_2_4_per_concept_fallback(
         slug = entity_slugify(name)
         if slug in generated_slugs:
             continue
-        prompt = _build_per_entity_prompt(
+        prompt = _stage_2_4_build_per_entity_prompt(
             entity_name, slug, file_path, config, global_digest,
             existing_slugs, template,
         )
@@ -355,7 +355,7 @@ START IMMEDIATELY with ---FILE:... No preamble.
     return analysis, combined, all_file_blocks
 
 
-def _build_per_concept_prompt(
+def _stage_2_4_build_per_concept_prompt(
     concept_info: dict,
     slug: str,
     file_path: Path,
@@ -435,7 +435,7 @@ Generate the page NOW. Start with ---FILE:...
 """
 
 
-def _build_per_entity_prompt(
+def _stage_2_4_build_per_entity_prompt(
     entity_name: str,
     slug: str,
     file_path: Path,
@@ -553,7 +553,7 @@ def stage_2_4_generate_chunk(
 
 # ---------- Stage 2: Synthesis (legacy, for small books) ----------
 
-def _build_image_reference_section(file_path: Path, config: Config) -> str:
+def _stage_2_4_build_image_reference_section(file_path: Path, config: Config) -> str:
     """Build a compact list of available images for the Stage 2 prompt."""
     slug = _stage_1_2_media_slug(file_path, config)
     media_dir = config.wiki_dir / "media" / slug
