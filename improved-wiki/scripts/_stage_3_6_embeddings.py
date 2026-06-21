@@ -1,4 +1,4 @@
-"""Stage 3.5: Embeddings (强制执行，2026-06-20 改为必需)
+"""Stage 3.6: Embeddings (强制执行，2026-06-20 改为必需)
 
 本地有 bge-m3（Ollama）时同步生成向量；不可用时优雅跳过——真正的 embedding
 由 ingest 主流程的 ``_auto_embed_new_pages`` 负责（``build_embeddings.py``，
@@ -82,12 +82,12 @@ def verify_embeddings(wiki_root: Path, checkpoint: dict) -> bool:
         return False
 
 
-def stage_3_5_embeddings(
+def stage_3_6_embeddings(
     checkpoint: dict,
     wiki_root: Path,
     file_blocks: list[tuple[str, str]] | None = None,
 ) -> bool:
-    """Stage 3.5: Embeddings（强制执行）。
+    """Stage 3.6: Embeddings（强制执行）。
 
     本地 BGE-M3 可用时同步生成向量；不可用时优雅跳过（真正的向量由 ingest
     主流程 ``_auto_embed_new_pages`` 通过 ``EMBEDDING_BASE_URL`` 生成）。
@@ -103,11 +103,11 @@ def stage_3_5_embeddings(
     _ = file_blocks  # 兼容旧签名，不再使用
 
     print("\n" + "=" * 70)
-    print("Stage 3.5: Embeddings（强制执行）")
+    print("Stage 3.6: Embeddings（强制执行）")
     print("=" * 70)
 
     if not check_local_bge_m3():
-        print("⚠️  本地 BGE-M3 未检测到，跳过 Stage 3.5 同步 embedding。")
+        print("⚠️  本地 BGE-M3 未检测到，跳过 Stage 3.6 同步 embedding。")
         print("    真正的向量由 ingest 主流程的 _auto_embed_new_pages 生成"
               "（需设置 EMBEDDING_BASE_URL）。")
         print("    如需本 stage 同步生成，安装 Ollama 后 `ollama pull bge-m3`。")
@@ -123,5 +123,5 @@ def stage_3_5_embeddings(
 
     checkpoint["embeddings_completed"] = True
     checkpoint["embedding_mode"] = "local_bge_m3"
-    print("✓ Stage 3.5 完成")
+    print("✓ Stage 3.6 完成")
     return True

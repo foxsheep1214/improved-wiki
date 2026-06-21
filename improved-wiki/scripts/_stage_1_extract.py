@@ -675,7 +675,7 @@ def extract_text_scanned_pdf(file_path: Path, config: Config) -> str:
 
     Splits PDF into ~50-page chunks. Each chunk runs minerU independently.
     Results persisted to extract_tmp_dir/<stem>/ with _mineru_stats.json for crash recovery.
-    Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.5 (mirrors raw/).
+    Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.2 (mirrors raw/).
     """
     try:
         import fitz
@@ -1111,7 +1111,7 @@ def _find_uncaptioned_mineru_images(media_dir: Path) -> list[dict]:
     return imgs
 
 
-# ---------- Stage 0.6/0.9: Unified image captioning (Path A + Path B merged) ----------
+# ---------- Stage 1.3: Unified image captioning (Path A + Path B merged) ----------
 
 CAPTION_BATCH_SIZE = int(os.environ.get("CAPTION_BATCH_SIZE", "8"))
 CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "6"))
@@ -1544,7 +1544,7 @@ def _save_mineru_chunk_text(md_text: str, start: int, end: int, out_dir: Path,
 
 
 def _copy_mineru_images(images: list[dict], config: Config, raw_file: Path) -> None:
-    """Copy minerU extracted images to wiki/media/<raw-subpath>/<slug>/ for Stage 3.5."""
+    """Copy minerU extracted images to wiki/media/<raw-subpath>/<slug>/ for Stage 3.2."""
     if not images:
         return
     import shutil
@@ -1569,7 +1569,7 @@ def _assemble_ocr_text(out_dir: Path, page_nums: list[int]) -> str:
     return "\n\n".join(parts)
 
 
-# ---------- Stage 0.5: Image extraction ----------
+# ---------- Stage 1.2: Image extraction ----------
 
 def _extract_images_from_office(raw_file: Path, media_dir: Path, manifest_path: Path,
                                  min_size: int = 100) -> dict:
@@ -1809,13 +1809,13 @@ def _write_manifest(manifest_path: Path, source: str, raw_file: Path, images: li
     tmp.rename(manifest_path)
 
 
-# ---------- Stage 0.6: Image captioning ----------
+# ---------- Stage 1.3: Image captioning ----------
 
 def stage_1_3_caption_images(config: Config, stage_1_2_result: dict, batch_size: int = CAPTION_BATCH_SIZE) -> dict:
     """Caption extracted images using unified caption pipeline (Path A + Path B merged).
 
     Thin wrapper around _caption_images() for backward compatibility with the
-    Stage 0.6 pipeline checkpoint. Internal implementation delegates to the
+    Stage 1.3 pipeline checkpoint. Internal implementation delegates to the
     unified function which supports both PyMuPDF-extracted images (Path A)
     and minerU-extracted images (Path B), with parallel batch dispatch."""
     images = stage_1_2_result.get("images", [])
@@ -1844,7 +1844,7 @@ CAPTION_SYSTEM_PROMPT = (
 
 
 def check_text_quality(text: str, source_name: str = "") -> dict:
-    """Pre-ingest text quality gate (Stage 0.5 → Stage 1.1).
+    """Pre-ingest text quality gate (pre-Stage 1.1).
 
     Detects garbled text from custom font encoding (e.g. Fuqua book:
     500+ chars/page but all unreadable). Returns a quality report dict.

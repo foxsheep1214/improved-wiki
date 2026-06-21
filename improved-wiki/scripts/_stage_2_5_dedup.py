@@ -1,15 +1,25 @@
-"""Stage 2.5: Concept Dedup & Merge"""
+"""Stage 2.5: Concept Dedup & Merge (deterministic candidate + LLM confirm)
+
+Deterministic phase finds candidate duplicate groups (title word-overlap or
+definition Jaccard >= 0.6). LLM phase confirms each group and picks the
+canonical primary; unconfirmed groups are left intact (conservative — never
+merge on LLM failure).
+"""
 from pathlib import Path
 import re
+from _llm_api import call_anthropic_protocol
 
-def extract_concept_blocks(file_blocks: list[tuple]) -> list[dict]:
+DEDUP_JACCARD_THRESHOLD = 0.6
+
+
+def extract_concept_blocks(file_blocks):
     concepts = []
     for idx, (path, content) in enumerate(file_blocks):
-        if "/concepts/" in path:
-            title_match = re.search(r'title:\s*([^\n]+)', content)
+        if "/concepts/" in path or path.startswith("concepts/"):
+            title_match = re.search(r"title:\s*([^\n]+)", content)
             title = title_match.group(1).strip() if title_match else path.split("/")[-1]
-            body_match = re.search(r'---\s*\n(.*?)\n---\s*\n(.*)', content, re.DOTALL)
-            definition = (body_match.group(2) if body_match else content)[:200].lower()
+            body_match = re.search(r"---\s*\n(.*?)\n---\s*\n(.*)", content, re.DOTALL)
+            definition = (body_match.group(2) if body_match else content)[:300].lower()
             concepts.append({
                 "slug": Path(path).stem,
                 "title": title,
@@ -19,45 +29,103 @@ def extract_concept_blocks(file_blocks: list[tuple]) -> list[dict]:
             })
     return concepts
 
-def find_duplicate_concepts(concepts: list[dict]) -> list[list[int]]:
+
+_STOPWORDS = {"the", "a", "an", "of", "in", "on", "for", "and", "or", "to",
+              "with", "by", "is", "are", "be", "as", "at", "from", "that", "this",
+              "it", "its", "into", "using", "use", "used", "via", "per", "than"}
+
+
+def _word_set(s):
+    return set(w for w in re.split(r"[\s,，。.;:、]+", s.lower())
+               if len(w) > 1 and w not in _STOPWORDS)
+
+
+def find_duplicate_concepts(concepts):
     duplicates = []
     processed = set()
-    for i, concept1 in enumerate(concepts):
+    for i, c1 in enumerate(concepts):
         if i in processed:
             continue
         group = [i]
         processed.add(i)
-        for j, concept2 in enumerate(concepts[i + 1 :], start=i + 1):
+        w1 = _word_set(c1["title"] + " " + c1["definition_snippet"])
+        for j in range(i + 1, len(concepts)):
             if j in processed:
                 continue
-            title_match = concept1["title"].lower() in concept2["title"].lower() or \
-                         concept2["title"].lower() in concept1["title"].lower()
-            words1 = set(concept1["definition_snippet"].split())
-            words2 = set(concept2["definition_snippet"].split())
-            overlap = len(words1 & words2) / max(len(words1 | words2), 1)
-            if title_match or overlap > 0.5:
+            c2 = concepts[j]
+            t_overlap = (c1["title"].lower() in c2["title"].lower() or
+                         c2["title"].lower() in c1["title"].lower())
+            w2 = _word_set(c2["title"] + " " + c2["definition_snippet"])
+            overlap = len(w1 & w2) / max(len(w1 | w2), 1)
+            if (t_overlap and overlap >= 0.4) or overlap >= DEDUP_JACCARD_THRESHOLD:
                 group.append(j)
                 processed.add(j)
         if len(group) > 1:
             duplicates.append(group)
     return duplicates
 
-def generate_merge_rules(concepts: list[dict], duplicate_groups: list[list[int]]) -> list[dict]:
+
+def _confirm_prompt(group_concepts):
+    items = "\n\n".join(
+        "### Concept {n}: {title}\nslug: {slug}\n{defn}".format(
+            n=i + 1, title=c["title"], slug=c["slug"], defn=c["definition_snippet"])
+        for i, c in enumerate(group_concepts)
+    )
+    return """You are reviewing concept pages generated from the same source for duplicates.
+
+{items}
+
+Are these concepts describing the SAME underlying concept (just named/worded differently)?
+- If YES: reply `MERGE: yes | PRIMARY: <slug of the best canonical one> | REASON: <one sentence>`
+- If NO:  reply `MERGE: no | REASON: <one sentence>`
+
+When unsure, reply `MERGE: no`.
+""".format(items=items)
+
+
+def confirm_merge_with_llm(group_concepts, config):
+    prompt = _confirm_prompt(group_concepts)
+    try:
+        response, _ = call_anthropic_protocol(prompt, config, max_tokens=200, label="dedup-confirm")
+    except Exception as e:
+        print("  [stage 2.5] LLM confirm failed: {} — keeping all candidates".format(e))
+        return False, ""
+    m = re.search(r"MERGE:\s*(yes|no)", response, re.IGNORECASE)
+    if not m or m.group(1).lower() != "yes":
+        return False, ""
+    pm = re.search(r"PRIMARY:\s*(\S+)", response)
+    primary = pm.group(1).strip() if pm else ""
+    return True, primary
+
+
+def generate_merge_rules(concepts, duplicate_groups, config=None):
     rules = []
     for group in duplicate_groups:
-        primary_idx = max(group, key=lambda i: len(concepts[i]["definition_snippet"]))
-        duplicate_indices = [i for i in group if i != primary_idx]
-        rule = {
-            "primary_slug": concepts[primary_idx]["slug"],
-            "primary_title": concepts[primary_idx]["title"],
-            "duplicate_slugs": [concepts[i]["slug"] for i in duplicate_indices],
+        group_concepts = [concepts[i] for i in group]
+        primary_slug = ""
+        should_merge = True
+        if config is not None:
+            should_merge, primary_slug = confirm_merge_with_llm(group_concepts, config)
+        if not should_merge:
+            continue
+        group_slugs = [c["slug"] for c in group_concepts]
+        if not primary_slug or primary_slug not in group_slugs:
+            primary_idx = max(group, key=lambda i: len(concepts[i]["definition_snippet"]))
+            primary_slug = concepts[primary_idx]["slug"]
+        duplicate_slugs = [c["slug"] for c in group_concepts if c["slug"] != primary_slug]
+        if not duplicate_slugs:
+            continue
+        rules.append({
+            "primary_slug": primary_slug,
+            "primary_title": next(c["title"] for c in group_concepts if c["slug"] == primary_slug),
+            "duplicate_slugs": duplicate_slugs,
             "merge_strategy": "union",
-            "merge_reason": f"相似度 >70%，{len(duplicate_indices)} 个重复",
-        }
-        rules.append(rule)
+            "merge_reason": "LLM-confirmed duplicate ({} merged)".format(len(duplicate_slugs)),
+        })
     return rules
 
-def apply_merge_rules(file_blocks: list[tuple], merge_rules: list[dict]) -> list[tuple]:
+
+def apply_merge_rules(file_blocks, merge_rules):
     if not merge_rules:
         return file_blocks
     slugs_to_delete = set()
@@ -66,12 +134,13 @@ def apply_merge_rules(file_blocks: list[tuple], merge_rules: list[dict]) -> list
     result = []
     for path, content in file_blocks:
         slug = Path(path).stem
-        if "/concepts/" in path and slug in slugs_to_delete:
+        if ("/concepts/" in path or path.startswith("concepts/")) and slug in slugs_to_delete:
             continue
         result.append((path, content))
     return result
 
-def verify_dedup_merge(checkpoint: dict, chunk_count: int) -> bool:
+
+def verify_dedup_merge(checkpoint, chunk_count):
     if chunk_count <= 1:
         checkpoint["concept_merge_rules"] = []
         return True

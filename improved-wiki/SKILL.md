@@ -11,7 +11,7 @@ Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Inge
 
 ```
 Pre-gates: [0.1 raw-naming] → [0.2 source dedup] → [0.3 pilot OCR]   (gate ingest; not in the numbered data-flow below)
-Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→3.1→3.2→3.3→3.4→[3.5]→4.1
+Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→3.1→3.2→3.3→3.4→3.5→[3.6]→4.1
         (numbered stages per ingest.py; "2.x" = per-chunk concept/entity gen; "3" = file write)
 
 Phase 0: Pre-processing (text extraction, image extract, caption, pilot OCR)
@@ -20,8 +20,8 @@ Phase 2: Generation      (source page, per-chunk concept/entity, queries, compar
 Phase 3: Write & Enrich  (file write, image injection, aggregate repair)
 Phase 4: Embeddings      (auto-triggered if EMBEDDING_BASE_URL set)
 
-Barrier-free: 1.5∥2.1 analyze→generate per chunk (unified, all chunk counts)
-Parallel (I/O only): 0.6∥1 caption∥digest + 0.6 caption batch dispatch
+Barrier-free: 2.2∥2.4 analyze→generate per chunk (unified, all chunk counts)
+Parallel (I/O only): 1.3∥2.1 caption∥digest + 1.3 caption batch dispatch
 
 Lint:  [structural] → [semantic (LLM, conversation mode)]
 Graph: [Build Graph (4-signal)] → [Louvain communities] → [cohesion + gaps + clusters]
@@ -45,7 +45,7 @@ Text generation has two paths (round iii, 2026-06-21), routed by
 
 Two other external-API dependencies (not text generation):
 - **Stage 1.3 image captioning** → MiniMax VLM (`anthropic/v1/messages` multi-image batch). This is the only MiniMax dependency; it needs `MINIMAX_CN_API_KEY` / `LLM_API_KEY` for the caption endpoint only.
-- **Stage 3.5 embeddings** → optional; configured separately if you want vector retrieval. Not routed through MiniMax.
+- **Stage 3.6 embeddings** → optional; configured separately if you want vector retrieval. Not routed through MiniMax.
 
 ## Entry points
 
@@ -61,8 +61,8 @@ Two other external-API dependencies (not text generation):
 
 **Pipeline core**:
 - `references/ingest-stages-mandatory.md` — ingest stage checklist (Phase 0-4 + Lint + Graph, ⭐ easy-to-skip stages marked)
-- `references/query-generation.md` — Stage 2.5: auto-generate `wiki/queries/`
-- `references/comparison-generation.md` — Stage 2.3.5: auto-generate `wiki/comparisons/` (2.5A disambiguation, 2.5B in-source, 2.5C cross-source)
+- `references/query-generation.md` — Stage 2.7: auto-generate `wiki/queries/`
+- `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (2.9A disambiguation, 2.9B in-source, 2.9C cross-source)
 - `references/knowledge-gap-lint.md` — lint system: synthesis/finding/thesis/methodology formation triggers
 - `references/scanned-pdf-ocr-pipeline.md` — minerU scanned PDF OCR pipeline (Path B)
 - `references/raw-naming-conventions.md` — raw 文件命名规范检查机制（项目级 `raw/NAMING.md` + auto-check）
@@ -99,15 +99,15 @@ Two other external-API dependencies (not text generation):
 
 ## Key features
 
-- **Auto-ingest**: `python3 scripts/ingest.py file.pdf [file2.pdf ...] --conversation` — NashSU two-step: Stage 2.4 dedicated source page + Stage 2.3.x concept/entity generation. LLM steps run in conversation mode (current model).
+- **Auto-ingest**: `python3 scripts/ingest.py file.pdf [file2.pdf ...] --conversation` — NashSU two-step: Stage 2.6 dedicated source page + Stage 2.4 concept/entity generation. LLM steps run in conversation mode (current model).
 - **Chat ingest** ⭐ (NashSU v0.4.25 parity): `/improved-wiki chat-ingest <file>` — interactive two-step: Claude presents digest → you provide guidance → Claude generates guided wiki pages. Human relevance judgment in the loop. See `references/chat-ingest.md`.
 - **Deep research** ⭐ (NashSU v0.4.25 parity): `/improved-wiki deep-research <topic>` — closed-loop: web search → LLM synthesis → wiki query page → auto-ingest → entity/concept pages → new review items. Knowledge base grows itself. See `references/deep-research.md`.
 - **Save chat to wiki** ⭐ (NashSU v0.4.25 parity): say "保存到 wiki" after any conversation — captures insight as wiki page with `origin: chat-save` + auto-ingests. Conversations become permanent knowledge. See `references/save-chat-to-wiki.md`.
 - **Review sweep** ⭐ (NashSU v0.4.25 parity): `/improved-wiki sweep-reviews` — scans pending review items, auto-resolves those satisfied by subsequent ingests (rule-based + LLM semantic judge). Keeps review backlog actionable. See `references/review-sweep.md`.
 - **Batch ingest**: `python3 scripts/ingest.py f1.pdf f2.pdf ...` — parallel Stage 1.1-2 per book, serial Stage 3.1+ write
 - **Graph** (separate command, peer of Ingest/Lint): `python3 scripts/graph.py` builds the knowledge graph (NashSU graph-view CLI parity — four-signal weighted graph + Louvain communities + cohesion + gaps + cluster hubs). Deterministic, no LLM. `AUTO_BUILD_GRAPH=1` auto-rebuilds after ingest (30-min staleness guard). `--mode query --slug <s>` for read-only per-page wikilink suggestions during ingest.
-- **Unified barrier-free pipeline**: Stage 2.2 + 2.1 merged — analyze chunk → generate pages → next chunk. Works for all chunk counts (1 to N). Accumulating context + per-chunk checkpoint for crash recovery. Legacy multi-round synthesis retired.
-- **Parallel I/O**: caption ∥ digest (Stage 1.3∥1), caption batch dispatch (×6 workers). Pure I/O-bound parallelism only — no quality impact.
+- **Unified barrier-free pipeline**: Stage 2.2 + 2.4 merged — analyze chunk → generate pages → next chunk. Works for all chunk counts (1 to N). Accumulating context + per-chunk checkpoint for crash recovery. Legacy multi-round synthesis retired.
+- **Parallel I/O**: caption ∥ digest (Stage 1.3∥2.1), caption batch dispatch (×6 workers). Pure I/O-bound parallelism only — no quality impact.
 - **Heading path tracking** (NashSU parity): each chunk analysis prompt includes full heading hierarchy (`Chapter 3 > Section 3.2 > Subsec 3.2.1`)
 - **Overlap context** (NashSU parity): paragraph/sentence-aware overlap text passed between chunks for continuity
 - **Page merge** (NashSU v0.4.25): three-layer merge on re-ingest — frontmatter array union + LLM body merge + locked fields. Sources field uses union-merge (preserves multi-source provenance).

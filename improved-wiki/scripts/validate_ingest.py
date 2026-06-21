@@ -191,7 +191,7 @@ def main():
                  "pilot may have been manually confirmed; best-effort check only")
 
     # ═══════════════════════════════════════════════
-    # Stage 0.5: Image extraction
+    # Stage 1.2: Image extraction
     # ═══════════════════════════════════════════════
     print("\n[Stage 1.2] Image extraction")
     if media:
@@ -207,7 +207,7 @@ def main():
         check("media dir found", False, f"slug={SOURCE_SLUG}")
 
     # ═══════════════════════════════════════════════
-    # Stage 0.6: Image captioning
+    # Stage 1.3: Image captioning
     # ═══════════════════════════════════════════════
     print("\n[Stage 1.3] Image captioning")
     if media:
@@ -246,7 +246,7 @@ def main():
         check("cache entry found", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 1.5: Chunk Analysis (NEVER skipped)
+    # Stage 2.2: Chunk Analysis (NEVER skipped)
     # ═══════════════════════════════════════════════
     print("\n[Stage 2.2] Chunk Analysis")
     if entry:
@@ -259,7 +259,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 2: Generation
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.3] Generation (synthesis)")
+    print("\n[Stage 2.4] Generation (synthesis)")
     if entry:
         fb = stages.get("file_blocks_generated", 0)
         identified = stages.get("concepts_identified", fb)
@@ -276,9 +276,9 @@ def main():
         check("cache entry found", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 2.3: Query generation (conditional)
+    # Stage 2.7: Query generation (conditional)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.5] Query generation")
+    print("\n[Stage 2.7] Query generation")
     queries_dir = WIKI / "queries"
     query_pages = list(queries_dir.glob("*.md")) if queries_dir.is_dir() else []
     src_query_pages = [p for p in query_pages
@@ -287,7 +287,7 @@ def main():
         tmpl = (entry.get("template") or "").lower()
         qg = stages.get("queries_generated", 0)
         if tmpl in ("datasheet", "standard"):
-            note("auto-skipped", f"template={tmpl} (datasheet/standard skip Stage 2.3)")
+            note("auto-skipped", f"template={tmpl} (datasheet/standard skip Stage 2.7)")
         else:
             check(f"{qg} query page(s) generated", 0 <= qg <= 5,
                   f"cache={qg} disk_attributed={len(src_query_pages)} (0-5 valid; 0 = ---QUERIES: 0---)")
@@ -295,9 +295,9 @@ def main():
         note("no cache entry", f"disk queries/ has {len(query_pages)} page(s) total")
 
     # ═══════════════════════════════════════════════
-    # Stage 2.5 (cmp): Comparison generation (conditional)
+    # Stage 2.9 (cmp): Comparison generation (conditional)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.6 cmp] Comparison generation")
+    print("\n[Stage 2.9 cmp] Comparison generation")
     comparisons_dir = WIKI / "comparisons"
     comp_pages = list(comparisons_dir.glob("*.md")) if comparisons_dir.is_dir() else []
     src_comp_pages = [p for p in comp_pages
@@ -306,7 +306,7 @@ def main():
         cg = stages.get("comparisons_generated", 0)
         fb = stages.get("file_blocks_generated", 0)
         if fb == 0:
-            note("auto-skipped", "no concept output — Stage 2.5 cmp skipped")
+            note("auto-skipped", "no concept output — Stage 2.9 cmp skipped")
         else:
             check(f"{cg} comparison page(s) generated", 0 <= cg <= 2,
                   f"cache={cg} disk_attributed={len(src_comp_pages)} (0-2 valid; 0 = ---COMPARISONS: 0---)")
@@ -341,12 +341,12 @@ def main():
               f"ingested={ingested} sources={len(sources)}")
 
     # ═══════════════════════════════════════════════
-    # Stage 3.5: Image injection
+    # Stage 3.2: Image injection
     # ═══════════════════════════════════════════════
     print("\n[Stage 3.2] Image injection into source page")
     img_ext_s35 = stages.get("images_extracted", 0)
     if img_ext_s35 == 0:
-        note("no images extracted — Stage 3.5 not applicable", "text-only source")
+        note("no images extracted — Stage 3.2 not applicable", "text-only source")
     elif source_page:
         text = source_page.read_text()
         has_section = "## Embedded Images" in text
@@ -358,7 +358,7 @@ def main():
         img_ext = stages.get("images_extracted", 0)
         img_inj = stages.get("images_injected", 0)
         if img_ext == 0:
-            note("no images — Stage 3.5 not applicable")
+            note("no images — Stage 3.2 not applicable")
         elif img_inj > 0:
             check("source page found", False, "cache says images injected but no source page on disk")
         else:
@@ -367,7 +367,7 @@ def main():
         check("source page exists", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 2.5 (rev): Review suggestions + review items
+    # Stage 3.3 (rev): Review suggestions + review items
     # ═══════════════════════════════════════════════
     print("\n[Stage 3.3 rev] Review suggestions + items")
     rs_path = RUNTIME / "review-suggestions.json"
@@ -377,7 +377,7 @@ def main():
     elif entry:
         ri = stages.get("review_items", -1)
         if ri == 0:
-            note("auto-skipped", "<4 FILE blocks — ingest.py skips Stage 2.5 rev")
+            note("auto-skipped", "<4 FILE blocks — ingest.py skips Stage 3.3 rev")
         elif ri > 0:
             check("review-suggestions.json exists", False, f"cache says {ri} items but file not found")
         else:
@@ -399,14 +399,14 @@ def main():
     elif entry:
         ri = stages.get("review_items", -1)
         if ri <= 0:
-            note("no review items", "Stage 2.5 rev was auto-skipped")
+            note("no review items", "Stage 3.3 rev was auto-skipped")
         else:
             check("review output found", False, f"cache says {ri} items but no review files on disk")
     else:
         check("review output found", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 2.6: Aggregate pages + hash cache
+    # Stage 3.4: Aggregate pages + hash cache
     # ═══════════════════════════════════════════════
     print("\n[Stage 3.4] Aggregate pages + hash cache")
     for name in ("index.md", "log.md", "overview.md"):
@@ -436,7 +436,7 @@ def main():
     # ═══════════════════════════════════════════════
     # Stage 4: Embeddings (optional)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.5] Embeddings (optional)")
+    print("\n[Stage 3.6] Embeddings (optional)")
     lance = RUNTIME / "lancedb"
     embed_cache = RUNTIME / "embed-cache.json"
     lance_present = lance.is_dir() and bool(list(lance.glob("*.lance")))

@@ -192,9 +192,9 @@ chunk_plan:
 ```
 
 # Constraints
-- Focus on STRUCTURE, not details — per-chapter details come in Stage 1.5
+- Focus on STRUCTURE, not details — per-chapter details come in Stage 2.2
 - The outline must be as complete as possible
-- chapter_map.start_marker is critical for accurate chunking in Stage 1.5
+- chapter_map.start_marker is critical for accurate chunking in Stage 2.2
 - Do NOT propose new wiki pages yet — that's Stage 2 (Synthesis)
 """
 
@@ -217,7 +217,7 @@ def stage_2_1_global_digest(
     return digest
 
 
-# ---------- Stage 1.5: Chunk Analysis ----------
+# ---------- Stage 2.2: Chunk Analysis ----------
 
 def build_chunk_analysis_prompt(
     chunk_text: str,
@@ -231,7 +231,7 @@ def build_chunk_analysis_prompt(
     overlap_before: str = "",
     heading_path: str = "",
 ) -> str:
-    """Build the prompt for Stage 1.5: Chunk Analysis.
+    """Build the prompt for Stage 2.2: Chunk Analysis.
 
     If accumulated_digest is provided (sequential mode), it replaces the
     static global_digest as the primary context — giving later chunks the
@@ -308,7 +308,7 @@ You are analyzing content from: **{heading_path}**
 
     return f"""# Role
 You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You are performing **Stage 1.5: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
+You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
 {template_section}
 # Context: Accumulated Global Digest
 This digest includes discoveries from all PREVIOUS chunks. Use it to avoid
@@ -415,7 +415,7 @@ def stage_2_2_chunk_analysis(
     verbose: bool = False,
     source_hash: str = "",
 ) -> list[dict]:
-    """Stage 1.5: Split text into chunks and analyze each one SEQUENTIALLY.
+    """Stage 2.2: Split text into chunks and analyze each one SEQUENTIALLY.
 
     NashSU parity: each chunk builds on the accumulated discoveries of all
     previous chunks via an "Updated Global Digest" that grows with each step.
@@ -453,7 +453,7 @@ def stage_2_2_chunk_analysis(
                 print(f"[stage 2.2] Resuming from chunk {start_chunk + 1}/{chunk_total} "
                       f"({start_chunk} completed, digest={len(accumulated_digest)} chars)")
 
-    # Build initial digest string from Stage 1.1 global digest (first chunk only)
+    # Build initial digest string from Stage 2.1 global digest (first chunk only)
     if not accumulated_digest:
         digest_compact = {}
         for key in ("book_meta", "outline", "key_entities", "key_concepts"):
@@ -633,7 +633,7 @@ def _analyze_chunk(
 
 def _checkpoint_1_5(config: Config, source_hash: str, chunk_total: int,
                     accumulated_digest: str, analyses: list[dict]) -> None:
-    """Save per-chunk checkpoint for Stage 1.5 resume (NashSU parity)."""
+    """Save per-chunk checkpoint for Stage 2.2 resume (NashSU parity)."""
     # Merge into existing progress to preserve other stage data
     progress = load_progress(config, source_hash) or {}
     progress["stage"] = "stage_2_2_partial"

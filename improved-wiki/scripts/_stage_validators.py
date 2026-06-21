@@ -108,8 +108,8 @@ def verify_stage_3(generation_result: Optional[Dict[str, Any]]) -> bool:
     return True
 
 
-def verify_stage_3_5(embeddings_result: Optional[Dict[str, Any]]) -> bool:
-    """Verify Stage 3.5: Embeddings (vector generation).
+def verify_stage_3_6(embeddings_result: Optional[Dict[str, Any]]) -> bool:
+    """Verify Stage 3.6: Embeddings (vector generation).
     
     Requirements:
     - At least 1 embedding vector created
@@ -177,7 +177,7 @@ def quick_stage_check(stage_name: str, result: Any) -> bool:
         return verify_stage_2(result) if isinstance(result, dict) else False
     elif stage_name == "stage_3":
         return verify_stage_3(result) if isinstance(result, dict) else False
-    elif stage_name == "stage_3_5":
-        return verify_stage_3_5(result) if isinstance(result, dict) else False
+    elif stage_name == "stage_3_6":
+        return verify_stage_3_6(result) if isinstance(result, dict) else False
     else:
         return False
