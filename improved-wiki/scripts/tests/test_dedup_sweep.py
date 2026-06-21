@@ -18,6 +18,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import dedup_sweep as ds  # noqa: E402
+import _dedup  # noqa: E402
 from _frontmatter_array import parse_frontmatter_array  # noqa: E402
 
 FIXED_TODAY = lambda: "2026-06-19"  # noqa: E731
@@ -96,7 +97,7 @@ class TestCollectAndSummaries(unittest.TestCase):
             (wiki / "a.md").write_text("---\ntype: entity\ntitle: A\n---\nbody", encoding="utf-8")
             (wiki / "b.md").write_text("# no frontmatter here", encoding="utf-8")
             pages = ds.collect_wiki_pages(wiki)
-            slugs = [s.slug for s in ds.build_summaries(pages)]
+            slugs = [s.slug for s in (_dedup.extract_entity_summary(p, c) for p, c in pages) if s is not None]
             self.assertEqual(slugs, ["a"])
 
 
@@ -105,8 +106,7 @@ class TestDryRun(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             _make_wiki(root)
-            report = ds.run_sweep(root, _mock_llm(), apply=False, today=FIXED_TODAY)
-            self.assertFalse(report["apply"])
+            report = ds.run_phase2(root, _mock_llm(), apply=False, today=FIXED_TODAY)
             self.assertEqual(len(report["groups"]), 1)
             self.assertEqual(report["groups"][0]["slugs"], ["paos", "聚磷菌"])
             self.assertEqual(report["applied"], [])
@@ -122,9 +122,8 @@ class TestApply(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             _make_wiki(root)
-            report = ds.run_sweep(root, _mock_llm(), apply=True, today=FIXED_TODAY)
+            report = ds.run_phase2(root, _mock_llm(), apply=True, today=FIXED_TODAY)
 
-            self.assertTrue(report["apply"])
             self.assertEqual(len(report["applied"]), 1)
             applied = report["applied"][0]
             self.assertEqual(applied["canonical"], "paos")
@@ -170,7 +169,7 @@ class TestWhitelist(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             _make_wiki(root)
-            report = ds.run_sweep(
+            report = ds.run_phase2(
                 root, _mock_llm(), apply=False, today=FIXED_TODAY,
                 whitelist_pairs=[["paos", "聚磷菌"]],
             )
@@ -196,7 +195,9 @@ class TestMainConversationHandoff(unittest.TestCase):
             _make_wiki(root)
 
             # First invocation: detect call is uncached → ConversationPending → 101.
-            rc = ds.main(["--project", str(root)])
+            # --semantic opts into phase 2 (the LLM path); without it main() only
+            # runs deterministic phase 1 and returns 0.
+            rc = ds.main(["--project", str(root), "--semantic", "--dry-run"])
             self.assertEqual(rc, 101)
             conv_dir = root / ".llm-wiki" / "conversation" / "dedup"
             md_files = list(conv_dir.glob("*.md"))
@@ -208,12 +209,13 @@ class TestMainConversationHandoff(unittest.TestCase):
                                               encoding="utf-8")
 
             # Second invocation: detect cached → no groups → report written → 0.
-            rc = ds.main(["--project", str(root)])
+            rc = ds.main(["--project", str(root), "--semantic", "--dry-run"])
             self.assertEqual(rc, 0)
             report = json.loads(
                 (root / ".llm-wiki" / "dedup-report.json").read_text("utf-8")
             )
-            self.assertEqual(report["groups"], [])
+            # Written report nests phase-2 results under "phase2".
+            self.assertEqual(report["phase2"]["groups"], [])
             self.assertFalse(report["apply"])
 
 
