@@ -133,7 +133,7 @@ def _stage_1_1_ensure_pymupdf() -> Path:
 def _stage_1_1_pymupdf_page_count(file_path: Path) -> int:
     """Get page count via PyMuPDF. Returns 0 on failure."""
     try:
-        python = _find_pymupdf_python()
+        python = _stage_1_1_find_pymupdf_python()
         if python is None:
             return 0
         if python == Path(sys.executable):
@@ -156,7 +156,7 @@ def _stage_1_1_pymupdf_page_count(file_path: Path) -> int:
 
 
 def _stage_1_1_extract_text_pymupdf(file_path: Path) -> str:
-    python = _ensure_pymupdf()
+    python = _stage_1_1_ensure_pymupdf()
     if python == Path(sys.executable):
         import fitz
         doc = fitz.open(file_path)
@@ -328,7 +328,7 @@ def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: boo
             # Misclassified scanned PDFs detected as "text" will have near-zero per-page yield.
             ok2 = True
             if ok1:
-                pages = _pymupdf_page_count(file_path)
+                pages = _stage_1_1_pymupdf_page_count(file_path)
                 if pages and len(text) < pages * 50:
                     ok2 = False
                     print(f"[extract] PyMuPDF returned only {len(text)} chars over {pages} pages "
@@ -1808,7 +1808,7 @@ def _stage_1_2_write_manifest(manifest_path: Path, source: str, raw_file: Path, 
 def stage_1_3_caption_images(config: Config, stage_1_2_result: dict, batch_size: int = CAPTION_BATCH_SIZE) -> dict:
     """Caption extracted images using unified caption pipeline (Path A + Path B merged).
 
-    Thin wrapper around _caption_images() for backward compatibility with the
+    Thin wrapper around _stage_1_3_caption_images_batch() for backward compatibility with the
     Stage 1.3 pipeline checkpoint. Internal implementation delegates to the
     unified function which supports both PyMuPDF-extracted images (Path A)
     and minerU-extracted images (Path B), with parallel batch dispatch."""
@@ -1821,7 +1821,7 @@ def stage_1_3_caption_images(config: Config, stage_1_2_result: dict, batch_size:
         return {"captioned": 0, "total": len(images), "skipped": True, "reason": "no-api-key"}
 
     media_dir = Path(stage_1_2_result["media_dir"])
-    captioned = _caption_images(images, config, media_dir,
+    captioned = _stage_1_3_caption_images_batch(images, config, media_dir,
                                 source_label="pyMuPDF",
                                 batch_size=batch_size)
     return {"captioned": captioned, "total": len(images)}

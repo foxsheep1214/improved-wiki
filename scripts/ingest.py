@@ -82,6 +82,7 @@ from _stage_1_extract import (
     _stage_1_2_extract_from_mineru,
     stage_1_3_caption_images,
     _stage_1_1_check_text_quality,
+    _stage_1_1_detect_pdf_type,
     _stage_1_2_media_slug,
     CAPTION_BATCH_SIZE, CAPTION_MAX_WORKERS,
 )
@@ -1961,7 +1962,7 @@ def main() -> int:
         print(f"  template: {template}")
         # Estimate cost
         if raw_file.suffix.lower() == ".pdf":
-            pdf_type, avg_chars = detect_pdf_type(raw_file)
+            pdf_type, avg_chars = _stage_1_1_detect_pdf_type(raw_file)
             print(f"  PDF type: {pdf_type} (avg {avg_chars:.0f} chars/page, 5-page random sample, skip first+last)")
             if pdf_type in ("scanned", "mixed"):
                 try:
