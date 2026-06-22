@@ -47,7 +47,7 @@ def delete_source(raw_file: Path, config) -> int:
         shutil.copy2(src_path, backup)
         src_path.unlink()
         removed += 1
-        print(f"[lifecycle] Deleted source page: {source_rel}")
+        print(f"[lifecycle] Deleted source page: {rel}")
 
     # 2. Remove from ingest cache
     cache_path = runtime_dir / "ingest-cache.json"

@@ -68,13 +68,28 @@ CAPTION_BATCH_SIZE = int(os.environ.get("CAPTION_BATCH_SIZE", "8"))
 MINERU_LOCK_FILE = Path.home() / ".cache" / "improved-wiki" / ".mineru.lock"
 MINERU_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+# Minimum image dimensions for mineru-extracted figures. Images below this are
+# treated as noise (1x1/2x2 artifacts, stray pixels) and dropped. Threshold is
+# deliberately very conservative: tiny formula strips (29-70px tall) are
+# valuable because MiniMax-M3 transcribes them to LaTeX/Unicode ~81% of the
+# time, so we must NOT filter them out. See image-caption-strategy.md.
+MINERU_IMG_MIN_WIDTH = int(os.environ.get("MINERU_IMG_MIN_WIDTH", "20"))
+MINERU_IMG_MIN_HEIGHT = int(os.environ.get("MINERU_IMG_MIN_HEIGHT", "20"))
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Utility Functions
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _is_image_too_small(width: int, height: int) -> bool:
-    """Check if image is too small (filters out icons, formulas, artifacts)."""
+    """Check if image is too small to keep.
+
+    Filters only true noise (stray 1x1/2x2 pixel artifacts). Does NOT filter
+    formula strips — tiny formula images (29-70px tall) are valuable because
+    MiniMax-M3 transcribes them to LaTeX/Unicode ~81% of the time. The
+    threshold is intentionally very low (default 20px) to avoid throwing away
+    recoverable formula content.
+    """
     return width < MINERU_IMG_MIN_WIDTH or height < MINERU_IMG_MIN_HEIGHT
 
 
@@ -381,7 +396,7 @@ def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: boo
 
 # ---------- Stage 0 pilot: PDF type detection + pilot OCR ----------
 
-def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[str, float]:
+def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 15) -> tuple[str, float]:
     """Sample N pages (skipping first+last) to determine PDF type.
 
     Uses three signals:
@@ -391,9 +406,17 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[
        encoding that PyMuPDF cannot decode. >1% garbled → force OCR path.
        (2026-06-18: Fuqua book had 500+ chars/page but all garbled.)
 
-    Page 0 (cover/title) and the last page (index/back-cover) are always
-    skipped. N pages are randomly picked from the remaining middle pages.
-    Short PDFs (< N+2 pages) sample all available middle pages.
+    Decision priority (2026-06-22 fix): real extractable text trumps image
+    coverage. Academic books/papers routinely have full-page charts alongside
+    vector text — such pages are NOT scanned. Previously `img_ratio > 0.6`
+    overrode `avg > 500`, misrouting born-digital PDFs (e.g. Tudoroiu 2021,
+    51% image-heavy pages) to minerU OCR, which then over-segmented text/table
+    pages into 100+ tiny fragments. Now: `avg > 500` + non-garbled → text/mixed
+    regardless of image coverage; only near-zero text → scanned.
+
+    Sampling is deterministic per file (seeded by file path) so the same PDF
+    always routes the same way across runs. Page 0 (cover) and last page are
+    skipped; N pages are picked from the middle.
 
     Returns ("text", avg_chars) or ("scanned", avg_chars) or ("mixed", avg_chars).
     """
@@ -403,6 +426,13 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[
         return ("text", 0)
 
     _C0_RE = __import__('re').compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+
+    # Deterministic per-file sampling: same PDF → same verdict every run.
+    # NOTE: use hashlib (not built-in hash()) because Python randomizes
+    # hash() per process (PYTHONHASHSEED) — built-in hash would make the
+    # sampling differ across ingest runs.
+    _seed = int(hashlib.md5(str(file_path).encode("utf-8")).hexdigest()[:8], 16)
+    rng = random.Random(_seed)
 
     doc = fitz.open(file_path)
     try:
@@ -416,7 +446,7 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[
             sample_indices = list(range(len(doc)))  # too short, take all
         else:
             pool = list(range(1, len(doc) - 1))    # pages between first and last
-            sample_indices = random.sample(pool, n) if n < len(pool) else pool
+            sample_indices = rng.sample(pool, n) if n < len(pool) else pool
 
         for idx in sample_indices:
             page = doc[idx]
@@ -445,19 +475,17 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 5) -> tuple[
         img_ratio = img_pages / text_pages
         garbled_ratio = garbled_chars / max(total_chars, 1)
 
-        # Signal 3: garbled text trumps all — force OCR
+        # Garbled text (custom font encoding) → force OCR, trumps all.
         if garbled_ratio > 0.01:
             return ("scanned", avg)
-        if img_ratio > 0.6:
-            return ("scanned", avg)
-        if avg > 500 and img_ratio > 0.3:
-            return ("mixed", avg)
+        # Sufficient extractable text → text-based PDF, even if pages have
+        # large figures. Image coverage must NOT override real vector text.
         if avg > 500:
-            return ("text", avg)
-        elif avg < 50:
+            return ("mixed" if img_ratio > 0.3 else "text", avg)
+        # Near-zero text → scanned (needs OCR)
+        if avg < 50:
             return ("scanned", avg)
-        else:
-            return ("mixed", avg)
+        return ("mixed", avg)
     finally:
         doc.close()
 
@@ -1377,18 +1405,23 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
                 except Exception:
                     continue
 
-            # Get dimensions if possible; skip tiny fragments (formulas, icons)
+            # Get dimensions if possible; drop true noise (1x1/2x2 artifacts).
+            # PIL open is wrapped (can fail on corrupt bytes), but the size
+            # check is outside the try so a NameError in _is_image_too_small
+            # surfaces instead of silently keeping every image.
             w, h = 0, 0
+            pil_ok = False
             try:
                 from PIL import Image
                 im = Image.open(out_path)
                 w, h = im.size
                 im.close()
-                if _is_image_too_small(w, h):
-                    out_path.unlink(missing_ok=True)
-                    continue
+                pil_ok = True
             except Exception:
-                pass
+                pass  # PIL couldn't read; keep image with unknown dims
+            if pil_ok and _is_image_too_small(w, h):
+                out_path.unlink(missing_ok=True)
+                continue
 
             saved.append({
                 "filename": filename,
@@ -1409,7 +1442,12 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
 
 
 def _stage_1_2_collect_images(img_dir: Path, page_offset: int) -> list[dict]:
-    """Collect extracted images from minerU output. Filters small fragments (formulas)."""
+    """Collect extracted images from minerU output.
+
+    Drops true noise (sub-20px artifacts) but keeps tiny formula strips, which
+    MiniMax-M3 can transcribe to LaTeX/Unicode. Size check is outside the
+    try/except so filter bugs surface instead of silently collecting all images.
+    """
     if not img_dir.exists():
         return []
     try:
@@ -1418,20 +1456,21 @@ def _stage_1_2_collect_images(img_dir: Path, page_offset: int) -> list[dict]:
         return []  # can't verify sizes, skip
     imgs = []
     for img_file in sorted(img_dir.iterdir()):
-        if img_file.suffix.lower() in (".jpg", ".jpeg", ".png"):
-            try:
-                im = Image.open(img_file)
-                w, h = im.size
-                im.close()
-                if not _is_image_too_small(w, h):
-                    imgs.append({
-                        "filename": img_file.name,
-                        "source_path": str(img_file),
-                        "width": w, "height": h,
-                        "page_hint": page_offset,
-                    })
-            except Exception:
-                pass
+        if img_file.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            continue
+        try:
+            im = Image.open(img_file)
+            w, h = im.size
+            im.close()
+        except Exception:
+            continue  # can't read this file — skip it
+        if not _is_image_too_small(w, h):
+            imgs.append({
+                "filename": img_file.name,
+                "source_path": str(img_file),
+                "width": w, "height": h,
+                "page_hint": page_offset,
+            })
     return imgs
 
 
@@ -1816,6 +1855,11 @@ CAPTION_SYSTEM_PROMPT = (
     "你是硬件知识库的图像解读专家。每次给你若干张图，按图顺序逐张描述："
     "1-3 句中文，不超过 100 字。聚焦：图类型（电路/波形/框图/PCB/曲线/参数表/公式/实物/示意等）"
     "+ 关键内容 + 关键参数/标注。"
+    "\n\n特殊规则——公式图：如果图是数学公式、表达式或方程，不要只笼统说「公式图」，"
+    "应尽量逐符号转录公式内容，统一用 LaTeX 语法表达（如 $x_{k+1}=Ax_k+Bu_k$、"
+    "$\\sum_{i=0}^{2n} W_c^{(i)}[Y^i-\\hat{y}]$、$\\dot{T}=\\frac{1}{mc_p}\\dot{Q}$），"
+    "不要用 Unicode 上下标或希腊字母（写 x_1、\\eta、\\alpha、\\Sigma 而非 x₁、η、α、Σ）。"
+    "转录时字数上限放宽至 150 字，避免长公式被截断。转录不确定的符号用 ? 占位。"
     "\n\n输出格式：严格按以下 JSON 数组：\n```json\n[\n  {\"idx\": 1, \"caption\": \"...\"},\n"
     "  {\"idx\": 2, \"caption\": \"...\"},\n  ...\n]\n```\n\n"
     "每个对象都要有，idx 与图顺序一致。即使图不清楚也尽量给个最合理的简短描述。"

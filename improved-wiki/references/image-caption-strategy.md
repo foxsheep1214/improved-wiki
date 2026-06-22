@@ -69,6 +69,38 @@ HardwareWiki verified (2026-06-17): 18,709 images, 18,701 captions (99.96% cover
 
 Failed captions are written as `[待重试] 图片 <filename>，尺寸 W×H` — the cache filter in `_caption_images()` will re-process them on next run.
 
+## Formula transcription (LaTeX-only)
+
+MiniMax-M3 transcribes formula images ~81% of the time (verified on Tudoroiu
+2021: 52/64 tiny formula strips successfully transcribed). `CAPTION_SYSTEM_PROMPT`
+includes a special rule for formula images:
+
+- **Transcribe formula content symbol-by-symbol in LaTeX** — e.g.
+  `$x_{k+1}=Ax_k+Bu_k$`, `$\sum_{i=0}^{2n} W_c^{(i)}[Y^i-\hat{y}]$`,
+  `$\dot{T}=\frac{1}{mc_p}\dot{Q}$`
+- **Do NOT use Unicode subscripts/superscripts or Greek letters** — write
+  `x_1`, `\eta`, `\alpha`, `\Sigma`, NOT `x₁`, `η`, `α`, `Σ`. Rationale: LaTeX
+  renders in markdown and is reusable downstream; Unicode subscripts are
+  unparseable and don't render.
+- **Word limit relaxed to 150 chars** for formula images (vs 100 default) to
+  avoid truncating long equations.
+- Unknown symbols use `?` placeholder.
+
+## Tiny-image filter (`_is_image_too_small`)
+
+Filters only true noise (1×1/2×2 pixel artifacts). Threshold is deliberately
+conservative (`MINERU_IMG_MIN_WIDTH=20`, `MINERU_IMG_MIN_HEIGHT=20`, env-overridable)
+because tiny formula strips (29-70px tall) are valuable — MiniMax transcribes
+them. The filter must NOT be aggressive or it throws away recoverable formula
+content.
+
+> **Bug fixed 2026-06-22**: `MINERU_IMG_MIN_WIDTH`/`MINERU_IMG_MIN_HEIGHT` were
+> referenced but never defined → `_is_image_too_small()` raised `NameError`,
+> silently swallowed by the surrounding `try/except Exception: pass`, so the
+> filter was completely non-functional (every image was kept). Fix: defined the
+> constants AND moved the size check outside the broad try/except so future
+> regressions surface instead of being swallowed.
+
 ## Usage
 
 ```bash
@@ -91,3 +123,4 @@ captioned = _caption_images(images, config, media_dir, source_label="repair")
 
 - **2026-06-11**: Initial version, 738-image benchmark
 - **2026-06-17**: Unified Path A + Path B into single `_caption_images()`; parallel batch dispatch via ThreadPoolExecutor; grayscale→RGB preprocessing; VLM failure detection with retry; cache filter checks existing caption content for failures
+- **2026-06-22**: LaTeX-only formula transcription rule in `CAPTION_SYSTEM_PROMPT` (no Unicode subscripts/Greek, 150-char limit for formulas); fixed `_is_image_too_small` NameError bug (undefined `MINERU_IMG_MIN_WIDTH/HEIGHT` silently disabled the filter — constants now defined at 20px, size check moved outside broad try/except)
