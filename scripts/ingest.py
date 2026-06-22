@@ -464,8 +464,22 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # Redact that volatile list (and the prompt's own prior-answer context that
     # carries it) before hashing. The full prompt is still written to the .md
     # for the LLM; only the cache *key* is stabilized.
+    #
+    # Two prompt shapes carry the list, both must be redacted:
+    #   1. Inline single-line (Stage 2.1/2.8): "- Existing wiki pages: a, b, c"
+    #   2. Heading + multi-line list (Stage 2.4/2.7/2.9/3.4):
+    #        "# Existing wiki pages ..." followed by indented dash items or a
+    #        bare comma-separated line, terminated by a blank line or the next
+    #        "#" heading. The old single-line regex only matched shape 1, so
+    #        Stage 2.4's slug changed every re-invoke as the wiki grew,
+    #        thrashing the cache and blocking the ingest from reaching Phase 3.
     stable_prompt = re.sub(
-        r"(Existing wiki pages:)[^\n]*", r"\1 <redacted>", prompt)
+        r"(#+[ \t]*(?:Existing [Ww]iki [Pp]ages|Linkable pages)[^\n]*\n)"  # group 1: heading line
+        r"(?:(?!#+[ \t])[ \t]*[^\n]+\n)*"                                 # following list lines
+        r"|(Existing wiki pages:[^\n]*)",                                  # group 2: inline "...:" single-line
+        lambda m: (m.group(1) + "<redacted>\n") if m.group(1)
+                   else "Existing wiki pages: <redacted>",
+        prompt)
     content_hash = hashlib.sha256(stable_prompt.encode("utf-8")).hexdigest()[:8]
     slug = f"{stage}-{content_hash}"
     prefix = config.conversation_prefix or "00000000"
