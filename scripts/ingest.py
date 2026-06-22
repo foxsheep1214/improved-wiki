@@ -224,7 +224,10 @@ def _verify_stage_2_2_chunks(chunk_analyses: list[dict], extracted_text: str) ->
         print(f"  ⚠️  Stage 2.2: {len(empty_chunks)}/{len(chunk_analyses)} chunks have no concepts or entities found")
 
 
-def _verify_stage_2_4_file_blocks(file_blocks: list[tuple[str, str]], raw_file: Path) -> None:
+def _verify_stage_2_4_file_blocks(
+    file_blocks: list[tuple[str, str]], raw_file: Path,
+    incremental_associations: dict | None = None,
+) -> None:
     """Verify synthesis produced valid FILE blocks with correct paths."""
     _verify_or_die(len(file_blocks) >= 1, "Stage 2",
                    f"0 FILE blocks parsed from LLM response for {raw_file.name}. "
@@ -253,8 +256,15 @@ def _verify_stage_2_4_file_blocks(file_blocks: list[tuple[str, str]], raw_file: 
     # Coverage check: warn if concept generation is sparse
     concept_file_blocks = [p for p, _ in file_blocks if "concepts/" in p]
     # Reasonable minimum: any non-trivial book should produce at least 5 concept pages
-    if len(concept_file_blocks) < 5 and len(file_blocks) >= 1:
-        print(f"  ⚠️  Stage 2: only {len(concept_file_blocks)} concept pages generated. "
+    # OR have most of its concepts already covered by existing wiki overlap —
+    # a replay pass that correctly skips regenerating already-written concepts
+    # (Stage 2.3's existing_refs) isn't a coverage failure (confirmed live:
+    # Plett BMS Vol.2's final pass had 0 new concept blocks because all 20 of
+    # its concepts already existed in the wiki from an earlier pass).
+    n_overlap = len(incremental_associations) if incremental_associations else 0
+    if len(concept_file_blocks) < 5 and len(concept_file_blocks) + n_overlap < 5 and len(file_blocks) >= 1:
+        print(f"  ⚠️  Stage 2: only {len(concept_file_blocks)} concept pages generated "
+              f"({n_overlap} existing-wiki overlaps). "
               f"Consider re-running with larger token budget or checking prompt output.")
 
 
@@ -1117,7 +1127,7 @@ def _do_prepare(
         file_blocks = _prepare_source_page(
             global_digest, raw_file, config, template_content, progress,
             file_blocks, verbose)
-        _verify_stage_2_4_file_blocks(file_blocks, raw_file)
+        _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
 
         # ── Stage 2.7: Query generation ──
         query_blocks, query_response = stage_2_7_query_generation(
