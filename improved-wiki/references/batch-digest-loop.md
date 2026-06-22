@@ -10,7 +10,7 @@ manual intervention per book.
 - Claude Code interactive mode works but requires a visible Terminal window.
   When the display is off/locked, you can't inject text into a running Terminal
   session (see `macos-app-automation` skill pitfall #27).
-- `ingest.py --conversation` hands each LLM step to the calling agent (current
+- `ingest.py` hands each LLM step to the calling agent (current
   model); for unattended batches you run an agent loop that answers each
   conversation prompt (see `references/delegate-mode.md`). No external LLM API
   key is needed for text generation — only image captioning calls MiniMax.
@@ -96,7 +96,7 @@ for i, pdf in enumerate(pdfs, 1):
     print(f"[{i}/{total}] {pdf.stem}", flush=True)
     try:
         r = subprocess.run(
-            ["python3", str(INGEST), str(pdf), "--conversation"],
+            ["python3", str(INGEST), str(pdf)],
             capture_output=True, text=True, timeout=3600,
             cwd=str(PROJECT_ROOT),
             env={**os.environ, "IMPROVED_WIKI_ROOT": str(PROJECT_ROOT)}

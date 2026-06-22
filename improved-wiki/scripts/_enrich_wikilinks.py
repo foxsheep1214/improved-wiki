@@ -2,100 +2,119 @@
 """
 _enrich_wikilinks.py — Post-save wikilink enrichment (NashSU enrich-wikilinks.ts parity).
 
-After a new page is saved, asks the LLM to suggest [[wikilinks]] for terms
-in the body that match existing wiki pages. The LLM returns (term→target)
-JSON; this module does the actual string replacement — the LLM never
-rewrites page content.
+After all pages from an ingest are saved, asks the LLM to suggest [[wikilinks]]
+for terms in each page's body that match existing wiki pages (or sibling pages
+from the same ingest). The LLM returns (path -> [{term, target}, ...]) JSON;
+this module does the actual string replacement — the LLM never rewrites page
+content.
 
-Uses the direct HTTP API (``call_anthropic_direct``) unconditionally, even in
-``--conversation`` mode: enrichment is high-volume / low-value per call, so
-the conversation handoff (which made it ~8× slower) is bypassed. If no API
-key is configured the call fails soft — the page is returned unchanged.
+Round iv (2026-06-22): batched and conversation-mode only. One LLM call covers
+every page written by an ingest, instead of one call per page — under
+conversation mode that is one manual round-trip per ingest, not one per page.
+Failures are no longer swallowed: a malformed/missing response raises and the
+caller (ingest.py) does not catch it — enrichment failure now visibly fails
+the ingest, same as any other stage.
 
 Usage:
-    from _enrich_wikilinks import enrich_wikilinks
-    enriched = enrich_wikilinks(content, existing_slugs, config)
+    from _enrich_wikilinks import enrich_wikilinks_batch
+    enriched = enrich_wikilinks_batch(pages, existing_slugs, config)
+    # enriched: {rel_path: new_content} for pages that changed
 """
 
 import json, re
 from pathlib import Path
 from _frontmatter import parse_frontmatter, write_frontmatter
-from _llm_api import call_anthropic_direct
+from _llm_api import call_anthropic_protocol
 
 
-def enrich_wikilinks(
-    content: str,
+def enrich_wikilinks_batch(
+    pages: list[tuple[str, str]],
     existing_slugs: list[str],
     config,
     *,
-    max_terms: int = 15,
-) -> str:
-    """Scan page body for terms matching existing wiki slugs, insert [[wikilinks]].
+    max_terms_per_page: int = 15,
+) -> dict[str, str]:
+    """Suggest and insert [[wikilinks]] across every page written in one ingest.
 
-    Only replaces the FIRST occurrence of each term. Never touches frontmatter.
+    ``pages`` is a list of (rel_path, content) for all just-written,
+    non-listing pages. ``existing_slugs`` is the pre-ingest wiki snapshot;
+    pages within this same batch are also valid link targets for each other
+    (but never for themselves).
+
+    Only replaces the FIRST occurrence of each suggested term per page.
+    Never touches frontmatter. Returns {rel_path: enriched_content} for pages
+    that actually changed — unchanged pages are omitted.
     """
-    if not existing_slugs:
-        return content
+    candidates = []
+    for rel_path, content in pages:
+        _, body = parse_frontmatter(content)
+        if len(body) >= 100:
+            candidates.append((rel_path, content))
+    if not candidates:
+        return {}
 
-    fm, body = parse_frontmatter(content)
-    if len(body) < 100:
-        return content  # too short to benefit
+    batch_slugs = [Path(rel_path).stem for rel_path, _ in candidates]
+    all_targets = list(dict.fromkeys(list(existing_slugs[:200]) + batch_slugs))
+    if not all_targets:
+        return {}
 
-    # Build slug→display_name map
-    slug_map = {}
-    for s in existing_slugs[:500]:
-        parts = s.split("/")
-        name = parts[-1] if parts else s
-        # Convert slug to readable form
-        readable = name.replace("-", " ").replace("_", " ")
-        slug_map[readable.lower()] = name
-        slug_map[name.lower()] = name
+    sections = []
+    for rel_path, content in candidates:
+        _, body = parse_frontmatter(content)
+        sections.append(f"## PAGE: {rel_path}\n{body[:3000]}")
 
-    # Build prompt
-    body_sample = body[:3000]
-    slugs_str = "\n".join(f"- [[{s}]]" for s in sorted(existing_slugs[:200]))
+    slugs_str = "\n".join(f"- [[{s}]]" for s in sorted(all_targets))
+    pages_str = "\n\n".join(sections)
 
-    prompt = f"""Scan the wiki page body below and identify up to {max_terms} terms
-that SHOULD be wikilinks to existing wiki pages. Only suggest terms
-with an EXACT slug match below. Output ONLY a JSON array:
+    prompt = f"""For each PAGE below, identify up to {max_terms_per_page} terms in its body
+that SHOULD be wikilinks to other pages — either existing wiki pages or other
+pages in this same batch. Only suggest terms with an EXACT slug match below.
+A page must never link to itself. Output ONLY a JSON object keyed by the
+page's path, each value a list of {{"term": "exact body text", "target": "slug"}}.
+Pages with no suggestions may be omitted from the object.
 
-[{{"term": "exact body text", "target": "slug"}}]
+{{"path/to/page.md": [{{"term": "...", "target": "..."}}], ...}}
 
-# Existing Wiki Pages ([[slug]])
+# Wiki Pages ([[slug]])
 {slugs_str}
 
-# Page Body
-{body_sample}"""
+# Pages To Enrich
+{pages_str}"""
 
-    try:
-        response, _ = call_anthropic_direct(prompt, config, max_tokens=2048, label="wikilink enrichment")
-        text = response.strip()
-        if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.startswith("json"):
-                text = text[4:]
-        suggestions = json.loads(text)
-    except Exception:
-        return content
+    response, _ = call_anthropic_protocol(
+        prompt, config, max_tokens=4096, label="wikilink enrichment (batch)")
+    text = response.strip()
+    if text.startswith("```"):
+        text = text.split("```", 2)[1]
+        if text.startswith("json"):
+            text = text[4:]
+    suggestions_by_path = json.loads(text)
 
-    if not isinstance(suggestions, list):
-        return content
+    if not isinstance(suggestions_by_path, dict):
+        raise ValueError(
+            f"enrich_wikilinks_batch: expected a JSON object keyed by path, "
+            f"got {type(suggestions_by_path).__name__}")
 
-    # Apply replacements (first occurrence only, body-only)
-    changed = False
-    for s in suggestions[:max_terms]:
-        term = s.get("term", "")
-        target = s.get("target", "")
-        if not term or not target:
+    enriched: dict[str, str] = {}
+    for rel_path, content in candidates:
+        suggestions = suggestions_by_path.get(rel_path, [])
+        if not suggestions:
             continue
-        # Only replace if term exists in body and isn't already a wikilink
-        escaped = re.escape(term)
-        if re.search(rf'\[\[{escaped}\]\]|\[\[{escaped}\|', body):
-            continue  # already linked
-        if term in body:
-            body = body.replace(term, f"[[{target}]]", 1)
-            changed = True
+        fm, body = parse_frontmatter(content)
+        this_slug = Path(rel_path).stem
+        changed = False
+        for s in suggestions[:max_terms_per_page]:
+            term = s.get("term", "")
+            target = s.get("target", "")
+            if not term or not target or target == this_slug:
+                continue
+            escaped = re.escape(term)
+            if re.search(rf'\[\[{escaped}\]\]|\[\[{escaped}\|', body):
+                continue  # already linked
+            if term in body:
+                body = body.replace(term, f"[[{target}]]", 1)
+                changed = True
+        if changed:
+            enriched[rel_path] = write_frontmatter(fm, body)
 
-    if changed:
-        return write_frontmatter(fm, body)
-    return content
+    return enriched

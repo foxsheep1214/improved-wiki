@@ -37,9 +37,9 @@ export MINIMAX_CN_API_KEY=***   # only needed if your source has images to capti
 # 6. Dry-run to verify detection
 $SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf --dry-run
 
-# 7. Process the first file for real (conversation mode: the calling agent
-#    answers each LLM step with the current model)
-$SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf --conversation
+# 7. Process the first file for real (conversation mode is the only mode:
+#    the calling agent answers each LLM step with the current model)
+$SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf
 
 # 8. Inspect the output
 ls wiki/sources/

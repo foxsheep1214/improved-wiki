@@ -1,27 +1,26 @@
-"""LLM API helpers — direct HTTP text-gen + conversation-mode router.
+"""LLM API helpers — conversation-mode router for text generation.
 
-Routing (round iii, 2026-06-21): text generation has TWO paths again.
+Round iv (2026-06-22): text generation has exactly ONE path again —
+conversation mode is no longer optional. ``call_anthropic_protocol`` (the
+entry point the stage modules import) always delegates to the conversation
+router registered by ingest.py: the prompt is written to a file and
+``ConversationPending`` is raised so the calling agent answers with the
+current conversation's model. Serial only — there is no concurrent text-gen
+path anymore (Stage 2.2's parallel chunk-analysis branch was removed with it).
 
-  * **Direct API** (default): ``call_anthropic_direct(prompt, config, ...)``
-    makes a real HTTP call to the configured provider (OpenAI or Anthropic
-    protocol) using ``config.llm_api_key``. This is the fast path — no
-    process-exit handoff — and the only path that can run concurrently
-    (ThreadPoolExecutor parallel chunk analysis).
-  * **Conversation mode** (opt-in via ``--conversation``): the prompt is
-    written to a file and ``ConversationPending`` is raised so the calling
-    agent answers with the current conversation's model. Serial only.
-
-``call_anthropic_protocol`` (the entry point the stage modules import) picks
-the path: conversation router when ``config.conversation_mode`` is set,
-otherwise direct API (requires ``config.llm_api_key``; raises if absent).
-
-Round ii (2026-06-20) had removed HTTP-direct text gen entirely (conversation
-only). Round iii re-adds it because (a) enrichment is high-volume / low-value
-per call and the conversation handoff made it ~8× slower, and (b) parallel
-chunk analysis is impossible when every call exits the process.
+Direct HTTP text generation existed briefly (round iii, 2026-06-21) to enable
+parallel chunk analysis and a faster wikilink-enrichment pass. Removed again:
+this skill is only ever driven from a CLI session where an agent is already
+present to answer conversation prompts, so a separate paid text-gen API key
+added cost and complexity without a real use case. ``call_anthropic_direct``
+is kept as a plain HTTP helper for callers that explicitly want it outside
+the main ingest pipeline (e.g. ``cross_source_dedup.py``, a standalone tool)
+— it is just no longer reachable from ``call_anthropic_protocol``.
 
 Image captioning (Stage 1.3, MiniMax VLM) and minerU OCR are NOT text
-generation and live elsewhere (`_stage_1_extract.py`); they are unaffected.
+generation and live elsewhere (`_stage_1_extract.py`); they are unaffected —
+vision content can't flow through the conversation-file handoff, so they
+always call their configured HTTP API directly regardless of this module.
 """
 from __future__ import annotations
 
@@ -98,15 +97,16 @@ def _is_retryable_exception(exc: Exception) -> bool:
     return False
 
 
-# ── Direct HTTP text generation (round iii, 2026-06-21) ──
+# ── Direct HTTP text generation ──
 #
 # Makes a real HTTP call to the configured provider. Two protocols:
 #   * "openai"    → POST {base_url}/chat/completions  (DeepSeek, OpenAI, …)
 #   * "anthropic" → POST {base_url}/v1/messages        (Anthropic, MiniMax, …)
 #
-# This is the path that lets the pipeline run concurrently (parallel chunk
-# analysis via ThreadPoolExecutor) and the path enrichment uses unconditionally
-# (high-volume / low-value — the conversation handoff made it ~8× slower).
+# No longer reachable from `call_anthropic_protocol` (round iv removed the
+# direct-API text-gen path again). Kept as a plain HTTP helper for callers
+# outside the main ingest pipeline that explicitly want it, e.g.
+# `cross_source_dedup.py` (a standalone tool, not invoked from ingest.py).
 
 _DIRECT_MAX_RETRIES = 3
 
@@ -214,9 +214,8 @@ def call_anthropic_direct(prompt: str, config, max_tokens: int | None = None,
     api_key = getattr(config, "llm_api_key", "") or ""
     if not api_key:
         raise RuntimeError(
-            "Direct LLM call needs an API key. Set LLM_API_KEY (or a provider "
-            "in ~/.agents/config.json), or run with --conversation to delegate "
-            "text generation to the calling agent."
+            "Direct LLM call needs an API key. Set LLM_API_KEY or configure "
+            "a provider in ~/.agents/config.json."
         )
     base_url = (getattr(config, "llm_base_url", "") or "").rstrip("/")
     model = getattr(config, "llm_model", "") or ""
@@ -283,9 +282,9 @@ def call_anthropic_direct(prompt: str, config, max_tokens: int | None = None,
 # ── Conversation-mode router ──
 #
 # ingest.py registers its `call_anthropic_protocol` (the function that writes
-# a prompt file and raises ConversationPending) here at startup. When
-# `config.conversation_mode` is set, text-gen calls delegate to it. Otherwise
-# they go through `call_anthropic_direct` (the default fast path).
+# a prompt file and raises ConversationPending) here at startup.
+# `call_anthropic_protocol` below always delegates to it — there is no
+# direct-API fallback for text generation anymore.
 
 _conversation_router = None  # (prompt, config, max_tokens) -> (text, stop_reason)
 
@@ -361,28 +360,23 @@ def conversation_handoff(
 
 def call_anthropic_protocol(prompt: str, config, max_tokens: int | None = None,
                             label: str = "") -> tuple[str, str]:
-    """Route a text-generation LLM call.
+    """Route a text-generation LLM call to the conversation router.
 
-    Path selection (round iii):
-      * ``config.conversation_mode`` → delegate to the conversation router
-        registered by ingest.py (prompt-file handoff, raises
-        ``ConversationPending``). Serial only.
-      * otherwise → ``call_anthropic_direct`` (real HTTP call to the
-        configured provider). This is the default and the only parallelizable
-        path.
+    Always delegates to the conversation router registered by ingest.py
+    (prompt-file handoff, raises ``ConversationPending``). Serial only —
+    there is no direct-API fallback for text generation.
 
-    ``label`` is forwarded to the progress line (e.g. "chunk 1 generation").
+    ``label`` is accepted for call-site compatibility (progress lines that
+    pass it) but is not otherwise used.
 
     Returns (text_content, stop_reason).
     """
-    if getattr(config, 'conversation_mode', False):
-        if _conversation_router is None:
-            raise RuntimeError(
-                "Conversation mode is active but no router is registered "
-                "(ingest.py must call set_conversation_router at startup)."
-            )
-        return _conversation_router(prompt, config, max_tokens)
-    return call_anthropic_direct(prompt, config, max_tokens, label=label)
+    if _conversation_router is None:
+        raise RuntimeError(
+            "No conversation router is registered (ingest.py must call "
+            "set_conversation_router at startup)."
+        )
+    return _conversation_router(prompt, config, max_tokens)
 
 
 __all__ = [

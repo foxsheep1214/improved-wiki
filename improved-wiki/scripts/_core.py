@@ -101,7 +101,7 @@ def rate_limit_cooldown_remaining() -> float:
 
 
 class ConversationPending(BaseException):
-    """Raised in --conversation mode when a prompt is written and awaits agent.
+    """Raised when a prompt is written to disk and awaits the calling agent.
 
     Subclasses BaseException (not Exception) so the broad ``except Exception``
     retry/fallback blocks around LLM calls in the stage modules do NOT swallow
@@ -231,7 +231,6 @@ class Config:
     target_chars: int
     max_tokens: int
     context_size: int | None = None
-    conversation_mode: bool = False
     conversation_prefix: str = ""
 
     @classmethod

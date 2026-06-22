@@ -1,4 +1,4 @@
-"""Tests for the conversation-mode router (round ii).
+"""Tests for the conversation-mode router (round iv, 2026-06-22).
 
 Verifies that:
   * ingest.py registers its `call_anthropic_protocol` as the conversation
@@ -8,7 +8,10 @@ Verifies that:
   * `_llm_api.call_anthropic_protocol` performs the prompt-file handoff
     (writes prompt, raises ConversationPending) and, on re-invoke with a
     result file present, returns the cached response.
-  * Without conversation mode the call raises (http-direct removed).
+
+Conversation mode is the only text-gen path now — there is no "without
+conversation mode" state to test (see test_llm_api_direct.py for the
+no-router-registered error case).
 """
 import sys
 import tempfile
@@ -22,7 +25,7 @@ import ingest  # noqa: F401  (import side-effect: registers the router)
 from _core import Config, ConversationPending
 
 
-def _make_config(tmp: Path, *, conversation: bool) -> Config:
+def _make_config(tmp: Path) -> Config:
     return Config(
         wiki_root=tmp / "wiki",
         raw_root=tmp / "raw",
@@ -43,7 +46,6 @@ def _make_config(tmp: Path, *, conversation: bool) -> Config:
         source_budget=100000,
         target_chars=60000,
         max_tokens=8192,
-        conversation_mode=conversation,
         conversation_prefix="ab12cd34",
     )
 
@@ -58,7 +60,7 @@ class TestConversationHandoff(unittest.TestCase):
     def test_writes_prompt_and_raises_pending(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            cfg = _make_config(tmp, conversation=True)
+            cfg = _make_config(tmp)
             with self.assertRaises(ConversationPending):
                 _llm_api.call_anthropic_protocol("analyze this text", cfg)
             conv_dir = cfg.runtime_dir / "conversation" / cfg.conversation_prefix
@@ -69,7 +71,7 @@ class TestConversationHandoff(unittest.TestCase):
     def test_returns_cached_result_on_reinvoke(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            cfg = _make_config(tmp, conversation=True)
+            cfg = _make_config(tmp)
             with self.assertRaises(ConversationPending):
                 _llm_api.call_anthropic_protocol("build a digest", cfg, max_tokens=2048)
             conv_dir = cfg.runtime_dir / "conversation" / cfg.conversation_prefix
@@ -88,7 +90,7 @@ class TestConversationHandoff(unittest.TestCase):
         # A cached result must remain readable on a second consume.
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            cfg = _make_config(tmp, conversation=True)
+            cfg = _make_config(tmp)
             with self.assertRaises(ConversationPending):
                 _llm_api.call_anthropic_protocol("build a digest", cfg, max_tokens=2048)
             conv_dir = cfg.runtime_dir / "conversation" / cfg.conversation_prefix
@@ -113,7 +115,7 @@ class TestConversationHandoff(unittest.TestCase):
         # distinct prompts → distinct slugs.
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            cfg = _make_config(tmp, conversation=True)
+            cfg = _make_config(tmp)
             with self.assertRaises(ConversationPending):
                 _llm_api.call_anthropic_protocol("write source page for part A", cfg)
             with self.assertRaises(ConversationPending):
@@ -131,7 +133,7 @@ class TestConversationHandoff(unittest.TestCase):
         # list so two prompts differing ONLY in the wiki-page list share a slug.
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            cfg = _make_config(tmp, conversation=True)
+            cfg = _make_config(tmp)
             base = "build a digest\n- Existing wiki pages: overview, schema\n"
             with self.assertRaises(ConversationPending):
                 _llm_api.call_anthropic_protocol(base, cfg, max_tokens=2048)
@@ -147,14 +149,6 @@ class TestConversationHandoff(unittest.TestCase):
             self.assertEqual(len(md_files), 1,
                              f"volatile wiki list must not split the cache; got {[m.name for m in md_files]}")
             self.assertEqual(md_files[0], first_md)
-
-    def test_without_conversation_mode_raises(self):
-        with tempfile.TemporaryDirectory() as d:
-            tmp = Path(d)
-            cfg = _make_config(tmp, conversation=False)
-            with self.assertRaises(RuntimeError) as cm:
-                _llm_api.call_anthropic_protocol("any prompt", cfg)
-            self.assertIn("--conversation", str(cm.exception))
 
 
 if __name__ == "__main__":

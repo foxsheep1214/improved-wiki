@@ -6,15 +6,15 @@
 
 ---
 
-> **例外**：图片 caption（Stage 1.3）走 MiniMax VLM（需 `MINIMAX_CN_API_KEY`）；Embedding（Stage 3.5）可选，独立配置（`EMBEDDING_BASE_URL`），不走 MiniMax。文本生成在 conversation 模式下由当前对话完成，但 **wikilink enrichment 即便在 conversation 模式下也走 direct API**（`call_anthropic_direct`，需 `LLM_API_KEY`，高频低值调用）。round iii（2026-06-21）起，direct API 也是未加 `--conversation` 时的默认文本生成路径。
+> **例外**：图片 caption（Stage 1.3）走 MiniMax VLM（需 `MINIMAX_CN_API_KEY`）；Embedding（Stage 3.5）可选，独立配置（`EMBEDDING_BASE_URL`），不走 MiniMax。round iv（2026-06-22）起文本生成只有 conversation 一条路径，无 direct API 分支——wikilink enrichment 也已改为走 conversation（批量：每次 ingest 汇总所有新写页面问一次，而非逐页问）。
 
 ## Mode Comparison
 
 | 维度 | Conversation Mode |
 |------|-------------------|
-| LLM 调用 | 当前对话直接执行（当前模型，spawn 子代理） |
+| LLM 调用 | 当前对话直接执行（当前模型）；单本书永远串行，仅当多本书batch ingest同时产生多个pending prompt时才派生子代理并行回答 |
 | API Key | 不需要（仅 caption 需 MiniMax key） |
-| 执行方式 | `ingest.py --conversation` 交接 或 对话中逐步完成 |
+| 执行方式 | `ingest.py` 交接（唯一路径，无需 flag） 或 对话中逐步完成 |
 | 状态保存 | 对话上下文 / `.llm-wiki/conversation/` |
 | 适用场景 | 人工单次消化、agent 自动化 |
 

@@ -117,7 +117,7 @@ from _stage_3_write import (
     _stage_3_1_backup_existing_page,
 )
 from _stage_3_2_inject_images import stage_3_2_inject_images
-from _enrich_wikilinks import enrich_wikilinks
+from _enrich_wikilinks import enrich_wikilinks_batch
 from _stage_validators import verify_stage_0, StageValidationError
 
 
@@ -413,13 +413,14 @@ def _run_post_ingest_graph(config: Config) -> None:
 # ---------- LLM API call ----------
 
 def call_anthropic_protocol(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
-    """Text-generation LLM call — conversation mode only (round ii, 2026-06-20).
+    """Text-generation LLM call — conversation mode only (round iv, 2026-06-22).
 
-    HTTP-direct text generation has been removed. In conversation mode the
+    HTTP-direct text generation has been removed for good: this skill is only
+    ever driven from a CLI session with an agent present to answer prompts,
+    so there is no real use case for a separate paid text-gen API key. The
     prompt is written to a file and ``ConversationPending`` is raised so the
     calling agent can answer with the current conversation's model; on
-    re-invoke the cached result is read and returned. Without conversation
-    mode the call raises (use ``--conversation``).
+    re-invoke the cached result is read and returned.
 
     This function is registered as the conversation router on ``_llm_api`` so
     that the stage modules (which call ``_llm_api.call_anthropic_protocol``)
@@ -427,13 +428,6 @@ def call_anthropic_protocol(prompt: str, config: Config, max_tokens: int | None 
 
     Returns (text_content, stop_reason).
     """
-    if not config.conversation_mode:
-        raise RuntimeError(
-            "Text generation requires --conversation mode. HTTP-direct LLM "
-            "calls have been removed (round ii); run ingest.py with "
-            "--conversation so the calling agent handles each LLM step with "
-            "the current conversation's model."
-        )
     return _conversation_llm_call(prompt, config, max_tokens)
 
 
@@ -725,55 +719,31 @@ def _analyze_all_chunks(
     raw_file: Path, config: Config, template_content: str,
     chunk_total: int, t_start: float, verbose: bool,
 ) -> list:
-    """Stage 2.2: analyze all chunks.
+    """Stage 2.2: analyze all chunks, serially.
 
-    Serial (conversation mode or single chunk) preserves cross-chunk
-    ``accumulated_digest`` refinement; parallel (direct API, multi-chunk)
-    analyzes concurrently against the static ``global_digest``.
+    Serial preserves cross-chunk ``accumulated_digest`` refinement \u2014 each
+    chunk's analysis is informed by the previous chunk's updated digest.
+    Conversation mode is the only text-gen path, so there is no parallel
+    branch: every call is a manual round-trip, which is inherently serial.
     Returns chunk_analyses indexed by chunk order.
     """
     chunk_analyses: list = []
 
-    if config.conversation_mode or chunk_total <= 1:
-        for i, chunk, overlap_before, heading_path in chunk_meta:
-            ca = _stage_2_2_analyze_chunk(
-                chunk, i, chunk_total, global_digest, accumulated_digest,
-                overlap_before, heading_path, raw_file, config, template_content,
-                max_retries=_stage_2_2_chunk_retries(), verbose=verbose)
-            chunk_analyses.append(ca)
-            updated = ca.get("updated_global_digest", "")
-            if isinstance(updated, str) and len(updated.strip()) > 50:
-                accumulated_digest = updated.strip()
-            elif isinstance(updated, dict):
-                accumulated_digest = json.dumps(updated, ensure_ascii=False, indent=2)
-            done = i + 1
-            pct = done * 100 // chunk_total
-            eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
-            print(f"  [analyze] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
-        return chunk_analyses
-
-    max_workers = min(chunk_total, int(os.environ.get("LLM_MAX_CONCURRENCY", "6")))
-    print(f"  [analyze] parallel \u2014 {chunk_total} chunks, {max_workers} workers")
-    results: dict[int, dict] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                _stage_2_2_analyze_chunk, chunk, i, chunk_total, global_digest,
-                "", overlap_before, heading_path, raw_file, config,
-                template_content, max_retries=_stage_2_2_chunk_retries(), verbose=verbose,
-            ): i
-            for (i, chunk, overlap_before, heading_path) in chunk_meta
-        }
-        for fut in as_completed(futures):
-            i = futures[fut]
-            try:
-                results[i] = fut.result()
-            except Exception as e:
-                results[i] = {"chunk_index": i + 1, "error": str(e), "_attempts": 1}
-                print(f"  [chunk {i+1}/{chunk_total}] analyze worker FAILED: {e}")
-    chunk_analyses = [results[i] for i in range(chunk_total)]
-    ok = sum(1 for ca in chunk_analyses if "error" not in ca)
-    print(f"  [analyze] done \u2014 {ok}/{chunk_total} analyzed in {time.time()-t_start:.0f}s")
+    for i, chunk, overlap_before, heading_path in chunk_meta:
+        ca = _stage_2_2_analyze_chunk(
+            chunk, i, chunk_total, global_digest, accumulated_digest,
+            overlap_before, heading_path, raw_file, config, template_content,
+            max_retries=_stage_2_2_chunk_retries(), verbose=verbose)
+        chunk_analyses.append(ca)
+        updated = ca.get("updated_global_digest", "")
+        if isinstance(updated, str) and len(updated.strip()) > 50:
+            accumulated_digest = updated.strip()
+        elif isinstance(updated, dict):
+            accumulated_digest = json.dumps(updated, ensure_ascii=False, indent=2)
+        done = i + 1
+        pct = done * 100 // chunk_total
+        eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
+        print(f"  [analyze] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
     return chunk_analyses
 
 
@@ -1229,17 +1199,17 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     canonical_source = f"raw/{raw_file.relative_to(config.raw_root)}"
     today_str = time.strftime("%Y-%m-%d")
 
-    # ── Wikilink enrichment setup (round iii, 2026-06-21) ──
-    # After each page is written, ask the LLM (direct API) to suggest
-    # [[wikilinks]] for body terms matching existing wiki pages. Gated by
-    # --enrich-wikilinks / --no-enrich. existing_slugs is a pre-loop snapshot
-    # of the wiki; written_slugs accumulates this ingest's new pages so later
-    # pages in the same batch can link to earlier ones. Listing pages are
-    # skipped (auto-managed). Soft-fails if no API key (returns content
-    # unchanged) — see _enrich_wikilinks.
+    # ── Wikilink enrichment setup (round iv, 2026-06-22) ──
+    # After every page in this ingest is written, one batched LLM call (via
+    # the conversation router — see _enrich_wikilinks.enrich_wikilinks_batch)
+    # suggests [[wikilinks]] for body terms matching existing wiki pages or
+    # sibling pages from this same ingest. Gated by --enrich-wikilinks /
+    # --no-enrich. existing_slugs is a pre-loop snapshot of the wiki.
+    # enrich_candidates collects (rel_path, full_path) for non-listing pages
+    # written this ingest; the batch call happens once, after the loop.
     enrich_enabled = prepared.get("enrich_enabled", True)
     existing_slugs = list_existing_slugs(config) if enrich_enabled else []
-    written_slugs: list[str] = []
+    enrich_candidates: list[tuple[str, Path]] = []
 
     for rel_path, content in file_blocks:
         if ".." in rel_path or rel_path.startswith("/"):
@@ -1295,26 +1265,24 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         action = "[merge]" if do_merge else "[overwrite]" if is_listing and full_path.exists() else "[write]"
         print(f"  {action} {rel_path}")
 
-        # ── Wikilink enrichment (direct API, post-write) ──
-        # Enrich the ACTUAL written content (post-merge) so links target real
-        # pages. Skip listing pages (auto-managed) and very short bodies.
-        this_slug = Path(rel_path).stem
         if enrich_enabled and not is_listing:
-            try:
-                written_content = full_path.read_text(encoding="utf-8")
-                enriched = enrich_wikilinks(
-                    written_content,
-                    existing_slugs + written_slugs,
-                    config,
-                )
-                if enriched != written_content:
-                    full_path.write_text(enriched, encoding="utf-8")
-                    print(f"  [enrich] {rel_path} (+wikilinks)")
-            except Exception as e:
-                # Enrichment is best-effort — never fail the ingest over it.
-                print(f"  [enrich] {rel_path} skipped ({type(e).__name__})")
-        if this_slug not in written_slugs:
-            written_slugs.append(this_slug)
+            enrich_candidates.append((rel_path, full_path))
+
+    if enrich_enabled and enrich_candidates:
+        # Enrich the ACTUAL written content (post-merge) so links target real
+        # pages. One batched call for the whole ingest — see
+        # _enrich_wikilinks.enrich_wikilinks_batch. Not wrapped in try/except:
+        # a malformed response or routing error now fails the ingest visibly,
+        # same as any other stage.
+        pages_for_enrichment = [
+            (rel_path, full_path.read_text(encoding="utf-8"))
+            for rel_path, full_path in enrich_candidates
+        ]
+        enriched_pages = enrich_wikilinks_batch(pages_for_enrichment, existing_slugs, config)
+        for rel_path, full_path in enrich_candidates:
+            if rel_path in enriched_pages:
+                full_path.write_text(enriched_pages[rel_path], encoding="utf-8")
+                print(f"  [enrich] {rel_path} (+wikilinks)")
 
     if not source_block:
         # Build NashSU-quality source page from digest data (no LLM needed)
@@ -1930,10 +1898,6 @@ def main() -> int:
         help="Print LLM responses for debugging",
     )
     parser.add_argument(
-        "--conversation", action="store_true",
-        help="Delegate LLM calls to calling agent via prompt.md → result.txt protocol.",
-    )
-    parser.add_argument(
         "--watch", action="store_true",
         help="Continuously watch ingest-queue.json and process pending entries. "
              "New entries added by wiki-monitor.sh are picked up automatically.",
@@ -1964,7 +1928,6 @@ def main() -> int:
     # ── Watch mode: continuous queue consumer ──
     if args.watch:
         config = Config.from_env()
-        config.conversation_mode = args.conversation
         config.enrich_enabled = args.enrich_wikilinks and not args.no_enrich
         config.runtime_dir.mkdir(parents=True, exist_ok=True)
         max_conc = args.parallel if args.parallel > 0 else BATCH_MAX_CONCURRENT
@@ -1994,7 +1957,6 @@ def main() -> int:
         return 0
 
     config = Config.from_env()
-    config.conversation_mode = args.conversation
     config.enrich_enabled = args.enrich_wikilinks and not args.no_enrich
     config.stop_after_stage = args.stop_after_stage
 

@@ -1,13 +1,12 @@
-"""Tests for the direct HTTP text-gen path (round iii, 2026-06-21; streaming 2026-06-21).
+"""Tests for the direct HTTP text-gen helper (round iv, 2026-06-22).
 
-Verifies:
+`call_anthropic_direct` is no longer reachable from `call_anthropic_protocol`
+(text generation is conversation-mode only — see test_conversation_router.py),
+but the function itself is kept as a plain HTTP helper for callers outside
+the ingest pipeline (e.g. `cross_source_dedup.py`). This file verifies:
   * `call_anthropic_direct` parses both the OpenAI chat-completions and the
     Anthropic messages protocols via SSE streaming (mocked urllib — no network).
-  * Routing in `call_anthropic_protocol`: direct API when not in conversation
-    mode, conversation router when ``--conversation`` is set.
-  * Raises clearly when no API key is configured (the message must point at
-    both LLM_API_KEY and --conversation so the existing regression test that
-    asserts ``--conversation`` in the error still holds).
+  * Raises clearly when no API key is configured.
 
 Stdlib `unittest` only — no pytest, no network, no real LLM calls.
 """
@@ -28,8 +27,7 @@ import _llm_api
 from _core import Config, ConversationPending
 
 
-def _make_config(*, conversation: bool = False, api_key: str = "sk-test",
-                 protocol: str = "openai") -> Config:
+def _make_config(*, api_key: str = "sk-test", protocol: str = "openai") -> Config:
     return Config(
         wiki_root=Path("/tmp/wiki"),
         raw_root=Path("/tmp/raw"),
@@ -50,7 +48,6 @@ def _make_config(*, conversation: bool = False, api_key: str = "sk-test",
         source_budget=100000,
         target_chars=60000,
         max_tokens=8192,
-        conversation_mode=conversation,
         conversation_prefix="ab12cd34",
     )
 
@@ -158,13 +155,10 @@ class TestCallAnthropicDirect(unittest.TestCase):
         self.assertEqual(captured["url"], "https://provider.example/v1/messages")
         self.assertEqual(captured["headers"].get("x-api-key"), "sk-anthropic")
 
-    def test_no_api_key_raises_pointing_at_conversation(self):
+    def test_no_api_key_raises(self):
         cfg = _make_config(api_key="")
         with self.assertRaises(RuntimeError) as cm:
             _llm_api.call_anthropic_direct("hi", cfg)
-        # The conversation-router regression test asserts "--conversation"
-        # appears in the non-conversation-mode error; keep that contract.
-        self.assertIn("--conversation", str(cm.exception))
         self.assertIn("API key", str(cm.exception))
 
     def test_empty_response_is_treated_as_failure(self):
@@ -178,19 +172,11 @@ class TestCallAnthropicDirect(unittest.TestCase):
 
 
 class TestRouting(unittest.TestCase):
-    def test_protocol_routes_to_direct_when_not_conversation(self):
-        cfg = _make_config(conversation=False, protocol="openai")
-        payload = _openai_sse(content="direct", finish="stop")
-        with mock.patch.object(_llm_api.urllib.request, "urlopen",
-                               return_value=_FakeResponse(payload)) as urlopen:
-            text, _ = _llm_api.call_anthropic_protocol("hi", cfg, max_tokens=64)
-        self.assertEqual(text, "direct")
-        urlopen.assert_called_once()  # went through direct HTTP, not router
-
-    def test_protocol_routes_to_conversation_router_when_enabled(self):
-        # Conversation mode must still hand off via the router (no HTTP call),
-        # even when an API key is present.
-        cfg = _make_config(conversation=True, protocol="openai", api_key="sk-x")
+    def test_protocol_always_routes_to_conversation_router(self):
+        # Text generation has exactly one path now — even with an API key
+        # present, call_anthropic_protocol must hand off via the router and
+        # never touch HTTP directly.
+        cfg = _make_config(protocol="openai", api_key="sk-x")
         called = {"router": False}
 
         def _router(prompt, config, max_tokens):
@@ -203,6 +189,13 @@ class TestRouting(unittest.TestCase):
         self.assertTrue(called["router"])
         self.assertEqual(text, "router-answer")
         urlopen.assert_not_called()
+
+    def test_protocol_raises_when_no_router_registered(self):
+        cfg = _make_config(protocol="openai", api_key="sk-x")
+        with mock.patch.object(_llm_api, "_conversation_router", None):
+            with self.assertRaises(RuntimeError) as cm:
+                _llm_api.call_anthropic_protocol("hi", cfg)
+        self.assertIn("router", str(cm.exception))
 
 
 if __name__ == "__main__":

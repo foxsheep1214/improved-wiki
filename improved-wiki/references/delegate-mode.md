@@ -1,6 +1,6 @@
 # Delegate Mode — Agent Orchestration
 
-When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **conversation mode** (`--conversation`) to let the agent handle every text-generation LLM step with the current conversation's model. The default path (without `--conversation`) is direct API via `call_anthropic_direct`, which needs `LLM_API_KEY` and can't hand off to the calling agent; wikilink enrichment uses direct API unconditionally even in conversation mode (high-volume, low-value-per-call). The one external API dependency outside text generation is image captioning (Stage 1.3, MiniMax VLM).
+Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **conversation mode** — there is no flag, and no direct-API alternative. Every text-generation LLM step (including wikilink enrichment, batched once per ingest) is handled by the calling agent with the current conversation's model. The one external API dependency outside text generation is image captioning (Stage 1.3, MiniMax VLM) — vision content can't flow through the prompt-file handoff, so it always calls its configured HTTP API directly.
 
 ---
 
@@ -14,11 +14,11 @@ When invoking improved-wiki from an agent (Claude Code, Hermes, etc.), use **con
 
 ## Conversation Mode Workflow
 
-### Step 1: Start with `--conversation`
+### Step 1: Start the ingest
 
 ```bash
 cd /path/to/wiki/project
-scripts/ingest.py raw/Book/Book.pdf --conversation
+scripts/ingest.py raw/Book/Book.pdf
 ```
 
 At each LLM call point, `ingest.py` writes a prompt file and raises `ConversationPending` (exit code `101`).
@@ -38,7 +38,7 @@ The agent reads the `.md` file, executes the LLM task, and writes the result to:
 ### Step 3: Re-invoke to continue
 
 ```bash
-scripts/ingest.py raw/Book/Book.pdf --conversation
+scripts/ingest.py raw/Book/Book.pdf
 ```
 
 `ingest.py` finds the result file, reads it, continues to the next stage, and repeats until completion.
@@ -55,7 +55,7 @@ Pipelines with multiple LLM calls (chunk analysis, per-chunk generation) use a `
 def ingest_via_conversation(pdf_path, project_path):
     while True:
         proc = subprocess.run(
-            ["scripts/ingest.py", pdf_path, "--conversation"],
+            ["scripts/ingest.py", pdf_path],
             cwd=project_path,
             env={**os.environ, "IMPROVED_WIKI_ROOT": project_path},
         )
