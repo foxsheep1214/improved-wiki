@@ -18,8 +18,27 @@ def stage_2_10_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: 
     """
     # NashSU 3-condition trigger (not just file block count)
     has_review_open = "---REVIEW:" in raw_response and not raw_response.rstrip().endswith("---END REVIEW---")
-    if len(file_blocks) < 4 and len(raw_response) < 10000 and not has_review_open:
-        print(f"[stage 2.10] Skipped — {len(file_blocks)} blocks, {len(raw_response)} chars, "
+    # ``file_blocks``/``raw_response`` reflect only THIS conversation-mode replay
+    # pass, not the whole ingest. A source that needed several replays (e.g.
+    # one pass does the real Stage 2.4 generation, a later pass replays after
+    # those pages are already on disk and correctly emits 0 new blocks) would
+    # otherwise have a substantial earlier pass's work invisible to this
+    # threshold check, silently skipping review even though 20+ pages were
+    # genuinely generated for this source (confirmed live: Plett BMS Vol.2 —
+    # an earlier pass generated 26 blocks and a real review answer was cached
+    # and accepted, but the final completing pass saw file_blocks=1 and
+    # skipped, so the cached review was never written to wiki/REVIEW/).
+    conv_dir = config.runtime_dir / "conversation" / (config.conversation_prefix or "00000000")
+    cumulative_blocks = len(file_blocks)
+    if conv_dir.exists():
+        for f in conv_dir.glob("Stage-2-*-*.txt"):
+            try:
+                cumulative_blocks += f.read_text(encoding="utf-8").count("---FILE:")
+            except OSError:
+                continue
+    if cumulative_blocks < 4 and len(raw_response) < 10000 and not has_review_open:
+        print(f"[stage 2.10] Skipped — {len(file_blocks)} blocks this pass "
+              f"({cumulative_blocks} cumulative across replays), {len(raw_response)} chars, "
               f"no incomplete REVIEW (all below NashSU thresholds)")
         return {"skipped": True, "reason": "below-thresholds"}
 
