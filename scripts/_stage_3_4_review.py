@@ -1,10 +1,10 @@
 
 from _stage_2_base import *
 
-def stage_2_10_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: Path,
+def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: Path,
                                   config: Config, *, raw_response: str = "",
                                   verbose: bool = False) -> dict:
-    """Stage 2.10: Run LLM review over newly generated wiki pages (quality assurance).
+    """Stage 3.4: Run LLM review over newly generated wiki pages (quality assurance).
 
     NashSU trigger conditions (ingest.ts): any of —
       - >= 4 FILE blocks
@@ -37,12 +37,12 @@ def stage_2_10_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: 
             except OSError:
                 continue
     if cumulative_blocks < 4 and len(raw_response) < 10000 and not has_review_open:
-        print(f"[stage 2.10] Skipped — {len(file_blocks)} blocks this pass "
+        print(f"[stage 3.4] Skipped — {len(file_blocks)} blocks this pass "
               f"({cumulative_blocks} cumulative across replays), {len(raw_response)} chars, "
               f"no incomplete REVIEW (all below NashSU thresholds)")
         return {"skipped": True, "reason": "below-thresholds"}
 
-    print(f"[stage 2.10] Running review over {len(file_blocks)} new pages + existing wiki...")
+    print(f"[stage 3.4] Running review over {len(file_blocks)} new pages + existing wiki...")
 
     # Collect new page contents
     new_pages: list[str] = []
@@ -110,11 +110,11 @@ def stage_2_10_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: 
             max_retries=3, label="stage-2.10",
         )
     except Exception as e:
-        print(f"[stage 2.10] LLM call failed after retries: {e}")
+        print(f"[stage 3.4] LLM call failed after retries: {e}")
         return {"error": str(e)}
 
     if verbose:
-        print(f"[stage 2.10] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
+        print(f"[stage 3.4] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
 
     # Parse YAML
     text = response
@@ -193,7 +193,7 @@ _待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 `resolv
         tmp.rename(page_path)
         written += 1
 
-    print(f"[stage 2.10] {written} review pages -> wiki/REVIEW/")
+    print(f"[stage 3.4] {written} review pages -> wiki/REVIEW/")
 
     # Also write JSON for tooling (backward compat)
     runtime_dir = config.runtime_dir

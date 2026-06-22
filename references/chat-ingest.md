@@ -163,7 +163,7 @@ After generation, Claude:
 1. Parses FILE blocks
 2. Writes pages to `wiki/` (using page merge if page exists)
 3. Injects image references into source page (Stage 3.2)
-4. Appends to index.md / log.md (Stage 3.4, programmatic)
+4. Appends to index.md / log.md (Stage 3.5, programmatic)
 5. Runs `validate_ingest.py`
 
 ```bash

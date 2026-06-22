@@ -332,7 +332,7 @@ def main():
         check("sources/concepts/entities all populated",
               len(sources) > 0 and len(concepts) > 0 and len(entities) > 0,
               f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
-    # Source page coverage (project-wide health check; folded from old Stage 3.7)
+    # Source page coverage (project-wide health check; folded from a removed aggregate-check stage)
     if CACHE_PATH.exists():
         _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
         _entries = _cache.get("entries", {})
@@ -408,9 +408,9 @@ def main():
         check("review output found", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 3.4: Aggregate pages + hash cache
+    # Stage 3.5: Aggregate pages + hash cache
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.4] Aggregate pages + hash cache")
+    print("\n[Stage 3.5] Aggregate pages + hash cache")
     for name in ("index.md", "log.md", "overview.md"):
         p = WIKI / name
         check(f"wiki/{name} exists and non-empty",
@@ -436,9 +436,9 @@ def main():
         check("ingest-cache.json has matching entry", False, f"slug={SOURCE_SLUG}")
 
     # ═══════════════════════════════════════════════
-    # Stage 3.6: Embeddings (mandatory attempt — local Ollama bge-m3)
+    # Stage 3.7: Embeddings (mandatory attempt — local Ollama bge-m3)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.6] Embeddings (mandatory attempt)")
+    print("\n[Stage 3.7] Embeddings (mandatory attempt)")
     lance = RUNTIME / "lancedb"
     embed_cache = RUNTIME / "embed-cache.json"
     lance_present = lance.is_dir() and bool(list(lance.glob("*.lance")))
@@ -470,10 +470,10 @@ def main():
               f"lance={'yes' if lance_present else 'no'}, embed-cache={'populated' if embed_cache_exists else 'no'}")
     else:
         sys.path.insert(0, str(_script_dir))
-        from ingest import _stage_3_6_check_embed_capability
+        from ingest import _stage_3_7_check_embed_capability
         base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
         model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
-        cap_ok, cap_reason = _stage_3_6_check_embed_capability(base_url, model)
+        cap_ok, cap_reason = _stage_3_7_check_embed_capability(base_url, model)
         if cap_ok:
             check("embeddings present", False,
                   "本地 Ollama bge-m3 可用但 wiki 尚未 embed — 补跑 build_embeddings.py")

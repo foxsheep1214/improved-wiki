@@ -2,7 +2,7 @@
 """
 repair_wiki.py — Rebuild ## Embedded Images sections from .caption.txt files.
 
-Repairs Stage 3.5 (image injection): scans all source pages, reads
+Repairs Stage 3.2 (image injection): scans all source pages, reads
 .caption.txt files from wiki/media/, and rebuilds the "## Embedded Images"
 table.  Supports dry-run mode.
 

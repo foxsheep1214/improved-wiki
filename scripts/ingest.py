@@ -107,9 +107,9 @@ from _stage_2_9_comparison import (
     _stage_2_9_build_prompt_disambiguation,
     _stage_2_9_build_prompt_in_source,
 )
-from _stage_2_10_review import stage_2_10_review_suggestions
+from _stage_3_4_review import stage_3_4_review_suggestions
 from _stage_3_write import (
-    stage_3_1_write_wiki_file, stage_3_4_aggregate_repair,
+    stage_3_1_write_wiki_file, stage_3_5_aggregate_repair,
     _stage_3_1_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
     _stage_3_1_sanitize_ingested_content,
     _stage_3_1_wiki_path_for_source, _stage_3_1_merge_page_content,
@@ -336,12 +336,12 @@ def validate_stage_outputs(
         warnings.append(msg)
         print(f"  ⚠️  {msg}")
 
-    # Stage 3.5: image injection verification
+    # Stage 3.6: image injection verification
     if img_count > 0 and source_path.exists():
         source_content = source_path.read_text(encoding="utf-8")
         if "## Embedded Images" not in source_content:
             warnings.append("Stage 3.2: source page missing '## Embedded Images' section")
-            print(f"  ⚠️  Stage 3.5: image injection not found in source page")
+            print(f"  ⚠️  Stage 3.6: image injection not found in source page")
 
     # Stage 3: source page on disk (post-write verify)
     if not source_path.exists():
@@ -359,7 +359,7 @@ def validate_stage_outputs(
         if unresolved > 0:
             print(f"  ℹ️  wiki/REVIEW/: {unresolved} unresolved review pages pending human triage")
 
-    # Stage 3.4: cache will be written after this — just check cache_path dir exists
+    # Stage 3.5: cache will be written after this — just check cache_path dir exists
     config.cache_path.parent.mkdir(parents=True, exist_ok=True)
 
     if warnings:
@@ -536,7 +536,7 @@ def _infer_stage(prompt: str) -> str:
     routinely appear somewhere in a real book by coincidence (confirmed live:
     Plett's BMS Vol.2 preface contains "send me corrections and suggestions
     for improvements", which previously made every digest/chunk-analysis call
-    for that book misreport itself as the Stage 2.10 review step).
+    for that book misreport itself as the Stage 3.4 review step).
     """
     head = prompt[:500]
     if "generating wiki pages" in head.lower() or ("Synthesis" in head and "FILE blocks" in head):
@@ -629,7 +629,7 @@ def ingest_one(
 
     # ── Post-ingest (unique to single-book path) ──
     _run_post_ingest_graph(config)
-    stage_3_6_embed_new_pages(config, files_written)
+    stage_3_7_embed_new_pages(config, files_written)
     stage_4_1_validate_ingest(config, raw_file)
 
     return {"status": "ok", "files_written": files_written}
@@ -1358,8 +1358,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     stage_3_3_result = stage_3_3_slug_collision_review(
         file_blocks, prepared.get("current_domain", "general"), config, verbose=verbose)
 
-    # Stage 2.10: Review (quality review of generated pages)
-    stage_2_10_result = stage_2_10_review_suggestions(
+    # Stage 3.4: Review (quality review of generated pages)
+    stage_3_4_result = stage_3_4_review_suggestions(
         file_blocks, raw_file, config, raw_response=raw_response, verbose=verbose)
 
     # Go/no-go validation
@@ -1370,8 +1370,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     )
 
 
-    # Stage 3.4: Aggregate repair
-    index_log_files = stage_3_4_aggregate_repair(source_path, raw_file, analysis, h, method, config)
+    # Stage 3.5: Aggregate repair
+    index_log_files = stage_3_5_aggregate_repair(source_path, raw_file, analysis, h, method, config)
 
     # Update cache
     try:
@@ -1418,12 +1418,12 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         return {"status": "hard-error", "error": str(e),
                 "files_written": files_written_paths + index_log_files}
 
-    # Stage 3.5: Quality scoring card (always runs; flags needs_review < 0.65)
-    from _stage_3_5_quality import stage_3_5_quality
+    # Stage 3.6: Quality scoring card (always runs; flags needs_review < 0.65)
+    from _stage_3_6_quality import stage_3_6_quality
     _q_review = stage_3_3_result.get("items", 0)
     _q_stats = prepared.get("concept_merge_stats", (0, 0))
     _q_dedup_ran = prepared.get("dedup_was_run", False)
-    quality_result = stage_3_5_quality(
+    quality_result = stage_3_6_quality(
         raw_file, config, extracted_text,
         stage_1_2_result.get("count", 0), stage_1_3_result.get("captioned", 0),
         file_blocks, _q_review, _q_stats, _q_dedup_ran, verbose=verbose)
@@ -1431,7 +1431,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # Note: Detailed validation moved to separate 'validate' command (Phase 2 refactor)
     # Ingest now focuses on generation (Stages 0-3.5) with per-stage validation
     # For detailed quality checks, run: python3 validate.py <source_slug>
-    # Stage 3.6 (embeddings) runs in the post-ingest section of ingest_one —
+    # Stage 3.7 (embeddings) runs in the post-ingest section of ingest_one —
     # single entry point, mandatory attempt against local Ollama bge-m3
     # (prints an install reminder instead of silently skipping if unavailable).
 
@@ -1804,7 +1804,7 @@ def stage_4_1_validate_ingest(config: Config, raw_file: Path) -> None:
         print(f"[validate] ✅ All 15 stages verified — ingest complete")
 
 
-def _stage_3_6_check_embed_capability(base_url: str, model: str) -> tuple[bool, str]:
+def _stage_3_7_check_embed_capability(base_url: str, model: str) -> tuple[bool, str]:
     """Probe local embedding capability: lancedb installed + Ollama reachable + model pulled.
 
     Returns (ok, reason). reason is empty when ok, otherwise a human-readable
@@ -1831,8 +1831,8 @@ def _stage_3_6_check_embed_capability(base_url: str, model: str) -> tuple[bool, 
     return True, ""
 
 
-def stage_3_6_embed_new_pages(config: Config, files_written: list[str]) -> None:
-    """Stage 3.6: embed wiki pages for semantic retrieval (mandatory attempt).
+def stage_3_7_embed_new_pages(config: Config, files_written: list[str]) -> None:
+    """Stage 3.7: embed wiki pages for semantic retrieval (mandatory attempt).
 
     NashSU parity (ingest.ts L1127-1146), upgraded 2026-06-21: always attempts
     embedding against local Ollama bge-m3 (default http://127.0.0.1:11434/v1)
@@ -1846,10 +1846,10 @@ def stage_3_6_embed_new_pages(config: Config, files_written: list[str]) -> None:
     base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
     model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
 
-    ok, reason = _stage_3_6_check_embed_capability(base_url, model)
+    ok, reason = _stage_3_7_check_embed_capability(base_url, model)
     if not ok:
-        print(f"[stage 3.6] ⚠️  Embeddings 不可用：{reason}")
-        print("[stage 3.6] 请安装后补跑（wiki 检索质量会下降到纯关键词，>100 页的 wiki 必须补）：")
+        print(f"[stage 3.7] ⚠️  Embeddings 不可用：{reason}")
+        print("[stage 3.7] 请安装后补跑（wiki 检索质量会下降到纯关键词，>100 页的 wiki 必须补）：")
         print("  1. brew install ollama          # 如未安装")
         print("  2. ollama serve                 # 如未启动")
         print(f"  3. ollama pull {model}")
@@ -1865,14 +1865,14 @@ def stage_3_6_embed_new_pages(config: Config, files_written: list[str]) -> None:
     if not new_files:
         return
 
-    print(f"[stage 3.6] Embedding {len(new_files)} new pages...")
+    print(f"[stage 3.7] Embedding {len(new_files)} new pages...")
     import subprocess
     script = Path(__file__).parent / "build_embeddings.py"
     subprocess.run(
         [sys.executable, str(script), "--project", str(config.wiki_root), "embed"],
         capture_output=True, timeout=300,
     )
-    print(f"[stage 3.6] Embedding complete")
+    print(f"[stage 3.7] Embedding complete")
 
 
 # ---------- CLI ----------

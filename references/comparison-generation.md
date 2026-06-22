@@ -189,7 +189,7 @@ updated: {today}
 
 ### 标记格式
 
-在 Stage 2.10 review 中追加 `type: missing-page` review item：
+在 Stage 3.4 review 中追加 `type: missing-page` review item：
 
 ```yaml
 - id: N
@@ -303,7 +303,7 @@ updated: {today}
 ## go/no-go 判断
 
 - **go**：生成了消歧义页 + 源内对比页（合计 0-2 个 FILE block），或输出 `---COMPARISONS: 0---` 标记
-- **no-go**：未输出任何 comparison block 也未输出 `---COMPARISONS: 0---` 标记 → Stage 2.3.5 未完成，重跑
+- **no-go**：未输出任何 comparison block 也未输出 `---COMPARISONS: 0---` 标记 → Stage 2.9 未完成，重跑
 - 每个 comparison 的 frontmatter 包含 `type: comparison` + `title:` + `domain:` 三必填字段
 
 ## 验证命令

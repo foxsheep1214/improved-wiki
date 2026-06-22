@@ -1,14 +1,14 @@
 # Knowledge Gap Lint — 高层知识空缺检测
 
 > **归属**：lint 系统（非 ingest pipeline）。
-> **触发**：每次 `wiki-lint` 运行时自动扫描，或在 ingest 完成后由 Stage 3.4 联动触发。
+> **触发**：每次 `wiki-lint` 运行时自动扫描，或在 ingest 完成后由 Stage 3.5 联动触发。
 > **产物**：`wiki/REVIEW/<gap-type>/<date>-<source>-<short-slug>.md` review items（按空缺类型分子目录）。
 
 ---
 
 ## 设计原理
 
-synthesis / finding / thesis / methodology 的形成不取决于单次 ingest 消化了什么——它们取决于**整个 wiki 的累积状态**。因此放在 per-ingest Stage 2.3.5 里跑是不对的：99% 的时候白算，而且语义不属于"本次 ingest 的产物质量审查"。
+synthesis / finding / thesis / methodology 的形成不取决于单次 ingest 消化了什么——它们取决于**整个 wiki 的累积状态**。因此放在 per-ingest Stage 3.4 里跑是不对的：99% 的时候白算，而且语义不属于"本次 ingest 的产物质量审查"。
 
 它们和 broken-link / orphan / missing-frontmatter 同质——都是 "wiki 结构不完整" 的信号。统一放到 lint 系统。
 

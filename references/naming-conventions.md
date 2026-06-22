@@ -118,7 +118,7 @@ wiki/overview.md
 wiki/log.md
 ```
 
-**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件**由 Stage 3.4 程序化 append，LLM 永远不应生成它们**。
+**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件**由 Stage 3.5 程序化 append，LLM 永远不应生成它们**。
 
 ---
 
@@ -274,8 +274,8 @@ wiki/media/<slug>/_manifest.json
 ├── ingest-queue.json           # 待处理队列
 ├── ingest-progress/            # <hash[:16]>.json 检查点
 ├── extract-tmp/<slug>/         # 文本抽取临时文件
-├── review-suggestions.json     # Stage 2.3.5 产物
-├── review.json                 # Stage 3.5 产物（run_review_suggestions.py）
+├── review-suggestions.json     # Stage 3.4 产物
+├── review.json                 # Stage 3.4 产物（run_review_suggestions.py）
 ├── lint-cache.json             # lint 结果缓存
 ├── lint-semantic.json          # 语义 lint 结果
 ├── ingest-lock                 # 并发锁
@@ -371,9 +371,9 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 | 文件 | 来源 |
 |------|------|
-| `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 2.3.5 每项一个 md |
-| `<runtime>/review-suggestions.json` | Stage 2.3.5 汇总 JSON |
-| `<runtime>/review.json` | `run_review_suggestions.py` Stage 3.5 产物 |
+| `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 3.4 每项一个 md |
+| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON |
+| `<runtime>/review.json` | `run_review_suggestions.py` Stage 3.4 产物 |
 
 ---
 

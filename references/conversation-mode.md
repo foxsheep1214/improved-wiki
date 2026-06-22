@@ -6,7 +6,7 @@
 
 ---
 
-> **例外**：图片 caption（Stage 1.3）走 MiniMax VLM（需 `MINIMAX_CN_API_KEY`）；Embedding（Stage 3.5）可选，独立配置（`EMBEDDING_BASE_URL`），不走 MiniMax。round iv（2026-06-22）起文本生成只有 conversation 一条路径，无 direct API 分支——wikilink enrichment 也已改为走 conversation（批量：每次 ingest 汇总所有新写页面问一次，而非逐页问）。
+> **例外**：图片 caption（Stage 1.3）走 MiniMax VLM（需 `MINIMAX_CN_API_KEY`）；Embedding（Stage 3.7）可选，独立配置（`EMBEDDING_BASE_URL`），不走 MiniMax。round iv（2026-06-22）起文本生成只有 conversation 一条路径，无 direct API 分支——wikilink enrichment 也已改为走 conversation（批量：每次 ingest 汇总所有新写页面问一次，而非逐页问）。
 
 ## Mode Comparison
 
@@ -167,7 +167,7 @@ digest_updates:
 
 ---
 
-### Stage 2.3.5: Review Suggestions
+### Stage 3.4: Review Suggestions
 
 **输入**：所有 chunk analyses + Global Digest
 
@@ -179,7 +179,7 @@ digest_updates:
 {所有 chunk 分析的汇总}
 </all_analyses>
 
-生成 5 类审查项（YAML 格式，与 ingest.py stage_2_10_review_suggestions 一致）：
+生成 5 类审查项（YAML 格式，与 ingest.py stage_3_4_review_suggestions 一致）：
 1. **confirm** — 需要确认的可疑内容
 2. **suggestion** — 改进建议
 3. **missing-page** — 缺少的重要页面
@@ -224,7 +224,7 @@ digest_updates:
 
 现有 wiki 页面：{现有页面列表}
 
-请生成以下页面（不要生成 index/log/overview——那由程序化的 Stage 3.4 处理）：
+请生成以下页面（不要生成 index/log/overview——那由程序化的 Stage 3.5 处理）：
 
 1. **Source 页面**：`wiki/sources/书名.md`
    - Frontmatter: type, title, created, updated, tags, related, sources
@@ -337,9 +337,9 @@ sources: ["raw/Book/书名.pdf"]
 2. Stage 1.1: Python 提取文本 → 全量字符
 3. Stage 2.1: 读取文本 + prompt → global digest YAML
 4. Stage 2.2: 分 N 次读取文本块 + prompt → N 个 chunk YAML（短源 ≥1 块，永远不跳过）
-5. Stage 2.3.5: 读取 analyses + prompt → review items（≥4 FILE 块时触发）
-6. Stage 2.3: 读取 digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）
-7. Stage 3.4: 程序化追加 index/log/overview（不让 LLM 重写）
+5. Stage 3.4: 读取 analyses + prompt → review items（≥4 FILE 块时触发）
+6. Stage 2.4: 读取 digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）
+7. Stage 3.5: 程序化追加 index/log/overview（不让 LLM 重写）
 8. 写入 wiki 文件（Stage 3.1）
 9. Stage 3.2: 读取 _manifest.json + source 页 → 注入 ## Embedded Images 段
 ```
@@ -350,7 +350,7 @@ sources: ["raw/Book/书名.pdf"]
 
 1. **文本长度**：长文本需要分阶段处理，避免超上下文
 2. **批次处理**：Stage 2.2 需要分批，每块 ~60K（ingest.py `target_chars`），短源仍然跑 1 块
-3. **最终整合**：Stage 2.3 需要整合所有分析结果，合理归并概念/实体
+3. **最终整合**：Stage 2.4 需要整合所有分析结果，合理归并概念/实体
 4. **图片 caption**：Stage 3.2 需要注入 `## Embedded Images` 段到 source 页
 5. **Frontmatter 完整性**：确保每个页面有 7 个必填字段
-6. **不要生成 index/log/overview**：这三页由 Stage 3.4 程序化 append，LLM 不应输出它们（防止 ADL8113 事故——整文件重写导致静默丢失历史条目）
+6. **不要生成 index/log/overview**：这三页由 Stage 3.5 程序化 append，LLM 不应输出它们（防止 ADL8113 事故——整文件重写导致静默丢失历史条目）

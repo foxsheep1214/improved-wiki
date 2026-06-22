@@ -38,7 +38,7 @@ ps aux | grep ingest.py | grep -v grep
 | `ingest-progress/` | Crash-recovery checkpoints | When no ingest is running |
 
 **Do NOT delete** (active state):
-- `ingest-cache.json` — dedup hash cache (Stage 3.4)
+- `ingest-cache.json` — dedup hash cache (Stage 3.5)
 - `lint-cache.json` / `lint-lock` — lint state
 - `graph.json` — knowledge graph (Graph command output)
 - `embed-cache.json` — embedding cache

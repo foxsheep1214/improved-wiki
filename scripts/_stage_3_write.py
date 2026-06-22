@@ -2,7 +2,7 @@
 
 This module holds Stage 3.1 (write), 3.3 (slug collision review), and 3.4
 (aggregate repair + cache). Sibling modules: _stage_3_2_inject_images.py
-(image injection) and _stage_3_5_quality.py (quality scoring). Stage 3.6
+(image injection) and _stage_3_6_quality.py (quality scoring). Stage 3.7
 (embeddings) runs from ingest.py post-ingest.
 
 Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
@@ -30,7 +30,7 @@ from _frontmatter_array import parse_frontmatter_array
 
 __all__ = [
     "stage_3_1_write_wiki_file",  # Stage 3.1
-    "stage_3_4_aggregate_repair", # Stage 3.4
+    "stage_3_5_aggregate_repair", # Stage 3.5
 ]
 
 # ---------- File writing ----------
@@ -426,7 +426,7 @@ def stage_3_1_write_wiki_file(path: Path, content: str, config: Config | None = 
     tmp.rename(path)
 
 
-def stage_3_4_aggregate_repair(
+def stage_3_5_aggregate_repair(
     source_path: Path,
     raw_file: Path,
     analysis: dict,
@@ -479,7 +479,7 @@ def stage_3_4_aggregate_repair(
         OVERVIEW_MAX_CHARS = min(24000, _AGGREGATE_CAP)
         INDEX_MAX_CHARS = _AGGREGATE_CAP
         if len(current_overview) > OVERVIEW_MAX_CHARS:
-            print(f"[stage 3.4] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
+            print(f"[stage 3.5] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
                   f"skipping LLM rewrite to avoid truncation")
             return files_written
 
@@ -487,7 +487,7 @@ def stage_3_4_aggregate_repair(
         if index_path.exists():
             index_size = index_path.stat().st_size
             if index_size > INDEX_MAX_CHARS:
-                print(f"[stage 3.4] Index too large ({index_size} > {INDEX_MAX_CHARS}) — "
+                print(f"[stage 3.5] Index too large ({index_size} > {INDEX_MAX_CHARS}) — "
                       f"skipping aggregate repair to avoid context overflow")
                 return files_written
         source_content = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
@@ -535,15 +535,15 @@ unless the new source directly contradicts or answers them.
             response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=4096)
             # NashSU parity: filter aggregate repair output — reject FILE blocks (ingest.ts L1216-1235)
             if "---FILE:" in response:
-                print(f"[stage 3.4] LLM response contained FILE blocks — discarding")
+                print(f"[stage 3.5] LLM response contained FILE blocks — discarding")
             elif response.strip().startswith("#"):
                 stage_3_1_write_wiki_file(overview_path, response.strip() + "\n", config)
                 files_written.append(str(overview_path.relative_to(config.wiki_root)))
-                print(f"[stage 3.4] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
+                print(f"[stage 3.5] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
             else:
-                print(f"[stage 3.4] LLM overview response did not start with '# Overview' — skipping")
+                print(f"[stage 3.5] LLM overview response did not start with '# Overview' — skipping")
         except Exception as e:
-            print(f"[stage 3.4] Overview LLM update failed: {e}")
+            print(f"[stage 3.5] Overview LLM update failed: {e}")
 
     return files_written
 

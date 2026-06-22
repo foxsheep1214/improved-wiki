@@ -1,4 +1,4 @@
-"""Stage 3.5: Quality Scoring Card
+"""Stage 3.6: Quality Scoring Card
 
 Refactored 2026-06-21 for explicit stage naming.
 """
@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 
 
-def _stage_3_5_calculate_quality_score(extracted_text, original_char_estimate, extracted_images,
+def _stage_3_6_calculate_quality_score(extracted_text, original_char_estimate, extracted_images,
     captioned_images, file_blocks, review_items, concept_merge_stats, dedup_was_run):
     metrics = {}
     text_coverage = min(1.0, len(extracted_text) / max(original_char_estimate, 1000))
@@ -44,7 +44,7 @@ def _stage_3_5_calculate_quality_score(extracted_text, original_char_estimate, e
             "needs_review": overall_score < 0.65}
 
 
-def _stage_3_5_generate_quality_card_md(source_stem, quality_result):
+def _stage_3_6_generate_quality_card_md(source_stem, quality_result):
     score = quality_result["overall_score"]
     metrics = quality_result["metrics"]
     needs_review = quality_result["needs_review"]
@@ -72,11 +72,11 @@ def _stage_3_5_generate_quality_card_md(source_stem, quality_result):
     return md
 
 
-def _stage_3_5_verify_quality_scoring(checkpoint):
+def _stage_3_6_verify_quality_scoring(checkpoint):
     return "quality_metrics" in checkpoint
 
 
-def _stage_3_5_estimate_expected_chars(raw_file) -> int:
+def _stage_3_6_estimate_expected_chars(raw_file) -> int:
     """Estimate expected extracted-text volume from the raw source's page count.
 
     Without this, text_coverage compared extracted_text's length against
@@ -97,25 +97,25 @@ def _stage_3_5_estimate_expected_chars(raw_file) -> int:
     return 1000  # no page-count signal available (pptx/docx/txt/md) — floor only
 
 
-def stage_3_5_quality(raw_file, config, extracted_text, images_extracted,
+def stage_3_6_quality(raw_file, config, extracted_text, images_extracted,
                       images_captioned, file_blocks, review_items,
                       concept_merge_stats, dedup_was_run, *, verbose: bool = False) -> dict:
-    """Stage 3.5: Quality scoring card (always runs; flags needs_review < 0.65).
+    """Stage 3.6: Quality scoring card (always runs; flags needs_review < 0.65).
 
     Computes the quality score, prints it, and writes a quality card to
     REVIEW/audit/ when needs_review. Returns the quality_result dict.
     """
-    quality_result = _stage_3_5_calculate_quality_score(
-        extracted_text, _stage_3_5_estimate_expected_chars(raw_file),
+    quality_result = _stage_3_6_calculate_quality_score(
+        extracted_text, _stage_3_6_estimate_expected_chars(raw_file),
         images_extracted, images_captioned,
         file_blocks, review_items, concept_merge_stats, dedup_was_run)
-    print(f"  [stage 3.5] Quality score: {quality_result['overall_score']:.1%}"
+    print(f"  [stage 3.6] Quality score: {quality_result['overall_score']:.1%}"
           f"{' ⚠️ needs_review' if quality_result['needs_review'] else ' ✅'}")
     if quality_result["needs_review"]:
         audit_dir = config.wiki_dir / "REVIEW" / "audit"
         audit_dir.mkdir(parents=True, exist_ok=True)
-        card = _stage_3_5_generate_quality_card_md(raw_file.stem, quality_result)
+        card = _stage_3_6_generate_quality_card_md(raw_file.stem, quality_result)
         (audit_dir / f"{time.strftime('%Y-%m-%d')}-{raw_file.stem}-quality.md"
          ).write_text(card, encoding="utf-8")
-        print(f"  [stage 3.5] Wrote quality card → REVIEW/audit/")
+        print(f"  [stage 3.6] Wrote quality card → REVIEW/audit/")
     return quality_result

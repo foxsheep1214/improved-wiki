@@ -1,6 +1,6 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——基于 NashSU v0.4.25 autoIngestImpl() 流水线的 ~13 个编号 ingest Stage + 2 个前置门（0.1/0.3）+ Lint + Graph 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——基于 NashSU v0.4.25 autoIngestImpl() 流水线的 20 个编号 ingest Stage + 3 个前置门（0.1/0.2/0.3）+ Lint + Graph 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
 tags: [ingest, mandatory, nashsu, pipeline]
 related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 ---
@@ -9,7 +9,7 @@ related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 
 ## 为什么需要"强制"？
 
-Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **Phase 0（3 个前置门：0.1 源页去重 / 0.2 / 0.3 Pilot OCR）+ ~13 个编号 ingest Stage + Lint + Graph**（编号与 `ingest.py` 代码一致）。**Ingest 任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。**Graph 是独立命令**（与 Ingest/Lint 并列，不属于 lint），见下文「Graph 命令」段。
+Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **Phase 0（3 个前置门：0.1 源页去重 / 0.2 / 0.3 Pilot OCR）+ 20 个编号 ingest Stage + Lint + Graph**（编号与 `ingest.py` 代码一致）。**Ingest 任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。**Graph 是独立命令**（与 Ingest/Lint 并列，不属于 lint），见下文「Graph 命令」段。
 
 **跳过的代价**：
 1. **raw 是 sacred**（Layer 1 原则）—— PDF 里的图也是 raw 的一部分，跳过图片提取 = 丢了一半知识
@@ -28,8 +28,8 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 **Phase 编号体系**（优先级：Phase > Stage）：
 - **Phase 0**：Pre-processing gates（0.1-0.3）
 - **Phase 1**：Extraction（1.1-1.3）
-- **Phase 2**：Analysis & Generation（2.1-2.10）
-- **Phase 3**：Write & Enrich（3.1-3.6）
+- **Phase 2**：Analysis & Generation（2.1-2.9）
+- **Phase 3**：Write & Enrich（3.1-3.7）
 - **Phase 4**：Validation（4.1）
 
 | 本文编号 | 代码函数名 | 说明 |
@@ -49,18 +49,18 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 | 2.7 | `stage_2_7_query_generation` | 问题生成 |
 | 2.8 | `_stage_2_8_resolve_queries`（`_stage_2_8_query_resolve.py`） | 跨源 query 解析（LLM judge） |
 | 2.9 | `stage_2_9_comparison_generation` | 对比生成（2.9A/B/C） |
-| 2.10 | `stage_2_10_review_suggestions`（`_stage_2_10_review.py`） | 生成内容质量审查（发现问题，不修复） |
 | 3.1 | `stage_3_1_write_wiki_file`（主写入循环）| 文件写盘 |
 | 3.2 | `stage_3_2_inject_images` | 图片注入 |
-| 2.10 | `stage_2_10_review_suggestions`（`_stage_2_10_review.py`） | 生成内容质量审查 |
-| 3.4 | `stage_3_4_aggregate_repair` | 聚合修复 + 缓存 |
-| 3.5 | `_stage_3_5_calculate_quality_score`（`_stage_3_5_quality.py`） | 质量评分卡 |
-| 3.6 | `stage_3_6_embed_new_pages`（`ingest.py` post-ingest） | 嵌入向量化（单一入口，soft-skip）|
-| 4.1 | `_auto_validate_ingest`（`validate_ingest.py`） | 最终验证 |
+| 3.3 | `stage_3_3_slug_collision_review`（`_stage_3_write.py`） | 跨域 slug 碰撞审查（标记消歧义） |
+| 3.4 | `stage_3_4_review_suggestions`（`_stage_3_4_review.py`） | 生成内容质量审查（发现问题，不修复；运行在已写盘文件上） |
+| 3.5 | `stage_3_5_aggregate_repair` | 聚合修复 + 缓存 |
+| 3.6 | `_stage_3_6_calculate_quality_score`（`_stage_3_6_quality.py`） | 质量评分卡 |
+| 3.7 | `stage_3_7_embed_new_pages`（`ingest.py` post-ingest） | 嵌入向量化（强制尝试，本地 Ollama bge-m3）|
+| 4.1 | `stage_4_1_validate_ingest`（`ingest.py`） / `validate_ingest.py` CLI | 最终验证 |
 
 > **编号即执行顺序**：本文 Stage 编号采用「Phase.Stage」形式（Phase 0 前置检查 / 1 原始素材提取 / 2 消化主流程 / 3 材料写入 / 4 验证检查），编号从上到下严格递增，与代码实际执行顺序一致（2026-06-20 重编号，旧编号 2.0/2.5rev/2.6 实际在 Stage 3 之后执行的错位已消除）。
 
-## 强制 Stage 清单（13 个编号 Stage + 2 个前置门）
+## 强制 Stage 清单（20 个编号 Stage + 3 个前置门）
 
 每个 Stage 都标了：
 - **作用**：该 Stage 做什么
@@ -272,7 +272,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **作用**：生成对比分析页面，分三种场景：
   - **2.9A 域内消歧义**：新 concept 名称与 wiki 已有 concept 同名但不同 domain → 创建/更新消歧义页（`type: comparison`, `domain: general`）。对齐 NashSU `domains.md` 消歧义规则。
   - **2.9B 源内概念对比**：同一源内两个高度相关的概念天然适合对比（如 CCM vs DCM、EMI vs EMC）→ 生成对比页（对比维度 ≥4）。
-  - **2.9C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 2.10 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
+  - **2.9C 跨源对比**：新 concept 与已有 wiki concept 有可比性 → **仅标记 suggestion** 到 Stage 3.4 review，不自动生成（需人工触发，因跨源对比需读取双方完整 concept 页面，token 消耗大）。
   - **2.9D 来自 Stage 2.8 的建议**：Stage 2.8 发现"答案不完整"的 query 转为 comparison 建议。
 - **跳过条件**：本次无 concept 产出（纯 stub source）时自动跳过。
 - **产物**：0-3 个 `wiki/comparisons/<slug>.md` 页面（消歧义 + 源内对比 + 不完整答案对比），或 `---COMPARISONS: 0---` 标记。
@@ -281,9 +281,9 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
   - 每个 comparison frontmatter 含 `type: comparison` + `title:` + `domain:` 三必填字段
 - **prompt 模板**：见 `references/comparison-generation.md`
 
-### Stage 2.10 · Review ⭐ **永远不能跳**（2.10 review，但低于阈值时自动 skip）
+### Stage 3.4 · Review ⭐ **永远不能跳**（3.4 review，但低于阈值时自动 skip）
 
-- **作用**：Phase 4 的 LLM 质量审查，分两步：
+- **作用**：Phase 3 的 LLM 质量审查，分两步：
   1. **生成 review items**：当满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时，跑一次 LLM 调用输出 5 类 review items：confirm / suggestion / missing-page / contradiction / duplicate。
   2. **解析并写入**：把 LLM 输出的 review items 解析并写入 `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md`（按 review type 分子目录，文件名含动作简述，含 frontmatter `resolved: false`），同时写入 `review-suggestions.json` 到 runtime dir。
 - **自动跳过条件**：NashSU 3 条件全不满足时跳过。但即使跳过，仍记录"LLM 主动认为无问题"。
@@ -306,7 +306,13 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **产物**：source 页有 `## Embedded Images` 段
 - **go/no-go**：source 页包含 `## Embedded Images` 标题 + ≥ 1 行图引用
 
-### Stage 3.4 · Save cache + Aggregate Repair ⭐ **永远不能跳**
+### Stage 3.3 · Cross-domain Slug Collision Review ⭐ **新增 2026-06-22**
+- **作用**：写盘后立即扫描新写的 concept 页 slug，检测与**其它 domain** 已有 concept 的同名碰撞，标记需要消歧义。同 domain 内的重叠是合法合并（由 Stage 2.5 处理），不在此阶段重复。
+- **跳过代价**：跨域同名概念静默共存 → 消歧义页缺失，wikilink 指向错误目标
+- **产物**：碰撞清单 + warning 段（`stage_3_3_result`：`items`/`collisions`/`warning`），供 Stage 3.4 review 与 Stage 3.6 质量评分消费
+- **go/no-go**：跨域碰撞数已统计（可为 0）；有碰撞时消歧义建议已生成
+
+### Stage 3.5 · Save cache + Aggregate Repair ⭐ **永远不能跳**
 
 - **作用**：两步：
   1. **Aggregate repair**：程序化 append index.md / log.md + LLM 重写 overview.md
@@ -318,7 +324,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 
 **🚨 2026-06-13 ADL8113 事故**：NashSU 原生让 LLM 同时输出 index/log/overview，但 LLM 不会读到旧的 wiki 文件内容，静默丢失所有历史。improved-wiki 对策：index.md / log.md 纯程序化 append（LLM 不参与）；overview.md LLM 重写但喂入当前全文作上下文。
 
-### Stage 3.5 · Quality Scoring Card ⭐ **新增 2026-06-20（中优先）**
+### Stage 3.6 · Quality Scoring Card ⭐ **新增 2026-06-20（中优先）**
 
 - **作用**：对本次 ingest 的质量进行量化评分，生成质量评分卡。快速识别哪些 ingest 有问题需要人工复审，避免低质量内容进入 wiki。
 - **跳过条件**：无（总是执行）
@@ -364,7 +370,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
   )
   ```
 
-### 3.6 · Embeddings ⭐ **强制尝试（2026-06-21 起）**
+### 3.7 · Embeddings ⭐ **强制尝试（2026-06-21 起）**
 - **作用**：把 wiki/ 下的页面 chunk 化 + embed，写到 LanceDB。默认本地 Ollama bge-m3（`http://127.0.0.1:11434/v1`），**不再需要显式 export `EMBEDDING_BASE_URL`**——只要本地 Ollama 跑着且模型已拉取就会自动执行。
 - **本地能力缺失时**：不再静默跳过。打印安装提醒（`ollama serve` / `ollama pull bge-m3` / `pip install lancedb`）+ 补跑命令，但**不阻断 ingest**（页面已在 Stage 3.1 落盘）。`validate_ingest.py` 会把这种情况记为 ❌ 而不是 `note skipped`，让缺失可见。
 - **跳过代价**：检索只能用纯关键词（wiki < 100 页可接受，> 100 页必须 embeddings）
@@ -376,14 +382,14 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 ## 强制顺序（不能乱）
 
 ```
-0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9 → 3.1 → 3.2 → 2.10 → 3.1 → 3.2 → 3.4 → 3.5 → [3.6] → 4.1
+0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9 → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → [3.7] → 4.1
 ```
 
 新增 Stage（2026-06-20）：
 - **2.3**：增量学习关联检测（wiki 非空时执行）
 - **2.5**：概念去重与合并（多 chunk 书执行）
 - **2.8**：跨源查询解析（2.7 产出 query 时执行）
-- **3.5**：质量评分卡（总是执行）
+- **3.6**：质量评分卡（总是执行）
 
 执行依赖关系：
 - Stage 0.3 Pilot 是强制前置：任何 PDF 走 Stage 1.1 之前必须先 5-10 页 pilot 验证
@@ -395,17 +401,18 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **2.5 依赖 2.4 完成**（需要所有 concept FILE blocks）；单 chunk 书自动跳过
 - **Phase 2（Generation）全部在内存中完成**：2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9，串行执行。所有产出统一由 Stage 3.1 写盘。
 - **2.8 依赖 2.7 完成 + wiki 已有内容**（搜索和匹配）
-- **Stage 2.10（review）运行在已写盘的文件上**，human reviewer 可直接看页面内容
-- **Stage 3.4（aggregate repair）在所有页面写盘后运行**
-- **Stage 3.5（质量评分）在 3.4 完成后运行**，基于完整的 ingest 结果
+- **Stage 3.3（slug 碰撞审查）在 3.2 注入图引用后立即运行**，标记跨域同名概念需消歧义
+- **Stage 3.4（review）运行在已写盘的文件上**，human reviewer 可直接看页面内容
+- **Stage 3.5（aggregate repair）在所有页面写盘后运行**
+- **Stage 3.6（质量评分）在 3.5 完成后运行**，基于完整的 ingest 结果
 - 2.7 是 conditional（datasheet/standard 自动跳过）
 - 2.8 是 conditional（2.7 无 query 或 wiki 为空时自动跳过）
 - 2.9 是 conditional（无 concept 产出时自动跳过）
-- 2.10 (review) 是 conditional（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）
-- 3.5 是 conditional（overall_score < 0.65 时标记为 needs_review）
-- 3.4 程序化 append index/log + LLM 重写 overview（喂入现有内容防丢失）
-- 3.4 在所有 stage 之后（写最终缓存）；hard error（磁盘满/权限）阻止 cache save
-- 3.6 强制尝试，默认本地 Ollama bge-m3；本地能力不可用时打印安装提醒（不阻断 ingest），手动补跑 `build_embeddings.py`
+- 3.4 (review) 是 conditional（NashSU 3 条件触发：≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）
+- 3.6 是 conditional（overall_score < 0.65 时标记为 needs_review）
+- 3.5 程序化 append index/log + LLM 重写 overview（喂入现有内容防丢失）
+- 3.5 在所有 stage 之后（写最终缓存）；hard error（磁盘满/权限）阻止 cache save
+- 3.7 强制尝试，默认本地 Ollama bge-m3；本地能力不可用时打印安装提醒（不阻断 ingest），手动补跑 `build_embeddings.py`
 
 ---
 
@@ -426,18 +433,19 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - [ ] **2.7：query 页面已生成或 `---QUERIES: 0---` 已记录**（datasheet/standard 自动跳过）
 - [ ] **Stage 2.8：query_resolutions 已记录**；已关闭或改写的 query 已处理
 - [ ] **2.9：comparison 页面已生成或 `---COMPARISONS: 0---` 已记录**（无 concept 时自动跳过）
-- [ ] **Stage 2.10：review items 已生成并写入 wiki/REVIEW/（即使 0 items）**
 - [ ] Stage 3.1：所有 FILE 块写盘成功
 - [ ] **Stage 3.2：source 页含 `## Embedded Images` 段**
-- [ ] **Stage 3.4：ingest-cache.json 含本次所有 raw 文件 hash**（且 `validate_ingest.py` 通过；ingest.py 末尾自动运行）
-- [ ] **Stage 3.5：quality_metrics 已记录；overall_score 已计算**；如 <0.65 已标记为 needs_review
-- [ ] **3.6：lancedb 表已更新**；本地能力不可用时确认安装提醒已打印并记录待补跑
+- [ ] **Stage 3.3：跨域 slug 碰撞已检查**（碰撞数已统计，消歧义建议已生成）
+- [ ] **Stage 3.4：review items 已生成并写入 wiki/REVIEW/（即使 0 items）**
+- [ ] **Stage 3.5：ingest-cache.json 含本次所有 raw 文件 hash**（且 `validate_ingest.py` 通过；ingest.py 末尾自动运行）
+- [ ] **Stage 3.6：quality_metrics 已记录；overall_score 已计算**；如 <0.65 已标记为 needs_review
+- [ ] **3.7：lancedb 表已更新**；本地能力不可用时确认安装提醒已打印并记录待补跑
 
 **关键新增 stage**（2026-06-20 优化）：
 - **Stage 2.3**（增量学习）—— 避免新源生成孤儿概念
 - **Stage 2.5**（概念去重）—— 防止同一本书的重复概念页面
 - **Stage 2.8**（跨源查询解析）—— 自动关闭已有答案的 query
-- **Stage 3.5**（质量评分）—— 快速识别质量问题的 ingest
+- **Stage 3.6**（质量评分）—— 快速识别质量问题的 ingest
 
 **历史上最容易跳过的 stage**：
 - Stage 0.3 Pilot（2026-06-11）—— 没 pilot 直接全本 = 浪费数小时
@@ -447,10 +455,10 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - 2.7（query 生成）—— 知识库只有事实没有追问
 - Stage 2.8（跨源查询解析）— **2026-06-20 新增**；重复提问浪费资源
 - 2.9（comparison 生成）— 跨概念理解和消歧义缺失
-- Stage 2.10（review 建议）—— 错误内容永久残留
+- Stage 3.4（review 建议）—— 错误内容永久残留
 - Stage 3.2（图注入）—— 图与 wiki 脱节
-- Stage 3.4（cache 写入）—— 下次跑会重做所有 stage
-- Stage 3.5（质量评分）—— 无法识别问题 ingest
+- Stage 3.5（cache 写入）—— 下次跑会重做所有 stage
+- Stage 3.6（质量评分）—— 无法识别问题 ingest
 
 ---
 
@@ -468,7 +476,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 
 ## 验证清单的执行方式（**清单本身没用，配套脚本才有约束力**）
 
-本清单的 17 项是**人工 check 用的**，但验证已在流水线中自动化：
+本清单的 19 项是**人工 check 用的**，但验证已在流水线中自动化：
 
 ### 自动验证（ingest.py 内置，2026-06-16+）
 
@@ -492,7 +500,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 # 结构性 lint（覆盖 wikilink 健康）
 ./scripts/wiki-lint.sh --summary
 
-# 图存在性（覆盖 Stage 1.2 / 0.6 / 3.6）
+# 图存在性（覆盖 Stage 1.2 / 1.3 / 3.2）
 test -d wiki/media/*/<slug> && \
   find wiki/media/<type>/<slug> \( -name '*.jpeg' -o -name '*.png' \) | \
     while read f; do
@@ -512,6 +520,8 @@ for k, v in cache['entries'].items():
 ```
 
 ## 修订记录
+
+- **2026-06-22**：Stage 2.10（review）重编号为 **3.4** 并移入 Phase 3，原 3.4/3.5/3.6 顺延为 **3.5/3.6/3.7**（aggregate repair / quality / embeddings），4.1 不变。动机：review 实际运行在已写盘文件上（3.3 之后），归入 Phase 3 更贴合执行顺序，消除"2.10 编号在 Phase 2 却在 Stage 3 之后执行"的错位。代码同步重命名：`stage_2_10_review_suggestions`→`stage_3_4_review_suggestions`（`_stage_2_10_review.py`→`_stage_3_4_review.py`）、`stage_3_4_aggregate_repair`→`stage_3_5_aggregate_repair`、`stage_3_5_quality`→`stage_3_6_quality`（`_stage_3_5_quality.py`→`_stage_3_6_quality.py`）、`stage_3_6_embed_new_pages`→`stage_3_7_embed_new_pages`。新增 Stage 3.3（跨域 slug 碰撞审查）章节与表格行；修正强制顺序行（原重复 3.1→3.2、缺 3.3 的 bug）。历史条目中的旧函数名映射保持原样。
 
 - **2026-06-21**：Stage 编号统一为 x.y 形式（消除 x.y.z 后缀）。映射：2.2.1→2.3、2.3→2.4、2.3.1→2.5、2.4→2.6、2.5→2.7、2.5.1→2.8、2.6→2.9、3.4.1→3.5、3.5→3.6。代码同步重命名：`stage_2_4_source_page`→`stage_2_6_source_page`、`stage_2_5_query_generation`→`stage_2_7_query_generation`、`stage_2_6_comparison_generation`→`stage_2_9_comparison_generation`、`stage_3_5_embeddings`→`stage_3_6_embeddings`、`verify_stage_3_5`→`verify_stage_3_6`。接入 Stage 2.5（源内概念去重，多 chunk 书）与 Stage 3.5（质量评分卡，总是执行）；Stage 2.3（增量关联）与 2.8（跨源 query 解析）模块保留，待后续接入。
 
