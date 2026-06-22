@@ -875,9 +875,14 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
 def slugify(text: str) -> str:
     """Convert a concept/entity name to a kebab-case wiki slug.
 
-    Standardized across all stage modules. Used in 15+ places.
+    Standardized across all stage modules. Used in 15+ places. Strips the
+    same Windows-illegal characters is_safe_ingest_path() rejects (e.g. a
+    book-title entity like "...Volume III: Physics-Based Methods" would
+    otherwise produce a colon-bearing slug that the FILE-block parser
+    silently drops the page for).
     """
-    return text.lower().replace(" ", "-").replace("/", "-")
+    slug = text.lower().replace(" ", "-").replace("/", "-")
+    return _ILLEGAL_CHARS_RE.sub("", slug)
 
 
 def atomic_write(path, content: str, encoding: str = "utf-8") -> None:

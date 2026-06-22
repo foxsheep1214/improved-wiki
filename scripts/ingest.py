@@ -521,16 +521,40 @@ def _is_stale_result(response: str, prompt: str) -> bool:
 
 
 def _infer_stage(prompt: str) -> str:
-    if "Generate wiki pages" in prompt or ("Synthesis" in prompt and "FILE blocks" in prompt):
-        return "Stage-2-Synthesis"
-    if "review" in prompt.lower() and "suggestions" in prompt.lower():
-        return "Stage-2-5-Review"
-    if "Chunk Analysis" in prompt[:500]:
+    """Best-effort stage label for the CONVERSATION banner / cache-file prefix.
+
+    Cosmetic only — conversation_handoff()'s actual cache key also includes a
+    content hash of the prompt, so a wrong label here can't cause two distinct
+    prompts to collide. But every check here must stay anchored to a prefix
+    slice of distinctive *instruction* text, never an unbounded scan of the
+    full prompt — a digest/chunk-analysis prompt embeds up to 200K chars of
+    the source's own prose, and generic words like "review"/"suggestions"
+    routinely appear somewhere in a real book by coincidence (confirmed live:
+    Plett's BMS Vol.2 preface contains "send me corrections and suggestions
+    for improvements", which previously made every digest/chunk-analysis call
+    for that book misreport itself as the Stage 2.10 review step).
+    """
+    head = prompt[:500]
+    if "generating wiki pages" in head.lower() or ("Synthesis" in head and "FILE blocks" in head):
+        return "Stage-2-4-Generation"
+    if "review agent" in head or "可疑项" in head:
+        return "Stage-2-10-Review"
+    if "Chunk Analysis" in head:
         m = re.search(r"chunk (\d+)/(\d+)", prompt)
         if m:
-            return f"Stage-1-5-Chunk-{m.group(1)}"
-    if "book_meta" in prompt[:1000] or "produce a **high-level structural summary**" in prompt:
-        return "Stage-1-Global-Digest"
+            return f"Stage-2-2-Chunk-{m.group(1)}"
+    if "writing a **source page**" in head:
+        return "Stage-2-6-SourcePage"
+    if "finished generating source/concept/entity pages" in head:
+        return "Stage-2-7-QueryGeneration"
+    if "reviewing concept pages generated from the same source for duplicates" in head:
+        return "Stage-2-5-DedupConfirm"
+    if "just generated concept/entity pages for a book" in head:
+        return "Stage-2-9-Comparison"
+    if "review the concepts just generated for a book" in head.lower():
+        return "Stage-2-9-ComparisonReview"
+    if "performing **Stage 1: Global Digest**" in head or "produce a **high-level structural summary**" in head:
+        return "Stage-2-1-Global-Digest"
     return "LLM-task"
 
 
@@ -759,12 +783,6 @@ def _generate_all_chunks(
     all_responses: list[str] = []
     generated_slugs: list[str] = []
 
-    unique_concepts_pre, unique_entities_pre = _stage_2_4_extract_names(chunk_analyses)
-    for name in (*unique_concepts_pre, *unique_entities_pre):
-        slug = name.strip().lower().replace(" ", "-").replace("/", "-")
-        if slug and slug not in generated_slugs:
-            generated_slugs.append(slug)
-
     for i, chunk, _overlap_before, _heading_path in chunk_meta:
         ca = chunk_analyses[i]
         if "error" in ca:
@@ -873,8 +891,18 @@ def _run_chunk_pipeline(
     file_blocks = all_file_blocks
 
     # \u2500\u2500 Fallback: per-concept generation \u2500\u2500
-    if not concept_blocks and unique_concepts and chunk_analyses:
-        n_missed = len(unique_concepts)
+    # 0 blocks generated is the CORRECT outcome (not a failure) when every
+    # concept in this source already overlaps an existing wiki page \u2014
+    # Stage 2.4 is instructed to skip and wikilink those (see existing_refs
+    # in _stage_2_4_build_prompt). Only fall back for concepts genuinely
+    # missing from the wiki; otherwise a conversation-mode replay that
+    # resumes past Stage 3.1 (write) re-derives chunk_analyses, sees its own
+    # already-written pages as "existing", correctly emits 0 blocks, and
+    # then this fallback would burn 20+ wasted LLM calls re-generating pages
+    # that are already on disk (confirmed live on the Plett BMS Vol.2 ingest).
+    truly_missing = [n for n in unique_concepts if n not in incremental_associations]
+    if not concept_blocks and truly_missing and chunk_analyses:
+        n_missed = len(truly_missing)
         print(f"  [stage 2.4] \u26a0\ufe0f  0/{n_missed} concepts generated "
               f"\u2014 falling back to per-concept generation "
               f"(pre_existing_slugs={len(generated_slugs)})")

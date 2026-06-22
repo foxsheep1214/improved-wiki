@@ -329,7 +329,12 @@ def _stage_3_1_canonicalize_sources_field(content: str, canonical_source: str) -
     end = content.find("\n---", 3)
     if end == -1:
         return content
-    fm = content[3:end]
+    # content[3] is the '\n' after the opening '---'; slicing from 3 (not 4)
+    # carries that newline into fm, and re-serializing below then produces
+    # '---\n\ntype:...' — a blank line after the fence that breaks YAML
+    # parsing. Mirrors the fix already applied to
+    # _stage_3_1_stamp_frontmatter_dates for the same off-by-one.
+    fm = content[4:end]
     body = content[end + 4:]
 
     # Parse existing sources (quote-aware: a filename containing commas must
