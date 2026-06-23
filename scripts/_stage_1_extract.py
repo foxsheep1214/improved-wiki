@@ -333,14 +333,22 @@ def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: boo
     print(f"[extract] PDF type: {pdf_type} (avg {avg_chars:.0f} chars/page from 10-page sample)")
 
     if pdf_type == "text":
-        # Text-based PDF -> minerU pipeline (tables, formulas, figures preserved)
-        try:
-            text = _stage_1_1_extract_text_mineru_pipeline(file_path, config)
-            return text, "mineru-pipeline"
-        except Exception as e:
-            print(f"[extract] minerU pipeline failed ({e}) -- falling back to VLM")
-            text = _stage_1_1_extract_text_scanned(file_path, config)
-            return text, "mineru-vlm-fallback"
+        # Text-based PDF -> minerU via API server (hybrid-engine, auto method).
+        # The pipeline CLI (`mineru -b pipeline`) has a 502 Bad Gateway bug in
+        # 3.4.0: its auto-started API server shuts down immediately. The scanned
+        # path starts a persistent API server + calls /file_parse directly,
+        # which works. hybrid-engine auto detects the text layer and uses txt
+        # method (no OCR), preserving tables/formulas/figures. Formula quality
+        # verified equivalent (0% noise after _clean_mineru_latex).
+        # Set IMPROVED_WIKI_PIPELINE_CLI=1 to retry the (broken) pipeline CLI.
+        if os.environ.get("IMPROVED_WIKI_PIPELINE_CLI"):
+            try:
+                text = _stage_1_1_extract_text_mineru_pipeline(file_path, config)
+                return text, "mineru-pipeline"
+            except Exception as e:
+                print(f"[extract] minerU pipeline CLI failed ({e}) -- falling back to API path")
+        text = _stage_1_1_extract_text_scanned(file_path, config)
+        return text, "mineru-api-txt"
 
     elif pdf_type == "scanned":
         # Scanned PDF -> minerU VLM OCR (chunked, crash-resilient, auto-fallback)
@@ -361,29 +369,13 @@ def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: boo
             )
 
     elif pdf_type == "mixed":
-        # Mixed: try pipeline first (text layer usually usable).
-        # If pipeline returns sparse text, fall back to VLM OCR.
-        try:
-            text = _stage_1_1_extract_text_mineru_pipeline(file_path, config)
-            if text.strip() and len(text) > 2000:
-                print(f"[extract] Mixed PDF: pipeline returned {len(text):,} chars -- using text layer")
-                return text, "mineru-pipeline-mixed"
-            print(f"[extract] Mixed PDF: pipeline returned sparse text ({len(text)} chars) -- trying VLM")
-        except Exception as e:
-            print(f"[extract] Mixed PDF: pipeline failed ({e}) -- trying VLM")
-        # Sparse/failed -- auto-fallback to minerU VLM OCR (no interactive pilot).
-        print(f"[extract] Mixed PDF: auto-fallback to minerU VLM OCR...")
-        try:
-            text = _stage_1_1_extract_text_scanned(file_path, config)
-            if len(text) > 2000:
-                return text, "mineru-vlm"
-            print(f"[extract] ⚠️  Mixed PDF OCR returned only {len(text)} chars -- quality may be poor")
-            return text, "mineru-vlm-low-quality"
-        except Exception as e:
-            raise RuntimeError(
-                f"Mixed PDF minerU VLM failed ({e}). "
-                f"Re-run interactively with --pilot-confirmed to review."
-            )
+        # Mixed PDF -> API path (hybrid-engine auto handles text layer + OCR).
+        # Same 502 rationale as the text branch.
+        text = _stage_1_1_extract_text_scanned(file_path, config)
+        if len(text) > 2000:
+            return text, "mineru-api-mixed"
+        print(f"[extract] ⚠️  Mixed PDF returned only {len(text)} chars -- quality may be poor")
+        return text, "mineru-api-mixed-low-quality"
 
     else:
         raise RuntimeError(f"Unknown PDF type: {pdf_type}")
