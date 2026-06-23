@@ -1,6 +1,6 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——基于 NashSU v0.4.25 autoIngestImpl() 流水线的 20 个编号 ingest Stage + 3 个前置门（0.1/0.2/0.3）+ Lint + Graph 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——基于 NashSU v0.4.25 autoIngestImpl() 流水线的 20 个编号 ingest Stage + 2 个前置门（0.1/0.2）+ Lint + Graph 规范，每个 Stage 含作用/跳过代价/产物/go-no-go 判断。用于约束任何 wiki 项目执行 ingest 时不漏步。"
 tags: [ingest, mandatory, nashsu, pipeline]
 related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 ---
@@ -9,7 +9,7 @@ related: [SKILL.md §7, known-issues, multimodal-vlm-pitfalls]
 
 ## 为什么需要"强制"？
 
-Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **Phase 0（3 个前置门：0.1 源页去重 / 0.2 / 0.3 Pilot OCR）+ 20 个编号 ingest Stage + Lint + Graph**（编号与 `ingest.py` 代码一致）。**Ingest 任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。**Graph 是独立命令**（与 Ingest/Lint 并列，不属于 lint），见下文「Graph 命令」段。
+Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 流水线包含 **Phase 0（2 个前置门：0.1 源页去重 / 0.2）+ 20 个编号 ingest Stage + Lint + Graph**（编号与 `ingest.py` 代码一致）。**Ingest 任何一个 Stage 都不能跳过**——即使后续 Stage 看起来成功了，也不能"先跑再说"。**Graph 是独立命令**（与 Ingest/Lint 并列，不属于 lint），见下文「Graph 命令」段。
 
 **跳过的代价**：
 1. **raw 是 sacred**（Layer 1 原则）—— PDF 里的图也是 raw 的一部分，跳过图片提取 = 丢了一半知识
@@ -26,7 +26,7 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 - **代码函数名**：代码中对应的实现函数
 
 **Phase 编号体系**（优先级：Phase > Stage）：
-- **Phase 0**：Pre-processing gates（0.1-0.3）
+- **Phase 0**：Pre-processing gates（0.1-0.2）
 - **Phase 1**：Extraction（1.1-1.3）
 - **Phase 2**：Analysis & Generation（2.1-2.9）
 - **Phase 3**：Write & Enrich（3.1-3.7）
@@ -36,7 +36,6 @@ Karpathy LLM-Wiki 模式 + NashSU LLM Wiki app (v0.4.25) 的 `autoIngestImpl()` 
 |---------|-----------|------|
 | 0.1 | `normalize_raw_names.py --check` | raw 命名规范检查（前置门） |
 | 0.2 | 源页存在性检查（`wiki/sources/<rel>.md`） | 源页去重 |
-| 0.3 | `stage_0_3_pilot` | Pilot OCR 质量验证 |
 | 1.1 | `stage_1_1_extract_text` / `_stage_1_1_detect_pdf_type` | 文本提取 + PDF 类型检测 |
 | 1.2 | `stage_1_2_extract_images` | 图片提取 |
 | 1.3 | `stage_1_3_caption_images` | 图片 caption |
@@ -93,7 +92,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 
 ### Stage 0.2：源页去重检查 ⭐ **任何文件选取前强制执行**
 
-- **作用**：检查候选文件是否已消化。**唯一判断依据：`wiki/sources/<raw-rel-path>.md` 是否存在。** `<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），镜像 `raw/` 的目录结构。源页是 Stage 3.2 写入的不可变记录，永远不会被 pipeline 删除或覆盖。源页存在 = 消化完成 → 跳过。不存在 → 进入 Stage 0.3。
+- **作用**：检查候选文件是否已消化。**唯一判断依据：`wiki/sources/<raw-rel-path>.md` 是否存在。** `<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），镜像 `raw/` 的目录结构。源页是 Stage 3.2 写入的不可变记录，永远不会被 pipeline 删除或覆盖。源页存在 = 消化完成 → 跳过。不存在 → 进入 Stage 1.1。
 - **跳过代价**：重复消化已完成的书籍，浪费 LLM token、OCR 时间，且并行场景下可能导致 index.md / log.md 竞态覆盖。
 - **为什么只用 `wiki/sources/`，不查 `ingest-cache.json`**：
   - **`wiki/sources/` 是不可变记录**：每个成功的 ingest 在 Stage 3.2 写入一个源页，pipeline 永不删除或覆盖它。
@@ -102,7 +101,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **go/no-go 判断**（2026-06-17 改为完整性校验，不只是检查源页存在）：
   - `wiki/sources/<raw-rel-path>.md` 存在 **且** 解析 `[[wikilinks]]` 验证 >80% 的 concepts/entities 页面存在 → 跳过。
   - 源页存在但引用的 concepts/entities 丢失 >80%（或源页无任何 wikilinks）→ 不跳过，重新消化。**防止上次 ingest 中途崩溃后留下残缺源页。**
-  - `wiki/sources/<raw-rel-path>.md` 不存在 → 未消化，进入 Stage 0.3。
+  - `wiki/sources/<raw-rel-path>.md` 不存在 → 未消化，进入 Stage 1.1。
   - **不依赖对话历史、agent 记忆、`ingest-cache.json`、或文件名猜测。**
 
 ## Phase 1：Extraction（文本、图片、字幕）
@@ -130,16 +129,6 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **产物**：每页一个 `p<NNN>.txt`（与页号 1:1 对应）+ minerU 自动提取并已经过 Stage 1.3 caption 的图片（见下方 Stage 1.2 说明）
 - **go/no-go**：每页 chars >100；无幻觉（chars<100 且无中文字符 → 重跑）；确认图片已落到 `wiki/media/<slug>/`
 - **关键实操**：文本版/混合版/扫描版 PDF 现在统一走同一套本地 minerU 持久 API 服务器（`mineru.cli.fast_api`，端口 `MINERU_API_PORT`，默认 19999），按 50 页/chunk（`MINERU_CHUNK_SIZE`）切分，逐 chunk POST `/file_parse`，每 chunk 最多 3 次重试、累计失败 >30% 全本 abort。免费、自动提取图片、无需 API key。**并发限制**：系统级最多 1 个 minerU 任务执行，通过文件锁 `_stage_1_1_acquire_mineru_lock()`（`fcntl.flock`，超时 3600s）而不是旧版的进程数轮询实现，等待时打印 `[mineru] Waiting for lock... (Xs elapsed)`，无需人工协调。详见 `references/scanned-pdf-ocr-pipeline.md`。
-
-**Stage 0.3 Pilot：OCR 质量验证（2026-06-21 改进质量阈值）**
-- **作用**：在正式 OCR 前先抽 5 页验证 minerU 质量，避免浪费 OCR 时间在已损坏/已保护的 PDF 上。
-- **运行条件**：PDF 类型检测为 `scanned` 或 `mixed` 时自动执行，不需人工确认。
-- **质量检查**（双信号）：
-  - 信号 ①：文字密度 — chars/page（反映 OCR 文字层质量）
-  - 信号 ②：图片密度 — images/page（反映图表提取质量）
-  - **通过条件**：`chars_per_page > 600`（文字密集型）OR `(chars_per_page > 200 AND images_per_page >= 0.5)`（均衡混合型）
-- **缺失 minerU**：提示"缺失minerU工具"并中断 ingest，不做自动 fallback。
-- **产物**：pilot 阶段的 OCR 输出（前 3000 字）+ 质量评分
 
 ### Stage 1.2 · 图片提取 ⭐ **永远不能跳**
 
@@ -385,7 +374,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 ## 强制顺序（不能乱）
 
 ```
-0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9 → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → [3.7] → 4.1
+0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9 → 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → [3.7] → 4.1
 ```
 
 新增 Stage（2026-06-20）：
@@ -395,7 +384,6 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **3.6**：质量评分卡（总是执行）
 
 执行依赖关系：
-- Stage 0.3 Pilot 是强制前置：任何 PDF 走 Stage 1.1 之前必须先 5-10 页 pilot 验证
 - 1.2 **必须先于** 1.3（先有图才能 caption）
 - 1.2/1.3 **必须先于** 3.2（3.2 注入图引用）
 - Stage 2.1 / 2.2 **永远不能跳过**（短源 1 chunk / 长源 N chunk）
@@ -423,7 +411,6 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 
 完成一个文件的 ingest 后，**必须**逐项过这个清单：
 
-- [ ] **Stage 0.3 Pilot 已跑**：5-10 页 OCR 输出质量 OK
 - [ ] **Stage 1.1**：源文本已提取（minerU `txt` method OR VLM OCR 后每页 chars >100；PyMuPDF 现在只做类型检测，不做提取）
 - [ ] **Stage 1.2：图已抽到 `wiki/media/<type>/<slug>/`（数量 > 0 或确认无嵌入图）**
 - [ ] **Stage 1.3：每张图有 .caption.txt（长度 ≥ 20 字符）**
@@ -451,7 +438,6 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **Stage 3.6**（质量评分）—— 快速识别质量问题的 ingest
 
 **历史上最容易跳过的 stage**：
-- Stage 0.3 Pilot（2026-06-11）—— 没 pilot 直接全本 = 浪费数小时
 - Stage 1.2（图提取）— 丢失图知识
 - Stage 1.3（图 caption）— 图无法检索
 - Stage 2.5（概念去重）— **2026-06-20 新增**；重复页面污染 wiki

@@ -10,11 +10,11 @@ related_skills: [karpathy-llm-wiki, llm-wiki-local]
 Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (20 numbered ingest Stages + 3 Phase-0 gates across 5 Phases: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich → 4 validation), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint). Graph auto-triggers post-ingest behind `AUTO_BUILD_GRAPH=1`.
 
 ```
-Phase 0: [0.1 raw-naming] → [0.2 source dedup] → [0.3 pilot OCR]  (pre-processing gates)
+Phase 0: [0.1 raw-naming] → [0.2 source dedup]  (pre-processing gates)
 Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→3.1→3.2→3.3→3.4→3.5→3.6→3.7→4.1
         (execution order per ingest.py _do_prepare/_do_write; 3.4 = review, runs after 3.3 on already-written files; 3.7 = embeddings)
 
-Phase 0: Pre-processing gates  (raw naming, source dedup, pilot OCR)
+Phase 0: Pre-processing gates  (raw naming, source dedup)
 Phase 1: Extraction            (text extraction, image extract, caption)
 Phase 2: Analysis & Generation (global digest, chunk analysis, concept/entity gen, queries, comparisons, quality review)
 Phase 3: Write & Enrich        (file write, image injection, slug collision review, review, aggregate repair, scoring, embeddings)
@@ -67,7 +67,7 @@ Two other external-API dependencies (not text generation):
 - `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (2.9A disambiguation, 2.9B in-source)
 - `references/knowledge-gap-lint.md` — lint system: synthesis/finding/thesis/methodology formation triggers
 - `references/dedup-design.md` — two dedup tiers: intra-source (Stage 2.5, ingest-time) vs cross-source (CLI, lint-time); distinct responsibilities, not interchangeable
-- `references/scanned-pdf-ocr-pipeline.md` — minerU scanned PDF OCR pipeline (Path B)
+- `references/scanned-pdf-ocr-pipeline.md` — minerU local API extraction pipeline (all PDFs: text/scanned/mixed unified)
 - `references/raw-naming-conventions.md` — raw 文件命名规范检查机制（项目级 `raw/NAMING.md` + auto-check）
 - `references/chat-ingest.md` ⭐ — interactive human-guided ingest (NashSU startIngest/executeIngestWrites parity)
 - `references/deep-research.md` ⭐ — closed-loop web→wiki research pipeline (NashSU deep-research.ts parity)
@@ -130,14 +130,14 @@ Two other external-API dependencies (not text generation):
 - **Per-page 语言门禁** (built-in): `ingest.py` Stage 3.2 detects body language per FILE block, warns on mismatch with expected source language (NashSU contentMatchesTargetLanguage parity)
 - **Schema routing validation** (built-in): `ingest.py` validates `type:` frontmatter against file path directory, auto-corrects mismatches (NashSU validateWikiPageRouting parity)
 - **Path safety validation** (built-in): `ingest.py` rejects FILE blocks with `..` segments, absolute paths, Windows-invalid names, and non-wiki/ destinations (NashSU isSafeIngestPath parity)
-- **Local extraction**: minerU via a persistent local API server (`mineru.cli.fast_api`) + `/file_parse` per 50-page chunk (free, serial, `MINERU_MAX_CONCURRENT=1`). The server defaults to **hybrid-engine** with `parse_method=auto` — text PDFs auto-route to txt (no OCR), scanned PDFs auto-route to VLM OCR. `/file_parse` accepts a per-request `backend` Form field (pipeline|vlm-engine|hybrid-engine|...), but hybrid-engine is the verified default for both routes (pipeline loses inline-formula recall; the `mineru -b pipeline` CLI also still hits a 502 bug in 3.4.0). txt/md/pptx/docx bypass minerU.
+- **Local extraction**: minerU via a persistent local API server (`mineru.cli.fast_api`) + `/file_parse` per 50-page chunk (free, serial, one book at a time via `fcntl.flock`). All PDFs (text/scanned/mixed) take one unified path: backend=`hybrid-engine`, `parse_method=auto`, which routes per-page to txt or VLM OCR internally (garbled-font PDFs force `parse_method=ocr` → `mineru-api-ocr` label). `/file_parse` accepts a per-request `backend` Form field, but hybrid-engine is the verified default (pipeline loses inline-formula recall; the `mineru -b pipeline` CLI also still hits a 502 bug in 3.4.0). txt/md/pptx/docx bypass minerU.
 
 ## Scripts
 
 | Category | Scripts |
 |----------|---------|
 | Core | `ingest.py`, `_core.py`, `_llm_api.py`, `_paths.py`, `_language.py`, `_frontmatter.py` |
-| Stage Modules (Phase 0-4) | `_stage_0_3_pilot.py` (0.3), `_stage_1_extract.py` (1.1-1.3), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_3_4_review.py` (3.4), `_stage_2_base.py` (公共导入), `_stage_3_write.py` (3.1, 3.3, 3.5), `_stage_3_2_inject_images.py` (3.2), `_stage_3_6_quality.py` (3.6), `_stage_validators.py` (Stage 0 验证门 + StageValidationError) |
+| Stage Modules (Phase 0-4) | `_stage_1_extract.py` (1.1-1.3), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_3_4_review.py` (3.4), `_stage_2_base.py` (公共导入), `_stage_3_write.py` (3.1, 3.3, 3.5), `_stage_3_2_inject_images.py` (3.2), `_stage_3_6_quality.py` (3.6), `_stage_validators.py` (Stage 0 验证门 + StageValidationError) |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `validate_ingest.py`, `validate-frontmatter.sh`, `normalize_raw_names.py` |
 | Graph | `graph.py` (NashSU graph-view CLI parity; four-signal + Louvain; deterministic, no LLM) |
@@ -147,7 +147,7 @@ Two other external-API dependencies (not text generation):
 
 ## Trigger this skill
 
-**Auto Ingest**: User mentions wiki ingest / PDF OCR / batch ingest / validate-ingest / image caption / local minerU / pilot OCR. Ingest runs in conversation mode — the current conversation's model does all text-generation LLM work; only image captioning calls MiniMax. A single-book ingest is always serial (no parallel LLM steps). **Batch ingest of multiple books** (`--parallel`/multiple files) runs Stage 0-2 prepare concurrently per book — when this produces more than one simultaneously-pending conversation prompt (one per book), spawn one sub-agent per pending prompt to answer them concurrently instead of answering serially. **Dedup rule**: before selecting any file, check `wiki/sources/<path>.md` exists. Never rely on `ingest-cache.json` for dedup.
+**Auto Ingest**: User mentions wiki ingest / PDF OCR / batch ingest / validate-ingest / image caption / local minerU. Ingest runs in conversation mode — the current conversation's model does all text-generation LLM work; only image captioning calls MiniMax. A single-book ingest is always serial (no parallel LLM steps). **Batch ingest of multiple books** (`--parallel`/multiple files) runs Stage 0-2 prepare concurrently per book — when this produces more than one simultaneously-pending conversation prompt (one per book), spawn one sub-agent per pending prompt to answer them concurrently instead of answering serially. **Dedup rule**: before selecting any file, check `wiki/sources/<path>.md` exists. Never rely on `ingest-cache.json` for dedup.
 
 **Chat Ingest** ⭐: User mentions chat ingest / interactive ingest / 交互消化 / 对话消化 / 人工引导消化 / 重点消化. User provides a source file and wants to discuss it before generating wiki pages. See `references/chat-ingest.md`.
 

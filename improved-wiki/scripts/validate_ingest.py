@@ -179,19 +179,6 @@ def main():
     else:
         check("cache entry found for slug", False, f"no entry matching '{SOURCE_SLUG}'")
 
-    # Stage 0 pilot validation (minerU OCR only)
-    # Best-effort: the cache may not have been written at pilot time, so a missing
-    # marker does not necessarily mean pilot was skipped — only a soft warning.
-    if entry and entry.get("method", "").lower().find("mineru") >= 0:
-        pilot_confirmed = entry.get("pilot_confirmed", False)
-        pilot_marker = RUNTIME / ".pilot_done"
-        if pilot_confirmed or pilot_marker.exists():
-            note("pilot validated", "pilot_confirmed field or .pilot_done marker found")
-        else:
-            note("pilot NOT confirmed",
-                 "no 'pilot_confirmed' field in cache and no .pilot_done marker — "
-                 "pilot may have been manually confirmed; best-effort check only")
-
     # ═══════════════════════════════════════════════
     # Stage 1.2: Image extraction
     # ═══════════════════════════════════════════════

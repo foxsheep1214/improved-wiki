@@ -78,7 +78,6 @@ from _core import (
     FOLDER_TO_TEMPLATE,
     is_safe_ingest_path,
 )
-from _stage_0_3_pilot import stage_0_3_pilot
 from _stage_1_extract import (
     stage_1_1_extract_text,
     stage_1_2_extract_images,
@@ -228,7 +227,6 @@ def ingest_one(
     config: Config,
     template_override: str | None = None,
     verbose: bool = False,
-    pilot_confirmed: bool = False,
 ) -> dict:
     """Process one file end-to-end (NashSU-style 15-stage pipeline with checkpoint/resume)."""
     _set_current_file(raw_file.name)
@@ -249,7 +247,7 @@ def ingest_one(
     # only short-circuits once stage_4_1 is done, so a mid-flight resume (pages
     # written but post-review stages pending) is never dropped.  _do_write in
     # turn skips the non-idempotent 3.1 write loop when `write_phase` is marked.
-    prepared = _do_prepare(raw_file, config, template_override, verbose, pilot_confirmed)
+    prepared = _do_prepare(raw_file, config, template_override, verbose)
     if prepared is None:
         return {"status": "skipped", "reason": "source-page-exists"}
 
@@ -662,7 +660,6 @@ def _do_prepare(
     raw_file: Path, config: Config,
     template_override: str | None = None,
     verbose: bool = False,
-    pilot_confirmed: bool = False,
 ) -> dict | None:
     """Stage 0-2 for one book.  Read-only: no shared state writes, no lock needed.
 
@@ -686,7 +683,7 @@ def _do_prepare(
             method = progress.get("extract_method", "cached")
             print(f"  [extract] (cached) {method}: {len(extracted_text)} chars")
         else:
-            extracted_text, method = stage_1_1_extract_text(raw_file, config, pilot_confirmed=pilot_confirmed)
+            extracted_text, method = stage_1_1_extract_text(raw_file, config)
             print(f"  [extract] {method}: {len(extracted_text)} chars")
             _verify_stage_1_1_text(raw_file, extracted_text, method)
 
@@ -1173,7 +1170,6 @@ def batch_ingest(
     max_concurrent: int = BATCH_MAX_CONCURRENT,
     template_override: str | None = None,
     verbose: bool = False,
-    pilot_confirmed: bool = False,
 ) -> list[dict]:
     """Ingest multiple books with parallel Stage 0-2 and serial Stage 3+.
 
@@ -1212,7 +1208,7 @@ def batch_ingest(
             futures: dict[concurrent.futures.Future, Path] = {}
             for f in raw_files:
                 futures[executor.submit(
-                    _do_prepare, f, config, template_override, verbose, pilot_confirmed
+                    _do_prepare, f, config, template_override, verbose
                 )] = f
 
             for future in as_completed(futures):
@@ -1272,8 +1268,6 @@ def main() -> int:
                         help="Auto-enrich new pages with [[wikilinks]] after write (NashSU enrich-wikilinks parity)")
     parser.add_argument("--no-enrich", action="store_true",
                         help="Disable wikilink enrichment")
-    parser.add_argument("--pilot-confirmed", action="store_true",
-                        help="Acknowledge Stage 0 pilot quality and proceed with full OCR (required for scanned PDFs)")
     parser.add_argument(
         "--verbose", action="store_true",
         help="Print LLM responses for debugging",
@@ -1319,7 +1313,6 @@ def main() -> int:
             max_concurrent=max_conc,
             max_retries=args.max_retries,
             verbose=args.verbose,
-            pilot_confirmed=args.pilot_confirmed,
         )
         return 0
 
@@ -1358,7 +1351,6 @@ def main() -> int:
         results = batch_ingest(
             raw_files, config, max_concurrent=max_conc,
             template_override=args.type, verbose=args.verbose,
-            pilot_confirmed=args.pilot_confirmed,
         )
         ok = sum(1 for r in results if r.get("status") == "ok")
         return 0 if ok == len(results) else 1
@@ -1374,32 +1366,19 @@ def main() -> int:
         print(f"  template: {template}")
         # Estimate cost
         if raw_file.suffix.lower() == ".pdf":
-            pdf_type, avg_chars = _stage_1_1_detect_pdf_type(raw_file)
-            print(f"  PDF type: {pdf_type} (avg {avg_chars:.0f} chars/page, 5-page random sample, skip first+last)")
-            if pdf_type in ("scanned", "mixed"):
-                try:
-                    import fitz
-                    doc = fitz.open(raw_file)
-                    pages = len(doc)
-                    doc.close()
-                    batches = (pages + 4) // 5
-                    print(f"  Stage 0 OCR: {pages} pages → ~{batches} API calls (5 pages/batch)")
-                except Exception:
-                    pass
-        # Estimate Stage 1/1.5/2 (use PDF page count, don't call APIs)
-        if raw_file.suffix.lower() == ".pdf":
             try:
                 import fitz
                 doc = fitz.open(raw_file)
                 pages = len(doc)
                 doc.close()
+                _pdf_type, avg_chars = _stage_1_1_detect_pdf_type(raw_file)
+                mineru_chunks = max(1, (pages + 49) // 50)  # MINERU_CHUNK_SIZE = 50 pages
+                print(f"  PDF: {pages} pages, avg {avg_chars:.0f} chars/page (sampled)")
+                print(f"  minerU extraction: ~{mineru_chunks} chunk(s) (50 pages/chunk, hybrid-engine)")
                 est_chars = int(max(avg_chars, 200)) * pages  # floor at 200 chars/page
                 chunks_est = max(1, (est_chars + config.target_chars - 1) // config.target_chars)
                 print(f"  Estimated text: ~{est_chars:,} chars ({pages} pages × {max(avg_chars, 200):.0f} chars/page)")
                 print(f"  Estimated API calls: 1 (Stage 2.1) + {chunks_est} (Stage 2.2 chunks) + 1-3 (Stage 2.4)")
-                if pdf_type in ("scanned", "mixed"):
-                    batches = (pages + 4) // 5
-                    print(f"  ⚠️  May need Stage 0 OCR: ~{batches} batch calls for full-book OCR if PyMuPDF insufficient")
             except Exception:
                 pass
         print(f"  Stages: text-extract -> image-extract+caption -> digest -> chunk -> generate -> review -> inject -> write -> cache")
@@ -1411,8 +1390,7 @@ def main() -> int:
         print("ERROR: Could not acquire project lock — another ingest may be running", file=sys.stderr)
         return 1
     try:
-        result = ingest_one(raw_file, config, args.type, verbose=args.verbose,
-                            pilot_confirmed=args.pilot_confirmed)
+        result = ingest_one(raw_file, config, args.type, verbose=args.verbose)
         print(f"\nResult: {result}")
         return 0 if result["status"] in ("ok", "skipped") else 1
     except ConversationPending:
