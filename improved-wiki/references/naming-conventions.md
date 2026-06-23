@@ -291,7 +291,7 @@ wiki/media/<slug>/_manifest.json
       "hash": "<sha256>",
       "timestamp": 1718300000000,
       "filesWritten": ["wiki/sources/xxx.md", "wiki/concepts/yyy.md", ...],
-      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "mineru-pipeline" | "mineru-api-txt" | "mineru-vlm" | "mineru-vlm-low-quality" | "mineru-api-mixed" | "mineru-api-mixed-low-quality",
+      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "mineru-api" | "mineru-api-ocr" | "mineru-pipeline" | "mineru-api-low-quality" | "mineru-api-ocr-low-quality",
       "template": "digest-book.md",
       "fileBlockCount": 15,
       "stages": {

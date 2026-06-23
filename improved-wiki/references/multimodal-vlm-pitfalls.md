@@ -2,7 +2,7 @@
 
 2026-06-11 第一次 HardwareWiki 电源篇图 captioning 时摸出来的具体非平凡经验。每个 pitfall 都有验证记录。
 
-> **round ii 澄清 (2026-06-20)**：本技能的视觉任务分工是——**图片 caption（Stage 1.3）走 MiniMax VLM**（`anthropic/v1/messages` 多图批量，需 `MINIMAX_CN_API_KEY`）；**OCR / 文档 VLM 解析（Phase 0）走本地 minerU**（免费，`vlm-engine` 后端）。本文件历史上有几处把 MiniMax 的多图批量叫做"OCR"——那是早期对"figure 图片描述"的口语叫法，实际都是 **caption**。真正的文本 OCR 自始至终是本地 minerU。读下方 endpoint 矩阵 / 决策树时，把"OCR/caption"里的 OCR 部分理解为 caption 即可。
+> **round ii 澄清 (2026-06-20，2026-06-23 更新)**：本技能的视觉任务分工是——**图片 caption（Stage 1.3）走 MiniMax VLM**（`anthropic/v1/messages` 多图批量，需 `MINIMAX_CN_API_KEY`）；**OCR / 文档 VLM 解析（Phase 0）走本地 minerU**（免费，API server 默认 **hybrid-engine** 后端——`/file_parse` 默认 backend=hybrid-engine、parse_method=auto，文字版自动 txt、扫描版自动 VLM OCR；不再用 `-b vlm-engine` CLI）。本文件历史上有几处把 MiniMax 的多图批量叫做"OCR"——那是早期对"figure 图片描述"的口语叫法，实际都是 **caption**。真正的文本 OCR 自始至终是本地 minerU。读下方 endpoint 矩阵 / 决策树时，把"OCR/caption"里的 OCR 部分理解为 caption 即可。
 
 ---
 

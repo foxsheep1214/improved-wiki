@@ -130,7 +130,7 @@ Two other external-API dependencies (not text generation):
 - **Per-page 语言门禁** (built-in): `ingest.py` Stage 3.2 detects body language per FILE block, warns on mismatch with expected source language (NashSU contentMatchesTargetLanguage parity)
 - **Schema routing validation** (built-in): `ingest.py` validates `type:` frontmatter against file path directory, auto-corrects mismatches (NashSU validateWikiPageRouting parity)
 - **Path safety validation** (built-in): `ingest.py` rejects FILE blocks with `..` segments, absolute paths, Windows-invalid names, and non-wiki/ destinations (NashSU isSafeIngestPath parity)
-- **Local OCR**: minerU VLM via `~/.venv/bin/mineru -b vlm-engine` (free, serial, `MINERU_MAX_CONCURRENT=1`; override via `MINERU_BACKEND` env)
+- **Local extraction**: minerU via a persistent local API server (`mineru.cli.fast_api`) + `/file_parse` per 50-page chunk (free, serial, `MINERU_MAX_CONCURRENT=1`). The server defaults to **hybrid-engine** with `parse_method=auto` — text PDFs auto-route to txt (no OCR), scanned PDFs auto-route to VLM OCR. `/file_parse` accepts a per-request `backend` Form field (pipeline|vlm-engine|hybrid-engine|...), but hybrid-engine is the verified default for both routes (pipeline loses inline-formula recall; the `mineru -b pipeline` CLI also still hits a 502 bug in 3.4.0). txt/md/pptx/docx bypass minerU.
 
 ## Scripts
 

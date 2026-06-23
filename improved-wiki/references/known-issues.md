@@ -16,10 +16,12 @@
 compounding causes, all fixed (`tests/test_language.py`):
 
 1. **minerU skip-set incomplete** (`ingest.py`): the per-block language
-   check was skipped for only 4 method names, but Stage 1.1 returns
-   `mineru-pipeline` / `mineru-api-txt` / `mineru-api-mixed` /
-   `mineru-vlm-low-quality` / `mineru-api-mixed-low-quality`. OCR text
-   then tripped false warnings. Now skipped via `method.startswith("mineru")`.
+   check was skipped for only 4 method names, but Stage 1.1 returns multiple
+   `mineru-*` labels (currently `mineru-api` / `mineru-api-ocr` / `mineru-pipeline`
+   / `*-low-quality`; formerly `mineru-api-txt` / `mineru-vlm` / `mineru-api-mixed`
+   / `*-low-quality` before the 2026-06-23 single-path refactor). OCR text
+   then tripped false warnings. Now skipped via `method.startswith("mineru")`,
+   which is label-agnostic and survived the refactor.
 2. **Greek false positive on math symbols** (`_language.py`): isolated
    Greek letters (λ σ θ Δ …) hit the ≥2-count threshold. Now requires a
    ≥2-letter word run (`_has_greek_word_run`); isolated singletons are

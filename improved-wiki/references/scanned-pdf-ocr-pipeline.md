@@ -4,10 +4,10 @@
 
 ## 何时使用这条 pipeline
 
-- 任意类型的 PDF：类型检测（仍用 PyMuPDF 采样，见 `ingest-stages-mandatory.md` Stage 1.1）判定为 `text`/`scanned`/`mixed` 后统一交给这条 pipeline，只是 minerU 后端模式不同：
-  - `text` → method 标签 `mineru-api-txt`（hybrid-engine 自动识别文字层，不跑重 OCR）
-  - `scanned` → method 标签 `mineru-vlm` / `mineru-vlm-low-quality`（强制 VLM OCR）
-  - `mixed` → method 标签 `mineru-api-mixed` / `mineru-api-mixed-low-quality`
+- 任意类型的 PDF（text/scanned/mixed 不再分流）：fitz 采样（`_stage_1_1_sample_pdf`，见 `ingest-stages-mandatory.md` Stage 1.1）只做 **garbled 字体检测**，统一交给这条 pipeline，hybrid-engine/auto 内部按页判 txt vs VLM OCR。method 标签：
+  - 正常 → `mineru-api`（auto：有文字层走 txt、无文字层走 VLM OCR）
+  - garbled 字体 PDF（文字层是乱码）→ `mineru-api-ocr`（强制 `parse_method=ocr`，避免 auto 读乱码层）
+  - 提取 <2000 字符 → 上述标签加 `-low-quality` 后缀
 - 不适用：`.txt`/`.md`（直接读文件）、`.pptx`/`.docx`（zipfile/XML 解析，完全不碰 minerU）。
 - **已废弃的旧说法**："纯 text-layer PDF 直接 PyMuPDF `get_text()`，毫秒级" ——2026-06-23 起这条捷径不存在了，所有 PDF 文本提取都要起一次本地 minerU。
 
@@ -22,7 +22,7 @@
 3. PyMuPDF 渲染页面 + 切分 chunks（50 页/chunk，MINERU_CHUNK_SIZE）
 4. 每个 chunk POST 本地 /file_parse（multipart，return_images + return_content_list=true）
    ├─ text 类型走 hybrid-engine 自动 txt method（无重 OCR）
-   └─ scanned/mixed 走 vlm-engine 全 OCR
+   └─ scanned/mixed 走 hybrid-engine 自动 VLM OCR（`/file_parse` 默认 backend=hybrid-engine、parse_method=auto；可 per-request 改 backend，但 hybrid-engine 已验证最优）
 5. 响应里直接带 base64 图片 + content_list（页码映射）→ _stage_1_2_harvest_images() 立即存图到 wiki/media/
 6. md_content 写入每页 p<NNN>.txt
 7. 全书跑完 → _stage_1_1_scanned_assemble_manifest() 写图片 manifest.json，并直接调 Stage 1.3 caption（见下方"输出物"）

@@ -76,6 +76,15 @@ MINERU_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 MINERU_IMG_MIN_WIDTH = int(os.environ.get("MINERU_IMG_MIN_WIDTH", "20"))
 MINERU_IMG_MIN_HEIGHT = int(os.environ.get("MINERU_IMG_MIN_HEIGHT", "20"))
 
+# parse_method override for the current minerU run ("ocr" | None). Set by
+# stage_1_1_extract_text when fitz sampling detects a garbled-font PDF (text
+# layer exists but is custom-encoded junk — auto would read it via txt and
+# produce garbage, so force OCR). Read by _stage_1_1_scanned_build_parse_body
+# to emit a parse_method Form field. Safe as module-level state because
+# _stage_1_1_acquire_mineru_lock serializes all minerU runs — only one ingest
+# touches this at a time. Reset to None after each run.
+_PARSE_METHOD_OVERRIDE: str | None = None
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Utility Functions
@@ -310,16 +319,38 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
 
 
 def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: bool = False) -> tuple[str, str]:
-    """Route a source file to the appropriate text extractor.
+    """Extract text from a source file via the minerU API server (hybrid-engine).
 
-    PDF routing (2026-06-23: PyMuPDF extraction removed):
-      - text    -> minerU pipeline (`-b pipeline -m txt`, layout-aware, no OCR)
-      - scanned -> minerU VLM      (`-b vlm-engine`, chunked crash-resilient OCR)
-      - mixed   -> minerU pipeline first; sparse text -> fall back to minerU VLM
+    All PDFs (text / scanned / mixed) take ONE path: a persistent local minerU
+    API server (mineru.cli.fast_api) + /file_parse per 50-page chunk, backend
+    hybrid-engine (server default), parse_method auto — hybrid-engine routes
+    per-page (text layer present → txt, no OCR; absent → VLM OCR). The former
+    text/scanned/mixed branching is retired: hybrid-engine/auto does that
+    routing internally, so an external fitz classification would be redundant.
 
-    PDF type detection still uses fitz (PyMuPDF) for sampling the text layer --
-    this is detection only, NOT content extraction. txt/md/pptx/docx bypass
-    minerU entirely.
+    The ONE fitz-based override: a garbled-font PDF (text layer exists but is
+    custom-encoded garbage, e.g. the Fuqua book) would be misread by auto — it
+    sees a text layer and reads it via txt, producing junk. _stage_1_1_sample_pdf
+    detects this (C0 control-char ratio > 1%) and the caller forces
+    parse_method=ocr so hybrid-engine OCRs instead of reading the garbage layer.
+    This is the sole reason fitz sampling is retained (detection only, NOT
+    extraction).
+
+    pilot_confirmed is retained for signature compatibility but is currently
+    cosmetic (Stage 0.3 pilot is defined but not wired into the active flow).
+
+    txt/md/pptx/docx bypass minerU entirely.
+
+    Returns (text, method_label). method_label always contains "mineru" for PDFs
+    (the validator keys on that): "mineru-api" (auto), "mineru-api-ocr"
+    (garbled-forced OCR), suffixed "-low-quality" when <2000 chars extracted.
+
+    Backend choice rationale (verified 2026-06-23 on Wu text PDF + Huang scanned
+    PDF): hybrid-engine matches or beats pipeline/vlm-engine on both text and
+    scanned — identical CJK text, equal block-formula capture, 2.5x more inline
+    formulas on scanned vs pipeline. The `mineru -b pipeline` CLI also still
+    hits a 502 bug in 3.4.0; set IMPROVED_WIKI_PIPELINE_CLI=1 to retry it
+    (non-garbled only — garbled must use the API path to force parse_method=ocr).
     """
     if file_path.suffix.lower() in {".txt", ".md"}:
         return file_path.read_text(encoding="utf-8"), "plain-text"
@@ -328,96 +359,69 @@ def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: boo
     if file_path.suffix.lower() != ".pdf":
         raise ValueError(f"Unsupported file type: {file_path.suffix}")
 
-    # Stage 1.1: Detect PDF type (fitz for detection only -- not extraction)
-    pdf_type, avg_chars = _stage_1_1_detect_pdf_type(file_path)
-    print(f"[extract] PDF type: {pdf_type} (avg {avg_chars:.0f} chars/page from 10-page sample)")
+    # fitz sampling: garbled-font detection + diagnostics. NOT content extraction.
+    avg_chars, is_garbled, img_ratio = _stage_1_1_sample_pdf(file_path)
+    print(f"[extract] PDF sample: avg {avg_chars:.0f} chars/page, img_ratio={img_ratio:.2f}, garbled={is_garbled}")
 
-    if pdf_type == "text":
-        # Text-based PDF -> minerU via API server (hybrid-engine, auto method).
-        # The pipeline CLI (`mineru -b pipeline`) has a 502 Bad Gateway bug in
-        # 3.4.0: its auto-started API server shuts down immediately. The scanned
-        # path starts a persistent API server + calls /file_parse directly,
-        # which works. hybrid-engine auto detects the text layer and uses txt
-        # method (no OCR), preserving tables/formulas/figures. Formula quality
-        # verified equivalent (0% noise after _clean_mineru_latex).
-        # Set IMPROVED_WIKI_PIPELINE_CLI=1 to retry the (broken) pipeline CLI.
-        if os.environ.get("IMPROVED_WIKI_PIPELINE_CLI"):
+    # Garbled text layer → force OCR (auto would read the garbage layer via txt).
+    # Otherwise auto lets hybrid-engine route per-page (txt vs VLM OCR).
+    parse_method = "ocr" if is_garbled else "auto"
+    base_label = "mineru-api-ocr" if is_garbled else "mineru-api"
+
+    # Set the per-run override read by _stage_1_1_scanned_build_parse_body.
+    # Safe as module-level state: _stage_1_1_acquire_mineru_lock serializes runs.
+    global _PARSE_METHOD_OVERRIDE
+    _PARSE_METHOD_OVERRIDE = parse_method
+    try:
+        if os.environ.get("IMPROVED_WIKI_PIPELINE_CLI") and not is_garbled:
+            # Opt-in (broken) pipeline CLI — non-garbled only; garbled needs the
+            # API path to force parse_method=ocr.
             try:
                 text = _stage_1_1_extract_text_mineru_pipeline(file_path, config)
-                return text, "mineru-pipeline"
+                method = "mineru-pipeline"
             except Exception as e:
                 print(f"[extract] minerU pipeline CLI failed ({e}) -- falling back to API path")
-        text = _stage_1_1_extract_text_scanned(file_path, config)
-        return text, "mineru-api-txt"
-
-    elif pdf_type == "scanned":
-        # Scanned PDF -> minerU VLM OCR (chunked, crash-resilient, auto-fallback)
-        if pilot_confirmed:
-            print(f"[extract] Running minerU VLM OCR on scanned PDF (pilot confirmed)...")
+                text = _stage_1_1_extract_text_scanned(file_path, config)
+                method = base_label
         else:
-            print(f"[extract] Scanned PDF: auto-fallback to minerU VLM OCR...")
-        try:
             text = _stage_1_1_extract_text_scanned(file_path, config)
-            if len(text) > 2000:
-                return text, "mineru-vlm"
-            print(f"[extract] ⚠️  Scanned PDF OCR returned only {len(text)} chars -- quality may be poor")
-            return text, "mineru-vlm-low-quality"
-        except Exception as e:
-            raise RuntimeError(
-                f"Scanned PDF minerU VLM failed ({e}). "
-                f"Re-run interactively with --pilot-confirmed to review."
-            )
+            method = base_label
+    finally:
+        _PARSE_METHOD_OVERRIDE = None
 
-    elif pdf_type == "mixed":
-        # Mixed PDF -> API path (hybrid-engine auto handles text layer + OCR).
-        # Same 502 rationale as the text branch.
-        text = _stage_1_1_extract_text_scanned(file_path, config)
-        if len(text) > 2000:
-            return text, "mineru-api-mixed"
-        print(f"[extract] ⚠️  Mixed PDF returned only {len(text)} chars -- quality may be poor")
-        return text, "mineru-api-mixed-low-quality"
-
-    else:
-        raise RuntimeError(f"Unknown PDF type: {pdf_type}")
+    # Universal quality guard (formerly scanned/mixed-only).
+    if len(text) < 2000:
+        print(f"[extract] ⚠️  Only {len(text)} chars extracted -- quality may be poor")
+        method = f"{method}-low-quality"
+    return text, method
 
 
 # ---------- Stage 0 pilot: PDF type detection + pilot OCR ----------
 
-def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 15) -> tuple[str, float]:
-    """Sample N pages (skipping first+last) to determine PDF type.
+def _stage_1_1_sample_pdf(file_path: Path, sample_pages: int = 15) -> tuple[float, bool, float]:
+    """Sample N pages (skipping first+last) via fitz — detection only, NOT extraction.
 
-    Uses three signals:
-    1. Text chars/page (PyMuPDF get_text())
-    2. Presence of full-page images (scanned PDFs have one large image per page)
-    3. Garbled text ratio — C0 control chars (0x00-0x1F) indicate custom font
-       encoding that PyMuPDF cannot decode. >1% garbled → force OCR path.
-       (2026-06-18: Fuqua book had 500+ chars/page but all garbled.)
-
-    Decision priority (2026-06-22 fix): real extractable text trumps image
-    coverage. Academic books/papers routinely have full-page charts alongside
-    vector text — such pages are NOT scanned. Previously `img_ratio > 0.6`
-    overrode `avg > 500`, misrouting born-digital PDFs (e.g. Tudoroiu 2021,
-    51% image-heavy pages) to minerU OCR, which then over-segmented text/table
-    pages into 100+ tiny fragments. Now: `avg > 500` + non-garbled → text/mixed
-    regardless of image coverage; only near-zero text → scanned.
+    Returns (avg_chars, is_garbled, img_ratio):
+      - avg_chars: mean chars/page over sampled pages with ≥10 chars (0 if none).
+      - is_garbled: True if >1% of sampled chars are C0 control chars (0x00-0x1F),
+        indicating custom font encoding PyMuPDF cannot decode (e.g. Fuqua book:
+        500+ chars/page but all garbage). Such PDFs have a text layer that is
+        junk — hybrid-engine/auto would read it via txt and produce garbage, so
+        the caller must force parse_method=ocr.
+      - img_ratio: fraction of sampled text-pages with a >50%-page image.
 
     Sampling is deterministic per file (seeded by file path) so the same PDF
-    always routes the same way across runs. Page 0 (cover) and last page are
-    skipped; N pages are picked from the middle.
-
-    Returns ("text", avg_chars) or ("scanned", avg_chars) or ("mixed", avg_chars).
+    always samples the same way across runs (uses hashlib, not built-in hash(),
+    which is randomized per process). Page 0 (cover) and last page are skipped;
+    N pages are picked from the middle. Returns (0.0, False, 0.0) if fitz is
+    unavailable or no sampled page has ≥10 chars.
     """
     try:
         import fitz
     except ImportError:
-        return ("text", 0)
+        return (0.0, False, 0.0)
 
     _C0_RE = __import__('re').compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
-
-    # Deterministic per-file sampling: same PDF → same verdict every run.
-    # NOTE: use hashlib (not built-in hash()) because Python randomizes
-    # hash() per process (PYTHONHASHSEED) — built-in hash would make the
-    # sampling differ across ingest runs.
     _seed = int(hashlib.md5(str(file_path).encode("utf-8")).hexdigest()[:8], 16)
     rng = random.Random(_seed)
 
@@ -443,9 +447,7 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 15) -> tuple
                 continue
             total_chars += chars
             text_pages += 1
-            # Signal 3: garbled text (custom font encoding → force OCR)
             garbled_chars += len(_C0_RE.findall(text))
-            # Signal 2: full-page scan image
             rect = page.rect
             page_area = rect.width * rect.height
             for img in page.get_images():
@@ -456,25 +458,33 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 15) -> tuple
                     break
 
         if text_pages == 0:
-            return ("scanned", 0.0)
-
+            return (0.0, False, 0.0)
         avg = total_chars / text_pages
         img_ratio = img_pages / text_pages
-        garbled_ratio = garbled_chars / max(total_chars, 1)
-
-        # Garbled text (custom font encoding) → force OCR, trumps all.
-        if garbled_ratio > 0.01:
-            return ("scanned", avg)
-        # Sufficient extractable text → text-based PDF, even if pages have
-        # large figures. Image coverage must NOT override real vector text.
-        if avg > 500:
-            return ("mixed" if img_ratio > 0.3 else "text", avg)
-        # Near-zero text → scanned (needs OCR)
-        if avg < 50:
-            return ("scanned", avg)
-        return ("mixed", avg)
+        is_garbled = (garbled_chars / max(total_chars, 1)) > 0.01
+        return (avg, is_garbled, img_ratio)
     finally:
         doc.close()
+
+
+def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 15) -> tuple[str, float]:
+    """Backward-compat text/scanned/mixed classifier — used ONLY by the --dry-run
+    cost estimate in ingest.py.
+
+    The active extraction path (stage_1_1_extract_text) no longer branches on
+    text/scanned/mixed: hybrid-engine/auto routes per-page internally, and the
+    only fitz-based override is the garbled-font check (is_garbled). This
+    classifier is kept so `--dry-run` can still print a human-readable type.
+    Delegates to _stage_1_1_sample_pdf.
+    """
+    avg, is_garbled, img_ratio = _stage_1_1_sample_pdf(file_path, sample_pages)
+    if is_garbled:
+        return ("scanned", avg)  # garbled → needs OCR
+    if avg > 500:
+        return ("mixed" if img_ratio > 0.3 else "text", avg)
+    if avg < 50:
+        return ("scanned", avg)
+    return ("mixed", avg)
 
 
 MINERU_CHUNK_SIZE = 50  # pages per minerU invocation
@@ -679,6 +689,16 @@ def _stage_1_1_scanned_build_parse_body(
     parts.append(b'Content-Disposition: form-data; name="data"')
     parts.append(b"")
     parts.append(json.dumps({"lang": "ch"}).encode())
+    # parse_method override (set by stage_1_1_extract_text for garbled-font
+    # PDFs to force OCR). Omitting it lets the server default to "auto".
+    # NOTE: the "data" field above is actually ignored by the API (it reads
+    # lang_list/backend/parse_method as separate Form fields with defaults);
+    # parse_method here is the one that takes effect.
+    if _PARSE_METHOD_OVERRIDE:
+        parts.append(f"--{boundary}".encode())
+        parts.append(b'Content-Disposition: form-data; name="parse_method"')
+        parts.append(b"")
+        parts.append(_PARSE_METHOD_OVERRIDE.encode())
     if with_images:
         for field in ("return_images", "return_content_list"):
             parts.append(f"--{boundary}".encode())
@@ -979,7 +999,16 @@ def _stage_1_1_scanned_assemble_manifest(
 
 
 def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str:
-    """OCR a scanned PDF using local minerU (vlm-engine backend, configurable via MINERU_BACKEND env).
+    """Extract a PDF (any type) via the local minerU API server (hybrid-engine).
+
+    Despite the legacy "_scanned" name, this is the shared extraction path for
+    text / scanned / mixed PDFs (see stage_1_1_extract_text routing). It starts
+    a persistent mineru.cli.fast_api server and calls /file_parse per ~50-page
+    chunk. The server defaults to hybrid-engine with parse_method=auto, which
+    auto-routes: text layer present -> txt (no OCR); absent -> VLM OCR. The
+    /file_parse endpoint accepts a per-request `backend` Form field, so pipeline
+    or vlm-engine could be forced, but hybrid-engine is the verified default
+    (see stage_1_1_extract_text docstring for the rationale).
 
     Splits PDF into ~50-page chunks. Each chunk runs minerU independently.
     Results persisted to extract_tmp_dir/<stem>/ with _mineru_stats.json for crash recovery.

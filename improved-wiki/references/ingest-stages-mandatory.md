@@ -117,7 +117,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 
 #### 路径 A：文本层 PDF（chars/page >500 且全页大图占比 <60%）
 
-- **作用（2026-06-23 起，已不是 PyMuPDF 直抽）**：交给本地持久化 minerU API 服务器（`mineru.cli.fast_api`），分 chunk（50 页/chunk）调 `/file_parse`，`hybrid-engine` 自动识别文字层走 `txt` method（不跑重 OCR），同时保留表格/公式/图片。method 标签为 `mineru-api-txt`。**原因**：PyMuPDF 直接 `get_text()` 在数据手册类 PDF 上漏检表格/公式/图（实测对比 73 表格/7 公式/157 图 vs 0/0/2），必须靠 minerU 的版面分析补救。
+- **作用（2026-06-23 起，已不是 PyMuPDF 直抽；text/scanned/mixed 不再分流）**：交给本地持久化 minerU API 服务器（`mineru.cli.fast_api`），分 chunk（50 页/chunk）调 `/file_parse`，backend=`hybrid-engine`、parse_method=`auto`（hybrid 按页自动判 txt vs VLM OCR），保留表格/公式/图片。method 标签为 `mineru-api`（garbled 字体 PDF 强制 ocr → `mineru-api-ocr`；<2000 字符加 `-low-quality`）。fitz 采样仅做 garbled 检测，不再做三分类。**原因**：PyMuPDF 直接 `get_text()` 在数据手册类 PDF 上漏检表格/公式/图（实测对比 73 表格/7 公式/157 图 vs 0/0/2），必须靠 minerU 的版面分析补救。
 - **跳过代价**：无该路径；这是三类 PDF 里最快的一档（但已不是"毫秒级"，是分钟级，因为要起 minerU 模型）
 - **产物**：每页一个 `p<NNN>.txt`（与扫描版同一套产物结构，由 Stage 1.1 内部统一组装）
 - **go/no-go**：平均 chars/page >500 且抽样页中全页大图占比 <60%。**但如果书籍内容以图表为核心（信号完整性、眼图、波形图、电路图等），即使字符数达标，也优先选路径 B——图表丢失的代价远大于 OCR 的时间成本。**
