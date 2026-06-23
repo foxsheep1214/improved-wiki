@@ -127,6 +127,62 @@ def _stage_1_1_mineru_find_md(out_dir: Path, stem: str) -> Path:
     return md_out
 
 
+
+def _clean_mineru_latex(text: str) -> str:
+    """Clean minerU's noisy LaTeX formula output (font-dependent noise).
+
+    minerU wraps individual chars in \\mathsf{}/\\mathrm{}/\\mathcal{} and
+    inserts spurious spaces between digits/letters. Operates ONLY inside
+    $...$ / $$...$$ formula spans to avoid touching prose. Conservative:
+    skips ambiguous cases (e.g. \\nu which may be Greek nu or voltage v).
+
+    Measured on AFE439A2 (TI datasheet font): 84% -> 1% noise.
+    See ~/Desktop/formula-test/公式识别调研结论.md.
+    """
+    import re
+
+    def _join_single_chars(content: str) -> str:
+        """Join space-separated single-char tokens: 'D D' -> 'DD'."""
+        parts = content.split()
+        if len(parts) > 1 and all(len(part) == 1 for part in parts):
+            return "".join(parts)
+        return content
+
+    def _clean_formula(s: str) -> str:
+        # \mathsf { ... } -> strip wrapper, join single-char tokens inside
+        s = re.sub(r"\\mathsf\s*\{\s*([^{}]+?)\s*\}",
+                   lambda m: _join_single_chars(m.group(1)), s)
+        # \mathrm { X } single char -> X  (keep multi-char \mathrm{system})
+        s = re.sub(r"\\mathrm\s*\{\s*(\S)\s*\}", r"\1", s)
+        # \mathcal { X } single char -> X
+        s = re.sub(r"\\mathcal\s*\{\s*(\S)\s*\}", r"\1", s)
+        # \vee / \bigvee -> V  (voltage variable; logic-or rare in eng docs)
+        s = re.sub(r"\\bigvee\b", r"V", s)
+        s = re.sub(r"\\vee\b", r"V", s)
+        # \sf followed by space -> remove
+        s = re.sub(r"\\sf\s+", r"", s)
+        # Join digits/dots separated by spaces: "0 . 0 0 1 6" -> "0.0016"
+        s = re.sub(r"(?<=[\d.])\s+(?=[\d.])", r"", s)
+        # Inside _{...} / ^{...}: join single-char tokens
+        def _join_braces(m):
+            inner = m.group(2)
+            parts = inner.split()
+            if len(parts) > 1 and all(len(part) == 1 for part in parts):
+                return m.group(1) + "".join(parts) + "}"
+            return m.group(0)
+        s = re.sub(r"([_\^])\{\s*([^{}]+?)\s*\}", _join_braces, s)
+        # Collapse multiple spaces
+        s = re.sub(r"  +", r" ", s)
+        return s
+
+    # Apply only inside $$...$$ and $...$ spans (preserve prose).
+    text = re.sub(r"\$\$[^\$]+\$\$",
+                  lambda m: "$$" + _clean_formula(m.group(0)[2:-2]) + "$$", text)
+    text = re.sub(r"\$[^\$\n]+\$",
+                  lambda m: "$" + _clean_formula(m.group(0)[1:-1]) + "$", text)
+    return text
+
+
 def _stage_1_1_extract_text_mineru_pipeline_impl(file_path: Path, config: Config) -> str:
     """Extract text from a text-based PDF via minerU pipeline backend (no OCR).
 
@@ -162,7 +218,7 @@ def _stage_1_1_extract_text_mineru_pipeline_impl(file_path: Path, config: Config
         raise RuntimeError(f"minerU pipeline failed: {result.stderr[-500:]}")
 
     md_out = _stage_1_1_mineru_find_md(out_dir, stem)
-    return md_out.read_text(encoding="utf-8")
+    return _clean_mineru_latex(md_out.read_text(encoding="utf-8"))
 
 
 def _stage_1_1_extract_text_mineru_pipeline(file_path: Path, config: Config) -> str:
@@ -497,7 +553,8 @@ def _stage_1_1_extract_text_scanned_locked(file_path: Path, config: Config) -> s
     """Wrapper around _stage_1_1_extract_text_scanned_impl() with file lock management."""
     lock_fd = _stage_1_1_acquire_mineru_lock()
     try:
-        return _stage_1_1_extract_text_scanned_impl(file_path, config)
+        text = _stage_1_1_extract_text_scanned_impl(file_path, config)
+        return _clean_mineru_latex(text)
     finally:
         _stage_1_1_release_mineru_lock(lock_fd)
 
@@ -1572,32 +1629,91 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
 
 
 def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path) -> dict:
-    """Extract images from minerU OCR output (改进2：从 minerU 输出而非重新提取)."""
+    """Extract images from minerU output (pipeline txt / vlm / auto backends).
+
+    minerU writes images to <out_dir>/<stem>/<method>/images/ where <method>
+    is txt (pipeline -m txt), vlm (vlm-engine), or auto. Also reads
+    content_list.json to harvest minerU's own image_caption (the PDF figure
+    caption) and sub_type (flowchart/curve/text_image) so downstream Stage 1.3
+    can skip re-captioning figures minerU already described.
+    """
     media_dir = config.wiki_dir / "media" / _stage_1_2_media_slug(raw_file, config)
     media_dir.mkdir(parents=True, exist_ok=True)
 
-    images = []
-    img_source_dir = out_dir / "vlm" / "images"
-    if not img_source_dir.exists():
-        img_source_dir = out_dir / "auto" / "images"
+    # Locate image source dir across backends: txt (pipeline), vlm, auto.
+    # minerU nests output as <out_dir>/<stem>/<method>/images/.
+    stem = raw_file.stem
+    img_source_dir = None
+    for method in ("txt", "vlm", "auto"):
+        cand = out_dir / stem / method / "images"
+        if cand.exists():
+            img_source_dir = cand
+            break
+    # Fallback: older flat layout <out_dir>/vlm/images or auto/images
+    if img_source_dir is None:
+        for method in ("vlm", "auto"):
+            cand = out_dir / method / "images"
+            if cand.exists():
+                img_source_dir = cand
+                break
 
-    if img_source_dir.exists():
+    # Harvest minerU image_caption + sub_type from content_list.json.
+    # Keyed by image basename so we can attach during copy.
+    caption_map: dict[str, dict] = {}
+    cl_files = sorted(out_dir.rglob("*content_list.json"))
+    for clf in cl_files:
+        try:
+            blocks = json.loads(clf.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for b in blocks:
+            if b.get("type") in ("image", "chart"):
+                ip = b.get("img_path", "")
+                bn = os.path.basename(ip)
+                if bn:
+                    caps = b.get("image_caption", [])
+                    caption_map[bn] = {
+                        "caption": caps[0] if caps else "",
+                        "sub_type": b.get("sub_type", ""),
+                        "page": b.get("page_idx", 0),
+                    }
+        if caption_map:
+            break  # use first content_list that yields images
+
+    images = []
+    mineru_captioned = 0
+    if img_source_dir:
         for img_path in sorted(img_source_dir.glob("*")):
             if not img_path.is_file():
                 continue
             dest = media_dir / img_path.name
             shutil.copy2(img_path, dest)
+            meta = caption_map.get(img_path.name, {})
+            # Write minerU caption as sidecar so Stage 1.3 skips re-captioning.
+            # Combine image_caption (figure label) + content (Mermaid for flowcharts).
+            cap_parts = []
+            if meta.get("caption"):
+                cap_parts.append(meta["caption"])
+            if meta.get("content"):
+                cap_parts.append(meta["content"])
+            if cap_parts:
+                sidecar = media_dir / (img_path.name + ".caption.txt")
+                sidecar.write_text("\n".join(cap_parts), encoding="utf-8")
+                mineru_captioned += 1
             images.append({
+                "filename": img_path.name,
                 "path": str(dest.relative_to(config.wiki_root)),
-                "page": 0,
-                "caption": "",
+                "page": meta.get("page", 0),
+                "caption": meta.get("caption", ""),
+                "sub_type": meta.get("sub_type", ""),
                 "width": 0,
                 "height": 0,
             })
 
     manifest_path = media_dir / "_manifest.json"
     _stage_1_2_write_manifest(manifest_path, "mineru-ocr", raw_file, images)
-    print(f"[stage 1.2] minerU: {len(images)} images extracted from {img_source_dir}")
+    print(f"[stage 1.2] minerU: {len(images)} images from {img_source_dir} "
+          f"({mineru_captioned} pre-captioned by minerU, Stage 1.3 will skip)")
     return {
         "count": len(images),
         "media_dir": str(media_dir),
