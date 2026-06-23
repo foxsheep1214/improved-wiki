@@ -117,18 +117,19 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 
 #### 路径 A：文本层 PDF（chars/page >500 且全页大图占比 <60%）
 
-- **作用**：PyMuPDF `page.get_text()` 直接抽文本层
-- **跳过代价**：无；这是最快路径
-- **产物**：`full.txt`（合并所有页）
+- **作用（2026-06-23 起，已不是 PyMuPDF 直抽）**：交给本地持久化 minerU API 服务器（`mineru.cli.fast_api`），分 chunk（50 页/chunk）调 `/file_parse`，`hybrid-engine` 自动识别文字层走 `txt` method（不跑重 OCR），同时保留表格/公式/图片。method 标签为 `mineru-api-txt`。**原因**：PyMuPDF 直接 `get_text()` 在数据手册类 PDF 上漏检表格/公式/图（实测对比 73 表格/7 公式/157 图 vs 0/0/2），必须靠 minerU 的版面分析补救。
+- **跳过代价**：无该路径；这是三类 PDF 里最快的一档（但已不是"毫秒级"，是分钟级，因为要起 minerU 模型）
+- **产物**：每页一个 `p<NNN>.txt`（与扫描版同一套产物结构，由 Stage 1.1 内部统一组装）
 - **go/no-go**：平均 chars/page >500 且抽样页中全页大图占比 <60%。**但如果书籍内容以图表为核心（信号完整性、眼图、波形图、电路图等），即使字符数达标，也优先选路径 B——图表丢失的代价远大于 OCR 的时间成本。**
+- **已知坑（502 workaround，见 `a79cd7d`）**：`mineru -b pipeline` CLI 在 3.4.0 有 502 Bad Gateway bug（自启的 API 服务器立刻关闭）。当前默认走"API 路径"（`_stage_1_1_extract_text_scanned()`，函数名是历史遗留，现在文本版/混合版/扫描版都走它），不再调用 pipeline CLI。设 `IMPROVED_WIKI_PIPELINE_CLI=1` 才会尝试（已知坏的）pipeline CLI 路径，method 标签为 `mineru-pipeline`。
 
 #### 路径 B：扫描版 PDF（chars/page <50，或抽样页中 >60% 有全页大图，或图表密集型书籍）
 
-- **作用**：强制走本地 minerU VLM OCR，同时提取文字和图片。**⚠️ OCR 处理的扫描版 PDF 会有高质量文字层（chars/page 可达数百甚至上千），2026-06-17 新增第四信号"隐藏 OCR 层检测"：即使 chars/page >500，如果 >30% 抽样页有全页大图，判定为 `mixed` 走 OCR 路径，防止 Johnson 事故（文本达标但图表全丢）再次发生。**
-- **跳过代价**：扫描版 PDF 仅走 PyMuPDF → 全页波形图/眼图/示意图丢失 → 对于信号完整性、电路设计等图表密集型书籍，丢失了一半以上的知识价值。**2026-06-14 Johnson《High-Speed Signal Propagation》实际发生**：100% 页面有全页大图，但 OCR 文字层字符数达标，最终走了路径 A，全本图表丢失。
-- **产物**：每页一个 `p<NNN>.txt`（与页号 1:1 对应）+ minerU 自动提取的图片
-- **go/no-go**：每页 chars >100；无幻觉（chars<100 且无中文字符 → 重跑）；确认 minerU 输出的 `images/` 目录包含图表
-- **关键实操**：扫描版 PDF 全本 OCR 使用本地 minerU（`~/.venv/bin/mineru -b vlm-engine`），免费、自动提取图片、无需 API key。可通过 `MINERU_BACKEND` 环境变量切换后端（vlm-engine / hybrid-engine / pipeline）。**并发限制**：系统级最多 1 个 minerU OCR 任务串行执行（`MINERU_MAX_CONCURRENT=1`）。`ingest.py` 在每次 minerU 调用前通过 `_wait_for_mineru_slot()` 自动排队，等待时显示当前占用文件名和累计等待时间（如 `[mineru] ⏳ 并发槽已满 (1/1)「图解传热学」— 已等待 X 分钟，30s 后重试...`），无需人工协调。
+- **作用**：同一个本地 minerU API 服务器，强制走 VLM OCR 模式，同时提取文字和图片。**⚠️ OCR 处理的扫描版 PDF 会有高质量文字层（chars/page 可达数百甚至上千），2026-06-17 新增第四信号"隐藏 OCR 层检测"：即使 chars/page >500，如果 >30% 抽样页有全页大图，判定为 `mixed` 走 OCR 路径，防止 Johnson 事故（文本达标但图表全丢）再次发生。**
+- **跳过代价**：扫描版 PDF 若只抽文本层 → 全页波形图/眼图/示意图丢失 → 对于信号完整性、电路设计等图表密集型书籍，丢失了一半以上的知识价值。**2026-06-14 Johnson《High-Speed Signal Propagation》实际发生**：100% 页面有全页大图，但 OCR 文字层字符数达标，最终误判为纯文本路径，全本图表丢失（这正是当时引入第四信号的原因）。
+- **产物**：每页一个 `p<NNN>.txt`（与页号 1:1 对应）+ minerU 自动提取并已经过 Stage 1.3 caption 的图片（见下方 Stage 1.2 说明）
+- **go/no-go**：每页 chars >100；无幻觉（chars<100 且无中文字符 → 重跑）；确认图片已落到 `wiki/media/<slug>/`
+- **关键实操**：文本版/混合版/扫描版 PDF 现在统一走同一套本地 minerU 持久 API 服务器（`mineru.cli.fast_api`，端口 `MINERU_API_PORT`，默认 19999），按 50 页/chunk（`MINERU_CHUNK_SIZE`）切分，逐 chunk POST `/file_parse`，每 chunk 最多 3 次重试、累计失败 >30% 全本 abort。免费、自动提取图片、无需 API key。**并发限制**：系统级最多 1 个 minerU 任务执行，通过文件锁 `_stage_1_1_acquire_mineru_lock()`（`fcntl.flock`，超时 3600s）而不是旧版的进程数轮询实现，等待时打印 `[mineru] Waiting for lock... (Xs elapsed)`，无需人工协调。详见 `references/scanned-pdf-ocr-pipeline.md`。
 
 **Stage 0.3 Pilot：OCR 质量验证（2026-06-21 改进质量阈值）**
 - **作用**：在正式 OCR 前先抽 5 页验证 minerU 质量，避免浪费 OCR 时间在已损坏/已保护的 PDF 上。
@@ -141,17 +142,22 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 - **产物**：pilot 阶段的 OCR 输出（前 3000 字）+ 质量评分
 
 ### Stage 1.2 · 图片提取 ⭐ **永远不能跳**
-- **作用**：用 PyMuPDF `get_images()` 抽取 PDF 每页的嵌入图，存到 `wiki/media/<type>/<pdf-stem>/`。**`<pdf-stem>` = PDF 文件名去 `.pdf` 后缀，与 `wiki/sources/<pdf-stem>.md` 共用同一个 stem。2026-06-15: 出现同一 PDF 被两次 Stage 1.2 用不同 slug 命名产生两个 media 目录的 bug，根因是 `source-slug` 未强制等于 PDF stem。**
+
+**PDF（默认 API 路径，2026-06-23 起）**：图片提取已经融进 Stage 1.1 的 chunk 处理里，不再是事后单独一步。每个 chunk 调 minerU `/file_parse` 拿到结果后，`_stage_1_2_harvest_images()` 立即从响应里的 `images`（base64）+ `content_list`（页码映射）把图存到 `wiki/media/<type>/<pdf-stem>/`，文件名 `p<NNN>-mineru_<md5前8位>.<ext>`（不再是 `p<N>-fig<K>.<ext>` 这种页内序号命名）。全本 OCR 跑完后 `_stage_1_1_scanned_assemble_manifest()` 汇总写 manifest.json，并直接调 Stage 1.3 的 `_stage_1_3_caption_images_batch()` 把图配上文字——也就是说对默认路径，Stage 1.2 + 1.3 已经在 Stage 1.1 内部做完了，ingest.py 里那个独立的"Stage 1.2 调用"（`_stage_1_2_extract_from_mineru()`）对这条路径基本是空跑（找不到目录，返回 0 张）。
+
+**PDF（opt-in pipeline CLI 路径，`IMPROVED_WIKI_PIPELINE_CLI=1` 时）**：走真正独立的 Stage 1.2 —— `_stage_1_2_extract_from_mineru()` 从 `extract_tmp_dir/<stem>/<method>/images/`（minerU CLI 落盘的目录）拷贝图到 `wiki/media/`，同时读 `content_list.json` 里 minerU 自带的 `image_caption` 写成 sidecar，供 Stage 1.3 跳过重复配文字。
+
+**PPTX / DOCX**：走 `stage_1_2_extract_images()` → `_stage_1_2_extract_images_office()`，直接从 zip 内部 `ppt/media/` / `word/media/` 取图（NashSU parity 做法），与 minerU 无关。
+
 - **跳过代价**：图全部丢失，wiki 文字描述无法引用图，故障排查价值砍半
-- **产物**：`wiki/media/<type>/<pdf-stem>/p<N>-fig<K>.<ext>` + manifest.json
-- **go/no-go**：扫描完所有页，统计抽出的图总数 > 0；如确实没有图，在 source 页 `## Embedded Images` 段写"无嵌入图"
+- **产物**：`wiki/media/<type>/<pdf-stem>/p<NNN>-mineru_<id>.<ext>`（PDF API 路径）+ manifest.json
+- **go/no-go**：抽出的图总数 > 0；如确实没有图，在 source 页 `## Embedded Images` 段写"无嵌入图"
 - **必须含**：
-  - 文件命名带页号（`p123-fig4.png`）便于回溯
-  - sha256 去重（一图复用多页只存一份）
-  - 尺寸过滤（< 100×100 像素的装饰/logo 剔除）
-  - manifest.json 记录：图路径 / 来源页 / 尺寸 / sha256
-  - **方向修正**（2026-06-15）：使用 `fitz.Pixmap(doc, xref)` 而非 `doc.extract_image(xref).raw_bytes`。Pixmap 会应用 PDF 图像变换矩阵，自动纠正旋转/翻转——`extract_image()` 只给原始字节，不处理 PDF 层对图像施加的旋转。CMYK 色彩空间自动转 RGB。如果 Pixmap 对 JBIG2/JPEG2000 等特殊编码失败，fallback 回原始字节。
-- **扫描版 PDF 特殊说明**：扫描版的"图"是整页 PNG（不是嵌入 raster），Stage 1.2 在扫描版路径下不走 PyMuPDF `get_images()`，由 Stage 1.2 的页图天然承担。Stage 3.2 注入 source 页时直接引用 page-level PNG 即可
+  - 文件命名带页号便于回溯
+  - 尺寸过滤：`_is_image_too_small()`，阈值 `MINERU_IMG_MIN_WIDTH`/`MINERU_IMG_MIN_HEIGHT`（默认 20px，故意调得很低，公式截图哪怕只有 29px 高也要保留——MiniMax 能转录）
+  - manifest.json 记录：图路径 / 来源页 / 尺寸
+  - **注意**：当前 API 路径的图片 harvest 按 `page+md5前8位` 命名，不做跨页 sha256 全局去重（旧的 PyMuPDF 提取逻辑曾经做过 sha256 去重，2026-06-23 随 PyMuPDF 路径整体移除后这一步也跟着没了——同一张图如果在文档里物理重复出现在不同页，会各存一份）
+- **历史**：`fitz.Pixmap(doc, xref)` 纠正旋转/翻转、CMYK→RGB 那套 PyMuPDF 提取逻辑（2026-06-15 引入）已随 2026-06-23 的 mineru-only 迁移整体删除（dead code cleanup），minerU 自己的版面分析已经处理了图像方向问题。
 
 ### Stage 1.3 · 图片 captioning ⭐ **永远不能跳**
 - **作用**：对每张抽出的图，用 VLM 生成 1-3 句描述（中文优先）
@@ -418,7 +424,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
 完成一个文件的 ingest 后，**必须**逐项过这个清单：
 
 - [ ] **Stage 0.3 Pilot 已跑**：5-10 页 OCR 输出质量 OK
-- [ ] **Stage 1.1**：源文本已提取（PyMuPDF 文本层 OR mmx vision OCR 后每页 chars >100）
+- [ ] **Stage 1.1**：源文本已提取（minerU `txt` method OR VLM OCR 后每页 chars >100；PyMuPDF 现在只做类型检测，不做提取）
 - [ ] **Stage 1.2：图已抽到 `wiki/media/<type>/<slug>/`（数量 > 0 或确认无嵌入图）**
 - [ ] **Stage 1.3：每张图有 .caption.txt（长度 ≥ 20 字符）**
 - [ ] Stage 2.1：global-digest.yaml 合法

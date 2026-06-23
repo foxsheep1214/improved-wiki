@@ -1,39 +1,46 @@
 ---
-description: "Image captioning strategy — unified Path A (PyMuPDF) + Path B (minerU) pipeline, parallel batch dispatch via ThreadPoolExecutor, grayscale→RGB preprocessing, VLM failure detection. Verified: HardwareWiki 18,709 images (2026-06-17), EMC book fix (2026-06-17)."
+description: "Image captioning strategy — unified pipeline over office-extracted (PPTX/DOCX zipfile) + minerU-extracted (PDF) images, parallel batch dispatch via ThreadPoolExecutor, grayscale→RGB preprocessing, VLM failure detection. Verified: HardwareWiki 18,709 images (2026-06-17), EMC book fix (2026-06-17)."
 tags: [vlm, captioning, batch, minimax, strategy, parallel, preprocessing]
 related: [multimodal-vlm-pitfalls, ingest-stages-mandatory §0.6, known-issues]
 ---
 
 # Image Captioning 策略
 
-Unified image captioning pipeline covering both Path A (PyMuPDF embedded images) and Path B (minerU scanned-page images). Implemented as `_caption_images()` in `scripts/ingest.py`.
+Unified image captioning pipeline. Implemented as `stage_1_3_caption_images()` / `_stage_1_3_caption_images_batch()` in `scripts/_stage_1_extract.py` (moved out of `ingest.py` during the 2026-06-22 explicit-stage-naming refactor — old name was `_caption_images()`).
+
+**2026-06-23 update**: the "Path A / Path B" split below is now stale terminology. PyMuPDF no longer extracts any images (PDF image extraction moved to minerU — see `ingest-stages-mandatory.md` Stage 1.2). The two sources captioning actually sees today are:
+- **PDF images** — harvested by minerU (`_stage_1_2_harvest_images()` inline during Stage 1.1 chunk processing, or `_stage_1_2_extract_from_mineru()` for the opt-in CLI pipeline path)
+- **PPTX/DOCX images** — extracted via `_stage_1_2_extract_images_office()` (zipfile, not PyMuPDF)
+
+The code still passes `source_label="pyMuPDF"` as a hardcoded literal in `stage_1_3_caption_images()` — that label is leftover from before the migration and no longer reflects where the images actually came from. Harmless (it's just a log/manifest label, not used for branching), but don't trust it as a source-of-truth indicator.
 
 ---
 
-## Architecture (2026-06-17)
+## Architecture (2026-06-17, function names updated 2026-06-23)
 
 ```
-Path A: PyMuPDF get_images()          Path B: minerU VLM OCR
-  → media_dir / filename.png            → media_dir / filename.jpg
-  → {"filename":..., "page":N, ...}     → {"filename":..., "path":"/abs/..."}
+PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
+  → media_dir / p0007-mineru_a1b2.png   → media_dir / image1.png
+  → {"filename":..., "page":N, ...}     → {"filename":..., "page":0, ...}
                 │                              │
                 └──────────┬───────────────────┘
                            ▼
-              _caption_images()  ← unified entry point
+        _stage_1_3_caption_images_batch()  ← unified entry point
                 │
-                ├── _preprocess_image_for_caption()
+                ├── _stage_1_3_preprocess_image()
                 │     • grayscale (mode L/LA/P/PA) → RGB
                 │     • oversized (>1568px) → thumbnail
                 │     • base64 encode
                 │
                 ├── ThreadPoolExecutor (max CAPTION_MAX_WORKERS batches parallel)
-                │     • _caption_one_batch(): builds multi-image request
-                │     • Handles both Path A (page annotation) and Path B (index annotation)
+                │     • _stage_1_3_caption_one_batch(): builds multi-image request
                 │
-                └── _is_caption_failed()
+                └── _stage_1_3_is_caption_failed()
                       • Detects VLM error responses
                       • Writes "[待重试]" fallback for later retry
 ```
+
+(The "Path A/B" labels still in the code itself — `source_label="pyMuPDF"` default, the docstring inside `_stage_1_3_caption_images_batch()` — are stale leftovers from before the 2026-06-23 PyMuPDF-removal; harmless, just don't read them as describing current image sourcing.)
 
 ## Key parameters
 
@@ -111,12 +118,12 @@ export CAPTION_MAX_WORKERS=8    # more parallel workers
 
 Direct call from Python (e.g., to repair failed captions for a specific book):
 ```python
-from ingest import _caption_images
+from _stage_1_extract import _stage_1_3_caption_images_batch
 media_dir = Path("wiki/media/Book/Some Book - 2024 - Author")
 images = [{"filename": f.name, "page": 0, "width": 0, "height": 0}
           for f in sorted(media_dir.iterdir())
           if f.suffix.lower() in ('.png', '.jpg', '.jpeg')]
-captioned = _caption_images(images, config, media_dir, source_label="repair")
+captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_label="repair")
 ```
 
 ## Revision history
@@ -124,3 +131,4 @@ captioned = _caption_images(images, config, media_dir, source_label="repair")
 - **2026-06-11**: Initial version, 738-image benchmark
 - **2026-06-17**: Unified Path A + Path B into single `_caption_images()`; parallel batch dispatch via ThreadPoolExecutor; grayscale→RGB preprocessing; VLM failure detection with retry; cache filter checks existing caption content for failures
 - **2026-06-22**: LaTeX-only formula transcription rule in `CAPTION_SYSTEM_PROMPT` (no Unicode subscripts/Greek, 150-char limit for formulas); fixed `_is_image_too_small` NameError bug (undefined `MINERU_IMG_MIN_WIDTH/HEIGHT` silently disabled the filter — constants now defined at 20px, size check moved outside broad try/except)
+- **2026-06-23**: functions moved from `ingest.py` to `_stage_1_extract.py` with explicit stage prefixes (`_caption_images` → `stage_1_3_caption_images`/`_stage_1_3_caption_images_batch`, etc.); PyMuPDF removed entirely from PDF image extraction (Path A description above is now historical only — see note at top of doc)
