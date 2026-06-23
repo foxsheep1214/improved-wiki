@@ -143,7 +143,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the MiniMax caption key/endpoint used by Stage 1.3 |
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
-| Scanned PDF returns empty text from PyMuPDF | Normal — the script should fall back to minerU OCR | Check the script logs for "[extract] PyMuPDF returned empty text — falling back to minerU OCR" |
+| Scanned PDF detected | Normal — type detection (still PyMuPDF-based sampling) routes it to minerU VLM OCR | Check the script logs for "[extract] PDF type: scanned (avg N chars/page from 10-page sample)" |
 | `wiki/index.md` is missing the new source link | The script appends via `index_text.replace("## Sources\n", f"## Sources\n\n{new_link}", 1)` — if the index doesn't have an exact "## Sources\n" header, the append silently no-ops | Make sure your `index.md` template has `## Sources\n` as a standalone line (not `## Sources - `) |
 
 ---
@@ -155,7 +155,7 @@ For a typical 300-page book with full text layer:
 | Stage | Expected time |
 |---|---|
 | Hash check | <1s |
-| PyMuPDF text extract | 1-3s |
+| minerU text extract (API path, text-layer PDF) | minutes, not seconds — dominated by local minerU server startup/model load, not page count (2026-06-23: PyMuPDF direct extraction removed, all PDFs route through minerU) |
 | LLM Analysis call (conversation mode) | 30-90s (current model, per-chunk) |
 | LLM Generation call (conversation mode) | 60-180s (this is the big one) |
 | File writes | <1s |
