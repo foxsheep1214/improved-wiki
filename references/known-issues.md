@@ -2,17 +2,13 @@
 
 ## Open issues
 
-### `--dry-run` gives a wrong impression of what the LLM call will cost
-
-`--dry-run` does NOT print estimated prompt length or token cost. User can't tell if the upcoming call will be 30s or 30min. Fix: add `--dry-run-extract` mode that counts chars in extracted text.
-
 ### Shell scripts lack `set -euo pipefail`
 
 `run-queue.sh`, `wiki-lint.sh`, `wiki-monitor.sh` — should add strict error handling.
 
 ### Several files exceed the 800-line guideline
 
-`ingest.py` (~1800 lines), `_stage_2_4_generation.py` (~628 lines).
+`ingest.py` (~2062 lines), `_stage_2_4_generation.py` (~632 lines).
 
 ## Design decisions (not bugs)
 
