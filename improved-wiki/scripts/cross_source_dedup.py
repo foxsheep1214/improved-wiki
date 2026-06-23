@@ -16,10 +16,10 @@ Phase 2 (LLM semantic): detect same-topic different-name slugs (synonyms,
 EN/中文, singular/plural, abbrev/full) via NashSU's ``_dedup`` engine, then
 LLM body-merge each group.
 
-LLM path (phase 2): **direct HTTP API** by default (``call_anthropic_direct`` —
-same entry point ingest uses; parallelizable, fast), needing ``LLM_API_KEY``.
-Falls back to conversation-mode handoff (``make_conversation_llm_call``) when no
-key is configured, so the calling agent's model does the work.
+LLM path (phase 2): **conversation-mode only** (``make_conversation_llm_call``) —
+the same prompt-file handoff primitive ingest.py uses, so the calling agent's
+model does the work. No direct HTTP API / ``LLM_API_KEY`` path (round v,
+2026-06-23): text generation is conversation-mode everywhere, matching ingest.
 
 Dedup is NOT run after ingest — it is a standalone lint-command action
 (``wiki-lint.sh --dedup``). When invoked, it auto-applies (deletes files);
@@ -43,7 +43,6 @@ import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Callable
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -54,8 +53,7 @@ import _dedup  # noqa: E402
 import _dedup_merge  # noqa: E402
 from _core import ConversationPending  # noqa: E402
 from _paths import detect_runtime_dir  # noqa: E402
-from _llm_api import call_anthropic_direct  # noqa: E402
-from _llm_call import make_conversation_llm_call  # noqa: E402 (fallback)
+from _llm_call import make_conversation_llm_call  # noqa: E402
 
 ANCHOR_FILES = {"index.md", "log.md", "overview.md"}
 STATE_FILES = {
@@ -67,45 +65,14 @@ STATE_FILES = {
 SKIP_DIRS = {"lint", "REVIEW", "media"}
 
 
-# ── LLM call: direct API (default) with conversation fallback ──────────────
-
-def _load_config_file() -> dict:
-    cfg_path = Path.home() / ".agents" / "config.json"
-    if not cfg_path.exists():
-        return {}
-    try:
-        return json.loads(cfg_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def _direct_config() -> SimpleNamespace | None:
-    """Build a minimal config for call_anthropic_direct. None if no key."""
-    cfg = _load_config_file()
-    key = os.environ.get("LLM_API_KEY", "") or cfg.get("llm_api_key") or cfg.get("LLM_API_KEY", "")
-    if not key:
-        return None
-    return SimpleNamespace(
-        llm_api_key=key,
-        llm_base_url=os.environ.get("LLM_BASE_URL", "") or cfg.get("llm_base_url", ""),
-        llm_model=os.environ.get("LLM_MODEL", "") or cfg.get("llm_model", ""),
-        llm_protocol=os.environ.get("LLM_PROTOCOL", "anthropic"),
-        max_tokens=16384,
-    )
-
+# ── LLM call: conversation-mode only ───────────────────────────────────────
 
 def make_llm_call(project_root: Path):
-    """Return (callable, runtime). Direct API if key set, else conversation."""
-    cfg = _direct_config()
-    if cfg is not None:
-        def direct_call(prompt: str, label: str = "") -> str:
-            text, _stop = call_anthropic_direct(prompt, cfg, label=label or "dedup")
-            return text
-        print("[dedup] LLM path: direct API (call_anthropic_direct)")
-        return direct_call, None
+    """Return (callable, runtime). Always conversation-mode — the calling
+    agent's model does the work via the shared prompt-file handoff."""
     runtime = detect_runtime_dir(project_root)
     conv = make_conversation_llm_call(runtime, stage_prefix="dedup")
-    print("[dedup] LLM path: conversation-mode (no LLM_API_KEY)")
+    print("[dedup] LLM path: conversation-mode (calling agent's model)")
     return conv, runtime
 
 
