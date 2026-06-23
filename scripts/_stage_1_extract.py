@@ -4,7 +4,6 @@ Pipeline stages:
   Phase 1 Stage 1.1: Extract text from PDF/PPTX/DOCX (minerU pipeline for text PDFs, minerU VLM for scanned)
   Phase 1 Stage 1.2: Extract embedded images from PDF
   Phase 1 Stage 1.3: Generate image captions via VLM
-  (Stage 0.3 Pilot OCR lives in _stage_0_3_pilot.py)
 
 Extracted from ingest.py on 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
 Imports shared infrastructure from _core.
@@ -318,7 +317,7 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
     return text
 
 
-def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: bool = False) -> tuple[str, str]:
+def stage_1_1_extract_text(file_path: Path, config: Config) -> tuple[str, str]:
     """Extract text from a source file via the minerU API server (hybrid-engine).
 
     All PDFs (text / scanned / mixed) take ONE path: a persistent local minerU
@@ -335,9 +334,6 @@ def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: boo
     parse_method=ocr so hybrid-engine OCRs instead of reading the garbage layer.
     This is the sole reason fitz sampling is retained (detection only, NOT
     extraction).
-
-    pilot_confirmed is retained for signature compatibility but is currently
-    cosmetic (Stage 0.3 pilot is defined but not wired into the active flow).
 
     txt/md/pptx/docx bypass minerU entirely.
 
@@ -396,7 +392,7 @@ def stage_1_1_extract_text(file_path: Path, config: Config, pilot_confirmed: boo
     return text, method
 
 
-# ---------- Stage 0 pilot: PDF type detection + pilot OCR ----------
+# ---------- Stage 0: PDF type detection ----------
 
 def _stage_1_1_sample_pdf(file_path: Path, sample_pages: int = 15) -> tuple[float, bool, float]:
     """Sample N pages (skipping first+last) via fitz — detection only, NOT extraction.

@@ -64,7 +64,6 @@ def ingest_watch(
     max_retries: int = 3,
     resume_from: str | None = None,
     verbose: bool = False,
-    pilot_confirmed: bool = False,
 ) -> None:
     """Continuously watch ingest-queue.json and process pending entries.
 
@@ -188,7 +187,6 @@ def ingest_watch(
                     raw_paths, config,
                     max_concurrent=max_concurrent,
                     verbose=verbose,
-                    pilot_confirmed=pilot_confirmed,
                 )
             except Exception as e:
                 print(f"[watch] Batch ingest crashed: {e}")
