@@ -24,6 +24,15 @@ Deliberate choice to avoid `pip install` in the cron context.
 
 Use `~/.venv/bin/python3` or pre-install PyMuPDF.
 
+## Batch digest patterns
+
+Batch ingestion (looping `ingest.py` over many PDFs) has its own pitfalls:
+`claude -p` cannot loop, failure-mode table, dedup signal, and concurrency
+rules. See `references/batch-digest-patterns.md` for the full write-up.
+
+The one-line summary: call `ingest.py` directly from a Python loop (not through
+`claude -p`), dedup on `wiki/sources/<stem>.md` existence, and run serially.
+
 ## Legacy artifacts
 
 ### `.digested` files in `raw/` subdirectories
