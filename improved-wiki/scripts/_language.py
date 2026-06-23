@@ -22,6 +22,13 @@ def detect_language(text: str) -> str:
         if script:
             counts[script] = counts.get(script, 0) + 1
 
+    # Greek as math notation: isolated Greek letters (λ, σ, θ, Δ, …) flanked
+    # by Latin/digits/operators are notation, not Greek-language text. Real
+    # Greek has multi-letter word runs. Drop Greek from the script counts
+    # when every Greek letter is an isolated singleton.
+    if counts.get("Greek", 0) and not _has_greek_word_run(text):
+        del counts["Greek"]
+
     # Japanese: Hiragana/Katakana + Kanji → Japanese (not Chinese)
     if counts.get("Japanese", 0) > 0 and counts.get("Chinese", 0) > 0:
         return "Japanese"
@@ -70,6 +77,19 @@ def build_language_directive(text: str) -> str:
 
 
 # ── Script detection ──
+
+_GREEK_WORD_RUN = re.compile(r"[Ͱ-Ͽἀ-῿]{2,}")
+
+
+def _has_greek_word_run(text: str) -> bool:
+    """True if ``text`` contains ≥2 consecutive Greek letters — a word run.
+
+    Isolated single Greek letters (math symbols like λ, σ, Δ) do not form a
+    run, so a math-heavy English paragraph returns False and is not
+    misclassified as Greek.
+    """
+    return bool(_GREEK_WORD_RUN.search(text))
+
 
 def _get_script(cp: int):
     # CJK Unified Ideographs
@@ -159,22 +179,22 @@ def _detect_latin(text: str):
     if re.search(r"[őű]", lower):
         return "Hungarian"
     # German
-    if words & {"und", "der", "die", "das", "ist"}:
+    if len(words & {"und", "der", "die", "das", "ist"}) >= 2:
         return "German"
     # French
-    if words & {"le", "la", "les", "est", "une", "des"}:
+    if len(words & {"le", "la", "les", "est", "une", "des"}) >= 2:
         return "French"
     # Portuguese (before Spanish — stricter chars)
     if re.search(r"[ãõç]", lower) and words & {"o", "a", "os", "as", "de", "do", "da", "não", "que"}:
         return "Portuguese"
-    # Spanish
-    if (words & {"el", "los", "las", "del", "por"}) or re.search(r"[ñ¿¡]", lower):
+    # Spanish (ñ/¿/¡ alone is a strong signal; otherwise require ≥2 function words)
+    if re.search(r"[ñ¿¡]", lower) or len(words & {"el", "los", "las", "del", "por"}) >= 2:
         return "Spanish"
     # Italian
-    if words & {"il", "della", "gli", "che", "è"}:
+    if len(words & {"il", "della", "gli", "che", "è"}) >= 2:
         return "Italian"
     # Dutch
-    if words & {"het", "een", "van", "dat"}:
+    if len(words & {"het", "een", "van", "dat"}) >= 2:
         return "Dutch"
     # Swedish
     if re.search(r"[åäö]", lower) and words & {"och", "att", "det", "är", "för"}:
@@ -189,7 +209,7 @@ def _detect_latin(text: str):
     if re.search(r"[äö]", lower) and words & {"ja", "on", "ei", "se", "että", "tai", "kun"}:
         return "Finnish"
     # Indonesian
-    if words & {"yang", "dari", "untuk", "dengan", "adalah"}:
+    if len(words & {"yang", "dari", "untuk", "dengan", "adalah"}) >= 2:
         return "Indonesian"
 
     return None

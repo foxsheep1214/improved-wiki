@@ -917,7 +917,10 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
         # Skip per-block language check for minerU OCR — OCR text from garbled
         # PDFs confuses the detector (e.g. C0 control chars → wrong language).
-        if method not in ("mineru", "mineru-ocr", "mineru-vlm", "mineru-local-ocr"):
+        # All minerU extraction methods are OCR/pipeline variants, so match
+        # by prefix; the explicit list previously missed 'mineru-pipeline',
+        # 'mineru-api-mixed', 'mineru-api-txt', etc. and fired false warnings.
+        if not method.startswith("mineru"):
             if expected_lang not in ("unknown", "English"):
                 try:
                     from _language import detect_language

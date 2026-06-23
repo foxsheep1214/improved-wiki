@@ -1001,6 +1001,15 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
     out_dir = config.extract_tmp_dir / file_path.stem
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Route the minerU API server's output root into the runtime temp dir
+    # (.llm-wiki/). minerU defaults to "./output" relative to the server's
+    # cwd, which previously polluted the wiki root with uuid-named dirs.
+    # The server reads MINERU_API_OUTPUT_ROOT at startup; both start and
+    # restart Popen calls inherit the parent env, so set it once here.
+    api_output_root = config.runtime_dir / "mineru-api-out"
+    api_output_root.mkdir(parents=True, exist_ok=True)
+    os.environ["MINERU_API_OUTPUT_ROOT"] = str(api_output_root)
+
     # Build chunks: 50 pages each
     chunks = []
     for start in range(0, total_pages, MINERU_CHUNK_SIZE):

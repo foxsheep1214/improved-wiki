@@ -10,6 +10,25 @@
 
 `ingest.py` (~2062 lines), `_stage_2_4_generation.py` (~632 lines).
 
+### Fixed: per-block language warnings on OCR / math-heavy text (2026-06-23)
+
+`expected French, got Chinese/Greek` warnings during ingest had three
+compounding causes, all fixed (`tests/test_language.py`):
+
+1. **minerU skip-set incomplete** (`ingest.py`): the per-block language
+   check was skipped for only 4 method names, but Stage 1.1 returns
+   `mineru-pipeline` / `mineru-api-txt` / `mineru-api-mixed` /
+   `mineru-vlm-low-quality` / `mineru-api-mixed-low-quality`. OCR text
+   then tripped false warnings. Now skipped via `method.startswith("mineru")`.
+2. **Greek false positive on math symbols** (`_language.py`): isolated
+   Greek letters (λ σ θ Δ …) hit the ≥2-count threshold. Now requires a
+   ≥2-letter word run (`_has_greek_word_run`); isolated singletons are
+   treated as math notation.
+3. **Latin over-eager single-token match** (`_language.py`): one stray
+   token like `le` inside English text flipped it to French. German /
+   French / Spanish / Italian / Dutch / Indonesian now require ≥2
+   distinct function words (Spanish keeps ñ/¿/¡ as a solo signal).
+
 ## Design decisions (not bugs)
 
 ### `ingest.py` uses `urllib.request` not `httpx` / `requests`
