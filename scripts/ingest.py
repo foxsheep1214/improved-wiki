@@ -341,10 +341,20 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
     # Extract wikilinks: [[slug]] or [[slug|display]]
     # Improved regex: match [[ ... ]] with no nested brackets
     refs = re.findall(r'\[\[([^\[\]]+)\]\]', source_text)
+    # Wikilinks may be type-prefixed ([[concepts/foo]], per Stage 2.4/2.6 convention)
+    # or bare ([[foo]], per the wikilink-enrichment convention) — support both.
+    known_type_dirs = ("concepts", "entities", "sources", "queries", "comparisons",
+                        "synthesis", "findings", "thesis", "methodology")
     missing = []
     for ref in refs:
         slug = ref.split("|")[0].strip()
         if not slug:
+            continue
+        prefix, _, rest = slug.partition("/")
+        if prefix in known_type_dirs and rest:
+            target_path = config.wiki_dir / prefix / f"{rest}.md"
+            if not target_path.exists():
+                missing.append(slug)
             continue
         concept_path = config.wiki_dir / "concepts" / f"{slug}.md"
         entity_path = config.wiki_dir / "entities" / f"{slug}.md"

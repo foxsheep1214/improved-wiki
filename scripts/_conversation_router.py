@@ -167,7 +167,7 @@ def _infer_stage(prompt: str) -> str:
     if "generating wiki pages" in head.lower() or ("Synthesis" in head and "FILE blocks" in head):
         return "Stage-2-4-Generation"
     if "review agent" in head or "可疑项" in head:
-        return "Stage-2-10-Review"
+        return "Stage-3-4-Review"
     if "Chunk Analysis" in head:
         m = re.search(r"chunk (\d+)/(\d+)", prompt)
         if m:
