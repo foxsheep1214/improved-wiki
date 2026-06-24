@@ -151,7 +151,7 @@ def ingest_one(
     template_override: str | None = None,
     verbose: bool = False,
 ) -> dict:
-    """Process one file end-to-end (NashSU-style 15-stage pipeline with checkpoint/resume)."""
+    """Process one file end-to-end (NashSU-style multi-stage pipeline with checkpoint/resume)."""
     _set_current_file(raw_file.name)
     print(f"\n=== Ingest: {raw_file} ===")
 
@@ -310,7 +310,7 @@ def batch_ingest(
 # ---------- CLI ----------
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Ingest source files into the wiki (NashSU-style 15-stage)")
+    parser = argparse.ArgumentParser(description="Ingest source files into the wiki (NashSU-style multi-stage)")
     parser.add_argument("file", nargs="*", help="Path(s) to raw source file(s). Multiple files enable batch mode. "
                         "Omit with --watch to consume the queue.")
     parser.add_argument("--type", help="Override template type (book/paper/datasheet/...)")

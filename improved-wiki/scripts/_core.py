@@ -670,9 +670,28 @@ def detect_domain(file_path: Path, template: str,
 
 
 def list_existing_slugs(config: Config) -> list[str]:
+    """Stems of existing knowledge pages under wiki/, for the digest's
+    existing-pages context and incremental-association detection.
+
+    Excludes non-knowledge artifacts so they don't pollute the list fed to
+    the Stage 2.1/2.2 LLM:
+      - wiki/REVIEW/**  — review/audit item pages (date-prefixed suggestion,
+        missing-page, contradiction, duplicate, confirm files + _audit_*)
+      - stems starting with '_' (system/audit files)
+      - aggregate anchor files (index, log, overview, schema)
+    """
     if not config.wiki_dir.exists():
         return []
-    return [f.stem for f in config.wiki_dir.rglob("*.md")]
+    anchors = {"index", "log", "overview", "schema"}
+    slugs: list[str] = []
+    for f in config.wiki_dir.rglob("*.md"):
+        if "REVIEW" in f.parts:
+            continue
+        stem = f.stem
+        if stem.startswith("_") or stem in anchors:
+            continue
+        slugs.append(stem)
+    return slugs
 
 
 # ── Path safety (NashSU parity: isSafeIngestPath) ──

@@ -428,7 +428,7 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
 
     manifest_path = media_dir / "_manifest.json"
     _stage_1_2_write_manifest(manifest_path, "mineru-ocr", raw_file, images)
-    print(f"[stage 1.2] minerU: {len(images)} images from {img_source_dir} "
+    print(f"[stage 1.2] minerU: {len(images)} images from {media_dir.name} "
           f"(Stage 1.3 will VLM-caption all)")
     return {
         "count": len(images),
