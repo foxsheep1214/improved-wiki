@@ -179,7 +179,7 @@ def _do_prepare(
                 if ocr_out.exists():
                     stage_1_2_result = _stage_1_2_extract_from_mineru(ocr_out, config, raw_file)
                 # Save progress immediately after 1.2 completes
-                cp = {"stage": "stage_1_1_done", "extracted_text": extracted_text,
+                cp = {"stage": "stage_1_2_done", "extracted_text": extracted_text,
                       "extract_method": method, "stage_1_2": stage_1_2_result}
                 save_progress(config, h, cp)
             elif raw_file.suffix.lower() in (".pptx", ".docx"):
@@ -225,7 +225,7 @@ def _do_prepare(
             # _run_image_pipeline() from scratch for this source, forever.
             if not progress or "stage_1_2" not in progress:
                 save_progress(config, h, {
-                    "stage": "stage_1_1_done", "extracted_text": extracted_text,
+                    "stage": "stage_1_3_done", "extracted_text": extracted_text,
                     "extract_method": method,
                     "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result,
                 })
@@ -234,6 +234,16 @@ def _do_prepare(
 
         if needs_digest:
             _verify_stage_2_1_digest(global_digest, raw_file)
+            # Mark 2.1 done + persist global_digest so a resume in the 2.2/2.4
+            # window (e.g. chunk-analysis handoff) skips 2.1 via needs_digest.
+            # Conditional on needs_digest so a later resume (stage already
+            # stage_2_3_done from Fix A) does not regress the marker.
+            save_progress(config, h, {
+                "stage": "stage_2_1_done", "extracted_text": extracted_text,
+                "extract_method": method,
+                "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result,
+                "global_digest": global_digest,
+            })
         else:
             print(f"  [stage 2.1] (cached) Global Digest — {len(global_digest)} keys")
             _verify_stage_2_1_digest(global_digest, raw_file)
@@ -250,9 +260,9 @@ def _do_prepare(
             if _inlined != extracted_text:
                 extracted_text = _inlined
                 save_progress(config, h, {
-                    "stage": "stage_1_1_done", "extracted_text": extracted_text,
+                    "stage": "stage_2_1_done", "extracted_text": extracted_text,
                     "extract_method": method, "stage_1_2": stage_1_2_result,
-                    "stage_1_3": stage_1_3_result,
+                    "stage_1_3": stage_1_3_result, "global_digest": global_digest,
                 })
                 print(f"  [caption] Inlined VLM captions as alt text into "
                       f"extracted_text ({len(extracted_text):,} chars)")
