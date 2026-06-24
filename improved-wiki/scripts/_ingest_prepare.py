@@ -16,6 +16,7 @@ from _core import (
     save_progress,
     parse_file_blocks,
     set_current_file as _set_current_file,
+    is_stage_done,
 )
 from _stage_1_extract import (
     stage_1_1_extract_text,
@@ -101,6 +102,36 @@ def _do_prepare(
 
         h = file_sha256(raw_file)
         progress = load_progress(config, h)
+
+        # ── write_phase short-circuit (Bug 2 fix, 2026-06-25) ──
+        # If the Stage 3.1-3.3 write phase already completed in a prior run,
+        # skip the entire 2.x pipeline. Re-running Stage 2.4 generation would
+        # cache-miss every resume because the generation prompt hash drifts
+        # with wiki state (pages written/rewritten), looping forever before
+        # _do_write can be reached. _do_write handles write_phase_done by
+        # setting _write_blocks=[] and skipping 3.1/3.2/3.3, then runs
+        # 3.4-4.1 over the on-disk wiki. chunk_analyses/analysis/raw_response
+        # are not needed post-write (3.4+ scan the wiki dir, not file_blocks).
+        if is_stage_done(config, h, "write_phase"):
+            print("  [prepare] write_phase marker present — skipping 2.x prepare")
+            extracted_text = (progress or {}).get("extracted_text", "")
+            method = (progress or {}).get("extract_method", "cached")
+            stage_1_2_result = (progress or {}).get("stage_1_2", {"count": 0})
+            stage_1_3_result = (progress or {}).get("stage_1_3", {"captioned": 0})
+            global_digest = (progress or {}).get("global_digest", {})
+            template_name = detect_template_type(raw_file, config.raw_root, template_override)
+            current_domain = _detect_domain(raw_file, load_template(template_name), global_digest)
+            return {
+                "raw_file": raw_file, "config": config, "h": h, "method": method,
+                "extracted_text": extracted_text, "global_digest": global_digest,
+                "chunk_analyses": [], "analysis": {}, "raw_response": "",
+                "file_blocks": [], "stage_1_2_result": stage_1_2_result,
+                "stage_1_3_result": stage_1_3_result, "template_name": template_name,
+                "query_count": 0, "comp_count": 0,
+                "concept_merge_stats": (0, 0), "dedup_was_run": False,
+                "current_domain": current_domain, "incremental_associations": {},
+                "query_resolutions": {}, "enrich_enabled": False,
+            }
 
         # Stage 0: Text extraction
         if progress and "extracted_text" in progress:
@@ -230,6 +261,28 @@ def _do_prepare(
         chunk_analyses, analysis, raw_response, file_blocks, incremental_associations = _run_chunk_pipeline(
             extracted_text, global_digest, raw_file, config, template_content,
             progress, verbose)
+
+        # Persist 2.2/2.4 results + advance stage marker (Bug 2 fix, 2026-06-25).
+        # Without this, a mid-flight resume (e.g. 3.3 enrich conversation
+        # handoff) re-enters _run_chunk_pipeline with stage still at
+        # stage_1_1_done, misses the line-107 cached skip, and re-runs Stage
+        # 2.4 generation — whose prompt hash drifts with wiki state, so it
+        # cache-misses every resume and loops before _do_write is reached.
+        # save_progress overwrites (not merges), so include every cumulative key.
+        if not (progress and progress.get("stage") in ("stage_2_2_done", "stage_2_3_done")
+                and "chunk_analyses" in progress):
+            save_progress(config, h, {
+                "stage": "stage_2_3_done",
+                "extracted_text": extracted_text,
+                "extract_method": method,
+                "stage_1_2": stage_1_2_result,
+                "stage_1_3": stage_1_3_result,
+                "global_digest": global_digest,
+                "chunk_analyses": chunk_analyses,
+                "analysis": analysis,
+                "raw_response": raw_response,
+                "incremental_associations": incremental_associations,
+            })
 
         # Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
         # Runs before the source page so the index lists de-duplicated concepts.
