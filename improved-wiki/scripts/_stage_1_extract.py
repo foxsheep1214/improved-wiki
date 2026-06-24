@@ -1368,6 +1368,14 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
         if isinstance(imgs, dict):
             all_images.update(imgs)
         cl = rv.get("content_list")
+        if isinstance(cl, str):
+            # minerU API returns content_list as a JSON string (via
+            # get_infer_result which reads the file with fp.read()),
+            # not a parsed list. Parse it so we can map images → pages.
+            try:
+                cl = json.loads(cl)
+            except (json.JSONDecodeError, ValueError):
+                pass
         if isinstance(cl, list):
             all_content.extend(cl)
 
@@ -1388,6 +1396,21 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
         page_idx = block.get("page_idx", 0)
         abs_page = page_offset + int(page_idx)
         page_figs.setdefault(abs_page, []).append(img_basename)
+
+    # Build a basename→caption map from content_list so we can write
+    # minerU's own image_caption as a sidecar (.caption.txt). This lets
+    # Stage 1.3 skip re-captioning figures minerU already described.
+    mineru_captions: dict[str, str] = {}
+    for block in all_content:
+        if block.get("type") not in ("image", "chart"):
+            continue
+        ip = block.get("img_path", "")
+        if not ip:
+            continue
+        bn = os.path.basename(ip)
+        caps = block.get("image_caption", [])
+        if caps and caps[0].strip():
+            mineru_captions[bn] = caps[0].strip()
 
     # If content_list mapping produced nothing, fall back: assign all images
     # to the chunk-start page so they aren't lost.
@@ -1452,6 +1475,14 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
                 "width": w, "height": h,
                 "source": "mineru-extracted",
             })
+
+            # Write minerU's own image_caption as sidecar so Stage 1.3
+            # skips re-captioning figures minerU already described.
+            mc = mineru_captions.get(img_name)
+            if mc:
+                cap_path = media_dir / (filename + ".caption.txt")
+                if not cap_path.exists():
+                    cap_path.write_text(mc, encoding="utf-8")
 
     if saved:
         # Persist to chunk_out so the per-chunk stats can reference them

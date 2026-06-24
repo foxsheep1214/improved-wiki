@@ -146,6 +146,7 @@ Phase 0 包含 3 个前置检查，必须按顺序执行：
   - 尺寸过滤：`_is_image_too_small()`，阈值 `MINERU_IMG_MIN_WIDTH`/`MINERU_IMG_MIN_HEIGHT`（默认 20px，故意调得很低，公式截图哪怕只有 29px 高也要保留——MiniMax 能转录）
   - manifest.json 记录：图路径 / 来源页 / 尺寸
   - **注意**：当前 API 路径的图片 harvest 按 `page+md5前8位` 命名，不做跨页 sha256 全局去重（旧的 PyMuPDF 提取逻辑曾经做过 sha256 去重，2026-06-23 随 PyMuPDF 路径整体移除后这一步也跟着没了——同一张图如果在文档里物理重复出现在不同页，会各存一份）
+- **已知问题（2026-06-24 实测）**：`_stage_1_2_harvest_images()` 不读取 `content_list` 的 `image_caption` 字段写 sidecar（269 张已有 caption 被浪费），也不过滤 `images` dict 中不在 `content_list` image/chart 块里的 188 张碎片图。详见 `references/image-caption-strategy.md` § "Known issues discovered 2026-06-24"
 - **历史**：`fitz.Pixmap(doc, xref)` 纠正旋转/翻转、CMYK→RGB 那套 PyMuPDF 提取逻辑（2026-06-15 引入）已随 2026-06-23 的 mineru-only 迁移整体删除（dead code cleanup），minerU 自己的版面分析已经处理了图像方向问题。
 
 ### Stage 1.3 · 图片 captioning ⭐ **永远不能跳**

@@ -126,9 +126,110 @@ images = [{"filename": f.name, "page": 0, "width": 0, "height": 0}
 captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_label="repair")
 ```
 
+## Known issues discovered 2026-06-24 (从零开始学散热 re-ingest, 528 images)
+
+A full re-ingest of a 272-page Chinese thermal-design book exposed 5
+quantifiable issues in the current image extraction + captioning pipeline.
+All measurements below are from that run.
+
+### Issue 1: MinerU's built-in `image_caption` is wasted on the API path
+
+MinerU's `content_list` contains `image_caption` fields for **269/300** image
+blocks (e.g. `["图11-14 汽蚀导致的叶片严重损坏"]`). The function that writes
+these as sidecar `.caption.txt` files is `_stage_1_2_extract_from_mineru()`
+(line ~1668), but **this function is only called on the opt-in pipeline CLI
+path** (`IMPROVED_WIKI_PIPELINE_CLI=1`). The default API path uses
+`_stage_1_2_harvest_images()` (line ~1341), which saves image files but does
+NOT read `content_list`'s `image_caption` field — so 269 images with
+pre-existing captions are sent to MiniMax VLM for redundant re-captioning.
+
+**Fix needed**: `_stage_1_2_harvest_images()` should read `content_list` blocks
+for `type=image/chart` and write `image_caption[0]` as a sidecar
+`.caption.txt` before Stage 1.3 runs. This would skip ~50% of VLM calls for
+typical books.
+
+### Issue 2: 528 extracted images vs 340 content_list image/chart blocks
+
+MinerU's API `images` dict (base64 figures) contains **528** entries, but
+`content_list` has only **300 image + 40 chart = 340** blocks. The **188
+extra images** are not accounted for by `content_list` — they are likely
+page-level fragments, formula screenshots, or table crops that minerU's
+layout analysis classified differently internally.
+
+`_stage_1_2_harvest_images()` saves everything in `images` dict without
+checking `content_list` membership, so these 188 low-value fragments are
+extracted, stored, and sent to VLM captioning — wasting time and diluting
+quality.
+
+**Fix needed**: filter `images` dict to only keep entries whose basename
+appears in a `content_list` `image`/`chart` block's `img_path` field.
+
+### Issue 3: No retry for failed/uncaptioned images (single-pass only)
+
+Caption dispatch is a single `ThreadPoolExecutor` pass — batches that fail
+JSON parsing or have truncated responses are logged but **not retried**.
+7 `json_truncation` events were logged (each salvaging 4-5 of 6 captions),
+leaving **202 images (38%)** without any caption.
+
+The `_stage_1_3_is_caption_failed()` function writes `[待重试]` fallbacks,
+but there is no second pass to actually retry them. The next `ingest.py`
+run would re-process them, but within a single ingest session they stay
+uncaptioned.
+
+**Fix needed**: after the main batch pass, collect images still lacking
+captions and dispatch a second round (smaller batch_size=3, single-image
+fallback for persistent failures).
+
+### Issue 4: batch_size inconsistency
+
+`CAPTION_BATCH_SIZE=8` (env var, line 66/1103) is the intended default, but
+the minerU path call at line 990 hardcodes `batch_size=6`. JSON truncation
+happens because 6-image batches can exceed MiniMax response token limits.
+The 2024-06-11 HardwareWiki benchmark used 5 images/batch (optimal), but
+this value was never parameterized.
+
+**Fix needed**: remove the hardcoded `batch_size=6` at line 990, let it use
+`CAPTION_BATCH_SIZE` default. Consider lowering default to 5.
+
+### Issue 5: Formula images extracted as pictures instead of text
+
+MinerU `content_list` marks **114 equation blocks** as LaTeX text (e.g.
+`$$Q = P/d/C_p/\Delta t$$`) with `type=equation`, `text_format=latex`.
+These are NOT in the `images` dict and NOT extracted as image files —
+minerU handles them correctly as text.
+
+However, ~112 narrow+short images (W/H > 2.5, height < 100px) were found
+among the 528 extracted images, and 77 of their captions mention "公式"
+or "formula". This means minerU's layout analysis sometimes classifies
+formula regions as `image` blocks (with `img_path`) rather than `equation`
+blocks (with LaTeX text), especially for complex multi-line formulas or
+formulas embedded in figure captions.
+
+**Mitigation** (not a fix): the current tiny-image filter
+(`_is_image_too_small`, 20px threshold) deliberately keeps these because
+MiniMax can transcribe them to LaTeX. The VLM caption prompt already
+instructs LaTeX transcription. So the system degrades gracefully — but
+these formula images consume VLM calls that shouldn't be needed if minerU
+classified them correctly.
+
+### Summary table
+
+| Issue | Impact | VLM calls wasted | Fix difficulty |
+|-------|--------|-----------------|----------------|
+| 1: MinerU caption not used as sidecar | 269 redundant VLM calls | ~51% of total | Low (20 lines) |
+| 2: 188 fragment images not filtered | 188 unnecessary VLM calls | ~36% of total | Low (10 lines) |
+| 3: No retry for failed captions | 202 images uncaptioned (38%) | N/A (quality loss) | Medium (30 lines) |
+| 4: batch_size=6 hardcoded | 7 JSON truncation events | ~7 batches affected | Low (2 lines) |
+| 5: Formulas as images | ~112 formula VLM calls | ~21% of total | Medium (upstream) |
+
+Combined effect of fixing issues 1+2: VLM calls drop from 528 → ~70
+(340 content_list images − 269 pre-captioned − some formulas), an 85%+
+reduction.
+
 ## Revision history
 
 - **2026-06-11**: Initial version, 738-image benchmark
 - **2026-06-17**: Unified Path A + Path B into single `_caption_images()`; parallel batch dispatch via ThreadPoolExecutor; grayscale→RGB preprocessing; VLM failure detection with retry; cache filter checks existing caption content for failures
 - **2026-06-22**: LaTeX-only formula transcription rule in `CAPTION_SYSTEM_PROMPT` (no Unicode subscripts/Greek, 150-char limit for formulas); fixed `_is_image_too_small` NameError bug (undefined `MINERU_IMG_MIN_WIDTH/HEIGHT` silently disabled the filter — constants now defined at 20px, size check moved outside broad try/except)
 - **2026-06-23**: functions moved from `ingest.py` to `_stage_1_extract.py` with explicit stage prefixes (`_caption_images` → `stage_1_3_caption_images`/`_stage_1_3_caption_images_batch`, etc.); PyMuPDF removed entirely from PDF image extraction (Path A description above is now historical only — see note at top of doc)
+- **2026-06-24**: Documented 5 issues from 从零开始学散热 re-ingest (528 images, 202 uncaptioned): (1) minerU `image_caption` not used as sidecar on API path, (2) 188 fragment images not filtered by content_list, (3) no retry for failed captions, (4) batch_size=6 hardcoded vs env default 8, (5) ~112 formula images extracted as pictures instead of text
