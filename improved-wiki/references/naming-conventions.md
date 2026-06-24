@@ -374,6 +374,13 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 3.4 每项一个 md |
 | `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON |
 | `<runtime>/review.json` | `run_review_suggestions.py` Stage 3.4 产物 |
+| `wiki/REVIEW/_summaries/_audit_<scope>.md` | LLM 审计汇总报告（meta，非 review item） |
+
+**`_summaries/` 约定**（2026-06-24 增）：
+- 装**跨类审计汇总报告**（如 `_audit_report.md` 总报告、`_audit_<category>.md` 分类明细），是审计 agent 对一批 lint findings 的 verdict/action 统计表，**不是 per-finding review item**。
+- `_` 前缀目录 = meta 产物，review-sweep / lint 不当 finding 扫描。
+- **不要**写进 `wiki/REVIEW/audit/`——后者是 pipeline 自动生成的 per-book 质量评分卡（`type: audit`，`overall_score < 0.65` 时落盘），混入会污染扫描。
+- **不要**散落 `wiki/REVIEW/` 根目录——保持根目录只有 `<type>/` 子目录 + `_summaries/`。
 
 ---
 
