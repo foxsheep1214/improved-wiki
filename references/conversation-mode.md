@@ -56,7 +56,9 @@ Path("/tmp/extract.txt").write_text(text, encoding="utf-8")
 
 ### Stage 2.1: Global Digest
 
-**输入**：前 100K 字符（避免超上下文）
+**输入**：`ingest.py` 采样发送一小段文本（约 4-10K chars，从书中段提取），**不是**全文前 100K 字符。完整文本在 `.llm-wiki/extract-tmp/<book-stem>/p*.txt`（每页一个文件）。
+
+> ⚠️ **2026-06-24 实测修正**：之前文档说"前 100K 字符"是错误的。实际 pipeline 只发送采样的几K字符。**当回答 Stage 2.1 prompt 时，应额外读取 `extract-tmp/` 下的页面样本**来补充对全书内容的理解，仅靠 prompt 中的采样文本不足以生成完整的 outline 和 chunk_plan。
 
 **Prompt 模板**：
 ```
@@ -332,16 +334,29 @@ sources: ["raw/Book/书名.pdf"]
 
 ## 完整流程（单次对话）
 
+> ⚠️ 以下为**概念性**流程示意。实际执行时由 `ingest.py` 驱动（conversation mode），
+> 每个 LLM 步骤通过 prompt-file handoff 交接。Stage 编号和执行顺序以
+> `references/ingest-stages-mandatory.md` 为准。
+
 ```
-1. Stage 1.2: extract_images.py → 图片
-2. Stage 1.1: Python 提取文本 → 全量字符
-3. Stage 2.1: 读取文本 + prompt → global digest YAML
-4. Stage 2.2: 分 N 次读取文本块 + prompt → N 个 chunk YAML（短源 ≥1 块，永远不跳过）
-5. Stage 3.4: 读取 analyses + prompt → review items（≥4 FILE 块时触发）
-6. Stage 2.4: 读取 digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）
-7. Stage 3.5: 程序化追加 index/log/overview（不让 LLM 重写）
-8. 写入 wiki 文件（Stage 3.1）
-9. Stage 3.2: 读取 _manifest.json + source 页 → 注入 ## Embedded Images 段
+1. Stage 1.1: minerU OCR 提取文本 → p*.txt 每页一个文件
+2. Stage 1.2/1.3: 图片提取 + caption（在 1.1 内部完成）
+3. Stage 2.1: 采样文本 + prompt → global digest YAML
+4. Stage 2.2: 分 N 次读取文本块 + prompt → N 个 chunk 分析 YAML
+5. Stage 2.3: 增量关联检测（与已有 wiki 页面匹配）
+6. Stage 2.4: digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）
+7. Stage 2.5: 概念去重合并（多 chunk 书）
+8. Stage 2.6: 源页面生成
+9. Stage 2.7-2.9: Query 生成 → 跨源解析 → Comparison 生成
+10. Stage 3.1: 写盘（所有 FILE 块）
+11. Stage 3.2: 图片注入 source 页
+12. Stage 3.3: 跨域 slug 碰撞审查
+13. Stage 3.4: Review 审查建议
+14. Stage 3.5: 程序化追加 index/log + LLM 重写 overview
+15. Stage 3.6: 质量评分
+16. Stage 3.7: Embeddings（LanceDB）
+17. Stage 4.1: validate_ingest 自动验证
+18. Wikilink enrichment: 多轮 LLM-task merge（可用 delegate_task 批量处理）
 ```
 
 ---

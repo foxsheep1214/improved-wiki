@@ -95,6 +95,24 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 
 `_mineru_stats.json` 记录每个 chunk 的状态（completed_chunks/failed_chunks/images）。中断后重新运行 `ingest.py` 会自动跳过已完成的 chunk，只重跑未完成的——这部分行为不变。
 
+### Image harvesting gap: API path doesn't use content_list image_caption (2026-06-24)
+
+`_stage_1_2_harvest_images()` (API path, line ~1341) saves all images from
+the API `images` dict but does NOT read `content_list`'s `image_caption`
+field to write sidecar `.caption.txt` files. The separate function
+`_stage_1_2_extract_from_mineru()` (CLI path, line ~1608) DOES write
+sidecars from `content_list`, but it's only called when
+`IMPROVED_WIKI_PIPELINE_CLI=1`.
+
+Result: on the default API path, 269/300 images with minerU-provided
+captions are sent to MiniMax VLM for redundant re-captioning. Additionally,
+the `images` dict contains ~188 entries not present in `content_list`
+image/chart blocks (fragments, formula crops, noise), all of which get
+extracted and captioned unnecessarily.
+
+See `references/image-caption-strategy.md` § "Known issues discovered
+2026-06-24" for the full analysis and fix proposals.
+
 ## 相关的其他 pipeline
 
 - **Stage 1.3 Caption**：对默认路径而言，caption 已经在这条 pipeline 内部跑完了（见上方"输出物"），不再是 ingest.py 里独立调度的一步。详见 `references/image-caption-strategy.md`。

@@ -371,13 +371,13 @@ print(f"avg images per page: {sum(img_per_page)/len(img_per_page):.1f}")
 
 **Lesson**: `improved-wiki/scripts/ingest.py` and `caption_sample_test.py` assume the default text-layer + per-figure branch. They will silently produce empty `wiki/sources/` on scanned PDFs. The scan-detect step above must run first; if it triggers, switch to the scanned-PDF pipeline (manual orchestration, no ingest.py shortcut).
 
-The `references/scanned-pdf-to-llm-wiki-recovery.md` and `references/scanned-pdf-batch-recipe.md` cover the bulk-OCR workflow on scanned books (80-page Parts, 5-page pilot gate). They were built for RadarWiki 5-book recovery; the same workflow applies here, just with a different OCR backend — the user's preference on this Mac is MiniMax CN via mmx CLI, not local MinerU VLM (see §15).
+The `references/scanned-pdf-to-llm-wiki-recovery.md` and `references/scanned-pdf-batch-recipe.md` cover the bulk-OCR workflow on scanned books (80-page Parts). They were built for RadarWiki 5-book recovery; the same workflow applies here, just with a different OCR backend — the user's preference on this Mac is MiniMax CN via mmx CLI, not local MinerU VLM (see §15).
 
 ---
 
 ## 13. Blank-page detection BEFORE diagnosing "VLM hallucination"
 
-**Symptom (2026-06-11, HardwareWiki 无源器件篇 pilot p4)**: mmx vision takes **73.7 seconds** on page 4 and produces 2018 chars of hallucinated Japanese (`言いあう` repeated 30+ times). Initial diagnosis: "VLM collapsed into a foreign-language fallback loop." **Wrong** — p4 was a blank page (avg=254.7, 100% pixels in 200-255 luminance range, 0 dark pixels). The model wasn't hallucinating; it had no real content to extract, and the OCR prompt's "extract ALL text verbatim" constraint forced it into the cheapest fallback: non-Latin token emission.
+**Symptom (2026-06-11, HardwareWiki 无源器件篇 p4)**: mmx vision takes **73.7 seconds** on page 4 and produces 2018 chars of hallucinated Japanese (`言いあう` repeated 30+ times). Initial diagnosis: "VLM collapsed into a foreign-language fallback loop." **Wrong** — p4 was a blank page (avg=254.7, 100% pixels in 200-255 luminance range, 0 dark pixels). The model wasn't hallucinating; it had no real content to extract, and the OCR prompt's "extract ALL text verbatim" constraint forced it into the cheapest fallback: non-Latin token emission.
 
 **Diagnostic recipe** (run on suspicious low-quality OCR output):
 ```python
@@ -446,14 +446,14 @@ r = requests.post(
 )
 ```
 
-**Pilot/measurement rule**: A 5-page pilot that runs on **one** backend doesn't generalize to the other. State which backend the pilot ran on when reporting numbers.
+**Measurement rule**: A 5-page sample that runs on **one** backend doesn't generalize to the other. State which backend the sample ran on when reporting numbers.
 
 **Decision matrix** (which backend for which workload):
 | Workload | Use |
 |---|---|
 | `< 30` images, ad-hoc | `mmx vision describe` (CLI is simpler; no script needed) |
 | `30+` images, repeatable | `requests.post` to `anthropic/v1/messages` with multi-image content blocks |
-| 1-5 pages for "5-20 sample test" pilot | CLI is fine — sample size is small, pilot focus is quality not speed |
+| 1-5 pages for "5-20 sample test" | CLI is fine — sample size is small, focus is quality not speed |
 
 ---
 
@@ -487,7 +487,7 @@ The impact line matters for the next agent who sees the deviation and wonders wh
 
 ## 16. mmx CLI on the user's Mac — auth + region + base_url canonical invocation
 
-**Verified working invocation** (2026-06-11, HardwareWiki 无源器件篇 pilot):
+**Verified working invocation** (2026-06-11, HardwareWiki 无源器件篇):
 ```bash
 mmx vision describe \
   --image /path/to/page.png \
