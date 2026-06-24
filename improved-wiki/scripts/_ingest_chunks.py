@@ -5,7 +5,13 @@ import json
 import time
 from pathlib import Path
 
-from _core import Config, parse_file_blocks, stage_begin as _stage_begin
+from _core import (
+    Config,
+    parse_file_blocks,
+    stage_begin as _stage_begin,
+    file_sha256,
+    is_stage_done,
+)
 from _stage_2_analyze import (
     _stage_2_1_chunk_text,
     _stage_2_2_analyze_chunk,
@@ -103,8 +109,12 @@ def _run_chunk_pipeline(
     the generation prompt. Returns
     ``(chunk_analyses, analysis, raw_response, file_blocks, incremental_associations)``.
     """
-    # Cached: chunk analysis already complete
-    if progress and progress.get("stage") in ("stage_2_2_done", "stage_2_3_done") and "chunk_analyses" in progress:
+    # Cached: chunk analysis already complete. Stage-completion is the single
+    # source of truth in stages.json (stage_2_3_done); chunk_analyses presence
+    # in the artifact store guards against a missing artifact.
+    _h = file_sha256(raw_file)
+    if (progress and "chunk_analyses" in progress
+            and is_stage_done(config, _h, "stage_2_3_done")):
         chunk_analyses = progress["chunk_analyses"]
         print(f"  [stage 2.2] (cached) Chunk Analysis \u2014 {len(chunk_analyses)} chunks")
         _verify_stage_2_2_chunks(chunk_analyses, extracted_text)

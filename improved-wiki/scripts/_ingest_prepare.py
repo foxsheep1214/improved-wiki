@@ -17,6 +17,7 @@ from _core import (
     parse_file_blocks,
     set_current_file as _set_current_file,
     is_stage_done,
+    mark_stage_done,
 )
 from _stage_1_extract import (
     stage_1_1_extract_text,
@@ -47,7 +48,7 @@ def _prepare_source_page(
 ) -> list:
     """Stage 2.6: generate the source page (dedicated LLM call) and merge into file_blocks."""
     current_domain = _detect_domain(raw_file, template_content, global_digest)
-    if progress and progress.get("stage") in ("stage_2_4_done", "stage_2_3_done") and "source_page_response" in progress:
+    if progress and "source_page_response" in progress:
         source_page_response = progress["source_page_response"]
         print(f"  [stage 2.6] (cached) Source page already generated")
     else:
@@ -154,9 +155,10 @@ def _do_prepare(
                       f"Re-run with a different PDF or re-download from source.")
                 return None
             save_progress(config, h, {
-                "stage": "stage_1_1_done", "extracted_text": extracted_text,
+                "extracted_text": extracted_text,
                 "extract_method": method,
             })
+            mark_stage_done(config, h, "stage_1_1_done")
 
         # Template
         template_name = detect_template_type(raw_file, config.raw_root, template_override)
@@ -179,9 +181,8 @@ def _do_prepare(
                 if ocr_out.exists():
                     stage_1_2_result = _stage_1_2_extract_from_mineru(ocr_out, config, raw_file)
                 # Save progress immediately after 1.2 completes
-                cp = {"stage": "stage_1_2_done", "extracted_text": extracted_text,
-                      "extract_method": method, "stage_1_2": stage_1_2_result}
-                save_progress(config, h, cp)
+                save_progress(config, h, {"stage_1_2": stage_1_2_result})
+                mark_stage_done(config, h, "stage_1_2_done")
             elif raw_file.suffix.lower() in (".pptx", ".docx"):
                 # Covers "zipfile-pptx", "zipfile-docx". PDFs no longer reach
                 # here since 2026-06-23: all PDF extraction routes through
@@ -206,9 +207,7 @@ def _do_prepare(
             return stage_1_2_result, stage_1_3_result
 
         # Parallel execution: 1.2→1.3 pipeline vs 2.1 global digest
-        needs_digest = (
-            not progress or progress.get("stage") not in ("stage_2_1_done", "stage_2_2_done", "stage_2_3_done")
-        )
+        needs_digest = not is_stage_done(config, h, "stage_2_1_done")
 
         with ThreadPoolExecutor(max_workers=2) as executor:
             fut_images = executor.submit(_run_image_pipeline)
@@ -225,10 +224,10 @@ def _do_prepare(
             # _run_image_pipeline() from scratch for this source, forever.
             if not progress or "stage_1_2" not in progress:
                 save_progress(config, h, {
-                    "stage": "stage_1_3_done", "extracted_text": extracted_text,
-                    "extract_method": method,
-                    "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result,
+                    "stage_1_2": stage_1_2_result,
+                    "stage_1_3": stage_1_3_result,
                 })
+                mark_stage_done(config, h, "stage_1_3_done")
 
             global_digest = fut_digest.result() if fut_digest else progress.get("global_digest", {})
 
@@ -238,12 +237,8 @@ def _do_prepare(
             # window (e.g. chunk-analysis handoff) skips 2.1 via needs_digest.
             # Conditional on needs_digest so a later resume (stage already
             # stage_2_3_done from Fix A) does not regress the marker.
-            save_progress(config, h, {
-                "stage": "stage_2_1_done", "extracted_text": extracted_text,
-                "extract_method": method,
-                "stage_1_2": stage_1_2_result, "stage_1_3": stage_1_3_result,
-                "global_digest": global_digest,
-            })
+            save_progress(config, h, {"global_digest": global_digest})
+            mark_stage_done(config, h, "stage_2_1_done")
         else:
             print(f"  [stage 2.1] (cached) Global Digest — {len(global_digest)} keys")
             _verify_stage_2_1_digest(global_digest, raw_file)
@@ -259,11 +254,7 @@ def _do_prepare(
             _inlined = _stage_1_3_inline_captions(extracted_text, config, Path(_media_dir))
             if _inlined != extracted_text:
                 extracted_text = _inlined
-                save_progress(config, h, {
-                    "stage": "stage_2_1_done", "extracted_text": extracted_text,
-                    "extract_method": method, "stage_1_2": stage_1_2_result,
-                    "stage_1_3": stage_1_3_result, "global_digest": global_digest,
-                })
+                save_progress(config, h, {"extracted_text": extracted_text})
                 print(f"  [caption] Inlined VLM captions as alt text into "
                       f"extracted_text ({len(extracted_text):,} chars)")
 
@@ -272,71 +263,93 @@ def _do_prepare(
             extracted_text, global_digest, raw_file, config, template_content,
             progress, verbose)
 
-        # Persist 2.2/2.4 results + advance stage marker (Bug 2 fix, 2026-06-25).
-        # Without this, a mid-flight resume (e.g. 3.3 enrich conversation
-        # handoff) re-enters _run_chunk_pipeline with stage still at
-        # stage_1_1_done, misses the line-107 cached skip, and re-runs Stage
-        # 2.4 generation — whose prompt hash drifts with wiki state, so it
-        # cache-misses every resume and loops before _do_write is reached.
-        # save_progress overwrites (not merges), so include every cumulative key.
-        if not (progress and progress.get("stage") in ("stage_2_2_done", "stage_2_3_done")
-                and "chunk_analyses" in progress):
+        # Persist 2.2/2.4 results + mark stage_2_3_done. Without this, a
+        # mid-flight resume (e.g. 3.3 enrich conversation handoff) re-enters
+        # _run_chunk_pipeline, misses the cached skip, and re-runs Stage 2.4
+        # generation — whose prompt hash drifts with wiki state, so it cache-
+        # misses every resume and loops before _do_write is reached. Merge-write
+        # means only the new artifact keys are needed here.
+        if not is_stage_done(config, h, "stage_2_3_done"):
             save_progress(config, h, {
-                "stage": "stage_2_3_done",
-                "extracted_text": extracted_text,
-                "extract_method": method,
-                "stage_1_2": stage_1_2_result,
-                "stage_1_3": stage_1_3_result,
-                "global_digest": global_digest,
                 "chunk_analyses": chunk_analyses,
                 "analysis": analysis,
                 "raw_response": raw_response,
                 "incremental_associations": incremental_associations,
             })
+            mark_stage_done(config, h, "stage_2_3_done")
 
-        # Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
-        # Runs before the source page so the index lists de-duplicated concepts.
-        from _stage_2_5_dedup import stage_2_5_dedup
-        _stage_2_5 = stage_2_5_dedup(file_blocks, chunk_analyses, config, verbose=verbose)
-        file_blocks = _stage_2_5["file_blocks"]
-        dedup_was_run = _stage_2_5["dedup_was_run"]
-        concept_count_before = _stage_2_5["concept_count_before"]
-        concept_count_after = _stage_2_5["concept_count_after"]
+        # ── Stage 2.5–2.9A tail: dedup → source page → queries → resolve → comparisons ──
+        # Cached as ONE segment under stage_2_9_done. 2.8 (LLM judge) and 2.9A
+        # (LLM comparison generation) can fire ConversationPending; without this
+        # cache a resume would re-run the whole tail from 2.5. On cache hit,
+        # restore the tail outputs from the artifact store and skip the segment.
+        if is_stage_done(config, h, "stage_2_9_done"):
+            _pcache = progress or {}
+            file_blocks = _pcache.get("file_blocks", file_blocks)
+            query_resolutions = _pcache.get("query_resolutions", {})
+            query_count = _pcache.get("query_count", 0)
+            comp_count = _pcache.get("comp_count", 0)
+            concept_count_before, concept_count_after = _pcache.get(
+                "concept_merge_stats", (0, 0))
+            dedup_was_run = _pcache.get("dedup_was_run", False)
+            print(f"  [stage 2.5–2.9] (cached) tail outputs restored — "
+                  f"{len(file_blocks)} blocks")
+        else:
+            # Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
+            # Runs before the source page so the index lists de-duplicated concepts.
+            from _stage_2_5_dedup import stage_2_5_dedup
+            _stage_2_5 = stage_2_5_dedup(file_blocks, chunk_analyses, config, verbose=verbose)
+            file_blocks = _stage_2_5["file_blocks"]
+            dedup_was_run = _stage_2_5["dedup_was_run"]
+            concept_count_before = _stage_2_5["concept_count_before"]
+            concept_count_after = _stage_2_5["concept_count_after"]
 
-        # Stage 2.6: Source page generation + merge
-        file_blocks = _prepare_source_page(
-            global_digest, raw_file, config, template_content, progress,
-            file_blocks, verbose)
-        _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
+            # Stage 2.6: Source page generation + merge
+            file_blocks = _prepare_source_page(
+                global_digest, raw_file, config, template_content, progress,
+                file_blocks, verbose)
+            _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
 
-        # ── Stage 2.7: Query generation ──
-        query_blocks, _ = stage_2_7_query_generation(
-            global_digest, chunk_analyses, file_blocks, raw_file, config,
-            template=template_content, verbose=verbose
-        )
-        if query_blocks:
-            file_blocks = list(file_blocks) + query_blocks
+            # ── Stage 2.7: Query generation ──
+            query_blocks, _ = stage_2_7_query_generation(
+                global_digest, chunk_analyses, file_blocks, raw_file, config,
+                template=template_content, verbose=verbose
+            )
+            if query_blocks:
+                file_blocks = list(file_blocks) + query_blocks
 
-        # ── Stage 2.8: Cross-source query resolution ──
-        # LLM judge closes queries already answered elsewhere; defaults to "kept".
-        from _stage_2_8_query_resolve import (stage_2_8_resolve_queries,
-                                               _stage_2_8_update_file_blocks_after_resolution)
-        query_resolutions = stage_2_8_resolve_queries(file_blocks, config.wiki_dir, config)
-        if any(r["status"] == "closed" for r in query_resolutions.values()):
-            before_q = len(file_blocks)
-            file_blocks = _stage_2_8_update_file_blocks_after_resolution(file_blocks, query_resolutions)
-            print(f"  [stage 2.8] Removed {before_q - len(file_blocks)} closed query block(s)")
+            # ── Stage 2.8: Cross-source query resolution ──
+            # LLM judge closes queries already answered elsewhere; defaults to "kept".
+            from _stage_2_8_query_resolve import (stage_2_8_resolve_queries,
+                                                   _stage_2_8_update_file_blocks_after_resolution)
+            query_resolutions = stage_2_8_resolve_queries(file_blocks, config.wiki_dir, config)
+            if any(r["status"] == "closed" for r in query_resolutions.values()):
+                before_q = len(file_blocks)
+                file_blocks = _stage_2_8_update_file_blocks_after_resolution(file_blocks, query_resolutions)
+                print(f"  [stage 2.8] Removed {before_q - len(file_blocks)} closed query block(s)")
 
-        # ── Stage 2.9: Comparison generation ──
-        comp_blocks, _ = stage_2_9_comparison_generation(
-            global_digest, chunk_analyses, file_blocks, raw_file, config,
-            template=template_content, verbose=verbose
-        )
-        if comp_blocks:
-            file_blocks = list(file_blocks) + comp_blocks
+            # ── Stage 2.9: Comparison generation ──
+            comp_blocks, _ = stage_2_9_comparison_generation(
+                global_digest, chunk_analyses, file_blocks, raw_file, config,
+                template=template_content, verbose=verbose
+            )
+            if comp_blocks:
+                file_blocks = list(file_blocks) + comp_blocks
 
-        query_count = len(query_blocks)
-        comp_count = len(comp_blocks)
+            query_count = len(query_blocks)
+            comp_count = len(comp_blocks)
+
+            # Persist tail outputs + mark the segment done so a 2.8/2.9A
+            # ConversationPending resume restores instead of re-running.
+            save_progress(config, h, {
+                "file_blocks": file_blocks,
+                "query_resolutions": query_resolutions,
+                "query_count": query_count,
+                "comp_count": comp_count,
+                "concept_merge_stats": (concept_count_before, concept_count_after),
+                "dedup_was_run": dedup_was_run,
+            })
+            mark_stage_done(config, h, "stage_2_9_done")
 
         analysis["__source_hash"] = h
         analysis["__extract_method"] = method

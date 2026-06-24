@@ -213,5 +213,82 @@ class TestStrDistance(unittest.TestCase):
         self.assertEqual(_core.str_distance("", "abc"), 3)
 
 
+def _make_config(tmp: Path) -> _core.Config:
+    return _core.Config(
+        wiki_root=tmp / "wiki", raw_root=tmp / "raw",
+        wiki_dir=tmp / "wiki", runtime_dir=tmp / "rt",
+        cache_path=tmp / "rt" / "ingest-cache.json",
+        progress_dir=tmp / "rt" / "ingest-progress",
+        extract_tmp_dir=tmp / "rt" / "extract-tmp",
+        llm_base_url="https://example.invalid", llm_model="m", llm_api_key="",
+        llm_protocol="anthropic", caption_api_key="", caption_base_url="x",
+        caption_model="c", chunk_size=60000, chunk_overlap=3000,
+        source_budget=100000, target_chars=60000, target_tokens=30000,
+        max_tokens=8192, conversation_prefix="ab12cd34",
+    )
+
+
+class TestSaveProgressMergeWrite(unittest.TestCase):
+    """save_progress merge-writes (not overwrites). Regression for the
+    2026-06-25 stage-marker resume loop: the old overwrite-write meant a
+    save_progress call that forgot to re-carry a cumulative key silently
+    erased it. Stage-completion state now lives in stages.json, not in the
+    artifact cache — so the cache must never carry a ``stage`` field either.
+    """
+
+    def test_merge_preserves_existing_keys(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "deadbeef" * 8
+            _core.save_progress(cfg, h, {"extracted_text": "abc", "extract_method": "mineru"})
+            _core.save_progress(cfg, h, {"stage_1_2": {"count": 3}})
+            p = _core.load_progress(cfg, h)
+            self.assertEqual(p["extracted_text"], "abc")   # first write survives
+            self.assertEqual(p["extract_method"], "mineru")
+            self.assertEqual(p["stage_1_2"], {"count": 3}) # second write merged in
+
+    def test_corrupted_cache_does_not_raise(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "cafebabe" * 8
+            pp = _core.progress_path(cfg, h)
+            pp.parent.mkdir(parents=True, exist_ok=True)
+            pp.write_text("{not valid json", encoding="utf-8")
+            _core.save_progress(cfg, h, {"extracted_text": "x"})  # must not raise
+            self.assertEqual(_core.load_progress(cfg, h)["extracted_text"], "x")
+
+
+class TestStageMarkers(unittest.TestCase):
+    """stages.json is the single source of truth for stage completion. A
+    marker set in one phase must be readable in another (cross-function
+    resume), and the artifact cache must NOT carry a ``stage`` field.
+    """
+
+    def test_mark_and_check_marker(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "1234abcd" * 8
+            self.assertFalse(_core.is_stage_done(cfg, h, "stage_2_3_done"))
+            _core.mark_stage_done(cfg, h, "stage_2_3_done")
+            self.assertTrue(_core.is_stage_done(cfg, h, "stage_2_3_done"))
+            # artifact cache stays stage-free
+            _core.save_progress(cfg, h, {"chunk_analyses": []})
+            self.assertNotIn("stage", _core.load_progress(cfg, h))
+
+    def test_marker_payload_roundtrip(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "5678ef90" * 8
+            _core.mark_stage_done(cfg, h, "write_loop_done",
+                                  payload={"files_written": ["concepts/a.md"]})
+            self.assertEqual(
+                _core.get_stage_payload(cfg, h, "write_loop_done"),
+                {"files_written": ["concepts/a.md"]})
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

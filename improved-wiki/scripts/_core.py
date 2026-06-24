@@ -494,10 +494,28 @@ def load_progress(config: Config, source_hash: str) -> dict | None:
 
 
 def save_progress(config: Config, source_hash: str, data: dict) -> None:
+    """Merge-write artifact cache. Loads existing artifacts, updates with the
+    new keys, writes back. Callers write ONLY their stage's new artifacts — no
+    need to re-carry cumulative keys (the overwrite-write fragility that caused
+    the 2026-06-25 stage-marker resume loop: a save that forgot a key silently
+    erased it).
+
+    Stage-completion state (control flow) lives in stages.json via
+    mark_stage_done / is_stage_done — NOT in this file. This file is a pure
+    artifact store keyed by artifact name (extracted_text, chunk_analyses, …).
+    """
     pp = progress_path(config, source_hash)
+    existing: dict = {}
+    if pp.exists():
+        try:
+            existing = json.loads(pp.read_text(encoding="utf-8"))
+        except Exception:
+            # Corrupted artifact cache is not fatal — rebuild from empty.
+            existing = {}
+    existing.update(data)
+    existing["_updated_at"] = int(time.time() * 1000)
     tmp = pp.with_suffix(".tmp")
-    data["_updated_at"] = int(time.time() * 1000)
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.rename(pp)
 
 

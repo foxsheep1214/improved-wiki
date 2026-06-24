@@ -155,6 +155,14 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # page-merge LLM round-trips because post-write steps (enrichment, image
     # injection) have mutated page bodies.  Restore file list from the marker.
     write_phase_done = is_stage_done(config, h, "write_phase")
+    # write_loop_done is the finer-grained 3.1-only gate: the write loop
+    # completed but enrichment/3.2/3.3 have not. A 3.3-enrich ConversationPending
+    # handoff fires AFTER the write loop; without this marker, resume would
+    # re-run 3.1 and spuriously re-merge every page. On write_loop_done resume
+    # we still need to run enrich + 3.2 + 3.3, so enrich_candidates are
+    # reconstructed from the persisted file list instead of collected in-loop.
+    write_loop_done = (not write_phase_done
+                       and is_stage_done(config, h, "write_loop_done"))
     if write_phase_done:
         print("  [write] write_phase marker present — skipping 3.1/3.2/3.3")
         _wp = get_stage_payload(config, h, "write_phase")
@@ -163,7 +171,25 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         hard_failures = []
         stage_3_2_result = {"injected": _wp.get("images_injected", 0)}
         stage_3_3_result = {"items": _wp.get("collision_items", 0)}
-    _write_blocks = [] if write_phase_done else file_blocks
+    elif write_loop_done:
+        print("  [write] write_loop_done marker present — skipping 3.1 write loop")
+        _wlp = get_stage_payload(config, h, "write_loop_done")
+        files_written_paths = list(_wlp.get("files_written", []))
+        hard_failures = []
+        # If the source page was written in the prior loop, skip the placeholder
+        # build below; otherwise leave source_block=None so the placeholder
+        # runs and creates the source page (it hadn't been reached before the
+        # enrich handoff).
+        _src_rel = str(source_path.relative_to(config.wiki_root))
+        source_block = ("source", "") if _src_rel in files_written_paths else None
+        # Reconstruct enrich_candidates from the persisted file list so the
+        # enrich batch (below) still runs over the already-written pages.
+        enrich_candidates = [
+            (p, config.wiki_dir / p)
+            for p in files_written_paths
+            if Path(p).name not in _LISTING_PAGES
+        ]
+    _write_blocks = [] if (write_phase_done or write_loop_done) else file_blocks
 
     for rel_path, content in _write_blocks:
         if ".." in rel_path or rel_path.startswith("/"):
@@ -224,6 +250,13 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
         if enrich_enabled and not is_listing:
             enrich_candidates.append((rel_path, full_path))
+
+    # Mark the 3.1 write loop complete so an enrich/3.2/3.3 ConversationPending
+    # resume skips the loop (preventing spurious page re-merge). Only when the
+    # loop ran fresh — not on write_phase_done / write_loop_done resumes.
+    if not (write_phase_done or write_loop_done):
+        mark_stage_done(config, h, "write_loop_done",
+                        payload={"files_written": files_written_paths})
 
     if enrich_enabled and enrich_candidates and not write_phase_done:
         # Enrich the ACTUAL written content (post-merge) so links target real
