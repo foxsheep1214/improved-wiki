@@ -159,8 +159,13 @@ def load_provider_config(name: str | None = None) -> dict:
                     "protocol": provider.get("protocol", "anthropic"),
                     "provider": name,
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            # No silent fallback: a broken config.json must surface, not
+            # silently degrade to env vars (policy 2026-06-24).
+            raise RuntimeError(
+                f"~/.agents/config.json exists but failed to parse "
+                f"({type(e).__name__}: {e}) — fix or remove it. No silent fallback."
+            ) from e
     return {
         "api_key": os.environ.get("LLM_API_KEY", ""),
         "base_url": os.environ.get("LLM_BASE_URL", ""),
@@ -186,8 +191,12 @@ def load_caption_provider() -> dict:
                     "protocol": provider.get("protocol", "anthropic"),
                     "provider": caption_name,
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            # No silent fallback: a broken config.json must surface (policy 2026-06-24).
+            raise RuntimeError(
+                f"~/.agents/config.json exists but failed to parse "
+                f"({type(e).__name__}: {e}) — fix or remove it. No silent fallback."
+            ) from e
     return {
         "api_key": os.environ.get("CAPTION_API_KEY") or os.environ.get("LLM_API_KEY", ""),
         "base_url": "https://api.minimaxi.com",
@@ -455,8 +464,11 @@ def load_cache(config: Config) -> dict:
     if config.cache_path.exists():
         try:
             return json.loads(config.cache_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            # Corrupted cache is not a silent reset — warn loudly so the user
+            # knows why a full re-ingest is happening (policy 2026-06-24).
+            print(f"⚠️  [cache] {config.cache_path} corrupted ({type(e).__name__}: {e}) "
+                  f"— discarding cache, will re-ingest from scratch.")
     return {"version": "2", "entries": {}}
 
 
@@ -512,7 +524,11 @@ def load_stages(config: Config, source_hash: str) -> dict:
     if sp.exists():
         try:
             return json.loads(sp.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as e:
+            # Corrupted stage-progress is not a silent reset — warn loudly so
+            # the user knows why stages are re-running (policy 2026-06-24).
+            print(f"⚠️  [stages] {sp} corrupted ({type(e).__name__}: {e}) "
+                  f"— discarding stage progress, will re-run from start.")
             return {}
     return {}
 

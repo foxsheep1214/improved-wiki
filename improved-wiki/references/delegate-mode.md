@@ -1,6 +1,6 @@
 # Delegate Mode — Agent Orchestration
 
-Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **conversation mode** — there is no flag, and no direct-API alternative. Every text-generation LLM step (including wikilink enrichment, batched once per ingest) is handled by the calling agent with the current conversation's model. The one external API dependency outside text generation is image captioning (Stage 1.3, MiniMax VLM) — vision content can't flow through the prompt-file handoff, so it always calls its configured HTTP API directly.
+Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **conversation mode** — there is no flag, and no direct-API alternative. Every text-generation LLM step (including wikilink enrichment, batched once per ingest) is handled by the calling agent with the current conversation's model. Two external dependencies outside text generation: **image captioning** (Stage 1.3, MiniMax VLM — vision content can't flow through the prompt-file handoff) and **embeddings** (Stage 3.7, local Ollama bge-m3). Both are **no-fallback** (2026-06-24): if the caption key is missing/batch fails or the Ollama stack is down, `ingest.py` raises `RuntimeError` and pauses — the calling agent must surface this to the user rather than silently continuing. Extraction/page writes are cached, so re-running after the user fixes the dependency resumes from the failed stage.
 
 ---
 

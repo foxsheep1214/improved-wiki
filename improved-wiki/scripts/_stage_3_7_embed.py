@@ -2,9 +2,10 @@
 
 Extracted from ingest.py on 2026-06-23. Both run after Stage 3 writes
 wiki pages to disk: Stage 3.7 embeds new pages into the local LanceDB
-for semantic retrieval (best-effort; prints an install reminder if the
-local Ollama/lancedb stack is missing), and Stage 4.1 runs the 15-stage
-validator inline for fresh verification evidence.
+for semantic retrieval (mandatory; **pauses the ingest** if the local
+Ollama/lancedb/bge-m3 stack is missing — no silent fallback, policy
+2026-06-24), and Stage 4.1 runs the 15-stage validator inline for fresh
+verification evidence.
 """
 from __future__ import annotations
 
@@ -90,30 +91,36 @@ def _stage_3_7_check_embed_capability(base_url: str, model: str) -> tuple[bool, 
 
 
 def stage_3_7_embed_new_pages(config: Config, files_written: list[str]) -> None:
-    """Stage 3.7: embed wiki pages for semantic retrieval (mandatory attempt).
+    """Stage 3.7: embed wiki pages for semantic retrieval (mandatory).
 
-    NashSU parity (ingest.ts L1127-1146), upgraded 2026-06-21: always attempts
-    embedding against local Ollama bge-m3 (default http://127.0.0.1:11434/v1)
-    rather than gating behind an explicit EMBEDDING_BASE_URL export. If the
-    local capability is missing (Ollama not running, model not pulled, or
-    lancedb not installed), prints an actionable install reminder instead of
-    silently skipping. A missing local model never aborts the ingest — pages
-    are already written to disk by Stage 3.1 — but the gap is now visible
-    instead of silent.
+    NashSU parity (ingest.ts L1127-1146). Always attempts embedding against
+    local Ollama bge-m3 (default http://127.0.0.1:11434/v1). If the local
+    capability is missing (Ollama not running, model not pulled, or lancedb
+    not installed), **pauses the ingest** — no silent fallback, no degraded
+    keyword-only retrieval (policy 2026-06-24: a missing required dependency
+    is a hard stop, not a warn-and-continue). Pages are already on disk, so
+    re-running after fixing the stack resumes from here with no re-extraction.
     """
     base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
     model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
 
     ok, reason = _stage_3_7_check_embed_capability(base_url, model)
     if not ok:
-        print(f"[stage 3.7] ⚠️  Embeddings 不可用：{reason}")
-        print("[stage 3.7] 请安装后补跑（wiki 检索质量会下降到纯关键词，>100 页的 wiki 必须补）：")
+        print(f"\n⚠️  [stage 3.7] Embeddings 不可用：{reason}")
+        print(f"⚠️  [stage 3.7] PAUSING ingest — no silent fallback. Semantic retrieval "
+              f"is a required stage, not optional. Fix and re-run (pages are cached, "
+              f"resumes here):")
         print("  1. brew install ollama          # 如未安装")
         print("  2. ollama serve                 # 如未启动")
         print(f"  3. ollama pull {model}")
         print("  4. pip install lancedb")
-        print(f"  5. python3 scripts/build_embeddings.py --project {config.wiki_root} embed")
-        return
+        print(f"  5. 重跑 ingest（页面已落盘，从此处恢复，无需重新提取/生成）\n")
+        raise RuntimeError(
+            f"Embedding stack unavailable ({reason}) — Stage 3.7 cannot run. "
+            f"No fallback: start Ollama, pull {model}, and pip install lancedb, "
+            f"then re-run. The ingest pauses here; pages already written are "
+            f"cached and the run resumes from this stage."
+        )
 
     skip_files = {"index.md", "log.md", "overview.md", "schema.md"}
     new_files = [

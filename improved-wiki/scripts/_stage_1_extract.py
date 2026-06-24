@@ -988,6 +988,11 @@ def _stage_1_1_scanned_assemble_manifest(
         if pending and config.caption_api_key:
             _stage_1_3_caption_images_batch(
                 pending, config, media_dir, source_label="mineru-extracted", batch_size=6)
+        elif pending and not config.caption_api_key:
+            # No caption API key — VLM main path cannot run. Pause (no fallback).
+            already = len(extracted_figures) - len(pending)
+            _caption_no_key_pause(config, "mineru-extracted", media_dir,
+                                  len(extracted_figures), already)
     else:
         _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, [])
         print("[ocr] No extracted figures — empty manifest written")
@@ -1114,6 +1119,86 @@ def _stage_1_3_is_caption_failed(text: str) -> bool:
     return any(m.lower() in text_lower for m in failure_markers)
 
 
+def _emit_caption_skip_review(config, source_label: str, media_dir: Path,
+                              total_images: int, already_captioned: int) -> None:
+    """Write a high-severity REVIEW item documenting that VLM captioning was
+    skipped because the caption provider has no API key. (See bug 2026-06-24:
+    an Erickson re-ingest produced 773 OCR captions but 0 VLM captions with
+    no warning.) Does not itself raise — call _caption_no_key_pause() for the
+    full warn + REVIEW + pause behavior."""
+    import time
+    date_str = time.strftime("%Y-%m-%d")
+    safe_source = re.sub(r'[^\w\s-]', '', source_label or media_dir.parent.name).strip()[:40]
+    if not safe_source:
+        safe_source = "unknown"
+    reviews_dir = config.wiki_dir / "REVIEW" / "suggestion"
+    reviews_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{date_str}-{safe_source}-vlm-captioning-skipped-no-api-key.md"
+    page_path = reviews_dir / filename
+    pending = max(0, total_images - already_captioned)
+    md = f"""---
+type: review
+review_type: suggestion
+severity: high
+affected_pages: []
+resolved: false
+created: {date_str}
+source_ingest: "{source_label or media_dir.parent.name}"
+---
+
+# [suggestion] VLM image captioning skipped — no caption provider API key
+
+Stage 1.3 (MiniMax VLM captioning) was **entirely skipped** because
+`caption_api_key` is empty: `~/.agents/config.json` is absent and neither
+`CAPTION_API_KEY` nor `LLM_API_KEY` is set in the environment.
+
+**Impact:** {total_images} image(s) were NOT captioned by the VLM.
+{already_captioned} already had a caption (minerU OCR figure-text or prior
+run); **{pending} have no VLM description** — they fall back to minerU's OCR
+figure-caption text (if any) or remain uncaptioned. Image search/retrieval
+quality is degraded.
+
+**Fix:** configure the MiniMax caption provider — create `~/.agents/config.json`
+with a `providers.minimax` entry (`api_key` + `base_url`), or
+`export CAPTION_API_KEY=...`, then re-run ingest. Stage 1.3 resumes from
+cache and only captions pending images.
+
+## Resolution
+_配置 caption provider API key 后重跑 ingest 即可补齐；处理完成后将 `resolved: false` 改为 `resolved: true`。_
+"""
+    tmp = page_path.with_suffix(page_path.suffix + ".tmp")
+    tmp.write_text(md, encoding="utf-8")
+    tmp.rename(page_path)
+
+
+def _caption_no_key_pause(config, source_label: str, media_dir: Path,
+                          total_images: int, already_captioned: int) -> None:
+    """Handle a missing caption-provider API key: warn loudly, write a REVIEW
+    item, and **PAUSE the ingest** (raise RuntimeError). No fallback, no opt-out.
+
+    Policy (2026-06-24): the ingest process allows NO silent fallback. A
+    missing required external dependency is a hard stop — the main path (VLM
+    captioning) cannot run, so the pipeline pauses rather than silently
+    producing degraded output (OCR figure-text in place of VLM descriptions).
+    Extraction work is cached, so re-running after configuring the key resumes
+    from Stage 1.3 with no re-extraction.
+    """
+    pending = max(0, total_images - already_captioned)
+    print(f"\n⚠️  [caption] VLM SKIPPED — no API key for caption provider. "
+          f"{already_captioned}/{total_images} images have prior captions, "
+          f"{pending} will get NO VLM description.")
+    print(f"⚠️  [caption] PAUSING ingest — no silent fallback. Configure "
+          f"~/.agents/config.json (providers.minimax.api_key) or export "
+          f"CAPTION_API_KEY, then re-run (cached, resumes here).\n")
+    _emit_caption_skip_review(config, source_label, media_dir, total_images, already_captioned)
+    raise RuntimeError(
+        "Caption provider API key missing — VLM captioning (Stage 1.3) cannot run. "
+        "No fallback: configure ~/.agents/config.json (providers.minimax.api_key) or "
+        "export CAPTION_API_KEY, then re-run (extraction is cached, resumes from "
+        "Stage 1.3)."
+    )
+
+
 def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_dir: Path,
                     source_label: str = "",
                     batch_size: int = CAPTION_BATCH_SIZE,
@@ -1134,8 +1219,11 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
     if not images:
         return 0
     if not config.caption_api_key:
-        print(f"[caption] Skipped — no API key for caption provider")
-        return 0
+        # VLM main path cannot run — pause (no fallback, no silent degradation).
+        already = sum(1 for img in images
+                      if (media_dir / (img["filename"] + ".caption.txt")).exists())
+        _caption_no_key_pause(config, source_label, media_dir, len(images), already)
+        return 0  # unreachable — _caption_no_key_pause always raises
 
     # Filter to pending (uncaptioned or VLM-failed) images
     pending = []
@@ -1330,10 +1418,17 @@ def _stage_1_3_caption_one_batch(batch: list[dict], batch_idx: int, total_batche
             if attempt < 2:
                 time.sleep(2 ** attempt)
                 continue
-            # 改进3：Fallback 降级方案
-            print(f"[caption] Fallback (attempt {attempt+1}): {type(e).__name__}")
-            fallback_text = "\n".join(f"[图{i+1}] 技术图表" for i in range(len(batch)))
-            return fallback_text, None
+            # No fallback: a caption-batch failure after retries means the VLM
+            # main path is not working — pause rather than write placeholder
+            # captions that silently degrade quality (policy 2026-06-24).
+            print(f"\n⚠️  [caption] VLM batch failed after {attempt+1} attempts "
+                  f"({type(e).__name__}: {e}) — PAUSING, no fallback.")
+            raise RuntimeError(
+                f"Caption VLM batch failed after {attempt+1} attempts "
+                f"({type(e).__name__}: {e}). No fallback — the main captioning "
+                f"path is not working. Fix the provider and re-run (cached, "
+                f"resumes from Stage 1.3)."
+            ) from e
     return None, "max-retries"
 
 
@@ -1721,7 +1816,8 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
     manifest_path = media_dir / "_manifest.json"
     _stage_1_2_write_manifest(manifest_path, "mineru-ocr", raw_file, images)
     print(f"[stage 1.2] minerU: {len(images)} images from {img_source_dir} "
-          f"({mineru_captioned} pre-captioned by minerU, Stage 1.3 will skip)")
+          f"({mineru_captioned} pre-captioned by minerU"
+          f"{', Stage 1.3 will skip pre-captioned' if mineru_captioned == len(images) and images else ''})")
     return {
         "count": len(images),
         "media_dir": str(media_dir),
@@ -1818,7 +1914,11 @@ def stage_1_3_caption_images(config: Config, stage_1_2_result: dict, batch_size:
         print("[stage 1.3] No images to caption — skipping")
         return {"captioned": 0, "total": 0}
     if not config.caption_api_key:
-        print("[stage 1.3] Skipped — no API key for caption provider")
+        # VLM main path cannot run — pause (no fallback, no silent degradation).
+        media_dir = Path(stage_1_2_result.get("media_dir", "."))
+        already = sum(1 for img in images
+                      if (media_dir / (img["filename"] + ".caption.txt")).exists())
+        _caption_no_key_pause(config, "stage-1.3", media_dir, len(images), already)
         return {"captioned": 0, "total": len(images), "skipped": True, "reason": "no-api-key"}
 
     media_dir = Path(stage_1_2_result["media_dir"])

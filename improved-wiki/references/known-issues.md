@@ -3,137 +3,49 @@
 ## Open issues
 
 ### Shell scripts lack `set -euo pipefail`
-
-`run-queue.sh`, `wiki-lint.sh`, `wiki-monitor.sh` — should add strict error handling.
+`run-queue.sh`、`wiki-lint.sh`、`wiki-monitor.sh` 应加严格错误处理。
 
 ### Several files exceed the 800-line guideline
+`ingest.py`（~2062 行）、`_stage_2_4_generation.py`（~632 行）。
 
-`ingest.py` (~2062 lines), `_stage_2_4_generation.py` (~632 lines).
+### `batch_size=6` hardcoded on minerU caption path
+`_stage_1_extract.py` line 990 硬编码 `batch_size=6`，与 `CAPTION_BATCH_SIZE=8` env 默认不一致——6-图批次可能超 MiniMax token 限制导致 JSON 截断。
 
-### Fixed: per-block language warnings on OCR / math-heavy text (2026-06-23)
-
-`expected French, got Chinese/Greek` warnings during ingest had three
-compounding causes, all fixed (`tests/test_language.py`):
-
-1. **minerU skip-set incomplete** (`ingest.py`): the per-block language
-   check was skipped for only 4 method names, but Stage 1.1 returns multiple
-   `mineru-*` labels (currently `mineru-api` / `mineru-api-ocr` / `mineru-pipeline`
-   / `*-low-quality`; formerly `mineru-api-txt` / `mineru-vlm` / `mineru-api-mixed`
-   / `*-low-quality` before the 2026-06-23 single-path refactor). OCR text
-   then tripped false warnings. Now skipped via `method.startswith("mineru")`,
-   which is label-agnostic and survived the refactor.
-2. **Greek false positive on math symbols** (`_language.py`): isolated
-   Greek letters (λ σ θ Δ …) hit the ≥2-count threshold. Now requires a
-   ≥2-letter word run (`_has_greek_word_run`); isolated singletons are
-   treated as math notation.
-3. **Latin over-eager single-token match** (`_language.py`): one stray
-   token like `le` inside English text flipped it to French. German /
-   French / Spanish / Italian / Dutch / Indonesian now require ≥2
-   distinct function words (Spanish keeps ñ/¿/¡ as a solo signal).
+### minerU 偶尔把公式区域分类为 `image` 而非 `equation`
+~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。
 
 ## Design decisions (not bugs)
 
-### `ingest.py` uses `urllib.request` not `httpx` / `requests`
+### `ingest.py` 用 `urllib.request` 不用 `httpx`/`requests`
+刻意避免 cron 语境下 `pip install`。
 
-Deliberate choice to avoid `pip install` in the cron context.
+### 必须用 venv Python（系统 Python 缺 fitz + 版本太旧）
+用 `~/.venv/bin/python3`。fitz（PyMuPDF）仍用于 Stage 1.1 的 garbled 检测采样。**且** stage 模块用 PEP 604 union 语法（`str | None`），需 Python 3.10+；macOS 系统 `/usr/bin/python3` 是 3.9，会抛 `TypeError: unsupported operand type(s) for |`——这是 #1 首次运行失败原因。
 
-### Must run with venv Python (system Python lacks PyMuPDF)
+### Wikilink enrichment merge loop after Stage 3.1
+Stage 3.1 写盘后，pipeline 生成多个 `LLM-task-*.md` merge prompt（`.llm-wiki/conversation/<hash>/`），每个让 agent 把已有 wiki 页与新内容合并。re-run 时会重新发现并 re-merge。高效处理：用 `delegate_task` 批量；wikilink 建议 JSON 任务输出 `{}` 可安全跳过（Stage 2.4 已加内联 wikilink 时无质量损失）。
 
-Use `~/.venv/bin/python3` or pre-install PyMuPDF. **Also**: `ingest.py` and
-stage modules use PEP 604 union syntax (`str | None`), which requires Python
-3.10+. macOS system `/usr/bin/python3` is 3.9 and will throw
-`TypeError: unsupported operand type(s) for |` — this is the #1 first-run
-failure even when PyMuPDF is installed system-wide.
+### Stage 2.1 只喂文本采样不是全文
+Global Digest prompt 含书的文本采样（~200K chars），非全文。全文在 `.llm-wiki/extract-tmp/<stem>/p*.txt`，agent 需要时可读更多。
 
-### Wikilink enrichment merge loop after Stage 3.1 (2026-06-24)
+### OCR timeout for 200+ page books
+minerU 50 页/chunk 串行。272 页书（6 chunks）可能超 600s 终端超时。**重跑 `ingest.py` 从缓存恢复**——已完成 chunk 跳过。`--stop-after-stage 0` 分离 OCR 与 LLM 阶段。
 
-After Stage 3.1 write, the pipeline generates many `LLM-task-*.md` merge prompts
-in `.llm-wiki/conversation/<hash>/`. Each asks the agent to merge an existing wiki
-page with new content from the latest ingest. The pipeline also re-discovers and
-re-merges pages across `ingest.py` re-runs as new wikilinks are found — the same
-page may appear in multiple merge rounds.
+### `--delete` for re-ingest
+`ingest.py --delete "raw/Book/<file>.pdf"` 删 source 页 + 孤儿 concepts/entities + media + cache，再重跑即可干净重摄。
 
-**Efficient handling**: use `delegate_task` with `['terminal', 'file']` toolsets
-to batch-process these. A leaf subagent reads each `.md`, writes the merged body
-to `.txt`, and re-runs `ingest.py` in a loop until exit code 0 or a non-merge
-LLM stage (Review/quality) is reached.
+## 已修复（存档）
 
-**Wikilink suggestion JSON tasks**: the pipeline also generates a wikilink
-enrichment task expecting a JSON object mapping page paths to `[{term, target}]`
-lists. Outputting `{}` safely skips it with no quality loss if pages already have
-inline wikilinks from Stage 2.4 generation.
-
-### Stage 2.1 text sample size (2026-06-24, partially fixed)
-
-The Global Digest prompt includes only a text sample from the book, NOT the
-full extracted text. Before the `json.loads(cl)` harvest fix (commit `a2bfb3e`),
-the sample was only ~4K chars (corrupted OCR assembly from harvest fallback).
-After the fix, the sample is 200K chars — sufficient for accurate chunk
-planning (3 chunks vs 1). The full text remains in
-`.llm-wiki/extract-tmp/<book-stem>/p*.txt` if the agent needs to read more.
-
-### OCR timeout for 200+ page books (2026-06-24)
-
-minerU OCR processes 50 pages/chunk serially. A 272-page book (6 chunks) can
-exceed the 600s terminal timeout. **Re-running `ingest.py` resumes from cache**
-— completed chunks are skipped, only the interrupted chunk re-runs. Using
-`--stop-after-stage 0` separates OCR from the LLM stages and avoids timeout
-pressure on the LLM steps.
-
-### Image extraction + captioning: 5 issues from 2026-06-24 re-ingest (2 fixed, 3 open)
-
-Full analysis in `references/image-caption-strategy.md` § "Known issues
-discovered 2026-06-24". Summary:
-
-1. ✅ **FIXED: MinerU `image_caption` wasted on API path** — Root cause:
-   minerU API's `build_result_dict()` returns `content_list` as a JSON
-   **string** (via `get_infer_result` → `fp.read()`), not a parsed list.
-   `_stage_1_2_harvest_images()` checked `isinstance(cl, list)` which was
-   always `False` for a string → `content_list` skipped → `page_figs` empty →
-   fallback dumped ALL 528 images to chunk-start page. Fix: `json.loads(cl)`
-   before the isinstance check. Also added: harvest now writes minerU's
-   `image_caption` as sidecar `.caption.txt`, so Stage 1.3 skips them.
-   **Verified**: 141/340 images got sidecar captions (42%), VLM calls dropped
-   from 528→157 (↓70%).
-2. ✅ **FIXED: 188 fragment images not filtered** — Same root cause as #1.
-   Once `content_list` is parsed, `page_figs` only contains images/chart
-   blocks from `content_list` (340), not all `images` dict entries (528).
-   **Verified**: 528→340 images (↓36%), page numbers correctly mapped (180
-   distinct pages vs 6 before).
-3. **No retry for failed captions** — single-pass `ThreadPoolExecutor`; 4/340
-   images (1%) left uncaptioned after JSON truncation events. (Was 202/528 =
-   38% before fix #1+#2 reduced VLM load.)
-4. **`batch_size=6` hardcoded** at line 990 (minerU path) vs `CAPTION_BATCH_SIZE=8`
-   env default — causes JSON truncation on 6-image batches.
-5. **~112 formula images extracted as pictures** — minerU classifies some
-   formula regions as `image` blocks rather than `equation` blocks, so they
-   get VLM-captioned instead of using the LaTeX text minerU already extracted.
-
-**Cascading effect of fix #1+#2**: the `json.loads(cl)` fix also fixed Stage
-2.1 input quality. Before the fix, the harvest fallback (all images on one
-page) corrupted OCR text assembly → Stage 2.1 received only 4K chars (sampled
-from a narrow text window) → 1 chunk → 36 concepts. After the fix, Stage 2.1
-receives 200K chars → 3 chunks → 55 concepts (+53%) and 48 entities (+100%).
-
-### `--delete` for re-ingest (2026-06-24)
-
-To re-ingest a book for comparison or correction:
-`ingest.py --delete "raw/Book/<file>.pdf"` removes the source page, orphan
-concepts/entities, media directory, and cache entry. Then re-run without
-`--delete` to start fresh. This is the clean way to redo an ingest without
-leaving orphaned pages from the previous run.
-
-## Batch digest patterns
-
-Batch ingestion (looping `ingest.py` over many PDFs) has its own pitfalls:
-`claude -p` cannot loop, failure-mode table, dedup signal, and concurrency
-rules. See `references/batch-digest-patterns.md` for the full write-up.
-
-The one-line summary: call `ingest.py` directly from a Python loop (not through
-`claude -p`), dedup on `wiki/sources/<stem>.md` existence, and run serially.
+- **2026-06-24 无回退策略**：caption key 缺失/批次失败、embeddings 缺 stack、LLM page-merge 失败、config.json 解析失败 → 一律 raise 暂停（删占位符/array-merge/静默 env 回退）。详见 `ingest-stages-mandatory.md`。
+- **2026-06-24 caption harvest**：`content_list` 是 JSON 字符串，`isinstance(cl, list)` 永远 False → 全量图倾倒。修：`json.loads(cl)` + minerU `image_caption` 写 sidecar。528→340 图，VLM 调用 ↓70%，caption 覆盖 62%→98%，Stage 2.1 输入 4K→200K chars。
+- **2026-06-24 wikilink enrichment 嵌套链接 bug**：`_enrich_wikilinks.py` 对已有 `[[...]]` 内的子串二次包装。修：`_replace_first_outside_links` 只在非链接段替换。
+- **2026-06-23 per-block 语言误报**：minerU skip-set 不全 + Greek 单字符误判 + Latin 单 token 误判。修：`method.startswith("mineru")` + Greek ≥2-letter word run + Latin ≥2 function words。
+- **2026-06-22 `_is_image_too_small` NameError**：`MINERU_IMG_MIN_WIDTH/HEIGHT` 未定义被 try/except 吞。修：定义常量 + size check 移出 try/except。
 
 ## Legacy artifacts
 
 ### `.digested` files in `raw/` subdirectories
+旧 pipeline 标记。当前 pipeline（Stage 0.2）用 `wiki/sources/` 作唯一去重信号。清理见 `maintenance-cleanup.md`。
 
-Markers from an older pipeline version. Current pipeline (Stage 0.2) uses `wiki/sources/` as sole dedup signal. Cleanup: see `references/maintenance-cleanup.md`.
+## Batch digest patterns
+批量摄入 pitfalls 见 `batch-digest-patterns.md`。一句话：直接从 Python 循环调 `ingest.py`（不走 `claude -p`），按 `wiki/sources/<stem>.md` 存在性去重，串行跑。

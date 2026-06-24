@@ -29,7 +29,7 @@ See `/tmp/hw_batch_v4.py` for a working batch loop script.
 | Stage 2 verification | 1 | LLM didn't emit `wiki/sources/<title>.md` FILE block | Retry; check LLM model supports the prompt format |
 | minerU OCR timeout | -15 (SIGTERM) | Scanned PDF too large, OCR > 3600s | Increase timeout or skip large scanned books |
 | Stale lock | 1 (recovered) | Previous ingest crashed, `.ingest-progress/` lock file remains | `ingest.py` auto-recovers: "Stale lock from pid=XXX — taking over" |
-| Sparse text → minerU fallback | 0 (slow) | PyMuPDF `get_text()` returns 0 chars/page | Expected for scanned PDFs; minerU OCR runs automatically |
+| minerU hybrid OCR routing | 0 (normal) | 文本层薄/图表密集的 PDF | hybrid-engine `parse_method=auto` 按页自动判 txt vs VLM OCR，所有 PDF 统一走 minerU（2026-06-23 起 PyMuPDF 不再做提取） |
 
 ## Source page dedup check
 

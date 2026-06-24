@@ -46,8 +46,10 @@ this skill only runs from a CLI session with an agent present, so a separate pai
 text-gen API key had no real use case.
 
 Two other external-API dependencies (not text generation):
-- **Stage 1.3 image captioning** → MiniMax VLM (`anthropic/v1/messages` multi-image batch). This is the only MiniMax dependency; it needs `MINIMAX_CN_API_KEY` / `LLM_API_KEY` for the caption endpoint only.
-- **Stage 3.7 embeddings** → mandatory attempt (2026-06-21): defaults to local Ollama bge-m3 (`http://127.0.0.1:11434/v1`), no env var export required. If Ollama isn't running, the model isn't pulled, or `lancedb` isn't installed, prints an install reminder instead of silently skipping — never aborts the ingest. Not routed through MiniMax.
+- **Stage 1.3 image captioning** → MiniMax VLM (`anthropic/v1/messages` multi-image batch). This is the only MiniMax dependency; it needs `MINIMAX_CN_API_KEY` / `LLM_API_KEY` for the caption endpoint only. **No fallback**: if the key is missing or a caption batch fails after retries, the ingest **pauses** (raises) — it never silently degrades to OCR figure-text (policy 2026-06-24).
+- **Stage 3.7 embeddings** → mandatory (2026-06-21): defaults to local Ollama bge-m3 (`http://127.0.0.1:11434/v1`), no env var export required. **No fallback**: if Ollama isn't running, the model isn't pulled, or `lancedb` isn't installed, the ingest **pauses** (raises) — it never silently continues with keyword-only retrieval (policy 2026-06-24). Not routed through MiniMax.
+
+> **No-silent-fallback policy (2026-06-24)**: the ingest path allows NO silent fallback. If a main path cannot run (missing API key, missing service, LLM call failure after retries, broken config), the pipeline **warns and pauses** (raises `RuntimeError`) rather than degrading quality. Extraction/page writes are cached, so re-running after fixing the dependency resumes from the failed stage. This applies to: caption key missing, caption batch failure, embedding stack missing, LLM page-merge failure, broken `~/.agents/config.json`. (Corrupted cache/stage-progress files are the one exception: they warn loudly and reset, since re-ingesting is correct recovery, not quality degradation.)
 
 ## Entry points
 

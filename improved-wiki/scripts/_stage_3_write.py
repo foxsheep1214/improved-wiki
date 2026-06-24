@@ -307,7 +307,13 @@ with duplicates consolidated and new information integrated.
         response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
         merged_body = response.strip()
         if len(merged_body) < 100:
-            return merged_content  # triggers _frontmatter fallback
+            # No fallback: an empty/tiny LLM merge response means the main path
+            # is not working — pause rather than silently returning array-merge
+            # (which drops the existing body). Policy 2026-06-24.
+            raise RuntimeError(
+                f"LLM page-merge returned {len(merged_body)} chars (too short) — "
+                f"no fallback. Fix the LLM provider and re-run."
+            )
         return write_frontmatter(parse_frontmatter(merged_content)[0], merged_body)
 
     return _fm_merge_page_content(

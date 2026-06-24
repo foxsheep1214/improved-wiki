@@ -180,24 +180,31 @@ def merge_page_content(
         try:
             llm_output = merger_fn(existing_content, array_merged, source_file)
         except Exception as e:
-            print(f"[merge] LLM merge failed for {page_path}: {e} — falling back")
+            # No fallback: LLM merge failure means the main path is not working.
+            # Pause rather than silently degrading to array-merge-only (which
+            # drops the existing body) — policy 2026-06-24.
             if backup_fn:
                 try:
                     backup_fn(existing_content)
                 except Exception:
                     pass
-            return array_merged
+            raise RuntimeError(
+                f"LLM page-merge failed for {page_path} ({type(e).__name__}: {e}). "
+                f"No fallback — fix the LLM provider and re-run."
+            ) from e
 
         # Sanity 1: must have frontmatter
         llm_fm, llm_body = parse_frontmatter(llm_output)
         if not llm_fm:
-            print(f"[merge] LLM output for {page_path} has no frontmatter — rejecting")
             if backup_fn:
                 try:
                     backup_fn(existing_content)
                 except Exception:
                     pass
-            return array_merged
+            raise RuntimeError(
+                f"LLM page-merge output for {page_path} has no frontmatter — "
+                f"rejecting. No fallback, no silent array-merge degradation."
+            )
 
         # Sanity 2: body length
         old_len = len(old_body)
@@ -205,14 +212,16 @@ def merge_page_content(
         llm_len = len(llm_body)
         threshold = max(old_len, new_len) * BODY_SHRINK_THRESHOLD
         if llm_len < threshold:
-            print(f"[merge] LLM merge for {page_path} produced {llm_len} chars, "
-                  f"below threshold {threshold:.0f} — rejecting")
             if backup_fn:
                 try:
                     backup_fn(existing_content)
                 except Exception:
                     pass
-            return array_merged
+            raise RuntimeError(
+                f"LLM page-merge for {page_path} produced {llm_len} chars, below "
+                f"threshold {threshold:.0f} — rejecting. No fallback, no silent "
+                f"array-merge degradation."
+            )
 
         # Layer 3: lock fields + re-union arrays
         old_fm = parse_frontmatter(existing_content)[0]

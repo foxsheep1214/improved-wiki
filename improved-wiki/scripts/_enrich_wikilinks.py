@@ -27,6 +27,33 @@ from _frontmatter import parse_frontmatter, write_frontmatter
 from _llm_api import call_anthropic_protocol
 
 
+_LINK_SPAN_RE = re.compile(r'(\[\[.*?\]\])', re.DOTALL)
+
+
+def _replace_first_outside_links(body: str, term: str, replacement: str):
+    """Replace the first occurrence of `term` in `body` that is NOT inside an
+    existing ``[[...]]`` wikilink span. Returns the new body, or None if every
+    occurrence is inside a link (or there is no occurrence at all).
+
+    Without this guard, a term that appears as a substring of an existing
+    link's slug (e.g. ``lead`` inside ``[[concepts/lead-(pd)-...-design]]``)
+    gets re-wrapped, producing malformed nested links such as
+    ``[[concepts/[[lead-(pd)-...]]-(pd)-...]]``.
+    """
+    if term not in body:
+        return None
+    # With a capture group, re.split interleaves: [text, link, text, link, ...].
+    # Odd indices are link spans and must never be touched.
+    parts = _LINK_SPAN_RE.split(body)
+    for i, seg in enumerate(parts):
+        if i % 2 == 1:
+            continue  # link span — leave intact
+        if term in seg:
+            parts[i] = seg.replace(term, replacement, 1)
+            return "".join(parts)
+    return None
+
+
 def enrich_wikilinks_batch(
     pages: list[tuple[str, str]],
     existing_slugs: list[str],
@@ -111,8 +138,12 @@ Pages with no suggestions may be omitted from the object.
             escaped = re.escape(term)
             if re.search(rf'\[\[{escaped}\]\]|\[\[{escaped}\|', body):
                 continue  # already linked
-            if term in body:
-                body = body.replace(term, f"[[{target}]]", 1)
+            # Replace only an occurrence NOT inside an existing [[...]] span,
+            # otherwise we produce malformed nested links like
+            # [[concepts/[[slug]]-suffix]] (bug found 2026-06-24).
+            new_body = _replace_first_outside_links(body, term, f"[[{target}]]")
+            if new_body is not None:
+                body = new_body
                 changed = True
         if changed:
             enriched[rel_path] = write_frontmatter(fm, body)

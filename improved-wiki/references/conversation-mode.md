@@ -6,7 +6,7 @@
 
 ---
 
-> **例外**：图片 caption（Stage 1.3）走 MiniMax VLM（需 `MINIMAX_CN_API_KEY`）；Embedding（Stage 3.7）可选，独立配置（`EMBEDDING_BASE_URL`），不走 MiniMax。round iv（2026-06-22）起文本生成只有 conversation 一条路径，无 direct API 分支——wikilink enrichment 也已改为走 conversation（批量：每次 ingest 汇总所有新写页面问一次，而非逐页问）。
+> **例外（非文本生成的外部依赖）**：图片 caption（Stage 1.3）走 MiniMax VLM（需 `~/.agents/config.json` 的 `providers.minimax.api_key` 或 `CAPTION_API_KEY`）；Embedding（Stage 3.7）走本地 Ollama bge-m3（需 lancedb + Ollama + 模型就位）。两者**无回退**：缺 key/stack → `raise RuntimeError` 暂停 ingest（2026-06-24 策略），不走 MiniMax 文本生成。round iv（2026-06-22）起文本生成只有 conversation 一条路径，无 direct API 分支——wikilink enrichment 也走 conversation（批量：每次 ingest 汇总所有新写页面问一次）。
 
 ## Mode Comparison
 
@@ -41,24 +41,15 @@ stage_1_2_extract_images(Path('raw/Book/Book.pdf'), config)
 
 ### Stage 1.1: Text Extraction
 
-```python
-import fitz
-
-doc = fitz.open("raw/Book/Book.pdf")
-text = "\n\n".join(page.get_text() for page in doc)
-doc.close()
-
-# 保存备用
-Path("/tmp/extract.txt").write_text(text, encoding="utf-8")
-```
+**自动阶段**——`ingest.py` 直接调本地 minerU API（`hybrid-engine`/`auto`），agent 不写提取代码。所有 PDF（文本版/扫描版/混合版）统一走 minerU，fitz 仅做 garbled 检测采样。产物：`.llm-wiki/extract-tmp/<book-stem>/p<NNN>.txt`（每页一个文件）。OCR 长（200+ 页）可能超时，重跑从缓存恢复。
 
 ---
 
 ### Stage 2.1: Global Digest
 
-**输入**：`ingest.py` 采样发送一小段文本（约 4-10K chars，从书中段提取），**不是**全文前 100K 字符。完整文本在 `.llm-wiki/extract-tmp/<book-stem>/p*.txt`（每页一个文件）。
+**输入**：`ingest.py` 发送书的文本采样（~200K chars，2026-06-24 harvest 修复后）到 prompt。完整文本在 `.llm-wiki/extract-tmp/<book-stem>/p*.txt`。
 
-> ⚠️ **2026-06-24 实测修正**：之前文档说"前 100K 字符"是错误的。实际 pipeline 只发送采样的几K字符。**当回答 Stage 2.1 prompt 时，应额外读取 `extract-tmp/` 下的页面样本**来补充对全书内容的理解，仅靠 prompt 中的采样文本不足以生成完整的 outline 和 chunk_plan。
+> ⚠️ 当回答 Stage 2.1 prompt 时，若采样文本不足以生成完整 outline/chunk_plan，应额外读取 `extract-tmp/` 下的页面样本补充理解。
 
 **Prompt 模板**：
 ```
