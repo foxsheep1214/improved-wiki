@@ -6,7 +6,7 @@ related: [ingest-stages-mandatory, multimodal-vlm-pitfalls, known-issues]
 
 # Image Captioning 策略
 
-Unified image captioning. Implemented as `stage_1_3_caption_images()` / `_stage_1_3_caption_images_batch()` / `_stage_1_3_caption_one_batch()` in `scripts/_stage_1_extract.py`。
+Unified image captioning. Implemented as `stage_1_3_caption_images()` / `_stage_1_3_caption_images_batch()` / `_stage_1_3_caption_one_batch()` in `scripts/_stage_1_3_caption.py`（2026-06-24 从 `_stage_1_extract.py` 拆出；facade 仍 re-export `stage_1_3_caption_images`，但 `_stage_1_3_caption_images_batch` 等内部函数须直接从 `_stage_1_3_caption` 导入）。
 
 两个图片来源：
 - **PDF** — minerU 在 Stage 1.1 chunk 处理时由 `_stage_1_2_harvest_images()` 内联提取
@@ -77,7 +77,7 @@ export CAPTION_MAX_WORKERS=8    # more parallel workers
 
 直接调用补 caption：
 ```python
-from _stage_1_extract import _stage_1_3_caption_images_batch
+from _stage_1_3_caption import _stage_1_3_caption_images_batch
 media_dir = Path("wiki/media/Book/Some Book - 2024 - Author")
 images = [{"filename": f.name, "page": 0, "width": 0, "height": 0}
           for f in sorted(media_dir.iterdir())
@@ -89,11 +89,10 @@ captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_la
 
 | Issue | Status | Impact |
 |-------|--------|--------|
-| `batch_size=6` hardcoded on minerU path（line 990）vs `CAPTION_BATCH_SIZE=8` env | Open | 6-图批次可能超 MiniMax token 限制导致 JSON 截断 |
 | minerU 偶尔把公式区域分类为 `image` 而非 `equation`（LaTeX 文本） | Open | ~112 公式图被当图片送 VLM（上游 minerU 问题） |
 
 ## 修订记录
 
-- **2026-06-24**：无回退策略——caption key 缺失/批次重试耗尽 → raise 暂停，删 `[待重试]` 占位符 fallback。精简文档，删 Path A/B（已统一）、fixed-issue 深挖（issues 1&2 已修，root cause: `content_list` 是 JSON 字符串，`json.loads` + minerU `image_caption` 写 sidecar）。
+- **2026-06-24**：无回退策略——caption key 缺失/批次重试耗尽 → raise 暂停，删 `[待重试]` 占位符 fallback。精简文档，删 Path A/B（已统一）、fixed-issue 深挖（issues 1&2 已修，root cause: `content_list` 是 JSON 字符串，`json.loads` + minerU `image_caption` 写 sidecar）。caption 函数从 `_stage_1_extract.py` 拆到 `_stage_1_3_caption.py`（facade 保留 `stage_1_3_caption_images` re-export）；`batch_size=6` 硬编码改用 `CAPTION_BATCH_SIZE` 常量（原 Open issue #1 修复）。
 - **2026-06-23**：PyMuPDF 从 PDF 图片提取整体移除，统一 minerU；函数移到 `_stage_1_extract.py`。
 - **2026-06-22**：LaTeX-only 公式转录规则；修 `_is_image_too_small` NameError（常量未定义被 try/except 吞）。

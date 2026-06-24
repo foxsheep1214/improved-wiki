@@ -2,14 +2,11 @@
 
 ## Open issues
 
-### Shell scripts lack `set -euo pipefail`
-`run-queue.sh`、`wiki-lint.sh`、`wiki-monitor.sh` 应加严格错误处理。
-
 ### Several files exceed the 800-line guideline
-`ingest.py`（~2062 行）、`_stage_2_4_generation.py`（~632 行）。
-
-### `batch_size=6` hardcoded on minerU caption path
-`_stage_1_extract.py` line 990 硬编码 `batch_size=6`，与 `CAPTION_BATCH_SIZE=8` env 默认不一致——6-图批次可能超 MiniMax token 限制导致 JSON 截断。
+`_core.py`（~1013 行）。暂无明显自然切分点，未拆。
+`ingest.py` 已于 2026-06-24 拆分（→ `_ingest_skip.py` / `_ingest_chunks.py` / `_ingest_prepare.py` / `_ingest_write.py`，主文件 1407→462 行）。
+`_stage_1_extract.py` 已于 2026-06-24 按子阶段拆为 facade + 三个兄弟模块（`_stage_1_1_scanned.py` 780 / `_stage_1_2_images.py` 478 / `_stage_1_3_caption.py` 416，facade 主文件 1904→403 行）。采用 facade 模式：外部导入者（ingest.py / _ingest_prepare.py / _stage_3_2_inject_images.py / _stage_validators.py / _stage_2_base.py）无需改动，facade re-export 全部原有公开名。
+`_stage_2_4_generation.py`（~658 行）已低于阈值。
 
 ### minerU 偶尔把公式区域分类为 `image` 而非 `equation`
 ~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。
@@ -36,6 +33,12 @@ minerU 50 页/chunk 串行。272 页书（6 chunks）可能超 600s 终端超时
 
 ## 已修复（存档）
 
+- **2026-06-24 wiki-monitor.sh 队列文件被状态文本覆盖（数据损坏）**：merge 阶段的 heredoc 把 stdout 重定向到 `$QUEUE_PATH.tmp` 再 `mv` 覆盖真实队列文件，但 Python 内部又直接 `open(queue_path, 'w')` 写了一遍 JSON——外层 mv 随后用只含 `print()` 状态行的文本覆盖掉刚写好的 JSON，每次 merge 后队列文件就被损坏成纯文本，导致 `run-queue.sh` 下次读队列时 JSONDecodeError。修：Python 内部改为 tmp+`os.replace` 原子写，去掉外层重定向。
+- **2026-06-24 wiki-monitor.sh 队列去重 key 不匹配**：合并新文件时用裸 `rel`（如 `test.txt`）去匹配队列里的 `sourcePath`（如 `raw/test.txt`），永远不命中，导致同一文件在被 ingest.py 处理前每次 monitor 运行都会被重复加入队列。修：比较 `f"raw/{rel}"`。
+- **2026-06-24 wiki-monitor.sh 首次运行 lock 文件目录不存在**：默认 runtime 目录（`.llm-wiki/`）只在 `.iwiki-runtime` 迁移分支里被 `mkdir -p`；全新项目第一次跑（无历史 runtime 目录）时 `touch "$LOCK_PATH"` 直接报错退出。修：sanity check 后统一 `mkdir -p "$RUNTIME"`。
+- **2026-06-24 wiki-monitor.sh 死代码清理**：移除从未被调用的 `sha256_of`/`cached_hash` bash 函数（哈希实际在内嵌 Python 里算）、未使用的 `QUEUE_CONTENT`/`ADDED`/`SKIPPED`/`FAILED`/`TO_ADD` 占位变量、以及 `existing = {Path-like: i for i, Path-like in enumerate([])}` 这行语法上能跑但完全是垂悬占位符的字典推导式。
+- **2026-06-24 `batch_size=6` 硬编码**：`_stage_1_extract.py` 的 mineru-extracted caption 调用改用 `CAPTION_BATCH_SIZE`（env 可配，默认 8），不再与模块默认值脱节。同时删除了同文件里重复定义的第二个 `CAPTION_BATCH_SIZE = int(os.environ.get(...))`（与第一个定义完全冗余）。
+- **2026-06-24 shell 脚本 `set -euo pipefail` 复查**：`run-queue.sh`、`wiki-monitor.sh` 实际已具备严格错误处理（之前记录已过期）；`wiki-lint.sh` 仍只有 `set -uo pipefail`（缺 `-e`），但该脚本大量依赖"子步骤失败不应中断整体扫描"的语义（如 `--semantic` 子脚本失败时打印警告并继续），加 `-e` 风险大于收益，故保留现状，不强行加。
 - **2026-06-24 无回退策略**：caption key 缺失/批次失败、embeddings 缺 stack、LLM page-merge 失败、config.json 解析失败 → 一律 raise 暂停（删占位符/array-merge/静默 env 回退）。详见 `ingest-stages-mandatory.md`。
 - **2026-06-24 caption harvest**：`content_list` 是 JSON 字符串，`isinstance(cl, list)` 永远 False → 全量图倾倒。修：`json.loads(cl)` + minerU `image_caption` 写 sidecar。528→340 图，VLM 调用 ↓70%，caption 覆盖 62%→98%，Stage 2.1 输入 4K→200K chars。
 - **2026-06-24 wikilink enrichment 嵌套链接 bug**：`_enrich_wikilinks.py` 对已有 `[[...]]` 内的子串二次包装。修：`_replace_first_outside_links` 只在非链接段替换。

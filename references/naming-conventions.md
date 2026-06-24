@@ -228,7 +228,7 @@ wiki/media/<raw_subpath>/<source_stem>/
 - `raw/Book/Foo.pdf` → `wiki/media/Book/Foo/`
 - `raw/Datasheet/05_AMP/ADL8113.pdf` → `wiki/media/Datasheet/05_AMP/ADL8113/`
 
-`_media_slug()` 返回 raw 文件相对于 `raw/` 的父目录 + stem。
+`media_slug()`（在 `scripts/_paths.py`，2026-06-24 从 `_stage_1_2_images.py` 下沉；旧名 `_stage_1_2_media_slug` 仍由 `_stage_1_extract` facade 别名 re-export）返回 raw 文件相对于 `raw/` 的父目录 + stem。
 
 ### 5.2 图片文件
 

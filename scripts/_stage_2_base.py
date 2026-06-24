@@ -44,7 +44,7 @@ from _llm_api import (
     _is_retryable_exception,
     call_anthropic_protocol,
 )
-from _stage_1_extract import _stage_1_2_media_slug
+from _paths import media_slug as _stage_1_2_media_slug
 
 
 def _stage_2_frontmatter_title(content: str) -> str:

@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from _core import Config
-from _stage_1_extract import _stage_1_2_media_slug
+from _paths import media_slug
 
 
 def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
@@ -28,7 +28,7 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
     # Unified image injection: reads _manifest.json (the single source of truth
     # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
     # renders are filtered via source != "page-render" for backward compat.
-    slug = _stage_1_2_media_slug(raw_file, config)
+    slug = media_slug(raw_file, config)
     media_dir = config.wiki_dir / "media" / slug
     manifest_path = media_dir / "_manifest.json"
 

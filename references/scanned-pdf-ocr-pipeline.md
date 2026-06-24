@@ -1,6 +1,6 @@
 # PDF Text+Image Extraction Pipeline (minerU Local API Server, 2026-06-23)
 
-适用于**所有 PDF**——文本层/扫描版/混合型，2026-06-23 起统一走这条 pipeline，不再有"纯文本走 PyMuPDF 直抽、只有扫描版才上 OCR"的两分路。由 `_stage_1_extract.py` 的 `stage_1_1_extract_text()` 路由判定类型后调用，实际执行函数是 `_stage_1_1_extract_text_scanned()`（函数名是历史遗留——现在文本版/混合版也会调它）。
+适用于**所有 PDF**——文本层/扫描版/混合型，2026-06-23 起统一走这条 pipeline，不再有"纯文本走 PyMuPDF 直抽、只有扫描版才上 OCR"的两分路。由 `_stage_1_extract.py`（facade）的 `stage_1_1_extract_text()` 路由判定类型后调用，实际执行函数 `_stage_1_1_extract_text_scanned()` 及下方所有 `_stage_1_1_scanned_*` / 锁 / manifest 辅助函数现居 `scripts/_stage_1_1_scanned.py`（2026-06-24 从 `_stage_1_extract.py` 拆出；函数名是历史遗留——现在文本版/混合版也会调它）。
 
 ## 何时使用这条 pipeline
 
@@ -46,7 +46,7 @@
 旧版用 `MINERU_MAX_CONCURRENT` + `_wait_for_mineru_slot()` 轮询进程数（pgrep），在多会话/cron 并发下不可靠（注释原话："pgrep-based counting is unreliable under concurrent stress"）。现在用：
 
 ```python
-# _stage_1_extract.py
+# _stage_1_1_scanned.py
 def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
     """fcntl.flock 独占锁，原子、跨进程安全。阻塞直到拿到锁或超时。"""
     ...
@@ -84,7 +84,7 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 
 ## Chunk 的 retry 策略
 
-`_stage_1_1_scanned_submit_chunk_with_retries()`（`_stage_1_extract.py`）实现：
+`_stage_1_1_scanned_submit_chunk_with_retries()`（`_stage_1_1_scanned.py`）实现：
 
 1. **3 次重试** per chunk（HTTP 请求级，不是进程级 stderr 匹配）
 2. 失败时先 sleep 2s 再重试；HTTP 错误/连接异常会触发 `_stage_1_1_scanned_restart_server()` 重启本地服务器

@@ -76,6 +76,7 @@ if [ ! -d "$WIKI_ROOT/wiki" ]; then
   echo "ERROR: wiki/ does not exist under $WIKI_ROOT — run setup first (see references/initial-setup.md)" >&2
   exit 1
 fi
+mkdir -p "$RUNTIME"
 
 # ---------- Acquire lock (atomic — single instance only) ----------
 if [ -e "$LOCK_PATH" ]; then
@@ -97,53 +98,7 @@ log() {
   fi
 }
 
-# Compute sha256 of a file (works on macOS and Linux)
-sha256_of() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    # macOS shasum
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
-# Get the cached hash for a file (relative to raw/), or "" if not cached
-cached_hash() {
-  local rel="$1"
-  if [ ! -f "$CACHE_PATH" ]; then
-    echo ""
-    return
-  fi
-  # Use python to safely extract from JSON
-  python3 -c "
-import json, sys
-try:
-    with open('$CACHE_PATH', 'r', encoding='utf-8') as f:
-        cache = json.load(f)
-    rel = sys.argv[1]
-    entry = cache.get('entries', {}).get(rel)
-    if entry:
-        print(entry.get('hash', ''))
-    else:
-        print('')
-except Exception:
-    print('')
-" "$rel" 2>/dev/null
-}
-
-# ---------- Read existing queue ----------
-if [ -f "$QUEUE_PATH" ]; then
-  QUEUE_CONTENT=$(cat "$QUEUE_PATH")
-else
-  QUEUE_CONTENT="[]"
-fi
-
 # ---------- Walk raw/ and diff ----------
-ADDED=0
-SKIPPED=0
-FAILED=0
-TO_ADD=""
-
 # Use python for the walk to handle CJK filenames safely
 python3 <<EOF > "/tmp/wiki-monitor-$$.json"
 import hashlib
@@ -192,7 +147,6 @@ for path in sorted(raw_root.rglob("*")):
         "rel": rel,
         "hash": h,
         "size": path.stat().st_size,
-        "addedAt": int(time.time() * 1000) if False else 0,  # placeholder
     })
 
 # Add timestamps
@@ -227,15 +181,20 @@ for item in items:
 fi
 
 # ---------- Merge into existing queue ----------
-python3 <<EOF > "$QUEUE_PATH.tmp"
+# NOTE: must NOT redirect this heredoc's stdout to a file — the script writes
+# the queue atomically itself (tmp + os.replace) and prints a status line to
+# stdout for the caller. A prior version redirected stdout to "$QUEUE_PATH.tmp"
+# and then `mv`'d that over the real queue file, which clobbered the
+# just-written JSON with the literal status text on every run.
+python3 <<EOF
 import json
-import sys
+import os
 
 queue_path = "$QUEUE_PATH"
 to_add = json.loads('''$TO_ADD_JSON''')
 
 # Load existing queue
-if __import__('os').path.exists(queue_path):
+if os.path.exists(queue_path):
     with open(queue_path, 'r', encoding='utf-8') as f:
         queue = json.load(f)
     if not isinstance(queue, list):
@@ -244,15 +203,14 @@ else:
     queue = []
 
 # Find existing entries by source path
-existing = {Path-like: i for i, Path-like in enumerate([])}  # placeholder
 existing_paths = {entry.get("sourcePath"): i for i, entry in enumerate(queue) if "sourcePath" in entry}
 
 # Merge — for each new item, if not already in queue, append
 added_now = 0
 for item in to_add:
     rel = item["rel"]
-    if rel in existing_paths:
-        # Already queued — skip (or could update hash)
+    if f"raw/{rel}" in existing_paths:
+        # Already queued (not yet cache-confirmed by ingest.py) — skip
         continue
     queue.append({
         "id": f"ingest-{item['addedAt']}-{rel.replace('/', '-').replace(' ', '_')[:32]}",
@@ -266,13 +224,13 @@ for item in to_add:
     })
     added_now += 1
 
-with open(queue_path, 'w', encoding='utf-8') as f:
+tmp_path = queue_path + ".tmp"
+with open(tmp_path, 'w', encoding='utf-8') as f:
     json.dump(queue, f, ensure_ascii=False, indent=2)
+os.replace(tmp_path, queue_path)
 
 print(f"Added {added_now} new entries. Queue size: {len(queue)}.")
 EOF
-
-mv "$QUEUE_PATH.tmp" "$QUEUE_PATH"
 
 log "Done. Run ./run-queue.sh to process the queue."
 exit 0

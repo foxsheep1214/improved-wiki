@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from _core import Config
-from _stage_1_extract import _stage_1_2_media_slug
+from _paths import media_slug
 
 
 class StageValidationError(Exception):
@@ -154,7 +154,7 @@ def validate_stage_outputs(
     # Stage 1.2: image extraction completeness
     img_count = stage_1_2_result.get("count", 0)
     if img_count > 0:
-        manifest = config.wiki_dir / "media" / _stage_1_2_media_slug(raw_file, config) / "_manifest.json"
+        manifest = config.wiki_dir / "media" / media_slug(raw_file, config) / "_manifest.json"
         if not manifest.exists():
             warnings.append("Stage 1.2: images extracted but _manifest.json missing")
             print(f"  ⚠️  Stage 1.2: _manifest.json missing")
@@ -164,7 +164,7 @@ def validate_stage_outputs(
         images = stage_1_2_result.get("images", [])
         missing_captions = 0
         for img in images:
-            cap_path = config.wiki_dir / "media" / _stage_1_2_media_slug(raw_file, config) / (img["filename"] + ".caption.txt")
+            cap_path = config.wiki_dir / "media" / media_slug(raw_file, config) / (img["filename"] + ".caption.txt")
             if not cap_path.exists() or cap_path.stat().st_size < 20:
                 missing_captions += 1
         if missing_captions > 0:
