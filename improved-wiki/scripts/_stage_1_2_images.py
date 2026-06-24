@@ -327,6 +327,89 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
             "manifest": str(manifest_path), "images": all_images}
 
 
+def _stage_1_2_recover_from_api_out(
+    out_dir: Path, media_dir: Path, config: Config, caption_map: dict[str, dict],
+) -> list[dict]:
+    """Recover minerU figures from the shared mineru-api-out tree after --delete.
+
+    Called only when img_source_dir is None AND media_dir has no p*-mineru_*.*
+    images (a cached re-ingest whose media dir was wiped by ``--delete``).
+    Stage 1.1 chunk cache skips minerU re-run, so harvest never re-fires; the
+    only surviving copy of each figure is under
+    ``runtime_dir/mineru-api-out/<uuid>/.../images/``. This reads the per-chunk
+    ``_mineru_figures.json`` manifests (written during the original harvest) to
+    get each target's MD5[:8] id + filename + page + dimensions, builds a
+    MD5[:8] -> source-path index over every image minerU saved, and copies
+    matches back into media_dir with their original filenames.
+    """
+    import hashlib
+
+    # 1. Collect targets from per-chunk manifests.
+    #    img_id is the 8-char MD5 prefix between "-mineru_" and the extension.
+    targets: dict[str, list[dict]] = {}
+    for fj in out_dir.rglob("_mineru_figures.json"):
+        try:
+            entries = json.loads(fj.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for e in entries:
+            fn = e.get("filename", "")
+            if "-mineru_" not in fn:
+                continue
+            img_id = fn.split("-mineru_", 1)[1].rsplit(".", 1)[0]
+            targets.setdefault(img_id, []).append({
+                "filename": fn,
+                "page": e.get("page", 0),
+                "width": e.get("width", 0),
+                "height": e.get("height", 0),
+            })
+    if not targets:
+        return []
+
+    # 2. Build MD5[:8] -> source path index over mineru-api-out images.
+    api_out = config.runtime_dir / "mineru-api-out"
+    if not api_out.exists():
+        return []
+    exts = (".jpg", ".jpeg", ".png", ".webp")
+    index: dict[str, Path] = {}
+    for img in api_out.rglob("*"):
+        if not img.is_file() or img.suffix.lower() not in exts:
+            continue
+        try:
+            h = hashlib.md5(img.read_bytes()).hexdigest()[:8]
+        except Exception:
+            continue
+        index.setdefault(h, img)  # first match wins; duplicates are byte-identical
+
+    # 3. Copy matched images into media_dir with their original filenames.
+    images: list[dict] = []
+    for img_id, entries in targets.items():
+        src = index.get(img_id)
+        if src is None:
+            continue
+        for e in entries:
+            dest = media_dir / e["filename"]
+            if not dest.exists():
+                try:
+                    shutil.copy2(src, dest)
+                except Exception:
+                    continue
+            meta = caption_map.get(e["filename"], {})
+            images.append({
+                "filename": e["filename"],
+                "path": str(dest.relative_to(config.wiki_root)),
+                "page": e["page"],
+                "caption": meta.get("caption", ""),
+                "sub_type": meta.get("sub_type", ""),
+                "width": e["width"],
+                "height": e["height"],
+            })
+    if images:
+        print(f"[stage 1.2] recovered {len(images)} figures from mineru-api-out "
+              f"via MD5 match (media dir had been wiped)")
+    return images
+
+
 def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path) -> dict:
     """Extract images from minerU output (pipeline txt / vlm / auto backends).
 
@@ -425,6 +508,16 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
                 "width": 0,
                 "height": 0,
             })
+
+    # BUGFIX 2026-06-25: --delete wipes media_dir, and Stage 1.1 chunk cache
+    # skips minerU re-run so harvest never re-fires. img_source_dir is None
+    # (the per-chunk API output UUID isn't persisted) and media_dir is empty.
+    # Recover figures from the shared mineru-api-out tree by matching the
+    # MD5[:8] id embedded in each _mineru_figures.json filename against the
+    # MD5[:8] of every image minerU saved. Without this, --delete + re-ingest
+    # of a cached source silently produces 0 figures.
+    if not images:
+        images = _stage_1_2_recover_from_api_out(out_dir, media_dir, config, caption_map)
 
     manifest_path = media_dir / "_manifest.json"
     _stage_1_2_write_manifest(manifest_path, "mineru-ocr", raw_file, images)
