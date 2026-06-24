@@ -171,7 +171,14 @@ def validate_stage_outputs(
             msg = f"Stage 1.3: {missing_captions}/{len(images)} images missing captions"
             warnings.append(msg)
             print(f"  ⚠️  {msg}")
-        if stage_1_3_result.get("captioned", 0) == 0 and not stage_1_3_result.get("skipped"):
+        # "captioned" counts NEW captions written THIS run; it is 0 when every
+        # image was already captioned in a prior run (cached). Only warn when
+        # captions are actually missing (pending images the API failed to
+        # caption) — otherwise a fully-cached re-ingest falsely reports
+        # "0 captions generated" while every image has a .caption.txt on disk.
+        if (stage_1_3_result.get("captioned", 0) == 0
+                and missing_captions > 0
+                and not stage_1_3_result.get("skipped")):
             warnings.append("Stage 1.3: no captions generated (API may have failed)")
             print(f"  ⚠️  Stage 1.3: 0 captions generated")
 

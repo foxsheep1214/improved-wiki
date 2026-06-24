@@ -165,7 +165,12 @@ def _do_prepare(
                 stage_1_3_result = stage_1_3_caption_images(config, stage_1_2_result)
             elif progress and "stage_1_3" in progress:
                 stage_1_3_result = progress["stage_1_3"]
-                print(f"  [stage 1.3] (cached) {stage_1_3_result.get('captioned', 0)} captions")
+                # `captioned` is NEW captions written in the prior run (0 when
+                # all were already captioned). Report it as "new" so a cached
+                # re-ingest doesn't misleadingly print "0 captions" when every
+                # image actually has a .caption.txt on disk.
+                print(f"  [stage 1.3] (cached) {stage_1_3_result.get('total', 0)} images, "
+                      f"{stage_1_3_result.get('captioned', 0)} new captions")
 
             return stage_1_2_result, stage_1_3_result
 
