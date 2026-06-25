@@ -589,6 +589,26 @@ def get_stage_payload(config: Config, source_hash: str, stage: str) -> dict:
     return load_stages(config, source_hash).get(f"{stage}__payload", {}) or {}
 
 
+def unmark_stage_done(config: Config, source_hash: str, stage: str) -> None:
+    """Clear a stage-completion marker (and its payload), forcing a re-run.
+
+    Used when a stage marker is set but its artifact cannot be recovered from
+    the artifact store (e.g. an old/partial cache missing the ``file_blocks``
+    key). Invalidating the marker and re-running is correct recovery — far
+    better than honoring a "done" marker that would yield 0 pages and silently
+    drop every concept/entity/query (the 2026-06-25 loss). Atomic tmp+rename.
+    """
+    stages = load_stages(config, source_hash)
+    if stage not in stages and f"{stage}__payload" not in stages:
+        return
+    stages.pop(stage, None)
+    stages.pop(f"{stage}__payload", None)
+    sp = stages_path(config, source_hash)
+    tmp = sp.with_suffix(".tmp")
+    tmp.write_text(json.dumps(stages, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(sp)
+
+
 def is_stage_done(config: Config, source_hash: str, stage: str) -> bool:
     return bool(load_stages(config, source_hash).get(stage))
 

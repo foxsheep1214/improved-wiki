@@ -7,10 +7,10 @@ from pathlib import Path
 
 from _core import (
     Config,
-    parse_file_blocks,
     stage_begin as _stage_begin,
     file_sha256,
     is_stage_done,
+    unmark_stage_done,
 )
 from _stage_2_analyze import (
     _stage_2_1_chunk_text,
@@ -62,7 +62,7 @@ def _generate_all_chunks(
     raw_file: Path, config: Config, template_content: str,
     chunk_total: int, t_start: float, verbose: bool,
     related_pages: list[dict] | None = None,
-) -> tuple[list, list, list]:
+) -> tuple[list, list]:
     """Stage 2.4: sequential generation across all chunks.
 
     ``existing_refs`` (Stage 2.3 output: {concept_name: [wiki_slugs]}) is fed
@@ -73,7 +73,6 @@ def _generate_all_chunks(
     ``generated_slugs`` accumulates across chunks (sequential, both paths).
     """
     all_file_blocks: list = []
-    all_responses: list[str] = []
     generated_slugs: list[str] = []
 
     for i, chunk, _overlap_before, _heading_path in chunk_meta:
@@ -85,7 +84,6 @@ def _generate_all_chunks(
             verbose=verbose, chunk_text=chunk, existing_refs=existing_refs,
             related_pages=related_pages)
         all_file_blocks.extend(blocks)
-        all_responses.extend([b[1] for b in blocks])
         for path, _ in blocks:
             slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
             if slug not in generated_slugs:
@@ -95,19 +93,19 @@ def _generate_all_chunks(
         eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
         print(f"  [generate] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
 
-    return all_file_blocks, all_responses, generated_slugs
+    return all_file_blocks, generated_slugs
 
 def _run_chunk_pipeline(
     extracted_text: str, global_digest: dict, raw_file: Path, config: Config,
     template_content: str, progress: dict | None, verbose: bool,
-) -> tuple[list, dict, str, list, dict]:
+) -> tuple[list, dict, list, dict]:
     """Stage 2.2 \u2192 2.3 \u2192 2.4: analyze all chunks, detect existing-wiki
     associations, then generate pages with associations fed into each prompt.
 
     Split (2026-06-21): analysis and generation are separate phases so Stage 2.3
     (incremental association detection) can run between them and feed back into
     the generation prompt. Returns
-    ``(chunk_analyses, analysis, raw_response, file_blocks, incremental_associations)``.
+    ``(chunk_analyses, analysis, file_blocks, incremental_associations)``.
     """
     # Cached: chunk analysis already complete. Stage-completion is the single
     # source of truth in stages.json (stage_2_3_done); chunk_analyses presence
@@ -115,26 +113,34 @@ def _run_chunk_pipeline(
     _h = file_sha256(raw_file)
     if (progress and "chunk_analyses" in progress
             and is_stage_done(config, _h, "stage_2_3_done")):
-        chunk_analyses = progress["chunk_analyses"]
-        print(f"  [stage 2.2] (cached) Chunk Analysis \u2014 {len(chunk_analyses)} chunks")
-        _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
-        analysis = progress.get("analysis", {})
-        raw_response = progress.get("raw_response", "")
-        incremental_associations = progress.get("incremental_associations", {})
-        # Restore file_blocks directly from the artifact store. Do NOT re-parse
-        # raw_response: it is "\n".join(block bodies) (see _generate_all_chunks,
-        # all_responses = [b[1] for b in blocks]) \u2014 block BODIES without the
-        # ---FILE:...--- wrappers \u2014 so parse_file_blocks(raw_response) returns
-        # [] and silently drops every concept/entity page on resume. Bug
-        # 2026-06-25: this lost all 60 Hansen concept/entity blocks; only the
-        # source page was written, and 2.7/2.9 then had no concepts to work on.
-        # Prefer persisted file_blocks (list of [path, content]); fall back to
-        # parse_file_blocks ONLY if raw_response actually contains FILE markers
-        # (older artifacts) \u2014 never trust it blindly.
-        file_blocks = progress.get("file_blocks")
-        if not file_blocks:
-            file_blocks = parse_file_blocks(raw_response) if raw_response else []
-        return chunk_analyses, analysis, raw_response, file_blocks, incremental_associations
+        # Restore file_blocks DIRECTLY from the artifact store. The retired
+        # design re-parsed ``raw_response`` (= "\n".join(block BODIES), bodies
+        # without the ---FILE:...--- wrappers), so parse_file_blocks() returned
+        # [] and silently dropped every concept/entity page on resume
+        # (2026-06-25: lost all 60 Hansen blocks; only the source page
+        # survived, and 2.7/2.9 then had no concepts to work on). raw_response
+        # has since been removed entirely.
+        #
+        # The ``file_blocks`` key being PRESENT (even as []) is an authoritative
+        # restore: [] is the legitimate "every concept already overlaps an
+        # existing wiki page" outcome. The key being ABSENT means an old/partial
+        # cache that predates file_blocks persistence \u2014 there is no safe way to
+        # recover it, so rather than proceed with 0 blocks (re-introducing the
+        # silent loss) we invalidate the stage marker and fall through to
+        # re-run the chunk pipeline.
+        persisted_blocks = progress.get("file_blocks")
+        if persisted_blocks is None:
+            print("  [stage 2.2] \u26a0\ufe0f  stage_2_3_done set but no persisted "
+                  "file_blocks artifact \u2014 invalidating marker and re-running "
+                  "chunk pipeline (prevents silent concept/entity loss).")
+            unmark_stage_done(config, _h, "stage_2_3_done")
+        else:
+            chunk_analyses = progress["chunk_analyses"]
+            print(f"  [stage 2.2] (cached) Chunk Analysis \u2014 {len(chunk_analyses)} chunks")
+            _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
+            analysis = progress.get("analysis", {})
+            incremental_associations = progress.get("incremental_associations", {})
+            return chunk_analyses, analysis, persisted_blocks, incremental_associations
 
     chunks = _stage_2_1_chunk_text(extracted_text, config.target_chars, config.chunk_overlap,
                                    target_tokens=config.target_tokens)
@@ -187,7 +193,7 @@ def _run_chunk_pipeline(
 
     # \u2500\u2500 Stage 2.4: generate all chunks (associations fed into prompt) \u2500\u2500
     _stage_begin("Stage 2.4: Chunk Generation")
-    all_file_blocks, all_responses, generated_slugs = _generate_all_chunks(
+    all_file_blocks, generated_slugs = _generate_all_chunks(
         chunk_meta, chunk_analyses, incremental_associations, raw_file, config,
         template_content, chunk_total, t_start, verbose,
         related_pages=related_pages)
@@ -206,7 +212,6 @@ def _run_chunk_pipeline(
         "total_chunks": chunk_total,
         "method": "analyze\u2192associate\u2192generate",
     }
-    raw_response = "\n".join(all_responses)
     file_blocks = all_file_blocks
 
     # \u2500\u2500 Fallback: per-concept generation \u2500\u2500
@@ -225,7 +230,7 @@ def _run_chunk_pipeline(
         print(f"  [stage 2.4] \u26a0\ufe0f  0/{n_missed} concepts generated "
               f"\u2014 falling back to per-concept generation "
               f"(pre_existing_slugs={len(generated_slugs)})")
-        fa_analysis, fa_raw, fa_blocks = _stage_2_4_per_concept_fallback(
+        _fa_analysis, _fa_raw, fa_blocks = _stage_2_4_per_concept_fallback(
             chunk_analyses, global_digest, raw_file, config,
             template_content, verbose=verbose,
             pre_existing_slugs=generated_slugs,
@@ -233,9 +238,6 @@ def _run_chunk_pipeline(
         fa_concept_entity = [(p, c) for p, c in fa_blocks
                              if not p.startswith("sources/")]
         all_file_blocks = fa_concept_entity
-        if fa_concept_entity:
-            all_responses.append(fa_raw)
-            raw_response = "\n".join(all_responses)
         file_blocks = all_file_blocks
         concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
         entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
@@ -250,4 +252,4 @@ def _run_chunk_pipeline(
                 generated_slugs.append(s)
 
     _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
-    return chunk_analyses, analysis, raw_response, file_blocks, incremental_associations
+    return chunk_analyses, analysis, file_blocks, incremental_associations

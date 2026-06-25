@@ -2,32 +2,39 @@
 from _stage_2_base import *
 
 def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: Path,
-                                  config: Config, *, raw_response: str = "",
-                                  verbose: bool = False) -> dict:
+                                  config: Config, *, verbose: bool = False) -> dict:
     """Stage 3.4: Run LLM review over newly generated wiki pages (quality assurance).
 
     NashSU trigger conditions (ingest.ts): any of —
       - >= 4 FILE blocks
       - >= 10K chars of generation output
-      - Incomplete REVIEW block (opened but not closed)
+
+    The "incomplete REVIEW block" trigger was dropped: it only ever fired on the
+    retired ``raw_response``, which (being "\n".join of *parsed* FILE-block
+    bodies) could never contain a ``---REVIEW:`` marker — REVIEW blocks are not
+    FILE blocks and never survived parse_file_blocks. So the check was already
+    inert; the volume signal now reads directly off ``file_blocks`` instead.
 
     Output: wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md — human-browsable review pages.
     Each page has frontmatter `resolved: false`. When resolved, user changes to true.
     On next ingest, resolved pages are auto-cleaned.
     Also writes review-suggestions.json to runtime dir for tooling.
     """
-    # NashSU 3-condition trigger (not just file block count)
-    has_review_open = "---REVIEW:" in raw_response and not raw_response.rstrip().endswith("---END REVIEW---")
-    # ``file_blocks``/``raw_response`` reflect only THIS conversation-mode replay
-    # pass, not the whole ingest. A source that needed several replays (e.g.
-    # one pass does the real Stage 2.4 generation, a later pass replays after
-    # those pages are already on disk and correctly emits 0 new blocks) would
-    # otherwise have a substantial earlier pass's work invisible to this
-    # threshold check, silently skipping review even though 20+ pages were
-    # genuinely generated for this source (confirmed live: Plett BMS Vol.2 —
-    # an earlier pass generated 26 blocks and a real review answer was cached
-    # and accepted, but the final completing pass saw file_blocks=1 and
-    # skipped, so the cached review was never written to wiki/REVIEW/).
+    # Generation-volume signal: total chars across the pages generated this pass.
+    # file_blocks content is the full FILE-block content (frontmatter + body) —
+    # the same text the retired raw_response concatenated, so the 10K threshold
+    # carries the same intent ("did this source produce substantial content").
+    gen_chars = sum(len(content) for _, content in file_blocks)
+    # ``file_blocks`` reflects only THIS conversation-mode replay pass, not the
+    # whole ingest. A source that needed several replays (e.g. one pass does the
+    # real Stage 2.4 generation, a later pass replays after those pages are
+    # already on disk and correctly emits 0 new blocks) would otherwise have a
+    # substantial earlier pass's work invisible to this threshold check,
+    # silently skipping review even though 20+ pages were genuinely generated
+    # (confirmed live: Plett BMS Vol.2 — an earlier pass generated 26 blocks and
+    # a real review answer was cached and accepted, but the final completing
+    # pass saw file_blocks=1 and skipped, so the cached review was never written
+    # to wiki/REVIEW/).
     conv_dir = config.runtime_dir / "conversation" / (config.conversation_prefix or "00000000")
     cumulative_blocks = len(file_blocks)
     if conv_dir.exists():
@@ -36,10 +43,10 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
                 cumulative_blocks += f.read_text(encoding="utf-8").count("---FILE:")
             except OSError:
                 continue
-    if cumulative_blocks < 4 and len(raw_response) < 10000 and not has_review_open:
+    if cumulative_blocks < 4 and gen_chars < 10000:
         print(f"[stage 3.4] Skipped — {len(file_blocks)} blocks this pass "
-              f"({cumulative_blocks} cumulative across replays), {len(raw_response)} chars, "
-              f"no incomplete REVIEW (all below NashSU thresholds)")
+              f"({cumulative_blocks} cumulative across replays), {gen_chars} chars "
+              f"(all below NashSU thresholds)")
         return {"skipped": True, "reason": "below-thresholds"}
 
     print(f"[stage 3.4] Running review over {len(file_blocks)} new pages + existing wiki...")

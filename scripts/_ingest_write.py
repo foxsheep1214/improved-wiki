@@ -108,7 +108,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     global_digest = prepared["global_digest"]
     chunk_analyses = prepared["chunk_analyses"]
     analysis = prepared["analysis"]
-    raw_response = prepared["raw_response"]
     file_blocks = prepared["file_blocks"]
     stage_1_2_result = prepared["stage_1_2_result"]
     stage_1_3_result = prepared["stage_1_3_result"]
@@ -363,7 +362,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
     # Stage 3.4: Review (quality review of generated pages)
     stage_3_4_result = stage_3_4_review_suggestions(
-        file_blocks, raw_file, config, raw_response=raw_response, verbose=verbose)
+        file_blocks, raw_file, config, verbose=verbose)
 
     # Go/no-go validation
     go_nogo_warnings = validate_stage_outputs(

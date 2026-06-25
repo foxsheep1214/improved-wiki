@@ -145,6 +145,28 @@ from _ingest_write import _do_write, _run_post_ingest_graph, cleanup_resolved_re
 # Main pipeline — ingest_one, batch, queue, CLI
 # ═════════════════════════════════════════════════════════
 
+def _finalize_book(raw_file: Path, config: Config,
+                   files_written: list, source_hash: str) -> None:
+    """Per-book post-write finalization shared by the single-book and batch paths.
+
+    Runs Stage 3.7 (embeddings) → Stage 4.1 (validation) → sets the
+    ``stage_4_1`` completion marker. This used to live ONLY in ingest_one, so
+    batch_ingest — and the ``--watch`` queue daemon, which routes through
+    batch_ingest — silently skipped embeddings and validation, never set the
+    stage_4_1 marker, and left every batch-ingested book perpetually
+    "mid-flight" in _stage_0_2_should_skip (re-running 3.4–3.6 on each pass).
+
+    Embeddings stay mandatory / no-fallback here too: a missing Ollama stack
+    raises (pauses this book, and in batch propagates to abort the run) rather
+    than silently degrading to keyword-only retrieval (policy 2026-06-24).
+    Graph rebuild is intentionally NOT here — it is staleness-guarded and run
+    per-book by ingest_one and once at end-of-batch by batch_ingest.
+    """
+    stage_3_7_embed_new_pages(config, files_written)
+    stage_4_1_validate_ingest(config, raw_file)
+    mark_stage_done(config, source_hash, "stage_4_1")
+
+
 def ingest_one(
     raw_file: Path,
     config: Config,
@@ -190,7 +212,6 @@ def ingest_one(
     global_digest = prepared["global_digest"]
     chunk_analyses = prepared["chunk_analyses"]
     analysis = prepared["analysis"]
-    raw_response = prepared["raw_response"]
     file_blocks = prepared["file_blocks"]
     stage_1_2_result = prepared["stage_1_2_result"]
     stage_1_3_result = prepared["stage_1_3_result"]
@@ -206,7 +227,7 @@ def ingest_one(
         "raw_file": raw_file, "config": config, "h": h, "method": method,
         "extracted_text": extracted_text, "global_digest": global_digest,
         "chunk_analyses": chunk_analyses, "analysis": analysis,
-        "raw_response": raw_response, "file_blocks": file_blocks,
+        "file_blocks": file_blocks,
         "stage_1_2_result": stage_1_2_result, "stage_1_3_result": stage_1_3_result,
         "template_name": template_name,
         "enrich_enabled": getattr(config, "enrich_enabled", True),
@@ -217,13 +238,10 @@ def ingest_one(
 
     files_written = result["files_written"]
 
-    # ── Post-ingest (unique to single-book path) ──
+    # ── Post-ingest ──
     _run_post_ingest_graph(config)
-    stage_3_7_embed_new_pages(config, files_written)
-    stage_4_1_validate_ingest(config, raw_file)
-
-    # Mark the ingest fully complete so future re-runs skip cleanly (Option A).
-    mark_stage_done(config, h, "stage_4_1")
+    # Embeddings + validation + stage_4_1 marker (shared with batch path).
+    _finalize_book(raw_file, config, files_written, h)
 
     return {"status": "ok", "files_written": files_written}
 
@@ -303,6 +321,17 @@ def batch_ingest(
                     print(f"[batch] Write failed for {prepared['raw_file'].name}: {e}")
                     import traceback
                     traceback.print_exc()
+                    continue
+
+                # Per-book finalization (embeddings + validate + stage_4_1
+                # marker), shared with ingest_one. Deliberately OUTSIDE the write
+                # try/except: a missing embedding stack must pause the run
+                # (no-fallback policy), not be silently isolated per book the way
+                # a single corrupt PDF is. Without this, batch/queue ingests
+                # never embedded, never validated, and never marked complete.
+                if result.get("status") == "ok":
+                    _finalize_book(prepared["raw_file"], config,
+                                   result.get("files_written", []), prepared["h"])
     finally:
         lock.release()
 

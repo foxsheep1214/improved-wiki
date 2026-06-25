@@ -112,8 +112,8 @@ def _do_prepare(
         # with wiki state (pages written/rewritten), looping forever before
         # _do_write can be reached. _do_write handles write_phase_done by
         # setting _write_blocks=[] and skipping 3.1/3.2/3.3, then runs
-        # 3.4-4.1 over the on-disk wiki. chunk_analyses/analysis/raw_response
-        # are not needed post-write (3.4+ scan the wiki dir, not file_blocks).
+        # 3.4-4.1 over the on-disk wiki. chunk_analyses/analysis are not
+        # needed post-write (3.4+ scan the wiki dir, not file_blocks).
         if is_stage_done(config, h, "write_phase"):
             print("  [prepare] write_phase marker present — skipping 2.x prepare")
             extracted_text = (progress or {}).get("extracted_text", "")
@@ -126,7 +126,7 @@ def _do_prepare(
             return {
                 "raw_file": raw_file, "config": config, "h": h, "method": method,
                 "extracted_text": extracted_text, "global_digest": global_digest,
-                "chunk_analyses": [], "analysis": {}, "raw_response": "",
+                "chunk_analyses": [], "analysis": {},
                 "file_blocks": [], "stage_1_2_result": stage_1_2_result,
                 "stage_1_3_result": stage_1_3_result, "template_name": template_name,
                 "query_count": 0, "comp_count": 0,
@@ -281,7 +281,7 @@ def _do_prepare(
                       f"extracted_text ({len(extracted_text):,} chars)")
 
         # Stage 2.2 + 2.4: Chunk Analysis → Generation (barrier-free pipeline)
-        chunk_analyses, analysis, raw_response, file_blocks, incremental_associations = _run_chunk_pipeline(
+        chunk_analyses, analysis, file_blocks, incremental_associations = _run_chunk_pipeline(
             extracted_text, global_digest, raw_file, config, template_content,
             progress, verbose)
 
@@ -295,12 +295,13 @@ def _do_prepare(
             save_progress(config, h, {
                 "chunk_analyses": chunk_analyses,
                 "analysis": analysis,
-                "raw_response": raw_response,
                 "incremental_associations": incremental_associations,
                 # Persist file_blocks so a stage_2_3_done cache-resume restores
-                # them directly. raw_response alone is unparseable (block bodies
-                # without ---FILE:--- wrappers) — see _run_chunk_pipeline cache
-                # path. Without this, resume lost every concept/entity block.
+                # them DIRECTLY (it is the authoritative artifact). The retired
+                # raw_response could not be re-parsed into FILE blocks, so a
+                # resume that relied on it lost every concept/entity block
+                # (2026-06-25). Saved BEFORE the marker below so a crash in
+                # between never leaves "done" without its artifact.
                 "file_blocks": file_blocks,
             })
             mark_stage_done(config, h, "stage_2_3_done")
@@ -318,7 +319,22 @@ def _do_prepare(
         # (LLM comparison generation) can fire ConversationPending; without this
         # cache a resume would re-run the whole tail from 2.5. On cache hit,
         # restore the tail outputs from the artifact store and skip the segment.
-        if is_stage_done(config, h, "stage_2_9_done"):
+        #
+        # Same guard as the 2.3 cache path: this segment must have persisted a
+        # ``file_blocks`` artifact (it always does — see save_progress below).
+        # If the marker is set but the artifact is missing (old/partial cache),
+        # honoring it would skip the entire 2.5–2.9 tail with whatever
+        # file_blocks happens to be in scope — dropping source page / queries /
+        # comparisons. Invalidate and re-run the tail instead.
+        _tail_cached = (is_stage_done(config, h, "stage_2_9_done")
+                        and (progress or {}).get("file_blocks") is not None)
+        if is_stage_done(config, h, "stage_2_9_done") and not _tail_cached:
+            print("  [stage 2.5–2.9] ⚠️  stage_2_9_done set but no persisted "
+                  "file_blocks artifact — invalidating marker and re-running "
+                  "the 2.5–2.9 tail (prevents silent query/comparison loss).")
+            from _core import unmark_stage_done
+            unmark_stage_done(config, h, "stage_2_9_done")
+        if _tail_cached:
             _pcache = progress or {}
             file_blocks = _pcache.get("file_blocks", file_blocks)
             query_resolutions = _pcache.get("query_resolutions", {})
@@ -395,7 +411,7 @@ def _do_prepare(
             "raw_file": raw_file, "config": config,
             "h": h, "method": method, "extracted_text": extracted_text,
             "global_digest": global_digest, "chunk_analyses": chunk_analyses,
-            "analysis": analysis, "raw_response": raw_response,
+            "analysis": analysis,
             "file_blocks": file_blocks,
             "stage_1_2_result": stage_1_2_result,
             "stage_1_3_result": stage_1_3_result,
