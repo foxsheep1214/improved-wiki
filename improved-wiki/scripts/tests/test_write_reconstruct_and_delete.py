@@ -118,5 +118,48 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
             self.assertEqual(removed, 3)
 
 
+class TestPreserveStageCounters(unittest.TestCase):
+    """Cache stage counters must not regress on write_phase-resume passes.
+
+    Regression for 2026-06-25 Fardo re-ingest: the resume pass carried empty
+    chunk_analyses (2.x short-circuit), so _do_write rebuilt stages with
+    chunks_analyzed=0, overwriting the real first-pass count of 4 — tripping
+    validate_ingest's '0 chunk(s) analyzed' check (18/19 false-fail). Same
+    class as Orin #5 'cache stats zeroed'.
+    """
+
+    def test_first_write_unchanged(self):
+        new = {"chunks_analyzed": 4, "concepts_generated": 10,
+               "coverage_pct": 0.9, "review_items": 7}
+        out = _ingest_write._preserve_stage_counters({}, new)
+        self.assertEqual(out["chunks_analyzed"], 4)
+        self.assertEqual(out["concepts_generated"], 10)
+        self.assertEqual(out["review_items"], 7)
+
+    def test_resume_preserves_nonzero_counters(self):
+        prev = {"chunks_analyzed": 4, "concepts_generated": 10,
+                "images_extracted": 309, "review_items": 7}
+        new = {"chunks_analyzed": 0, "concepts_generated": 0,
+               "images_extracted": 0, "review_items": 0}
+        out = _ingest_write._preserve_stage_counters(prev, new)
+        self.assertEqual(out["chunks_analyzed"], 4)
+        self.assertEqual(out["concepts_generated"], 10)
+        self.assertEqual(out["images_extracted"], 309)
+        self.assertEqual(out["review_items"], 7)
+
+    def test_resume_new_higher_wins(self):
+        prev = {"chunks_analyzed": 3, "concepts_generated": 5}
+        new = {"chunks_analyzed": 6, "concepts_generated": 5}
+        out = _ingest_write._preserve_stage_counters(prev, new)
+        self.assertEqual(out["chunks_analyzed"], 6)
+
+    def test_coverage_ratios_keep_new_value(self):
+        prev = {"coverage_pct": 0.95, "chunks_analyzed": 4}
+        new = {"coverage_pct": 0.8, "chunks_analyzed": 0}
+        out = _ingest_write._preserve_stage_counters(prev, new)
+        self.assertEqual(out["coverage_pct"], 0.8)  # ratio: new wins, not max
+        self.assertEqual(out["chunks_analyzed"], 4)  # counter: preserved
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,36 @@ from _stage_3_4_review import stage_3_4_review_suggestions
 from _stage_validators import validate_stage_outputs
 from _enrich_wikilinks import enrich_wikilinks_batch
 
+# Monotonic counter fields in a cache entry's `stages` dict: these should
+# never regress across write passes. On a write_phase-resume pass the prepared
+# dict carries empty chunk_analyses/global_digest (the 2.x short-circuit), so a
+# naive rebuild would zero these counts and trip validate_ingest's
+# "N chunk(s) analyzed" check (Orin #5 / 2026-06-25 Fardo 18/19 false-fail).
+_STAGE_COUNTER_FIELDS = (
+    "global_digest_keys", "chunks_analyzed", "file_blocks_generated",
+    "concepts_identified", "concepts_core", "concepts_supporting",
+    "concepts_generated", "entities_generated",
+    "images_extracted", "images_captioned", "images_injected",
+    "queries_generated", "comparisons_generated", "review_items",
+)
+
+
+def _preserve_stage_counters(prev_stages: dict, new_stages: dict) -> dict:
+    """Return new_stages with monotonic counters preserved as max(old, new).
+
+    Non-counter fields (coverage_core / coverage_supporting / coverage_pct —
+    ratios, not counts) keep the new value. prev_stages may be empty (first
+    write); then new_stages is returned unchanged.
+    """
+    if not prev_stages:
+        return dict(new_stages)
+    out = dict(new_stages)
+    for k in _STAGE_COUNTER_FIELDS:
+        if k in out:
+            out[k] = max(int(prev_stages.get(k, 0) or 0), int(out[k] or 0))
+    return out
+
+
 def cleanup_resolved_reviews(config: Config) -> int:
     """Delete review pages whose frontmatter has `resolved: true`.
 
@@ -438,6 +468,37 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     _n_comps = sum(1 for p, _ in review_blocks if "comparisons/" in p)
     _n_blocks = max(len(file_blocks), len(review_blocks))
     cache = load_cache(config)
+
+    # B1 fix (2026-06-25, Orin #5 / "0 chunks analyzed" validator false-fail):
+    # On a write_phase-resume pass, chunk_analyses/global_digest/etc. are empty
+    # (_ingest_prepare short-circuit sets them to [] to skip 2.x), so rebuilding
+    # the stages dict would overwrite the real first-pass counts with 0. The
+    # validator then reads chunks_analyzed=0 and fails. Preserve monotonic
+    # counters via _preserve_stage_counters (max(old, new)).
+    _prev_entry = cache.get("entries", {}).get(rel, {}) or {}
+    _prev_stages = _prev_entry.get("stages", {}) or {}
+
+    _new_stages = {
+        "global_digest_keys": len(global_digest),
+        "chunks_analyzed": len(chunk_analyses),
+        "file_blocks_generated": _n_blocks,
+        "concepts_identified": analysis.get("concepts_identified", _n_concepts),
+        "concepts_core": analysis.get("concepts_core", 0),
+        "concepts_supporting": analysis.get("concepts_supporting", 0),
+        "concepts_generated": max(analysis.get("concepts_generated", 0), _n_concepts),
+        "entities_generated": max(analysis.get("entities_generated", 0), _n_entities),
+        "coverage_core": analysis.get("coverage_core", 1.0),
+        "coverage_supporting": analysis.get("coverage_supporting", 1.0),
+        "coverage_pct": analysis.get("coverage_pct", 1.0),
+        "images_extracted": stage_1_2_result.get("count", 0),
+        "images_captioned": stage_1_3_result.get("captioned", 0),
+        "images_injected": stage_3_2_result.get("injected", 0),
+        "queries_generated": max(query_count, _n_queries),
+        "comparisons_generated": max(comp_count, _n_comps),
+        "review_items": stage_3_3_result.get("items", 0),
+    }
+    _merged_stages = _preserve_stage_counters(_prev_stages, _new_stages)
+
     cache["entries"][rel] = {
         "hash": h,
         "timestamp": int(time.time() * 1000),
@@ -445,26 +506,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         "method": method,
         "template": template_name,
         "sourceHash": h,
-        "fileBlockCount": _n_blocks,
-        "stages": {
-            "global_digest_keys": len(global_digest),
-            "chunks_analyzed": len(chunk_analyses),
-            "file_blocks_generated": _n_blocks,
-            "concepts_identified": analysis.get("concepts_identified", _n_concepts),
-            "concepts_core": analysis.get("concepts_core", 0),
-            "concepts_supporting": analysis.get("concepts_supporting", 0),
-            "concepts_generated": max(analysis.get("concepts_generated", 0), _n_concepts),
-            "entities_generated": max(analysis.get("entities_generated", 0), _n_entities),
-            "coverage_core": analysis.get("coverage_core", 1.0),
-            "coverage_supporting": analysis.get("coverage_supporting", 1.0),
-            "coverage_pct": analysis.get("coverage_pct", 1.0),
-            "images_extracted": stage_1_2_result.get("count", 0),
-            "images_captioned": stage_1_3_result.get("captioned", 0),
-            "images_injected": stage_3_2_result.get("injected", 0),
-            "queries_generated": max(query_count, _n_queries),
-            "comparisons_generated": max(comp_count, _n_comps),
-            "review_items": stage_3_3_result.get("items", 0),
-        },
+        "fileBlockCount": _merged_stages["file_blocks_generated"],
+        "stages": _merged_stages,
     }
     if hard_failures:
         print(f"  [cache] SKIPPED — {len(hard_failures)} hard failure(s)")
