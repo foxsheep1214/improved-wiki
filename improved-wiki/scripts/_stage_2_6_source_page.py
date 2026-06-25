@@ -8,6 +8,7 @@ def stage_2_6_source_page(
     template: str = "",
     current_domain: str = "general",
     verbose: bool = False,
+    linkable_slugs: list[str] | None = None,
 ) -> tuple[str, str]:
     """Stage 2.6: Dedicated source page generation (NashSU two-step).
 
@@ -42,10 +43,29 @@ def stage_2_6_source_page(
     if template:
         template_section = f"\n# Document Type\n<template>\n{template[:2000]}\n</template>\n"
 
+    # Issue 2 fix: constrain source-page wikilinks to a known-linkable set so the
+    # LLM cannot link to a concept's own (never-written) slug when that concept
+    # was ALREADY COVERED by an existing page under a different slug. Without
+    # this, the source page emitted [[concepts/system-concept]] etc. → broken
+    # links, because the concept was skipped in Stage 2.4 and no such file exists.
+    linkable = sorted(set(linkable_slugs or []))
+    if len(linkable) > 300:
+        linkable = linkable[:300]
+    linkable_str = "\n".join(f"  - [[{s}]]" for s in linkable) if linkable else "(none — write concepts as plain text, do NOT invent [[wikilinks]])"
+    linkable_rule = (
+        "\n# Wikilink Rule — STRICT\n"
+        "ONLY use [[wikilinks]] that appear in the Linkable pages list below. "
+        "A concept marked ALREADY COVERED in Stage 2.4 was NOT written under its "
+        "own slug — link to its EXISTING slug from the list, never to "
+        "[[concepts/<its-own-name>]]. If a concept is not in the list, write it "
+        "as PLAIN TEXT with no [[ ]].\n"
+        f"# Linkable pages\n{linkable_str}\n"
+    )
+
     prompt = f"""# Role
 You are writing a **source page** for a Karpathy-pattern wiki knowledge base.
 This page will be the authoritative entry for a book in the wiki.
-{template_section}
+{template_section}{linkable_rule}
 # Book Information (from Global Digest)
 ```yaml
 {digest_str}

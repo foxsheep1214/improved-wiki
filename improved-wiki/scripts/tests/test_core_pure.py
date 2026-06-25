@@ -332,6 +332,22 @@ class TestSlugifyBracketHygiene(unittest.TestCase):
         self.assertEqual(_core.slugify("Tron Future Tech Inc."),
                          "tron-future-tech-inc")
 
+    def test_comma_ampersand_period_stripped(self):
+        """Regression for 2026-06-25 Fardo re-ingest: commas/ampersands/periods
+        were not stripped, producing slugs like "energy,-work,-and-power",
+        "taylor-&-francis-ltd", "the-fairmont-press,-inc"."""
+        self.assertEqual(_core.slugify("Energy, Work, and Power"),
+                         "energy-work-and-power")
+        self.assertEqual(_core.slugify("Taylor & Francis Ltd."),
+                         "taylor-francis-ltd")
+        self.assertEqual(_core.slugify("The Fairmont Press, Inc."),
+                         "the-fairmont-press-inc")
+        # No comma or ampersand survives in any slug.
+        for name in ["A, B, C", "X & Y", "Foo, Inc.", "R&D Spending"]:
+            s = _core.slugify(name)
+            self.assertNotIn(",", s, f"{name!r} -> {s!r} kept comma")
+            self.assertNotIn("&", s, f"{name!r} -> {s!r} kept ampersand")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

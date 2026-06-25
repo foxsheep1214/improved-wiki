@@ -19,6 +19,8 @@ from _core import (
     set_current_file as _set_current_file,
     is_stage_done,
     mark_stage_done,
+    unmark_stage_done,
+    list_existing_slugs,
 )
 from _stage_1_extract import (
     stage_1_1_extract_text,
@@ -53,9 +55,23 @@ def _prepare_source_page(
         source_page_response = progress["source_page_response"]
         print(f"  [stage 2.6] (cached) Source page already generated")
     else:
+        # Issue 2 fix: build the linkable-slug set (concepts/entities generated
+        # this ingest + existing wiki slugs) so the source page cannot wikilink
+        # to an ALREADY-COVERED concept's never-written own slug.
+        _linkable: list[str] = []
+        for _path, _ in file_blocks:
+            _stem = str(_path)
+            # normalize "wiki/concepts/foo.md" → "concepts/foo"
+            if _stem.startswith("wiki/"):
+                _stem = _stem[len("wiki/"):]
+            if _stem.endswith(".md"):
+                _stem = _stem[:-3]
+            _linkable.append(_stem)
+        _linkable.extend(list_existing_slugs(config))
         source_page_response, _ = stage_2_6_source_page(
             global_digest, raw_file, config,
-            template=template_content, current_domain=current_domain, verbose=verbose
+            template=template_content, current_domain=current_domain, verbose=verbose,
+            linkable_slugs=_linkable,
         )
 
     if not source_page_response:
@@ -105,6 +121,32 @@ def _do_prepare(
         h = file_sha256(raw_file)
         progress = load_progress(config, h)
 
+        # ── Issue 1 fix (cross-pipeline cache reuse, 2026-06-25) ──
+        # A prior llm-wiki-local run may have cached a *pymupdf* extraction under
+        # the same file hash. The new pipeline requires minerU for PDFs (it
+        # produces _manifest.json + image media + VLM captions); a pymupdf cache
+        # hit silently skips minerU, leaving no manifest, no captions, and a
+        # zero-file media directory (504 images → 0). Detect a legacy/non-minerU
+        # cached method for a PDF and discard the stale extraction cache so minerU
+        # re-runs. (plain-text/zipfile methods are for non-PDF inputs and stay.)
+        _MINERU_METHODS = ("mineru-api",)
+        if raw_file.suffix.lower() == ".pdf" and progress:
+            _cm = progress.get("extract_method", "")
+            if _cm and not _cm.startswith(_MINERU_METHODS):
+                print(f"  [extract] ⚠️ Cached extraction method '{_cm}' is legacy "
+                      f"(pre-minerU) — invalidating extraction/image/caption cache "
+                      f"and re-running minerU")
+                _invalidated = False
+                for _k in ("extracted_text", "extract_method", "stage_1_2", "stage_1_3"):
+                    if _k in progress:
+                        progress.pop(_k, None)
+                        _invalidated = True
+                for _stage in ("stage_1_1_done", "stage_1_2_done"):
+                    if is_stage_done(config, h, _stage):
+                        unmark_stage_done(config, h, _stage)
+                        _invalidated = True
+                if _invalidated:
+                    save_progress(config, h, progress)
         # ── write_phase short-circuit (Bug 2 fix, 2026-06-25) ──
         # If the Stage 3.1-3.3 write phase already completed in a prior run,
         # skip the entire 2.x pipeline. Re-running Stage 2.4 generation would

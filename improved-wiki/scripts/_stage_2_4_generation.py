@@ -30,6 +30,7 @@ def _stage_2_4_build_prompt(
 
     concept_lines = []
     concept_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
+    concept_slug_stems: set[str] = set()  # for entity-dedup (Issue 4)
     for c in concepts:
         if isinstance(c, dict):
             name = c.get("name", "")
@@ -41,14 +42,34 @@ def _stage_2_4_build_prompt(
             # existing-page overlap. Skipping the overlap concept here keeps its
             # NEW slug out of the linkable list so the LLM links to the EXISTING
             # page instead of a never-generated new slug (broken wikilink).
-            already = " [ALREADY COVERED — SKIP]" if (slug in generated_slugs or name in existing_refs) else ""
-            concept_lines.append(
-                f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}{already}"
-            )
-            if not already:
+            if name in existing_refs and existing_refs[name]:
+                # Issue 2 fix: show the EXISTING slug as the canonical wikilink
+                # target so the LLM links there instead of the never-written
+                # concepts/{own-slug} (which would be a broken link).
+                existing_slug = existing_refs[name][0]
+                concept_lines.append(
+                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
+                    f"do NOT generate a page; wikilink ONLY as [[{existing_slug}]] "
+                    f"(never [[concepts/{slug}]])"
+                )
+            elif slug in generated_slugs:
+                concept_lines.append(
+                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} [ALREADY COVERED — SKIP]"
+                )
+            else:
+                concept_lines.append(
+                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}"
+                )
                 concept_slugs.append((name, f"concepts/{slug}"))
+                concept_slug_stems.add(slug)
                 for d in details[:3]:
                     concept_lines.append(f"      • {d}")
+
+    # Issue 4: collect prior-chunk concept slug stems too, so an entity sharing
+    # a concept's slug is deduped (concept page takes precedence over entity).
+    for s in generated_slugs:
+        if s.startswith("concepts/"):
+            concept_slug_stems.add(s.split("/", 1)[1])
 
     entity_lines = []
     entity_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
@@ -58,11 +79,24 @@ def _stage_2_4_build_prompt(
             role = e.get("role", "")
             sig = e.get("significance", "")
             slug = slugify(name)
-            already = " [ALREADY COVERED — SKIP]" if (slug in generated_slugs or name in existing_refs) else ""
-            entity_lines.append(
-                f"  - {name} (slug: entities/{slug}) ({role}): {sig}{already}"
-            )
-            if not already:
+            if name in existing_refs and existing_refs[name]:
+                existing_slug = existing_refs[name][0]
+                entity_lines.append(
+                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
+                    f"do NOT generate; wikilink ONLY as [[{existing_slug}]]"
+                )
+            elif slug in generated_slugs or slug in concept_slug_stems:
+                # Issue 4: a concept page for this slug already exists (this chunk
+                # or a prior one) — skip the duplicate entity page; wikilink to
+                # the concept page instead.
+                entity_lines.append(
+                    f"  - {name} (slug: entities/{slug}) ({role}): {sig} "
+                    f"[DUPLICATE OF CONCEPT concepts/{slug} — SKIP]"
+                )
+            else:
+                entity_lines.append(
+                    f"  - {name} (slug: entities/{slug}) ({role}): {sig}"
+                )
                 entity_slugs.append((name, f"entities/{slug}"))
 
     concept_str = "\n".join(concept_lines[:100]) if concept_lines else "(none)"

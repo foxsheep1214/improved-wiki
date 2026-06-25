@@ -1064,6 +1064,12 @@ def slugify(text: str) -> str:
     """
     slug = text.lower().replace(" ", "-").replace("/", "-")
     slug = _ILLEGAL_CHARS_RE.sub("", slug)
+    # Strip interior punctuation that doesn't belong in slugs: commas, ampersands,
+    # periods, semicolons, apostrophes (e.g. "Energy, Work, and Power" ->
+    # "energy-work-and-power", "Taylor & Francis Ltd." -> "taylor-francis-ltd",
+    # "The Fairmont Press, Inc." -> "the-fairmont-press-inc"). The illegal-char
+    # strip above leaves these, producing comma/ampersand-bearing filenames.
+    slug = re.sub(r"[,.&;!'`]+", "-", slug)
     # Collapse interior brackets/parentheses (ASCII + full-width) into hyphens.
     # The illegal-char strip above leaves them, and the trailing-edge strip
     # below only removes the LAST one, so "Total Module Power (TMP)" became the
