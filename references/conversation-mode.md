@@ -344,7 +344,6 @@ sources: ["raw/Book/书名.pdf"]
 12. Stage 3.3: 跨域 slug 碰撞审查
 13. Stage 3.4: Review 审查建议
 14. Stage 3.5: 程序化追加 index/log + LLM 重写 overview
-15. Stage 3.6: 质量评分
 16. Stage 3.7: Embeddings（LanceDB）
 17. Stage 4.1: validate_ingest 自动验证
 18. Wikilink enrichment: 多轮 LLM-task merge（可用 delegate_task 批量处理）

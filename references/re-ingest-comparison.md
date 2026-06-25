@@ -51,7 +51,6 @@ this book) + media directory + cache entry. Prints a summary of all removed file
 | Comparison count | Same for `wiki/comparisons/` |
 | Review count | Same for `wiki/REVIEW/` |
 | Media count | `find "wiki/media/Book/$BOOK" -type f | wc -l` |
-| Quality score | Check pipeline stdout for `Stage 3.6 Quality score: X%` |
 | Validation | Check pipeline stdout for `Result: N/M` |
 | Cross-references | `grep -c '\[\[' source-page.md` (wikilink density) |
 
@@ -60,7 +59,7 @@ this book) + media directory + cache entry. Prints a summary of all removed file
 - New pipeline produces **fewer but better-connected** pages (73 vs 84 concepts,
   but 52 cross-references to existing wiki vs ~0 in old)
 - New stages add significant value: **queries** (3 new), **comparisons** (2 new),
-  **reviews** (8 items), **quality score** (65.8%), **embeddings** (20354 entries)
+  **reviews** (8 items), **embeddings** (20354 entries)
 - Source page is more structured but smaller (43KB vs 76KB) — less narrative
   detail, more concise structure
 - Main quality bottleneck: image captions (202 of 528 images missing captions

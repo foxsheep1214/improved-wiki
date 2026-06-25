@@ -438,6 +438,18 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # to the in-memory file_blocks only if nothing was written.
     review_blocks = _reconstruct_blocks_from_disk(config, files_written_paths) or file_blocks
 
+    # Total captioned images on disk. stage_1_3_result["captioned"] is NEW
+    # captions (0 on a cache-hit resume), unusable for stats/scoring. Count
+    # .caption.txt files in the media dir for the true total (bug 2026-06-25).
+    _total_captioned = 0
+    _media_dir = stage_1_2_result.get("media_dir")
+    if _media_dir:
+        from pathlib import Path as _P
+        try:
+            _total_captioned = sum(1 for _ in _P(_media_dir).glob("*.caption.txt"))
+        except OSError:
+            _total_captioned = 0
+
     # Stage 3.4: Review (quality review of generated pages)
     stage_3_4_result = stage_3_4_review_suggestions(
         review_blocks, raw_file, config, verbose=verbose)
@@ -491,11 +503,11 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         "coverage_supporting": analysis.get("coverage_supporting", 1.0),
         "coverage_pct": analysis.get("coverage_pct", 1.0),
         "images_extracted": stage_1_2_result.get("count", 0),
-        "images_captioned": stage_1_3_result.get("captioned", 0),
+        "images_captioned": _total_captioned,
         "images_injected": stage_3_2_result.get("injected", 0),
         "queries_generated": max(query_count, _n_queries),
         "comparisons_generated": max(comp_count, _n_comps),
-        "review_items": stage_3_3_result.get("items", 0),
+        "review_items": stage_3_4_result.get("items", 0),
     }
     _merged_stages = _preserve_stage_counters(_prev_stages, _new_stages)
 
@@ -521,21 +533,20 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         return {"status": "hard-error", "error": str(e),
                 "files_written": files_written_paths + index_log_files}
 
-    # Stage 3.6: Quality scoring card (always runs; flags needs_review < 0.65)
-    from _stage_3_6_quality import stage_3_6_quality
-    _q_review = stage_3_3_result.get("items", 0)
-    _q_stats = prepared.get("concept_merge_stats", (0, 0))
-    _q_dedup_ran = prepared.get("dedup_was_run", False)
-    quality_result = stage_3_6_quality(
-        raw_file, config, extracted_text,
-        stage_1_2_result.get("count", 0), stage_1_3_result.get("captioned", 0),
-        file_blocks, _q_review, _q_stats, _q_dedup_ran, verbose=verbose)
-
     # Note: Detailed validation moved to separate 'validate' command (Phase 2 refactor)
     # Ingest now focuses on generation (Stages 0-3.5) with per-stage validation
     # For detailed quality checks, run: python3 validate.py <source_slug>
     # Stage 3.7 (embeddings) runs in the post-ingest section of ingest_one —
     # single entry point, mandatory attempt against local Ollama bge-m3
     # (prints an install reminder instead of silently skipping if unavailable).
+    #
+    # Stage 3.6 (quality scoring card) was REMOVED 2026-06-25 to align with
+    # NashSU, which has no ingest quality-score stage. The per-dimension
+    # scoring (text coverage / image quality / concept density / review
+    # quality / dedup) was a skill-specific addition with an un-tuned
+    # concept_density threshold (3 concepts/KB, unrealistic for books) and
+    # call-site bugs that zeroed two dimensions on resume. Factual counters
+    # (images_captioned, review_items, concepts_generated) remain in the
+    # cache stage-stats below as metadata; only the SCORING is gone.
 
     return {"status": "ok", "files_written": cache["entries"][rel]["filesWritten"]}

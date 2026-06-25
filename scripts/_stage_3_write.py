@@ -3,8 +3,8 @@
 This module holds Stage 3.1 (write), 3.3 (slug collision review), and 3.5
 (aggregate repair + cache). Sibling modules: _stage_3_2_inject_images.py
 (image injection), _stage_3_4_review.py (content review), and
-_stage_3_6_quality.py (quality scoring). Stage 3.7 (embeddings) runs from
-ingest.py post-ingest.
+_stage_3_7_embed.py (embeddings, runs from ingest.py post-ingest).
+Stage 3.6 (quality scoring) was removed 2026-06-25 (NashSU alignment).
 
 Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
 """

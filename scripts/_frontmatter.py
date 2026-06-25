@@ -266,6 +266,30 @@ def merge_page_content(
         # Keep the existing (enriched) body; only adopt frontmatter array unions.
         return write_frontmatter(parse_frontmatter(array_merged)[0], old_body)
 
+    # Fast path 5: idempotent re-merge. If the existing page's `sources:`
+    # already includes every source in the new content, this collision was
+    # already merged in a prior run — the new body is already incorporated
+    # into the existing page. Returning the existing body (with unioned
+    # arrays) breaks the re-merge loop: write_phase has no per-file marker
+    # (only an all-or-nothing write_phase marker), so a mid-flight crash
+    # makes it re-write every file; the now-merged existing content changes
+    # the merge prompt hash, the conversation cache misses, and the LLM is
+    # asked to re-merge an already-merged page — forever (bug 2026-06-25).
+    def _src_set(fm: dict) -> set:
+        v = fm.get("sources")
+        if not v:
+            return set()
+        if isinstance(v, str):
+            return {v}
+        if isinstance(v, list):
+            return {str(s) for s in v}
+        return set()
+    if _src_set(parse_frontmatter(existing_content)[0]).issuperset(
+        _src_set(parse_frontmatter(new_content)[0])
+    ) and _src_set(parse_frontmatter(new_content)[0]):
+        # Keep the existing (already-merged) body; union frontmatter arrays.
+        return merge_array_fields_into_content(existing_content, new_content)
+
     # Layer 2: LLM merge (if merger provided)
     if merger_fn:
         try:

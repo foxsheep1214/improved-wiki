@@ -301,6 +301,19 @@ def batch_ingest(
                 # corrupt PDF) must not abort the rest of the batch.
                 try:
                     prepared = future.result()
+                except ConversationPending:
+                    # Conversation-mode handoff: this book paused at an LLM
+                    # step (normal, expected). ConversationPending is a
+                    # BaseException, so the broad `except Exception` below
+                    # does NOT catch it — without this dedicated handler it
+                    # escaped and crashed the whole batch, blocking every
+                    # other book's write phase (bug 2026-06-25). Isolate it
+                    # like a skip; re-invoke resumes this book from cache.
+                    prepared_count += 1
+                    print(f"\n[batch] {prepared_count}/{total_books} paused at LLM "
+                          f"handoff — {futures[future].name} (re-invoke to resume)",
+                          flush=True)
+                    continue
                 except Exception as e:
                     prepared_count += 1
                     print(f"\n[batch] {prepared_count}/{total_books} prepare FAILED for "
@@ -317,6 +330,15 @@ def batch_ingest(
                 try:
                     result = _do_write(prepared, verbose=verbose)
                     results.append(result)
+                except ConversationPending:
+                    # Write-phase LLM step (e.g. 3.3 wikilink enrichment, or a
+                    # page-merge handoff) paused for this book — same
+                    # BaseException-escapes-`except Exception` issue as prepare
+                    # (bug 2026-06-25). 3.1 file writes already landed; re-invoke
+                    # resumes at the paused step. Don't block the other books.
+                    print(f"[batch] {prepared['raw_file'].name} write paused at LLM "
+                          f"handoff (re-invoke to resume)", flush=True)
+                    continue
                 except Exception as e:
                     print(f"[batch] Write failed for {prepared['raw_file'].name}: {e}")
                     import traceback
