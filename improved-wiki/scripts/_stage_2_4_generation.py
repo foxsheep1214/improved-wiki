@@ -189,6 +189,15 @@ Chunk: {chunk_index + 1}
 # Entities found in this chunk (generate a page for key ones — skip ALREADY COVERED):
 {entity_str}
 
+# Supplementary foundational pages (use sparingly)
+If THIS chunk clearly defines or depends on a foundational concept that is NOT in
+the lists above AND is NOT in the Linkable pages list below (i.e. no existing page
+covers it), you MAY generate a page for it at a new `wiki/concepts/<kebab-slug>.md`
+path. Only do this for genuinely page-worthy building blocks the source actually
+explains — never for passing mentions. Give it a short, specific kebab-case slug
+and a `type: concept` frontmatter like the others. Do NOT [[wikilink]] to any slug
+that is not either in the Linkable list or a page you generate in THIS response.
+
 # ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
 - Your FIRST line of output MUST be `---FILE:wiki/concepts/...`
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.

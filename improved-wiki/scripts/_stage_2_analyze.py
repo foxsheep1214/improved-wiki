@@ -425,10 +425,14 @@ You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
 You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
 {template_section}
 # Context: Accumulated Global Digest
-This digest includes discoveries from all PREVIOUS chunks. Use it to avoid
-re-extracting the same concepts and to build on what earlier chunks found.
-If a concept was already defined in a prior chunk, note it as a
-cross-reference rather than re-defining it.
+This digest is cumulative context from the Stage 2.1 outline and all PREVIOUS
+chunks — use it for continuity and to avoid re-writing the same *prose* twice.
+It is NOT a list of existing wiki pages: a concept named here has NOT necessarily
+been turned into a page yet. Do NOT drop a page-worthy concept from
+`concepts_found` just because its name appears in this digest — that includes
+foundational / "preliminaries" concepts (the well-known building blocks a new
+method is built from). Deduplication against REAL existing pages happens
+downstream (Stage 2.3/2.4), not here. When in doubt, LIST the concept.
 
 ```yaml
 {digest_str}
@@ -447,8 +451,13 @@ cross-reference rather than re-defining it.
 # Task
 Analyze THIS CHUNK of the book. Extract:
 
-1. All concepts defined or heavily used in this chunk (skip if already in the
-   Accumulated Global Digest — just cross-reference instead)
+1. Every concept this chunk defines, derives, or materially relies on — INCLUDING
+   foundational / "preliminaries" concepts the source treats as background (e.g. the
+   building-block techniques a new method is built from). Each distinct building
+   block the source actually defines or uses deserves its own concept entry. Do NOT
+   collapse several distinct concepts into one page, and do NOT skip a concept merely
+   because it is "well known" or already named in the digest — downstream dedup
+   (Stage 2.3/2.4) will link it to an existing page if one already exists.
 2. All entities (people, organizations, systems, models, standards) mentioned
 3. Key claims, formulas, data points
 4. Connections to existing wiki pages (if any)

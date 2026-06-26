@@ -31,20 +31,28 @@ You are maintaining a wiki knowledge base. Review the concepts just generated fo
 {concepts_with_desc}
 
 # Task
-Identify pairs of concepts that are **naturally compared** — understanding one illuminates the other.
+Identify **comparison groups** — two OR MORE concepts that the source sets
+side-by-side, where understanding them together illuminates each one.
 Good candidates:
 - Two choices on the same dimension (CCM vs DCM, Buck vs Boost, Voltage Mode vs Current Mode)
 - Commonly confused pairs (EMI vs EMC, SNR vs SINAD, PSRR vs CMRR)
 - Explicitly contrasted in the book
+- **A systematic multi-way comparison (3+ alternatives)** that THE SOURCE ITSELF
+  benchmarks against each other across multiple dimensions — e.g. Phased-Array vs
+  MIMO vs Phased-MIMO across SINR / beampattern / sidelobe. This is the headline
+  page for any source whose central contribution is positioning a new method
+  against the existing alternatives; do NOT skip it just because there are 3+ items.
 
 Bad candidates:
 - Upstream/downstream relationships (MOSFET → Gate Driver)
 - Parent/child relationships (DC-DC Converter → Buck Converter)
-- Three or more items → NOT a comparison
+- An arbitrary list of unrelated concepts that the source never actually contrasts
 
-Generate at most 2 comparisons. Output 0 if no good pair exists.
+Generate at most 3 comparison pages. Output 0 if no genuine comparison exists.
 
 # Output Format
+# (For a 3+ way comparison, just add more columns to the table and more
+#  items to title / related / See Also — "A vs B vs C".)
 ---FILE:wiki/comparisons/{{slug}}.md---
 ---
 type: comparison
@@ -60,7 +68,7 @@ updated: {today_str}
 # {{Concept A}} vs {{Concept B}}
 
 ## Why Compare
-{{1-2 sentences: why these two benefit from side-by-side understanding}}
+{{1-2 sentences: why these benefit from side-by-side understanding}}
 
 ## Comparison Table
 | Dimension | {{Concept A}} | {{Concept B}} |
@@ -71,7 +79,7 @@ updated: {today_str}
 | {{dim 4: e.g. advantages/disadvantages}} | | |
 
 ## Selection Guide
-{{When to choose A vs B — 2-3 specific recommendations}}
+{{When to choose each — 2-3 specific recommendations}}
 
 ## See Also
 - [[{{Concept A}}]] — {{one-line description}}

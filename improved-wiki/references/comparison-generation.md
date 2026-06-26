@@ -20,9 +20,7 @@
 
 ## 设计原理
 
-comparison 在本阶段只自动生成一类：
-
-本阶段只生成一类对比：同源内两个天然适合对比的概念（如 CCM vs DCM），`concept ≥ 2` 时才运行。
+本阶段自动生成源内对比页：同源内**两个或多个**天然适合对比的概念，`concept ≥ 2` 时运行。既包括成对对比（如 CCM vs DCM），也包括源自身系统性 benchmark 的**多方对比（3+ 方）**（如 Phased-Array vs MIMO vs Phased-MIMO）。
 
 跨域同名碰撞交给 Stage 3.1 写盘时的 page-merge 处理（NashSU parity）。`domain` frontmatter 字段供 graph 分区 / query 用。
 
@@ -36,9 +34,10 @@ comparison 在本阶段只自动生成一类：
 |------|--------|
 | 同一维度的两种选择（CCM vs DCM、Buck vs Boost、Voltage/Current Mode） | 上下游关系（MOSFET → Gate Driver）→ 用 related 链接 |
 | 经常被混淆的概念对（EMI vs EMC、SNR vs SINAD、PSRR vs CMRR） | 大类含子类（DC-DC → Buck）→ 用 related 链接 |
-| 书中显式做了对比的概念对 | 三方及以上 → 不是 comparison |
+| 书中显式做了对比的概念对 | 源中从未真正并置的无关概念堆砌 |
+| **系统性多方对比（3+ 方）**：源自身在多个维度互相 benchmark 的方案（如 Phased-Array vs MIMO vs Phased-MIMO，跨 SINR/beampattern/sidelobe）。「新方法 vs 既有方案」类论文的**题眼页**，不因 3 方以上而跳过 | |
 
-**至多生成 2 个对比页**（宁缺毋滥）。
+**至多生成 3 个对比页**（宁缺毋滥）。多方对比时表格加列、title/related/See Also 加项（A vs B vs C）。
 
 ### 输出 schema
 
