@@ -17,6 +17,7 @@ from _core import (
     load_cache,
     save_cache,
     clear_progress,
+    load_progress,
 )
 from _stage_3_write import (
     _stage_3_1_wiki_path_for_source,
@@ -490,9 +491,16 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     _prev_entry = cache.get("entries", {}).get(rel, {}) or {}
     _prev_stages = _prev_entry.get("stages", {}) or {}
 
+    # On write_phase-resume the prepare short-circuit sets chunk_analyses=[].
+    # Fall back to the progress file's saved list so chunks_analyzed stays accurate.
+    _chunks_analyzed = len(chunk_analyses)
+    if not _chunks_analyzed:
+        _prog = load_progress(config, h) or {}
+        _chunks_analyzed = len(_prog.get("chunk_analyses") or [])
+
     _new_stages = {
         "global_digest_keys": len(global_digest),
-        "chunks_analyzed": len(chunk_analyses),
+        "chunks_analyzed": _chunks_analyzed,
         "file_blocks_generated": _n_blocks,
         "concepts_identified": analysis.get("concepts_identified", _n_concepts),
         "concepts_core": analysis.get("concepts_core", 0),

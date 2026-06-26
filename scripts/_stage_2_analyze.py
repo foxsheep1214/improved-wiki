@@ -484,10 +484,13 @@ claims:
   - claim: "..."
     evidence: "..."
     confidence: "high" | "medium" | "low"
+    table_ref: "Table N or Figure N"   # for datasheets: REQUIRED; for books: omit if no table source
+    page_ref: "p.NN"                   # for datasheets: REQUIRED; for books: omit if not applicable
 
 formulas:
-  - formula: "LaTeX"
+  - formula: "LaTeX"          # transcribe verbatim from source; never paraphrase
     meaning: "..."
+    table_ref: "Table N"      # cite source table/figure when available
 
 connections_to_existing_wiki:
   - existing_page: "..."
