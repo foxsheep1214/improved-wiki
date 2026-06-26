@@ -86,10 +86,10 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str) -> int:
     """Remove derived pages whose ONLY source reference is this book.
 
     Covers concepts, entities, queries, and comparisons. Queries and in-source
-    comparisons are source-specific derived pages (Stage 2.7 / 2.9B) and were
+    comparisons are source-specific derived pages (Stage 2.7 / 2.9) and were
     previously left behind by --delete, so a re-ingest stacked stale duplicates
-    next to the freshly generated ones. Cross-domain disambiguation comparisons
-    (Stage 2.9A) carry ``sources: []`` and so never match the single-source
+    next to the freshly generated ones. Comparison pages with ``sources: []``
+    (e.g. hand-authored or multi-source hub pages) never match the single-source
     test below — they are correctly preserved.
     """
     removed = 0

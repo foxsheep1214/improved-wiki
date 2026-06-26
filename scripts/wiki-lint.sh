@@ -273,7 +273,9 @@ for stem, path in pages.items():
         })
 
 # 7. Find pages with missing or invalid 'domain' field
-#    Domain is required for concept and entity pages (Plan B: disambiguation).
+#    Domain is required for concept and entity pages (used for graph
+#    partitioning and query routing — not for slug collision, which is
+#    handled by Stage 3.1 page-merge since 2026-06-26).
 #    Source/comparison/synthesis/etc pages are exempt.
 #    Valid-domain set is loaded from <project>/wiki/domains.md (project-level
 #    override) or <skill>/references/domains.md (skill default) — NOT

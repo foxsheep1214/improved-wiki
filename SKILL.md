@@ -1,23 +1,23 @@
 ---
 name: improved-wiki
-description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). 20 numbered ingest stages + 2 Phase-0 gates across 5 Phases (0-4). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode, the only path (no external API key) — the calling agent answers each prompt with the current conversation's model, spawning one sub-agent per pending prompt only when multi-book batch ingest produces more than one simultaneously-pending prompt. Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
+description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). 19 numbered ingest stages + 2 Phase-0 gates across 5 Phases (0-4). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode, the only path (no external API key) — the calling agent answers each prompt with the current conversation's model, spawning one sub-agent per pending prompt only when multi-book batch ingest produces more than one simultaneously-pending prompt. Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
 tags: [ingest, mandatory, nashsu, pipeline, scan-pdf, mineru, local-ocr, knowledge-graph, louvain]
 related_skills: [karpathy-llm-wiki, llm-wiki-local]
 ---
 
 # improved-wiki
 
-Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (20 numbered ingest Stages + 2 Phase-0 gates across 5 Phases: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich → 4 validation), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint). Graph auto-triggers post-ingest behind `AUTO_BUILD_GRAPH=1`.
+Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (19 numbered ingest Stages + 2 Phase-0 gates across 5 Phases: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich → 4 validation), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint). Graph auto-triggers post-ingest behind `AUTO_BUILD_GRAPH=1`.
 
 ```
 Phase 0: [0.1 raw-naming] → [0.2 source dedup]  (pre-processing gates)
-Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→3.1→3.2→3.3→3.4→3.5→3.7→4.1
-        (execution order per _ingest_prepare.py::_do_prepare / _ingest_write.py::_do_write; 3.4 = review, runs after 3.3 on already-written files; 3.7 = embeddings)
+Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→3.1→3.2→3.4→3.5→3.7→4.1
+        (execution order per _ingest_prepare.py::_do_prepare / _ingest_write.py::_do_write; 3.4 = review, runs after 3.2 on already-written files; 3.7 = embeddings; Stage 3.3 removed 2026-06-26 — same-slug collisions merged at 3.1 write, NashSU parity)
 
 Phase 0: Pre-processing gates  (raw naming, source dedup)
 Phase 1: Extraction            (text extraction, image extract, caption)
 Phase 2: Analysis & Generation (global digest, chunk analysis, concept/entity gen, queries, comparisons, quality review)
-Phase 3: Write & Enrich        (file write, image injection, slug collision review, review, aggregate repair, scoring, embeddings)
+Phase 3: Write & Enrich        (file write + same-slug page-merge, image injection, review, aggregate repair, embeddings)
 Phase 4: Validation            (Stage 4.1: validate_ingest — auto-runs at end of every ingest)
 
 Barrier-free: 2.2∥2.4 analyze→generate per chunk (unified, all chunk counts)
@@ -66,7 +66,7 @@ Two other external-API dependencies (not text generation):
 **Pipeline core**:
 - `references/ingest-stages-mandatory.md` — ingest stage checklist (Phase 0-4 + Lint + Graph, ⭐ easy-to-skip stages marked)
 - `references/query-generation.md` — Stage 2.7: auto-generate `wiki/queries/`
-- `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (2.9A disambiguation, 2.9B in-source)
+- `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (in-source concept pairs only; cross-domain disambiguation removed 2026-06-26 — same-slug pages merge at 3.1)
 - `references/knowledge-gap-lint.md` — lint system: synthesis/finding/thesis/methodology formation triggers
 - `references/dedup-design.md` — two dedup tiers: intra-source (Stage 2.5, ingest-time) vs cross-source (CLI, lint-time); distinct responsibilities, not interchangeable
 - `references/scanned-pdf-ocr-pipeline.md` — minerU local API extraction pipeline (all PDFs: text/scanned/mixed unified)
@@ -104,7 +104,7 @@ Two other external-API dependencies (not text generation):
 `templates/digest-{book,paper,datasheet,applicationnote,designexample,presentation,standard,news}.md`
 
 **Aggregate templates**:
-`templates/{overview,schema,index,log,disambiguation}.md`
+`templates/{overview,schema,index,log}.md`
 
 ## Key features
 
@@ -143,7 +143,7 @@ Two other external-API dependencies (not text generation):
 | Category | Scripts |
 |----------|---------|
 | Core | `ingest.py`, `_core.py`, `_llm_api.py`, `_paths.py`, `_language.py`, `_frontmatter.py` |
-| Stage Modules (Phase 0-4) | `_stage_1_extract.py` (1.1 facade → `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py`), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_3_4_review.py` (3.4), `_stage_2_base.py` (公共导入), `_stage_3_write.py` (3.1, 3.3, 3.5), `_stage_3_2_inject_images.py` (3.2), `_stage_3_7_embed.py` (3.7), `_stage_4_1_validate.py` (4.1), `_stage_validators.py` (Stage 0 验证门 + StageValidationError) |
+| Stage Modules (Phase 0-4) | `_stage_1_extract.py` (1.1 facade → `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py`), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_3_4_review.py` (3.4), `_stage_2_base.py` (公共导入), `_stage_3_write.py` (3.1 incl. page-merge, 3.5), `_stage_3_2_inject_images.py` (3.2), `_stage_3_7_embed.py` (3.7), `_stage_4_1_validate.py` (4.1), `_stage_validators.py` (Stage 0 验证门 + StageValidationError) |
 | Ingest orchestrator splits | `ingest.py` (CLI + `ingest_one`/`batch_ingest`) → `_ingest_skip.py` (Stage 0.2 去重/skip), `_ingest_chunks.py` (chunk 流水线), `_ingest_prepare.py` (综合/source page), `_ingest_write.py` (写盘 + post-ingest) |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `validate_ingest.py`, `validate-frontmatter.sh`, `normalize_raw_names.py` |

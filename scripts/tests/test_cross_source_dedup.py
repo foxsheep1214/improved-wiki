@@ -195,8 +195,7 @@ class TestMainConversationHandoff(unittest.TestCase):
             _make_wiki(root)
 
             # First invocation: detect call is uncached → ConversationPending → 101.
-            # main() now defaults to LLM semantic (NashSU parity); --semantic kept
-            # for backward compat but is a no-op.
+            # main() defaults to LLM semantic (NashSU parity).
             rc = ds.main(["--project", str(root), "--dry-run"])
             self.assertEqual(rc, 101)
             conv_dir = root / ".llm-wiki" / "conversation" / "dedup"
@@ -209,7 +208,7 @@ class TestMainConversationHandoff(unittest.TestCase):
                                               encoding="utf-8")
 
             # Second invocation: detect cached → no groups → report written → 0.
-            rc = ds.main(["--project", str(root), "--semantic", "--dry-run"])
+            rc = ds.main(["--project", str(root), "--dry-run"])
             self.assertEqual(rc, 0)
             report = json.loads(
                 (root / ".llm-wiki" / "dedup-report.json").read_text("utf-8")

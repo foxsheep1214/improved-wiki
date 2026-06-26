@@ -1,10 +1,13 @@
-"""Phase 3: Write pages to disk, slug collision review, aggregate repair.
+"""Phase 3: Write pages to disk + aggregate repair.
 
-This module holds Stage 3.1 (write), 3.3 (slug collision review), and 3.5
-(aggregate repair + cache). Sibling modules: _stage_3_2_inject_images.py
-(image injection), _stage_3_4_review.py (content review), and
-_stage_3_7_embed.py (embeddings, runs from ingest.py post-ingest).
+This module holds Stage 3.1 (write, incl. NashSU three-layer page merge for
+same-slug collisions) and 3.5 (aggregate repair + cache). Sibling modules:
+_stage_3_2_inject_images.py (image injection), _stage_3_4_review.py (content
+review), and _stage_3_7_embed.py (embeddings, runs from ingest.py post-ingest).
 Stage 3.6 (quality scoring) was removed 2026-06-25 (NashSU alignment).
+Stage 3.3 (cross-domain slug collision review) was removed 2026-06-26:
+NashSU has no `domain` field and no disambiguation concept — same-slug
+pages are merged at Stage 3.1 write time instead of renamed/warned.
 
 Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
 """
@@ -88,9 +91,11 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
       wiki/Book Title.md      → sources/Book Title.md
       wiki/Some Entity        → entities/Some Entity.md
 
-    Also performs cross-domain slug disambiguation (Plan B):
-    If a concept slug collides with an existing concept from a different domain,
-    auto-appends the current domain suffix.
+    Same-slug collisions are NOT resolved here — NashSU has no `domain` field
+    and no disambiguation concept; when a concept path already exists on disk,
+    Stage 3.1 write merges old + new (three-layer page merge, see
+    `stage_3_1_write_wiki_file`). Former "Plan B" cross-domain rename removed
+    2026-06-26 (NashSU alignment).
 
     Returns corrected path (relative to wiki/ dir, NO "wiki/" prefix) or None if uncorrectable.
     """
@@ -105,27 +110,10 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
     if not rel_path.endswith(".md"):
         rel_path += ".md"
 
-    # Read frontmatter type and domain from content (used by all cases below)
+    # Read frontmatter type from content (used by all cases below)
     fm_type = _extract_fm_field(content, "type") or None
-    fm_domain = _extract_fm_field(content, "domain") or None
 
-    # Plan B: Check for cross-domain slug collisions
     slug = stem
-    if config and fm_type == "concept" and fm_domain:
-        concepts_dir = config.wiki_dir / "concepts"
-        existing_path = concepts_dir / f"{slug}.md"
-        if existing_path.exists():
-            # Read existing page's domain
-            try:
-                existing_text = existing_path.read_text(encoding="utf-8")
-                existing_domain = _extract_fm_field(existing_text, "domain") or "general"
-                if existing_domain != fm_domain and existing_domain != "general" and fm_domain != "general":
-                    new_slug = f"{slug}-{fm_domain}"
-                    print(f"  ⚠️  [disambig] Slug collision: '{slug}' exists in domain '{existing_domain}', "
-                          f"new page from domain '{fm_domain}' → renaming to '{new_slug}'")
-                    slug = new_slug
-            except Exception:
-                pass  # can't read existing page, proceed with original slug
 
     # ── CJK slug rewriting (NashSU parity: rewriteIngestPathFromTitleForTargetLanguage) ──
     fm_title = _extract_fm_field(content, "title").strip("\"'") or None
@@ -556,192 +544,3 @@ unless the new source directly contradicts or answers them.
             print(f"[stage 3.5] Overview LLM update failed: {e}")
 
     return files_written
-
-
-
-
-# Domain detection keywords: title/subtitle → domain slug
-_DOMAIN_KEYWORDS: dict[str, str] = {
-    "thermal": "thermal-management",
-    "cooling": "thermal-management",
-    "heat transfer": "thermal-management",
-    "heat sink": "thermal-management",
-    "power electronic": "power-electronics",
-    "switching converter": "power-electronics",
-    "converter": "power-electronics",
-    "dc-dc": "power-electronics",
-    "electromagnetic compatibility": "emc",
-    "emc": "emc",
-    "emi": "emc",
-    "signal integrity": "signal-integrity",
-    "high-speed digital": "signal-integrity",
-    "high speed digital": "signal-integrity",
-    "transmission line": "signal-integrity",
-    "crosstalk": "signal-integrity",
-    "art of electronics": "circuit-fundamentals",
-    "electronic": "circuit-fundamentals",
-    "digital circuit": "digital-circuits",
-    "digital logic": "digital-circuits",
-    "pcb design": "pcb-design",
-    "printed circuit": "pcb-design",
-    "rf ": "rf-microwave",
-    "microwave": "rf-microwave",
-    "antenna": "rf-microwave",
-    "radar": "radar-systems",
-    "phased array": "radar-systems",
-    "operational amplifier": "analog-circuits",
-    "op-amp": "analog-circuits",
-    "analog circuit": "analog-circuits",
-    "filter design": "analog-circuits",
-    "mosfet": "semiconductor-devices",
-    "igbt": "semiconductor-devices",
-    "gan": "semiconductor-devices",
-    "sic": "semiconductor-devices",
-    "semiconductor": "semiconductor-devices",
-    "reliability": "reliability-engineering",
-    "failure analysis": "reliability-engineering",
-    "circuit": "circuit-fundamentals",
-    "electric circuit": "circuit-fundamentals",
-    "ohm": "circuit-fundamentals",
-    "kirchhoff": "circuit-fundamentals",
-}
-
-# Template type → domain mapping (datasheets are almost always semiconductor-devices)
-_TEMPLATE_DOMAIN: dict[str, str] = {
-    "digest-datasheet.md": "semiconductor-devices",
-    "digest-applicationnote.md": "general",    # application notes span multiple domains
-    "digest-designexample.md": "general",
-    "digest-standard.md": "general",
-    "digest-news.md": "general",
-}
-
-
-def _stage_3_3_list_existing_concepts_with_domains(config) -> dict[str, str]:
-    """Scan wiki/concepts/ and return dict of slug → domain for all concept pages.
-
-    Reads frontmatter to extract the domain field. Pages without domain default to 'general'.
-    """
-    result: dict[str, str] = {}
-    concepts_dir = config.wiki_dir / "concepts"
-    if not concepts_dir.exists():
-        return result
-
-    for f in concepts_dir.glob("*.md"):
-        slug = f.stem
-        try:
-            text = f.read_text(encoding="utf-8")
-            domain = _extract_fm_field(text, "domain")
-            result[slug] = domain if domain else "general"
-        except Exception:
-            result[slug] = "general"
-    return result
-
-
-def _stage_3_3_find_slug_collisions(
-    new_concepts: list[str],
-    existing_domains: dict[str, str],
-    current_domain: str,
-) -> list[tuple[str, str, str]]:
-    """Find new concept slugs that collide with existing ones from different domains.
-
-    Returns list of (slug, existing_domain, current_domain) for collisions.
-    Excludes same-domain matches (those are legitimate merges, not collisions).
-    """
-    collisions: list[tuple[str, str, str]] = []
-    for name in new_concepts:
-        # Generate expected slug (kebab-case, no special chars)
-        slug = re.sub(r'[<>:"|?*\\/]+', '', name).strip()
-        slug = re.sub(r'\s+', '-', slug).lower()
-        if slug in existing_domains:
-            existing_domain = existing_domains[slug]
-            if existing_domain != current_domain:
-                collisions.append((slug, existing_domain, current_domain))
-    return collisions
-
-
-def _stage_3_3_disambiguate_slug(slug: str, domain: str, existing_domains: dict[str, str]) -> str:
-    """Resolve a slug collision by appending the domain suffix.
-
-    Only appends if the slug already exists with a DIFFERENT domain.
-    If slug exists with the SAME domain, returns unchanged (merge case).
-    """
-    if slug not in existing_domains:
-        return slug  # no collision
-    existing_domain = existing_domains[slug]
-    if existing_domain == domain:
-        return slug  # same domain → merge, no rename needed
-    # Different domain → disambiguate
-    # Remove any existing domain suffix first (avoid double-suffix)
-    for d in _TEMPLATE_DOMAIN.values():
-        d_slug = d.replace("_", "-")
-        if slug.endswith(f"-{d_slug}"):
-            slug = slug[:-len(f"-{d_slug}")]
-            break
-    for d in _DOMAIN_KEYWORDS.values():
-        d_slug = d.replace("_", "-")
-        if slug.endswith(f"-{d_slug}"):
-            slug = slug[:-len(f"-{d_slug}")]
-            break
-    return f"{slug}-{domain}"
-
-
-def _stage_3_3_build_collision_warning(
-    collisions: list[tuple[str, str, str]],
-    existing_domains: dict[str, str],
-) -> str:
-    """Build a prompt section warning about slug collisions across domains."""
-    if not collisions:
-        return ""
-
-    lines = [
-        "",
-        "# ⚠️ SLUG COLLISION WARNINGS",
-        "The following concept names already exist in the wiki under DIFFERENT domains.",
-        "Use domain-specific slugs (e.g., `switch-power-electronics` instead of `switch`) to disambiguate.",
-        "",
-    ]
-    for slug, existing_domain, current_domain in collisions:
-        lines.append(f"- **{slug}** — already exists in `{existing_domain}`, new use is in `{current_domain}` → use `{_stage_3_3_disambiguate_slug(slug, current_domain, existing_domains)}`")
-
-    lines.append("")
-    return "\n".join(lines)
-
-
-def stage_3_3_slug_collision_review(file_blocks, current_domain, config, *, verbose: bool = False) -> dict:
-    """Stage 3.3: Detect new concept slugs colliding with existing concepts in OTHER domains.
-
-    Cross-domain collisions are flagged for disambiguation; same-domain overlaps
-    are legitimate merges (handled by Stage 2.5). Reads newly written concept
-    pages from file_blocks and the existing wiki. Returns a dict with the
-    collision count (items), the collision tuples, and a warning prompt section.
-    """
-    existing_domains = _stage_3_3_list_existing_concepts_with_domains(config)
-    new_concept_names = []
-    for path, content in file_blocks:
-        if "/concepts/" in path or path.startswith("concepts/"):
-            title = _extract_fm_field(content, "title")
-            if title:
-                new_concept_names.append(title)
-    # Stage 3.1 (write) has already written the new concept pages to disk, so
-    # they now appear in existing_domains. Without excluding them, each new
-    # concept matches ITS OWN just-written page; since the ingest's single
-    # current_domain rarely equals every new page's actual frontmatter domain,
-    # every new concept gets falsely flagged as a cross-domain collision with
-    # itself (observed: 8-10 spurious "collisions" that are all self-matches,
-    # contradicting Stage 2.9A's LLM judgment of 0).
-    new_slugs = set()
-    for name in new_concept_names:
-        s = re.sub(r'[<>:"|?*\\/]+', '', name).strip()
-        s = re.sub(r'\s+', '-', s).lower()
-        new_slugs.add(s)
-    existing_domains = {slug: d for slug, d in existing_domains.items()
-                        if slug not in new_slugs}
-    collisions = _stage_3_3_find_slug_collisions(
-        new_concept_names, existing_domains, current_domain)
-    warning = _stage_3_3_build_collision_warning(collisions, existing_domains)
-    if collisions:
-        print(f"  [stage 3.3] {len(collisions)} cross-domain slug collision(s) — "
-              f"disambiguation suggested")
-    elif verbose:
-        print(f"  [stage 3.3] No cross-domain slug collisions")
-    return {"items": len(collisions), "collisions": collisions, "warning": warning}

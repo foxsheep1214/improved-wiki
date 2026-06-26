@@ -338,8 +338,8 @@ Lint 页面位于运行时目录（不在 `wiki/` 下）——它们是派生诊
 | `orphan` | info | 无入向链接 |
 | `no-outlinks` | info | 无出向链接 |
 | `missing-frontmatter` | error | 缺 YAML frontmatter（improved-wiki 扩展） |
-| `missing-domain` | warning | concept/entity 页面缺少 `domain` 字段（Plan B 扩展） |
-| `invalid-domain` | warning | `domain` 值不在允许列表中（Plan B 扩展） |
+| `missing-domain` | warning | concept/entity 页面缺少 `domain` 字段（domain 供 graph 分区/query 用） |
+| `invalid-domain` | warning | `domain` 值不在允许列表中 |
 
 **`--strict` 模式**：`broken-link`、`missing-frontmatter`、`missing-domain` 触发 `exit 1`。
 

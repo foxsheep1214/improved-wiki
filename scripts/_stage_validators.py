@@ -204,19 +204,19 @@ def validate_stage_outputs(
         warnings.append(msg)
         print(f"  ⚠️  {msg}")
 
-    # Stage 3.6: image injection verification
+    # Stage 3.2: image injection verification
     if img_count > 0 and source_path.exists():
         source_content = source_path.read_text(encoding="utf-8")
         if "## Embedded Images" not in source_content:
             warnings.append("Stage 3.2: source page missing '## Embedded Images' section")
-            print(f"  ⚠️  Stage 3.6: image injection not found in source page")
+            print(f"  ⚠️  Stage 3.2: image injection not found in source page")
 
     # Stage 3: source page on disk (post-write verify)
     if not source_path.exists():
         warnings.append("Stage 3: source page does not exist after ingest")
         print(f"  ❌ Stage 3: source page missing")
 
-    # Stage 3.3: review pages in wiki/REVIEW/<type>/ (分子目录)
+    # Stage 3.4: review pages in wiki/REVIEW/<type>/ (分子目录)
     reviews_dir = config.wiki_dir / "REVIEW"
     if reviews_dir.exists():
         unresolved = 0

@@ -102,17 +102,12 @@ from _stage_2_4_generation import (
 )
 from _stage_2_6_source_page import stage_2_6_source_page
 from _stage_2_7_query_generation import stage_2_7_query_generation, _stage_2_7_build_prompt
-from _stage_2_9_comparison import (
-    stage_2_9_comparison_generation,
-    _stage_2_9_build_prompt_disambiguation,
-    _stage_2_9_build_prompt_in_source,
-)
+from _stage_2_9_comparison import stage_2_9_comparison_generation
 from _stage_3_4_review import stage_3_4_review_suggestions
 from _stage_3_write import (
     stage_3_1_write_wiki_file, stage_3_5_aggregate_repair,
     _stage_3_1_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
     _stage_3_1_sanitize_ingested_content,
-    _stage_3_1_wiki_path_for_source, _stage_3_1_merge_page_content,
     _stage_3_1_auto_correct_wiki_path, _stage_3_1_contains_cjk, _stage_3_1_make_cjk_slug,
     _stage_3_1_backup_existing_page,
 )
@@ -154,7 +149,7 @@ def _finalize_book(raw_file: Path, config: Config,
     batch_ingest — and the ``--watch`` queue daemon, which routes through
     batch_ingest — silently skipped embeddings and validation, never set the
     stage_4_1 marker, and left every batch-ingested book perpetually
-    "mid-flight" in _stage_0_2_should_skip (re-running 3.4–3.6 on each pass).
+    "mid-flight" in _stage_0_2_should_skip (re-running 3.4–3.7 on each pass).
 
     Embeddings stay mandatory / no-fallback here too: a missing Ollama stack
     raises (pauses this book, and in batch propagates to abort the run) rather

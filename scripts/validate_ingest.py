@@ -356,9 +356,9 @@ def main():
         check("source page exists", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 3.3 (rev): Review suggestions + review items
+    # Stage 3.4 (rev): Review suggestions + review items
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.3 rev] Review suggestions + items")
+    print("\n[Stage 3.4 rev] Review suggestions + items")
     rs_path = RUNTIME / "review-suggestions.json"
     if rs_path.exists():
         items = json.loads(rs_path.read_text()).get("items", [])
@@ -366,7 +366,7 @@ def main():
     elif entry:
         ri = stages.get("review_items", -1)
         if ri == 0:
-            note("auto-skipped", "<4 FILE blocks — ingest.py skips Stage 3.3 rev")
+            note("auto-skipped", "<4 FILE blocks — ingest.py skips Stage 3.4 rev")
         elif ri > 0:
             check("review-suggestions.json exists", False, f"cache says {ri} items but file not found")
         else:
@@ -388,7 +388,7 @@ def main():
     elif entry:
         ri = stages.get("review_items", -1)
         if ri <= 0:
-            note("no review items", "Stage 3.3 rev was auto-skipped")
+            note("no review items", "Stage 3.4 rev was auto-skipped")
         else:
             check("review output found", False, f"cache says {ri} items but no review files on disk")
     else:

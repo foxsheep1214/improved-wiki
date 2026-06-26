@@ -96,8 +96,13 @@ class MergeFastPathOnImagesOnlyDiff(unittest.TestCase):
         # output would be rejected. With strip, old_len is small. This test
         # ensures a merger_fn that returns the semantic body is accepted (not
         # rejected by an inflated threshold).
-        existing = _page(SEMANTIC_BODY + IMAGES_SECTION)
-        new = _page(SEMANTIC_BODY + "\n\n## Extra\nNew detail.\n")
+        #
+        # `new` uses a DIFFERENT source than `existing` so the idempotent
+        # re-merge fast path (fast path 5: existing.sources ⊇ new.sources)
+        # does NOT short-circuit — otherwise the merger_fn is never called and
+        # the threshold logic is never exercised.
+        existing = _page(SEMANTIC_BODY + IMAGES_SECTION, sources="raw/Book/X.pdf")
+        new = _page(SEMANTIC_BODY + "\n\n## Extra\nNew detail.\n", sources="raw/Book/Y.pdf")
 
         def merger(prev, merged, src):
             # Return a body that's reasonably sized relative to the STRIPPED

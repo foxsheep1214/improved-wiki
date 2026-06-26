@@ -356,8 +356,8 @@ def _do_prepare(
                   f"clean exit (--stop-after-stage=2)")
             raise PrepareStopAfter("2")
 
-        # ── Stage 2.5–2.9A tail: dedup → source page → queries → resolve → comparisons ──
-        # Cached as ONE segment under stage_2_9_done. 2.8 (LLM judge) and 2.9A
+        # ── Stage 2.5–2.9 tail: dedup → source page → queries → resolve → comparisons ──
+        # Cached as ONE segment under stage_2_9_done. 2.8 (LLM judge) and 2.9
         # (LLM comparison generation) can fire ConversationPending; without this
         # cache a resume would re-run the whole tail from 2.5. On cache hit,
         # restore the tail outputs from the artifact store and skip the segment.
@@ -432,7 +432,7 @@ def _do_prepare(
             query_count = len(query_blocks)
             comp_count = len(comp_blocks)
 
-            # Persist tail outputs + mark the segment done so a 2.8/2.9A
+            # Persist tail outputs + mark the segment done so a 2.8/2.9
             # ConversationPending resume restores instead of re-running.
             save_progress(config, h, {
                 "file_blocks": file_blocks,

@@ -231,13 +231,12 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     write_loop_done = (not write_phase_done
                        and is_stage_done(config, h, "write_loop_done"))
     if write_phase_done:
-        print("  [write] write_phase marker present — skipping 3.1/3.2/3.3")
+        print("  [write] write_phase marker present — skipping 3.1/3.2")
         _wp = get_stage_payload(config, h, "write_phase")
         files_written_paths = _wp.get("files_written", [])
         source_block = ("source", "")  # source page already written
         hard_failures = []
         stage_3_2_result = {"injected": _wp.get("images_injected", 0)}
-        stage_3_3_result = {"items": _wp.get("collision_items", 0)}
     elif write_loop_done:
         print("  [write] write_loop_done marker present — skipping 3.1 write loop")
         _wlp = get_stage_payload(config, h, "write_loop_done")
@@ -415,17 +414,13 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         if source_path.exists():
             stage_3_2_result = stage_3_2_inject_images(config, raw_file, source_path, method)
 
-        # Stage 3.3: Cross-domain slug collision review
-        from _stage_3_write import stage_3_3_slug_collision_review
-        stage_3_3_result = stage_3_3_slug_collision_review(
-            file_blocks, prepared.get("current_domain", "general"), config, verbose=verbose)
-
-        # Mark write phase complete so a post-review resume skips 3.1-3.3
+        # Mark write phase complete so a post-review resume skips 3.1-3.2
         # (prevents spurious page-merge / re-enrichment / re-injection).
+        # Stage 3.3 (cross-domain slug collision review) was removed 2026-06-26:
+        # same-slug collisions are merged at Stage 3.1 write (NashSU parity).
         mark_stage_done(config, h, "write_phase", payload={
             "files_written": files_written_paths,
             "images_injected": stage_3_2_result.get("injected", 0),
-            "collision_items": stage_3_3_result.get("items", 0),
         })
 
     # Reconstruct the review set from the pages actually on disk. Done on EVERY
