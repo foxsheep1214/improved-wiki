@@ -1,18 +1,18 @@
 ---
 name: improved-wiki
-description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). 20 active ingest Stages (Phase 0 included; 3.3/3.6 removed, slots retained) across 5 Phases (0-4). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode, the only path (no external API key) — the calling agent answers each prompt with the current conversation's model, spawning one sub-agent per pending prompt only when multi-book batch ingest produces more than one simultaneously-pending prompt. Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
+description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). 20 active ingest Stages (Phase 0 included) across 5 Phases (0-4). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode, the only path (no external API key) — the calling agent answers each prompt with the current conversation's model, spawning one sub-agent per pending prompt only when multi-book batch ingest produces more than one simultaneously-pending prompt. Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
 tags: [ingest, mandatory, nashsu, pipeline, scan-pdf, mineru, local-ocr, knowledge-graph, louvain]
 related_skills: [karpathy-llm-wiki, llm-wiki-local]
 ---
 
 # improved-wiki
 
-Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (20 active Stages across 5 Phases — Phase 0 included; 3.3/3.6 removed, slots retained: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich → 4 validation), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint). Graph auto-triggers post-ingest behind `AUTO_BUILD_GRAPH=1`.
+Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (20 active Stages across 5 Phases — Phase 0 included: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich → 4 validation), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint). Graph auto-triggers post-ingest behind `AUTO_BUILD_GRAPH=1`.
 
 ```
 Phase 0: [0.1 raw-naming] → [0.2 source dedup]  (pre-processing gates)
 Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→3.1→3.2→3.4→3.5→3.7→4.1
-        (execution order per _ingest_prepare.py::_do_prepare / _ingest_write.py::_do_write; 3.4 = review, runs after 3.2 on already-written files; 3.7 = embeddings; Stage 3.3 removed 2026-06-26 — same-slug collisions merged at 3.1 write, NashSU parity)
+        (execution order per _ingest_prepare.py::_do_prepare / _ingest_write.py::_do_write; 3.4 = review, runs after 3.2 on already-written files; 3.7 = embeddings; same-slug collisions merged at 3.1 write)
 
 Phase 0: Pre-processing gates  (raw naming, source dedup)
 Phase 1: Extraction            (text extraction, image extract, caption)
@@ -30,7 +30,7 @@ Graph: [Build Graph (4-signal)] → [Louvain communities] → [cohesion + gaps +
 
 ## LLM execution model
 
-Text generation has exactly one path (round iv, 2026-06-22), routed by
+Text generation has exactly one path, routed by
 `_llm_api.call_anthropic_protocol`:
 
 - **Conversation mode** (the only mode, no flag needed) — `ingest.py` writes a prompt
@@ -40,10 +40,8 @@ Text generation has exactly one path (round iv, 2026-06-22), routed by
   the process. Wikilink enrichment also routes through this path now (batched: one
   round-trip per ingest covering every page written, not one per page).
 
-There is no direct-API text-gen path. It existed briefly (round iii) to enable
-parallel chunk analysis and a faster enrichment pass, then was removed for good:
-this skill only runs from a CLI session with an agent present, so a separate paid
-text-gen API key had no real use case.
+There is no direct-API text-gen path: this skill only runs from a CLI session
+with an agent present, so a separate paid text-gen API key has no use case.
 
 Two other external-API dependencies (not text generation):
 - **Stage 1.3 image captioning** → MiniMax VLM (`anthropic/v1/messages`, one image per call with a context-aware prompt — NashSU `captionImage` parity). This is the only MiniMax dependency; it needs `MINIMAX_CN_API_KEY` / `LLM_API_KEY` for the caption endpoint only. **No fallback**: if the key is missing or caption calls fail consecutively after retries, the ingest **pauses** (raises) — it never silently degrades to OCR figure-text (policy 2026-06-24).
@@ -66,7 +64,7 @@ Two other external-API dependencies (not text generation):
 **Pipeline core**:
 - `references/ingest-stages-mandatory.md` — ingest stage checklist (Phase 0-4 + Lint + Graph, ⭐ easy-to-skip stages marked)
 - `references/query-generation.md` — Stage 2.7: auto-generate `wiki/queries/`
-- `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (in-source concept pairs only; cross-domain disambiguation removed 2026-06-26 — same-slug pages merge at 3.1)
+- `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (in-source concept pairs only)
 - `references/knowledge-gap-lint.md` — lint system: synthesis/finding/thesis/methodology formation triggers
 - `references/dedup-design.md` — two dedup tiers: intra-source (Stage 2.5, ingest-time) vs cross-source (CLI, lint-time); distinct responsibilities, not interchangeable
 - `references/scanned-pdf-ocr-pipeline.md` — minerU local API extraction pipeline (all PDFs: text/scanned/mixed unified)

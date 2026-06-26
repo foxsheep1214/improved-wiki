@@ -202,9 +202,9 @@ def stage_1_1_extract_text(file_path: Path, config: Config) -> tuple[str, str]:
     All PDFs (text / scanned / mixed) take ONE path: a persistent local minerU
     API server (mineru.cli.fast_api) + /file_parse per 50-page chunk, backend
     hybrid-engine (server default), parse_method auto — hybrid-engine routes
-    per-page (text layer present → txt, no OCR; absent → VLM OCR). The former
-    text/scanned/mixed branching is retired: hybrid-engine/auto does that
-    routing internally, so an external fitz classification would be redundant.
+    per-page (text layer present → txt, no OCR; absent → VLM OCR).
+    hybrid-engine/auto does that routing internally, so an external fitz
+    classification would be redundant.
 
     The ONE fitz-based override: a garbled-font PDF (text layer exists but is
     custom-encoded garbage, e.g. the Fuqua book) would be misread by auto — it
@@ -223,8 +223,7 @@ def stage_1_1_extract_text(file_path: Path, config: Config) -> tuple[str, str]:
     Backend choice rationale (verified 2026-06-23 on Wu text PDF + Huang scanned
     PDF): hybrid-engine matches or beats pipeline/vlm-engine on both text and
     scanned — identical CJK text, equal block-formula capture, 2.5x more inline
-    formulas on scanned vs pipeline. The `mineru -b pipeline` CLI hits a 502
-    bug in 3.4.0 and has been removed; the API path (hybrid-engine/auto) is the
+    formulas on scanned vs pipeline. The API path (hybrid-engine/auto) is the
     sole extraction backend.
     """
     if file_path.suffix.lower() in {".txt", ".md"}:
@@ -253,7 +252,7 @@ def stage_1_1_extract_text(file_path: Path, config: Config) -> tuple[str, str]:
     finally:
         _PARSE_METHOD_OVERRIDE = None
 
-    # Universal quality guard (formerly scanned/mixed-only).
+    # Universal quality guard.
     if len(text) < 2000:
         print(f"[extract] ⚠️  Only {len(text)} chars extracted -- quality may be poor")
         method = f"{method}-low-quality"

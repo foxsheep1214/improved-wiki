@@ -1,17 +1,7 @@
 
 from _stage_2_base import *
 
-# ──────────────────────────────────────────────────────────────────
-# Stage 2.9: In-source concept comparison ONLY.
-#
-# Cross-domain disambiguation (former 2.9A) was removed 2026-06-26
-# (NashSU alignment). NashSU has no `domain` field and no disambiguation
-# concept; same-slug pages are MERGED at write time (Stage 3.1,
-# `_stage_3_1_merge_page_content`) — frontmatter array union + LLM body
-# merge + locked fields — preserving multi-source provenance. Generating
-# separate disambiguation hub pages conflicted with that merge strategy.
-# See references/ingest-stages-mandatory.md.
-# ──────────────────────────────────────────────────────────────────
+# Stage 2.9: in-source concept comparison pages.
 
 
 def _stage_2_9_build_prompt_in_source(
@@ -109,9 +99,6 @@ def stage_2_9_comparison_generation(
 
     Returns (new_comparison_blocks, raw_response).
     Skips when fewer than 2 concepts were generated (no pair to compare).
-
-    Cross-domain disambiguation pages are NOT generated here — same-slug
-    pages across domains are merged at Stage 3.1 write time (NashSU parity).
     """
     # Get concept/entity titles from generated file blocks
     concept_titles: list[str] = []

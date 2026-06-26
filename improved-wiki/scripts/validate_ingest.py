@@ -319,7 +319,7 @@ def main():
         check("sources/concepts/entities all populated",
               len(sources) > 0 and len(concepts) > 0 and len(entities) > 0,
               f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
-    # Source page coverage (project-wide health check; folded from a removed aggregate-check stage)
+    # Source page coverage (project-wide health check)
     if CACHE_PATH.exists():
         _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
         _entries = _cache.get("entries", {})

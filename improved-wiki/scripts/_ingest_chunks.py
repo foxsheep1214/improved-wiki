@@ -116,10 +116,7 @@ def _run_chunk_pipeline(
         # Restore file_blocks DIRECTLY from the artifact store. The retired
         # design re-parsed ``raw_response`` (= "\n".join(block BODIES), bodies
         # without the ---FILE:...--- wrappers), so parse_file_blocks() returned
-        # [] and silently dropped every concept/entity page on resume
-        # (2026-06-25: lost all 60 Hansen blocks; only the source page
-        # survived, and 2.7/2.9 then had no concepts to work on). raw_response
-        # has since been removed entirely.
+        # [] and silently dropped every concept/entity page on resume.
         #
         # The ``file_blocks`` key being PRESENT (even as []) is an authoritative
         # restore: [] is the legitimate "every concept already overlaps an

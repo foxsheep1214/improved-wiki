@@ -41,12 +41,9 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
        and never re-merges already-written pages.
     3. **Fresh** — no source page: ingest from scratch.
 
-    The completion marker is the single skip signal. An earlier design also
-    re-parsed the source page's wikilinks here ("skip only if ≥80% of linked
-    concept/entity pages exist") but that block sat after an unconditional
-    ``return False`` and never ran — it was removed (2026-06-25) rather than
-    left as misleading dead code. stage_4_1 (set only after a verified,
-    embedded, validated ingest) is the authoritative completeness signal.
+    The completion marker is the single skip signal. stage_4_1 (set only
+    after a verified, embedded, validated ingest) is the authoritative
+    completeness signal.
     """
     h = file_sha256(raw_file)
     if is_stage_done(config, h, "stage_4_1"):

@@ -6,10 +6,8 @@ entry point the stage modules import) always delegates to the conversation
 router registered by ingest.py: the prompt is written to a file and
 ``ConversationPending`` is raised so the calling agent answers with the
 current conversation's model. Serial only — there is no concurrent text-gen
-path anymore (Stage 2.2's parallel chunk-analysis branch was removed with it).
+path.
 
-Direct HTTP text generation existed briefly (round iii, 2026-06-21) to enable
-parallel chunk analysis and a faster wikilink-enrichment pass. Removed again:
 this skill is only ever driven from a CLI session where an agent is already
 present to answer conversation prompts, so a separate paid text-gen API key
 added cost and complexity without a real use case. ``call_anthropic_direct``
@@ -103,9 +101,8 @@ def _is_retryable_exception(exc: Exception) -> bool:
 #   * "openai"    → POST {base_url}/chat/completions  (DeepSeek, OpenAI, …)
 #   * "anthropic" → POST {base_url}/v1/messages        (Anthropic, MiniMax, …)
 #
-# No longer reachable from `call_anthropic_protocol` (round iv removed the
-# direct-API text-gen path again). Kept as a plain HTTP helper for callers
-# outside the main ingest pipeline that explicitly want it, e.g.
+# Not used by the main ingest pipeline (conversation mode only). Kept as a
+# plain HTTP helper for callers that explicitly want direct API access, e.g.
 # `cross_source_dedup.py` (a standalone tool, not invoked from ingest.py).
 
 _DIRECT_MAX_RETRIES = 3

@@ -26,13 +26,13 @@ Output schema (one item per finding):
 Config:
   IMPROVED_WIKI_ROOT  project root (default: cwd)
 
-LLM execution: conversation mode only (round ii, 2026-06-20). The semantic
+LLM execution: conversation mode only. The semantic
 lint is one LLM call; this script writes a prompt file under
 <runtime>/conversation/semantic-lint/ and raises ConversationPending (exit
 101). The calling agent answers with the current conversation's model, writes
 the result, and re-invokes — the script reads the cached result and writes
 lint-semantic.json. No external LLM API key is needed (text generation is
-conversation-only). HTTP-direct LLM calls have been removed.
+conversation-only).
 
 Usage:
   ./wiki-lint-semantic.py              # scan and write lint-semantic.json

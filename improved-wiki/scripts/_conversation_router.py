@@ -1,4 +1,4 @@
-"""Conversation-mode LLM router + task manifest (round iv, 2026-06-22).
+"""Conversation-mode LLM router + task manifest.
 
 Extracted from ingest.py on 2026-06-23. This is the single text-generation
 path: ``call_anthropic_protocol`` writes the prompt to a file and raises
@@ -24,11 +24,10 @@ from _llm_api import conversation_handoff, set_conversation_router
 
 
 def call_anthropic_protocol(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
-    """Text-generation LLM call — conversation mode only (round iv, 2026-06-22).
+    """Text-generation LLM call — conversation mode only.
 
-    HTTP-direct text generation has been removed for good: this skill is only
-    ever driven from a CLI session with an agent present to answer prompts,
-    so there is no real use case for a separate paid text-gen API key. The
+    This skill is only ever driven from a CLI session with an agent present
+    to answer prompts, so there is no separate paid text-gen API key. The
     prompt is written to a file and ``ConversationPending`` is raised so the
     calling agent can answer with the current conversation's model; on
     re-invoke the cached result is read and returned.

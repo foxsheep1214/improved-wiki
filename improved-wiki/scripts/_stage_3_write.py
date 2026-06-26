@@ -1,13 +1,9 @@
 """Phase 3: Write pages to disk + aggregate repair.
 
-This module holds Stage 3.1 (write, incl. NashSU three-layer page merge for
+This module holds Stage 3.1 (write, incl. three-layer page merge for
 same-slug collisions) and 3.5 (aggregate repair + cache). Sibling modules:
 _stage_3_2_inject_images.py (image injection), _stage_3_4_review.py (content
 review), and _stage_3_7_embed.py (embeddings, runs from ingest.py post-ingest).
-Stage 3.6 (quality scoring) was removed 2026-06-25 (NashSU alignment).
-Stage 3.3 (cross-domain slug collision review) was removed 2026-06-26:
-NashSU has no `domain` field and no disambiguation concept — same-slug
-pages are merged at Stage 3.1 write time instead of renamed/warned.
 
 Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
 """
@@ -91,11 +87,9 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
       wiki/Book Title.md      → sources/Book Title.md
       wiki/Some Entity        → entities/Some Entity.md
 
-    Same-slug collisions are NOT resolved here — NashSU has no `domain` field
-    and no disambiguation concept; when a concept path already exists on disk,
-    Stage 3.1 write merges old + new (three-layer page merge, see
-    `stage_3_1_write_wiki_file`). Former "Plan B" cross-domain rename removed
-    2026-06-26 (NashSU alignment).
+    Same-slug collisions are not resolved here — when a path already exists
+    on disk, Stage 3.1 write merges old + new (three-layer page merge, see
+    `stage_3_1_write_wiki_file`).
 
     Returns corrected path (relative to wiki/ dir, NO "wiki/" prefix) or None if uncorrectable.
     """

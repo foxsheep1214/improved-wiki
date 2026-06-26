@@ -2,7 +2,7 @@
 
 > 把两个事物放在一起看才能看清各自特点。comparison 比 concept 高一层：concept 回答「X 是什么」，comparison 回答「X 和 Y 并置时各自优劣在哪里」。
 
-> **2026-06-26 NashSU 对齐**：原 2.9A（跨域消歧义页生成）已删除。NashSU 没有 `domain` 字段、没有消歧义概念——同名 slug 在 Stage 3.1 写盘时走三层 page-merge（frontmatter 数组 union + LLM body merge + locked 字段），保留多源 provenance。2.9A 生成的 `{{Term}} (disambiguation)` hub 页与 merge 策略冲突，故移除。本阶段现在只跑源内对比。
+> 同名 slug 的跨域碰撞在 Stage 3.1 写盘时走三层 page-merge 处理（frontmatter 数组 union + LLM body merge + locked 字段），不在此阶段生成消歧义页。
 
 ## 阶段契约（与代码一致）
 
@@ -26,7 +26,7 @@ comparison 在本阶段只自动生成一类：
 |--------|------|---------|
 | **2.9B** | 源内概念对比：同源内两个天然适合对比的概念（如 CCM vs DCM） | `concept ≥ 2` 时才运行 |
 
-跨域同名碰撞**不再生成消歧义页**——交给 Stage 3.1 写盘时的 page-merge 处理（NashSU parity）。`domain` frontmatter 字段保留，供 graph 分区 / query 用，不作碰撞判据。
+跨域同名碰撞交给 Stage 3.1 写盘时的 page-merge 处理（NashSU parity）。`domain` frontmatter 字段供 graph 分区 / query 用。
 
 ---
 

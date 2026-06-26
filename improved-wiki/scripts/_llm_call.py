@@ -6,11 +6,9 @@ shared :func:`_llm_api.conversation_handoff` primitive — the same primitive
 ingest.py's conversation router uses — so there is one cache-read / prompt-write
 / raise implementation across the skill.
 
-History: this module used to resolve an LLM endpoint (env vars /
-``~/.agents/config.json``) and make HTTP-direct calls for the dedup + semantic-
-lint sweeps. As of round ii (2026-06-20) text generation is conversation-mode
-only; round iv (2026-06-21) folds the handoff into ``_llm_api`` to eliminate the
-duplicate cache/handoff logic that used to live here.
+Text generation is conversation-mode only; the handoff lives in ``_llm_api``.
+This module resolves an LLM endpoint (env vars / ``~/.agents/config.json``) for
+the dedup + semantic-lint sweeps.
 """
 from __future__ import annotations
 

@@ -416,8 +416,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
         # Mark write phase complete so a post-review resume skips 3.1-3.2
         # (prevents spurious page-merge / re-enrichment / re-injection).
-        # Stage 3.3 (cross-domain slug collision review) was removed 2026-06-26:
-        # same-slug collisions are merged at Stage 3.1 write (NashSU parity).
         mark_stage_done(config, h, "write_phase", payload={
             "files_written": files_written_paths,
             "images_injected": stage_3_2_result.get("injected", 0),
@@ -542,14 +540,5 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # Stage 3.7 (embeddings) runs in the post-ingest section of ingest_one —
     # single entry point, mandatory attempt against local Ollama bge-m3
     # (prints an install reminder instead of silently skipping if unavailable).
-    #
-    # Stage 3.6 (quality scoring card) was REMOVED 2026-06-25 to align with
-    # NashSU, which has no ingest quality-score stage. The per-dimension
-    # scoring (text coverage / image quality / concept density / review
-    # quality / dedup) was a skill-specific addition with an un-tuned
-    # concept_density threshold (3 concepts/KB, unrealistic for books) and
-    # call-site bugs that zeroed two dimensions on resume. Factual counters
-    # (images_captioned, review_items, concepts_generated) remain in the
-    # cache stage-stats below as metadata; only the SCORING is gone.
 
     return {"status": "ok", "files_written": cache["entries"][rel]["filesWritten"]}
