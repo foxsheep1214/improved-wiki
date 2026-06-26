@@ -104,7 +104,7 @@ _AFFINITY: dict[tuple[str, str], float] = {
     ("entity", "comparison"): 1.0,
 }
 # Structural / navigational pages contribute little semantic affinity.
-_LOW_AFFINITY_TYPES = {"index", "overview", "schema", "log", "disambiguation", "methodology"}
+_LOW_AFFINITY_TYPES = {"index", "overview", "schema", "log", "methodology"}
 
 
 def type_affinity(t1: str, t2: str) -> float:

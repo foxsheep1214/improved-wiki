@@ -11,7 +11,7 @@ Covers the 2026-06-25 Orin re-ingest findings:
 
   #2: --delete left source-specific query/comparison pages behind, so a
   re-ingest stacked stale duplicates. _cleanup_orphan_pages now sweeps queries
-  and comparisons too (but preserves sources:[] disambiguation comparisons).
+  and comparisons too (but preserves sources:[] comparison hub pages).
 """
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
         p.write_text(f"---\ntype: x\nsources: {src_yaml}\n---\nbody\n", encoding="utf-8")
         return p
 
-    def test_orphan_query_and_comparison_removed_disambiguation_kept(self):
+    def test_orphan_query_and_comparison_removed_hub_kept(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _make_config(tmp)
@@ -103,7 +103,7 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
 
             q = self._write(cfg, "queries/ttp-measure.md", [src])           # orphan
             c_in = self._write(cfg, "comparisons/sw-vs-hw.md", [src])        # orphan
-            c_dis = self._write(cfg, "comparisons/switch-disambig.md", [])   # sources:[] -> keep
+            c_hub = self._write(cfg, "comparisons/switch-hub.md", [])   # sources:[] -> keep
             c_shared = self._write(cfg, "comparisons/shared.md",
                                    [src, "raw/Book/other.pdf"])              # multi-source -> keep
             con = self._write(cfg, "concepts/tmp.md", [src])                 # orphan concept
@@ -113,7 +113,7 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
             self.assertFalse(q.exists(), "orphan query should be deleted")
             self.assertFalse(c_in.exists(), "orphan in-source comparison should be deleted")
             self.assertFalse(con.exists(), "orphan concept should be deleted")
-            self.assertTrue(c_dis.exists(), "sources:[] disambiguation must be kept")
+            self.assertTrue(c_hub.exists(), "sources:[] hub comparison must be kept")
             self.assertTrue(c_shared.exists(), "multi-source comparison must be kept")
             self.assertEqual(removed, 3)
 
