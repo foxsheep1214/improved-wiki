@@ -2,7 +2,7 @@
 # wiki-lint.sh — Mechanical scan of wiki/ for structural problems.
 #
 # Lint phases (mirrors Ingest's Phase convention):
-#   Phase 0 · 前置检查     — lock + cleanup resolved lint pages
+#   Phase 0 · 前置检查     — lock
 #   Phase 1 · 结构扫描     — collect pages, run structural detection (6 categories)
 #   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic)
 #   Phase 3 · 写入         — write .lint-cache.json + .llm-wiki/lint/*.md + summary
@@ -21,8 +21,7 @@
 #
 # Output:
 #   - .llm-wiki/lint/*.md         — human-browsable lint pages (each finding one .md)
-#                                    Frontmatter: resolved: false → true to mark fixed
-#   - Cleanup: resolved-lint pages auto-deleted on next run
+#                                    Regenerated fresh on every run
 #   - .llm-wiki/lint-cache.json   — JSON array (for tooling)
 #   - stdout: summary line
 #
@@ -87,12 +86,7 @@ if [ -d "$WIKI_DIR/lint" ] && [ "$WIKI_DIR/lint" != "$LINT_PAGES_DIR" ]; then
 fi
 LINT_CACHE="$RUNTIME_DIR/lint-cache.json"
 LINT_LOCK="$RUNTIME_DIR/lint-lock"
-# Semantic cache: prefer runtime dir, fall back to .llm-wiki (backward compat)
-if [ -d "$WIKI_ROOT/.llm-wiki" ] && [ ! -d "$RUNTIME_DIR" ]; then
-  SEMANTIC_CACHE="$WIKI_ROOT/.llm-wiki/lint-semantic.json"
-else
-  SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
-fi
+SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
 
 VERBOSE=false
 SUMMARY=false
@@ -105,7 +99,6 @@ SWEEP=false
 DEDUP=false
 SEMANTIC_LIMIT=""
 SEMANTIC_TOKENS=""
-SEM_ARGS=()
 for arg in "$@"; do
   case $arg in
     --verbose|-v) VERBOSE=true ;;
@@ -157,24 +150,6 @@ fi
 trap 'rm -f "$LINT_LOCK"' EXIT
 touch "$LINT_LOCK"
 
-# ---------- Cleanup: remove resolved lint pages ----------
-if [ "$JSON_ONLY" != true ] && [ -d "$LINT_PAGES_DIR" ]; then
-  REMOVED=0
-  # find -print0 + read -d '' so filenames with spaces (macOS " 2.md"
-  # collision suffixes) survive — unquoted `for f in *.md` word-splits spaced
-  # names into two tokens and rm silently fails on both halves.
-  while IFS= read -r -d '' f; do
-    [ -f "$f" ] || continue
-    if grep -q '^resolved:\s*true\s*$' "$f"; then
-      rm -f "$f"
-      REMOVED=$((REMOVED + 1))
-    fi
-  done < <(find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' -print0)
-  if [ "$REMOVED" -gt 0 ]; then
-    echo "[lint] Cleaned $REMOVED resolved lint page(s)"
-  fi
-fi
-
 # ---------- Run the python linter ----------
 # All the heavy lifting is in Python for clean CJK handling.
 # Use a temp .py file rather than heredoc for maximum compatibility with
@@ -211,12 +186,13 @@ STATE_SKIP = {"lint-cache.json", "ingest-cache.json", "ingest-queue.json", "inge
               "domains.md"}  # domains.md is a project config file, not a wiki page
 ANCHOR_FILES = {"index.md", "log.md"}  # NashSU parity: only these 2 excluded from structural lint
 
+SKIP_DIRS = {"lint", "REVIEW", "media"}
 pages: dict[str, Path] = {}          # original stem -> Path
 for path in sorted(wiki_dir.rglob("*.md")):
     rel = path.relative_to(wiki_dir)
     if rel.name in STATE_SKIP or rel.name in ANCHOR_FILES:
         continue
-    if rel.parts[0] == "lint":
+    if rel.parts and rel.parts[0] in SKIP_DIRS:
         continue
     rel_stem = str(rel.with_suffix(""))       # e.g. "entities/foo-bar"
     pages[rel_stem] = path
@@ -256,11 +232,10 @@ for _f in run_structural_lint(structural_pages):
     _f["createdAt"] = now_ms
     findings.append(_f)
 
-# 6. Find missing frontmatter
+# 4. Find missing frontmatter
 for stem, path in pages.items():
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
+    text = contents.get(stem)
+    if text is None:
         continue
     if not re.match(r"^---\s*\n", text):
         findings.append({
@@ -272,7 +247,7 @@ for stem, path in pages.items():
             "createdAt": now_ms,
         })
 
-# 7. Find pages with missing or invalid 'domain' field
+# 5. Find pages with missing or invalid 'domain' field
 #    Domain is required for concept and entity pages (used for graph
 #    partitioning and query routing — not for slug collision, which is
 #    handled by Stage 3.1 page-merge since 2026-06-26).
@@ -308,9 +283,8 @@ for stem, path in pages.items():
     page_dir = rel.split("/")[0] if "/" in rel else ""
     if page_dir not in DOMAIN_APPLICABLE_DIRS:
         continue
-    try:
-        text = path.read_text(encoding="utf-8")
-    except Exception:
+    text = contents.get(stem)
+    if text is None:
         continue
     fm_match = re.match(r'^---\s*\n(.*?)\n---', text, re.DOTALL)
     if not fm_match:
@@ -441,17 +415,13 @@ type: lint
 lint_type: {ftype}
 severity: {severity}
 page: \"{page_ref}\"
-resolved: false
 created: {date_str}
 ---
 
 # {icon} [{ftype}] {page_ref}
 
 {detail}
-{suggestion}
-## Resolution
-_修复后，将 frontmatter 中 \`resolved: false\` 改为 \`resolved: true\`，下次 lint 时自动清理。_
-'''
+{suggestion}'''
     tmp = page_path.with_suffix(page_path.suffix + '.tmp')
     tmp.write_text(fm, encoding='utf-8')
     tmp.rename(page_path)
@@ -593,79 +563,16 @@ PYEOF
   echo "[lint] Auto-fix: repaired $FIXED issues"
 fi
 
-# ── Auto-fix links (--fix-links; applies the suggestion engine's output) ──
-# broken-link → replace [[broken]] with [[suggested]] in the source page
-# no-outlinks → append a "## Related" link to the suggested target
-# orphan      → append a "## Related" link to this page in the suggested source
-# Only acts when a suggestion exists. Wiki pages are edited in place; re-run
-# wiki-lint.sh afterwards to confirm the findings clear.
+# ── Auto-fix links (--fix-links; delegates to wiki-lint-fix.py via cache) ──
+# broken-link → rewrite [[broken]] → [[suggested]] (preserves alias)
+# no-outlinks → append [[suggested]] under ## Related
+# orphan      → append [[orphan]] in the suggested source page
+# Reads suggestions from $LINT_CACHE — no rescan, no O(n²) overhead.
 if [ "$FIX_LINKS" = true ]; then
   echo "[lint] Auto-fix-links: applying suggestion-engine wikilink fixes..."
-  FIXED_LINKS=$(python3 << PYEOF
-import json, re, pathlib
-with open('${LINT_CACHE}', 'r') as fh:
-    cache = json.load(fh)
-wiki_dir = pathlib.Path('${WIKI_DIR}')
-items = cache if isinstance(cache, list) else cache.get('findings', cache.get('items', []))
-
-def _slug(short_name):
-    return re.sub(r'\.md\$', '', short_name)
-
-fixed = 0
-for f in items:
-    t = f.get('type', '')
-    page_rel = f.get('page', '')
-    if not page_rel:
-        continue
-    src_path = wiki_dir / page_rel
-
-    if t == 'broken-link':
-        sug = f.get('suggested_target')
-        broken = f.get('broken_target')
-        if not sug or not broken or not src_path.exists():
-            continue
-        sug_slug = _slug(sug)
-        # Replace [[broken]] and [[broken|alias]] → [[suggested|alias]] (or [[suggested]])
-        pattern = re.compile(r'\[\[' + re.escape(broken) + r'(\|[^\]]+)?\]\]')
-        new_text, n = pattern.subn(
-            lambda m: f'[[{sug_slug}{m.group(1) or ""}]]',
-            src_path.read_text(encoding='utf-8'),
-        )
-        if n > 0:
-            src_path.write_text(new_text, encoding='utf-8')
-            fixed += n
-            print(f"  fixed broken-link: {page_rel} [[{broken}]] → [[{sug_slug}]] ({n}x)")
-
-    elif t == 'no-outlinks':
-        sug = f.get('suggested_target')
-        if not sug or not src_path.exists():
-            continue
-        sug_slug = _slug(sug)
-        text = src_path.read_text(encoding='utf-8')
-        addition = f"\n\n## Related\n\n- [[{sug_slug}]]\n"
-        if f'[[{sug_slug}]]' not in text:
-            src_path.write_text(text.rstrip() + addition, encoding='utf-8')
-            fixed += 1
-            print(f"  fixed no-outlinks: {page_rel} → appended [[{sug_slug}]]")
-
-    elif t == 'orphan':
-        sug = f.get('suggested_source')
-        if not sug:
-            continue
-        sug_path = wiki_dir / sug
-        if not sug_path.exists():
-            continue
-        orphan_slug = _slug(page_rel)
-        text = sug_path.read_text(encoding='utf-8')
-        addition = f"\n\n## Related\n\n- [[{orphan_slug}]]\n"
-        if f'[[{orphan_slug}]]' not in text:
-            sug_path.write_text(text.rstrip() + addition, encoding='utf-8')
-            fixed += 1
-            print(f"  fixed orphan: {sug} → appended [[{orphan_slug}]]")
-print(fixed)
-PYEOF
-)
-  echo "[lint] Auto-fix-links: applied $FIXED_LINKS wikilink fix(es)"
+  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply \
+    --from-cache "$LINT_CACHE" \
+    --project-root "$WIKI_ROOT"
 fi
 
 exit 0

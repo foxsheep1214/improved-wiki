@@ -358,7 +358,6 @@ raw_type: {raw_type}
 severity: {sev}
 page: "{page_ref}"
 affected_pages: [{', '.join(affected)}]
-resolved: false
 created: {date_str}
 ---
 
@@ -368,8 +367,6 @@ created: {date_str}
 
 {"## Affected Pages" if affected else ""}
 {affected_links}
-{"## Resolution" if affected else "## Resolution"}
-_修复后，将 frontmatter 中 `resolved: false` 改为 `resolved: true`，下次 lint 时自动清理。_
 """
         page_path = lint_dir / filename
         tmp = page_path.with_suffix(page_path.suffix + ".tmp")

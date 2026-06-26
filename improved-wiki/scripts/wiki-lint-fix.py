@@ -13,13 +13,15 @@ Idempotent: re-running on a clean wiki is a no-op. ``--dry-run`` previews
 without writing.
 
 Usage:
-  python3 wiki-lint-fix.py                       # dry-run preview
-  python3 wiki-lint-fix.py --apply               # write fixes
+  python3 wiki-lint-fix.py                                              # dry-run preview
+  python3 wiki-lint-fix.py --apply                                      # write fixes
   python3 wiki-lint-fix.py --apply --wiki-root /path/to/project/wiki
+  python3 wiki-lint-fix.py --apply --from-cache .llm-wiki/lint-cache.json  # skip rescan
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -175,6 +177,8 @@ def main() -> int:
                         help="Wiki dir (default: <project>/wiki).")
     parser.add_argument("--project-root", type=Path, default=None,
                         help="Project root (default: $IMPROVED_WIKI_ROOT or cwd).")
+    parser.add_argument("--from-cache", type=Path, default=None,
+                        help="Load findings from an existing lint-cache.json instead of rescanning.")
     args = parser.parse_args()
 
     project_root = args.project_root or Path(
@@ -184,18 +188,31 @@ def main() -> int:
         print(f"ERROR: wiki/ not found at {wiki_dir}", file=sys.stderr)
         return 2
 
-    pages = _collect_pages(wiki_dir)
-    if not pages:
-        print(f"No wiki pages under {wiki_dir}")
-        return 0
-
-    print(f"[lint-fix] Scanning {len(pages)} pages under {wiki_dir}")
-    findings = run_structural_lint(pages, with_suggestions=True)
-    broken = [f for f in findings if f["type"] == "broken-link"]
-    orphans = [f for f in findings if f["type"] == "orphan"]
-    no_out = [f for f in findings if f["type"] == "no-outlinks"]
-    print(f"[lint-fix] findings: broken-link={len(broken)} "
-          f"orphan={len(orphans)} no-outlinks={len(no_out)}")
+    if args.from_cache:
+        cache_path = args.from_cache
+        if not cache_path.exists():
+            print(f"ERROR: cache not found: {cache_path}", file=sys.stderr)
+            return 2
+        all_findings = json.loads(cache_path.read_text(encoding="utf-8"))
+        findings = [f for f in all_findings
+                    if f.get("type") in ("broken-link", "orphan", "no-outlinks")]
+        broken  = [f for f in findings if f["type"] == "broken-link"]
+        orphans = [f for f in findings if f["type"] == "orphan"]
+        no_out  = [f for f in findings if f["type"] == "no-outlinks"]
+        print(f"[lint-fix] from cache ({cache_path.name}): "
+              f"broken-link={len(broken)} orphan={len(orphans)} no-outlinks={len(no_out)}")
+    else:
+        pages = _collect_pages(wiki_dir)
+        if not pages:
+            print(f"No wiki pages under {wiki_dir}")
+            return 0
+        print(f"[lint-fix] Scanning {len(pages)} pages under {wiki_dir}")
+        findings = run_structural_lint(pages, with_suggestions=True)
+        broken  = [f for f in findings if f["type"] == "broken-link"]
+        orphans = [f for f in findings if f["type"] == "orphan"]
+        no_out  = [f for f in findings if f["type"] == "no-outlinks"]
+        print(f"[lint-fix] findings: broken-link={len(broken)} "
+              f"orphan={len(orphans)} no-outlinks={len(no_out)}")
 
     actions = plan_fixes(findings)
     mode = "DRY-RUN" if not args.apply else "APPLY"

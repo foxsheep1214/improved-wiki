@@ -23,9 +23,9 @@ sys.path.insert(0, str(_script_dir))
 
 from _lint_suggest import run_structural_lint  # noqa: E402
 
-# Anchor files excluded from orphan/outlink checks (mirror _lint_suggest +
-# validate_ingest). overview.md is an aggregate page, not a content page.
-_ANCHOR_FILES = {"index.md", "log.md", "overview.md"}
+# NashSU parity: only index.md and log.md excluded (mirror _lint_suggest +
+# wiki-lint.sh). overview.md is scanned like any content page.
+_ANCHOR_FILES = {"index.md", "log.md"}
 
 
 def collect_pages(wiki_root: Path) -> list[tuple[str, str]]:

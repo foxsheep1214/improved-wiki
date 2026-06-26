@@ -119,6 +119,8 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=20, help="Max results (default: 20)")
     parser.add_argument("--keyword-only", action="store_true",
                         help="Skip the vector path (pure keyword, no Ollama needed)")
+    parser.add_argument("--json", action="store_true",
+                        help="Output results as a JSON array (machine-readable, for agent use)")
     args = parser.parse_args()
 
     project = Path(args.project).expanduser()
@@ -153,8 +155,15 @@ def main() -> int:
         results = vec_results
         mode = "vector"
     else:
-        print(f"No results for: {args.query}")
+        if args.json:
+            print("[]")
+        else:
+            print(f"No results for: {args.query}")
         return 1
+
+    if args.json:
+        print(json.dumps(results, ensure_ascii=False))
+        return 0
 
     print(f"{len(results)} result(s) for: {args.query}  [mode={mode}]\n")
     for i, r in enumerate(results, 1):

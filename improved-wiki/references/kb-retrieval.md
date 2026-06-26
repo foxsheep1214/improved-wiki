@@ -81,14 +81,28 @@ search_wiki.py "查询" --project <项目>          # 语义搜索
 ### 5.1 search_wiki.py — 语义搜索
 
 ```bash
-# 基本搜索
+# 人类可读输出（交互调试用）
 python3 scripts/search_wiki.py "buck ringing" \
   --project ~/Documents/知识库/HardwareWiki
 
+# Agent 调用：--json 输出 JSON 数组，便于解析
+python3 scripts/search_wiki.py "LC谐振" \
+  --project ~/Documents/知识库/HardwareWiki --json
+
 # 更多结果
 python3 scripts/search_wiki.py "LC谐振导致振铃" \
-  --project ~/Documents/知识库/硬件设计知识库 --top 10
+  --project ~/Documents/知识库/硬件设计知识库 --top 10 --json
 ```
+
+`--json` 返回格式（每条结果）：
+```json
+[{"path": "concepts/buck-converter.md", "title": "Buck 变换器", "snippet": "...", "score": 0.032, "vector_score": 0.891, "title_match": true}]
+```
+
+**Agent 标准工作流**：
+1. `search_wiki.py "query" --project <项目> --json` → 解析 JSON
+2. 取前 N 条的 `path` → `Read <项目>/wiki/<path>` 读全文
+3. 引用具体段落回答
 
 **前提**：需要先建 LanceDB 索引（一次性）：
 ```bash
