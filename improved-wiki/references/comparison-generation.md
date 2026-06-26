@@ -22,15 +22,13 @@
 
 comparison 在本阶段只自动生成一类：
 
-| 子阶段 | 场景 | 触发门槛 |
-|--------|------|---------|
-| **2.9B** | 源内概念对比：同源内两个天然适合对比的概念（如 CCM vs DCM） | `concept ≥ 2` 时才运行 |
+本阶段只生成一类对比：同源内两个天然适合对比的概念（如 CCM vs DCM），`concept ≥ 2` 时才运行。
 
 跨域同名碰撞交给 Stage 3.1 写盘时的 page-merge 处理（NashSU parity）。`domain` frontmatter 字段供 graph 分区 / query 用。
 
 ---
 
-## 2.9B · 源内概念对比（concept ≥ 2 才运行）
+## 源内概念对比（concept ≥ 2 才运行）
 
 **目的**：从本次生成的 concept 中找出**天然适合对比理解**的概念对。`len(concept_titles) < 2` 时整段跳过。
 

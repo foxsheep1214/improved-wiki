@@ -80,7 +80,7 @@ Two other external-API dependencies (not text generation):
 
 **Conventions**:
 - `references/naming-conventions.md` — file naming, frontmatter, wikilink, directory conventions (NashSU-aligned)
-- `references/domains.md` — domain classification for disambiguation
+- `references/domains.md` — domain classification for graph partitioning / query routing
 - `references/raw-layout-compat.md` — raw/ layout convention (type subdirs, nested, template mapping)
 
 **Operations**:

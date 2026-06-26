@@ -122,26 +122,26 @@ def stage_2_9_comparison_generation(
     comp_tokens = config.compute_max_tokens(4096)
     all_blocks: list[tuple[str, str]] = []
 
-    # 2.9B: In-source concept comparison
-    response_29b = ""
+    # In-source concept comparison
+    response = ""
     if len(concept_titles) >= 2:
         if verbose:
             print(f"[stage 2.9] In-source comparison — {len(concept_titles)} concepts...")
-        prompt_29b = _stage_2_9_build_prompt_in_source(
+        prompt = _stage_2_9_build_prompt_in_source(
             concept_titles, file_path, config, current_domain
         )
         try:
-            response_29b, _stop_29b = call_anthropic_protocol(prompt_29b, config, max_tokens=comp_tokens)
+            response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)
         except Exception as e:
             print(f"[stage 2.9] LLM call failed: {e}")
-            response_29b = ""
-        if response_29b:
-            blocks_29b = parse_file_blocks(response_29b)
-            if blocks_29b:
-                print(f"[stage 2.9] {len(blocks_29b)} comparison page(s)")
-                for path, _ in blocks_29b:
+            response = ""
+        if response:
+            blocks = parse_file_blocks(response)
+            if blocks:
+                print(f"[stage 2.9] {len(blocks)} comparison page(s)")
+                for path, _ in blocks:
                     print(f"  → {path}")
-                all_blocks.extend(blocks_29b)
+                all_blocks.extend(blocks)
             else:
                 print("[stage 2.9] no comparison pairs found")
     else:
@@ -153,4 +153,4 @@ def stage_2_9_comparison_generation(
     else:
         print("[stage 2.9] No comparisons generated")
 
-    return all_blocks, response_29b
+    return all_blocks, response
