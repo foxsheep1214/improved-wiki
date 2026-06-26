@@ -421,6 +421,162 @@ def write_graph_json(out: Path, g: nx.Graph, pages: dict[str, Page],
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+_GRAPH_HTML_COLORS = [
+    "#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f",
+    "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
+]
+
+
+def write_graph_html(out: Path, g: nx.Graph, pages: dict[str, Page],
+                     communities: list[Community], gaps: dict) -> None:
+    """Write an interactive D3.js force-directed HTML graph next to graph.json."""
+    node_community: dict[str, int] = {}
+    for c in communities:
+        for n in c.nodes:
+            node_community[n] = c.cid
+
+    nodes_js = []
+    for nid in sorted(g.nodes):
+        p = pages.get(nid)
+        title = p.title if p else nid.split("/")[-1]
+        cid = node_community.get(nid, -1)
+        color = _GRAPH_HTML_COLORS[cid % len(_GRAPH_HTML_COLORS)] if cid >= 0 else "#888"
+        nodes_js.append({"id": nid, "label": title[:30], "color": color, "community": cid})
+
+    edges_js = [
+        {"source": u, "target": v, "weight": round(d["weight"], 2)}
+        for u, v, d in sorted(g.edges(data=True), key=lambda e: -e[2]["weight"])
+    ]
+
+    legend_items = []
+    for c in communities:
+        if c.cohesion >= COHESION_LOW:
+            p = pages.get(c.hub)
+            hub_label = (p.title if p else c.hub.split("/")[-1])[:35]
+            legend_items.append({
+                "color": _GRAPH_HTML_COLORS[c.cid % len(_GRAPH_HTML_COLORS)],
+                "label": f"C{c.cid}: {hub_label}",
+                "size": len(c.nodes),
+                "cohesion": round(c.cohesion, 3),
+            })
+
+    gaps_html = "".join(
+        f'<div class="gap-item">&#9651; {u.split("/")[-1][:22]} &harr; {v.split("/")[-1][:22]}</div>\n'
+        for u, v, _w, _f in gaps["suggested_links"][:5]
+    )
+    legend_html = "".join(
+        f'<div class="legend-item" onclick="highlightCommunity(\'{item["color"]}\')"'
+        f' style="border-left:3px solid {item["color"]}">'
+        f'<div class="legend-dot" style="background:{item["color"]}"></div>'
+        f'<div class="legend-text">{item["label"]}'
+        f'<br><span class="legend-meta">{item["size"]} pages, cohesion {item["cohesion"]}</span>'
+        f'</div></div>\n'
+        for item in legend_items
+    )
+
+    nodes_json = json.dumps(nodes_js, ensure_ascii=False)
+    edges_json = json.dumps(edges_js)
+    total_pages = len(pages)
+    total_edges = g.number_of_edges()
+    total_communities = len(communities)
+
+    html = (
+        '<!DOCTYPE html>\n<html lang="zh">\n<head>\n<meta charset="utf-8">\n'
+        '<title>Knowledge Graph</title>\n<style>\n'
+        'body{margin:0;background:#111;color:#eee;font-family:sans-serif}\n'
+        '#header{padding:12px 20px;background:#1a1a2e;border-bottom:1px solid #333;display:flex;align-items:center;gap:16px}\n'
+        '#header h2{margin:0;font-size:16px;color:#7eb8f7}\n'
+        '#hstats{font-size:12px;color:#aaa}\n'
+        '#container{display:flex;height:calc(100vh - 52px)}\n'
+        '#sidebar{width:240px;background:#161625;padding:12px;overflow-y:auto;border-right:1px solid #333;flex-shrink:0}\n'
+        '#sidebar h3{margin:0 0 8px;font-size:12px;color:#aaa;text-transform:uppercase;letter-spacing:1px}\n'
+        '.legend-item{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:11px;cursor:pointer;padding:4px 6px;border-radius:4px}\n'
+        '.legend-item:hover{background:#222}\n'
+        '.legend-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}\n'
+        '.legend-text{line-height:1.3}\n'
+        '.legend-meta{color:#888;font-size:10px}\n'
+        '#canvas{flex:1}\n'
+        'svg{width:100%;height:100%}\n'
+        '.node circle{stroke:#111;stroke-width:1px;cursor:pointer}\n'
+        '.node circle:hover{stroke:#fff;stroke-width:2px}\n'
+        '.node text{font-size:9px;fill:#ccc;pointer-events:none}\n'
+        '.link{stroke:#444;stroke-opacity:0.4}\n'
+        '#tooltip{position:fixed;background:#1e1e3a;border:1px solid #555;border-radius:6px;'
+        'padding:8px 12px;font-size:12px;pointer-events:none;display:none;max-width:300px;line-height:1.5;z-index:100}\n'
+        '#search{width:100%;box-sizing:border-box;background:#222;border:1px solid #444;color:#eee;'
+        'padding:6px 8px;border-radius:4px;font-size:12px;margin-bottom:10px}\n'
+        '.gap-item{font-size:10px;color:#f9a825;margin:4px 0;padding:3px 0;border-bottom:1px solid #222}\n'
+        '</style>\n</head>\n<body>\n'
+        '<div id="header">\n'
+        '  <h2>&#128375; Knowledge Graph</h2>\n'
+        f'  <div id="hstats">{total_pages} pages &nbsp;|&nbsp; {total_edges} edges &nbsp;|&nbsp; {total_communities} communities</div>\n'
+        '</div>\n'
+        '<div id="container">\n'
+        '  <div id="sidebar">\n'
+        '    <input id="search" type="text" placeholder="Search nodes..." oninput="filterNodes(this.value)">\n'
+        '    <h3>Communities</h3>\n'
+        f'    {legend_html}'
+        '    <br>\n'
+        '    <h3>Knowledge Gaps</h3>\n'
+        f'    {gaps_html}'
+        '  </div>\n'
+        '  <div id="canvas"></div>\n'
+        '</div>\n'
+        '<div id="tooltip"></div>\n'
+        '<script src="https://d3js.org/d3.v7.min.js"></script>\n'
+        '<script>\n'
+        f'const nodes={nodes_json};\n'
+        f'const links={edges_json};\n'
+        'const canvasEl=document.getElementById("canvas");\n'
+        'const W=canvasEl.clientWidth||1200,H=canvasEl.clientHeight||800;\n'
+        'const svg=d3.select("#canvas").append("svg").attr("viewBox",[0,0,W,H])\n'
+        '  .call(d3.zoom().on("zoom",e=>gel.attr("transform",e.transform)));\n'
+        'const gel=svg.append("g");\n'
+        'const deg={};\n'
+        'links.forEach(l=>{deg[l.source]=(deg[l.source]||0)+1;deg[l.target]=(deg[l.target]||0)+1;});\n'
+        'function nodeR(d){return Math.min(3+Math.sqrt(deg[d.id]||0)*1.2,18);}\n'
+        'const sim=d3.forceSimulation(nodes)\n'
+        '  .force("link",d3.forceLink(links).id(d=>d.id).distance(30).strength(d=>Math.min(d.weight/15,0.5)))\n'
+        '  .force("charge",d3.forceManyBody().strength(-60))\n'
+        '  .force("center",d3.forceCenter(W/2,H/2))\n'
+        '  .force("collision",d3.forceCollide().radius(d=>nodeR(d)+2));\n'
+        'const link=gel.append("g").selectAll("line").data(links).join("line").attr("class","link")\n'
+        '  .attr("stroke-width",d=>Math.min(d.weight/8,2));\n'
+        'const node=gel.append("g").selectAll("g.node").data(nodes).join("g").attr("class","node")\n'
+        '  .call(d3.drag()\n'
+        '    .on("start",(e,d)=>{if(!e.active)sim.alphaTarget(0.3).restart();d.fx=d.x;d.fy=d.y;})\n'
+        '    .on("drag", (e,d)=>{d.fx=e.x;d.fy=e.y;})\n'
+        '    .on("end",  (e,d)=>{if(!e.active)sim.alphaTarget(0);d.fx=null;d.fy=null;}));\n'
+        'const tt=document.getElementById("tooltip");\n'
+        'node.append("circle").attr("r",nodeR).attr("fill",d=>d.color)\n'
+        '  .on("mouseover",(e,d)=>{\n'
+        '    tt.style.display="block";tt.style.left=(e.clientX+12)+"px";tt.style.top=(e.clientY-20)+"px";\n'
+        '    tt.innerHTML="<b>"+d.label+"</b><br><span style=\'color:#aaa;font-size:10px\'>"+d.id+"</span><br>Degree: "+(deg[d.id]||0);\n'
+        '  })\n'
+        '  .on("mousemove",e=>{tt.style.left=(e.clientX+12)+"px";tt.style.top=(e.clientY-20)+"px";})\n'
+        '  .on("mouseout",()=>{tt.style.display="none";});\n'
+        'node.filter(d=>(deg[d.id]||0)>15).append("text")\n'
+        '  .attr("dy",d=>nodeR(d)+10).attr("text-anchor","middle").text(d=>d.label.substring(0,20));\n'
+        'sim.on("tick",()=>{\n'
+        '  link.attr("x1",d=>d.source.x).attr("y1",d=>d.source.y)\n'
+        '      .attr("x2",d=>d.target.x).attr("y2",d=>d.target.y);\n'
+        '  node.attr("transform",d=>"translate("+d.x+","+d.y+")");\n'
+        '});\n'
+        'function filterNodes(q){\n'
+        '  const lo=q.toLowerCase();\n'
+        '  node.style("opacity",d=>(!lo||d.id.toLowerCase().includes(lo)||d.label.toLowerCase().includes(lo))?1:0.08);\n'
+        '  link.style("opacity",()=>lo?0.05:0.4);\n'
+        '}\n'
+        'function highlightCommunity(color){\n'
+        '  node.select("circle").attr("stroke",d=>d.color===color?"#fff":"#111")\n'
+        '    .attr("stroke-width",d=>d.color===color?2:1);\n'
+        '}\n'
+        '</script>\n</body>\n</html>'
+    )
+
+    out.write_text(html, encoding="utf-8")
+
+
 def write_knowledge_gaps(out: Path, gaps: dict, pages: dict[str, Page]) -> None:
     lines: list[str] = ["# Knowledge Gaps", ""]
     lines.append(f"- Isolated pages: **{len(gaps['isolated'])}**")
@@ -542,6 +698,9 @@ def run_build(wiki_root: Path, output: Path | None, dry_run: bool) -> int:
     graph_json = output or (runtime / "graph.json")
     write_graph_json(graph_json, g, pages, communities, gaps, stats)
     print(f"📁 Wrote {graph_json}")
+    graph_html = graph_json.with_suffix(".html")
+    write_graph_html(graph_html, g, pages, communities, gaps)
+    print(f"🌐 Wrote {graph_html}")
     wiki_dir = wiki_root / "wiki"
     write_knowledge_gaps(wiki_dir / "knowledge-gaps.md", gaps, pages)
     print(f"📄 Wrote {wiki_dir / 'knowledge-gaps.md'}")

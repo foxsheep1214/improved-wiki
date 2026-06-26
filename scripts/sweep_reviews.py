@@ -294,6 +294,23 @@ def _resolve_review(review: dict, reason: str, dry_run: bool = True) -> bool:
     return False
 
 
+def _cleanup_resolved_reviews(wiki_dir: Path, dry_run: bool) -> int:
+    """Delete review pages whose frontmatter has `resolved: true`."""
+    reviews_dir = wiki_dir / "REVIEW"
+    if not reviews_dir.exists():
+        return 0
+    removed = 0
+    for f in sorted(reviews_dir.rglob("*.md")):
+        content = f.read_text(encoding="utf-8")
+        if re.search(r'^resolved:\s*true\s*$', content, re.MULTILINE):
+            if not dry_run:
+                f.unlink()
+            removed += 1
+            tag = "" if not dry_run else " [DRY RUN]"
+            print(f"  🗑️{tag} {f.name}")
+    return removed
+
+
 def sweep_reviews(wiki_root: Path, dry_run: bool = True) -> dict:
     """Main sweep logic. Returns results dict."""
     wiki_dir = wiki_root / "wiki"
@@ -393,10 +410,17 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True) -> dict:
         for t, n in sorted(by_type_pending_counts.items()):
             print(f"  {t}: {n} items")
 
+    # Cleanup: delete pages already marked resolved: true (including those just resolved above)
+    print(f"\n[cleanup] Removing resolved review pages...")
+    cleaned = _cleanup_resolved_reviews(wiki_dir, dry_run=dry_run)
+    if cleaned == 0:
+        print("  (none)")
+
     return {
         "total": len(reviews),
         "resolved": len(resolved),
         "pending": len(pending),
+        "cleaned": cleaned,
         "details": {
             "resolved": [{"title": r["title"], "reason": r["reason"]} for r in resolved],
             "pending_types": by_type_pending,
