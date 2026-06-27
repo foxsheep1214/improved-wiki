@@ -258,7 +258,13 @@ _TARGET_TOKENS_HARD_CEIL = 192_000  # (B) ...but never exceeds this. Raised from
                                     # chunk count / round-trips. Small-context models are unaffected
                                     # — the 0.33 scaling + 12K floor still govern below the cap.
 _MAX_CHARS_PER_TOKEN = 4            # char ceiling = target_tokens × this (Latin ≈ 4 chars/token)
-_TARGET_CHARS_HARD_CEIL = 320_000
+# Raised 320K→768K (2026-06-27, P2): at the 192K-token ceiling, Latin text
+# (~4 chars/token) needs ~768K chars to actually spend its full token budget;
+# the old 320K cap bound first and throttled English books to ~80K-token chunks
+# (Hennessy: 12 chunks instead of ~5-6). 768K ≈ 192K×4 keeps char and token
+# ceilings consistent. Small-context models are unaffected: their target_tokens
+# (context×0.33) keeps target_tokens×4 well under 768K.
+_TARGET_CHARS_HARD_CEIL = 768_000
 
 
 def _compute_chunk_targets(source_budget: int, context_size: int) -> tuple[int, int]:

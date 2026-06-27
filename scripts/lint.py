@@ -21,11 +21,11 @@ from pathlib import Path
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 
-from _lint_suggest import run_structural_lint  # noqa: E402
+from _lint_suggest import run_structural_lint, ANCHOR_FILES as _ANCHOR_FILES  # noqa: E402
 
-# NashSU parity: only index.md and log.md excluded (mirror _lint_suggest +
-# wiki-lint.sh). overview.md is scanned like any content page.
-_ANCHOR_FILES = {"index.md", "log.md"}
+# NashSU structural-lint universe: drop only index.md + log.md (lint.ts:161).
+# overview.md / schema.md stay scanned so they remain valid link targets and
+# their outlinks count; the engine itself exempts aggregates from findings.
 
 
 def collect_pages(wiki_root: Path) -> list[tuple[str, str]]:

@@ -27,7 +27,7 @@ WIKI = PROJECT_ROOT / "wiki"
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir
-from _lint_suggest import run_structural_lint
+from _lint_suggest import run_structural_lint, ANCHOR_FILES as _LINT_ANCHOR_FILES
 RUNTIME = detect_runtime_dir(PROJECT_ROOT)
 SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "ADL8113")
 
@@ -101,8 +101,8 @@ def _stage_4_1_find_media_dir(slug: str) -> Optional[Path]:
 
 
 # ── Structural lint suggestions (wiki-wide, non-gating) ─────────────────────
-# Mirrors cross_source_dedup exclusions: anchors + state + lint/REVIEW/media dirs.
-_LINT_ANCHOR_FILES = {"index.md", "log.md", "overview.md"}
+# Scan universe = NashSU {index, log} from _lint_suggest (overview/schema stay
+# valid targets; engine exempts aggregates from findings). + state + lint/REVIEW/media.
 _LINT_STATE_FILES = {
     "lint-cache.json", "ingest-cache.json", "ingest-queue.json",
     "review.json", "review-suggestions.json", "embed-cache.json",

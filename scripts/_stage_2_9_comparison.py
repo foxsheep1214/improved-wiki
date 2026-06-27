@@ -9,6 +9,7 @@ def _stage_2_9_build_prompt_in_source(
     file_path: Path,
     config: Config,
     current_domain: str = "general",
+    source_context: str = "",
 ) -> str:
     """Build prompt for Stage 2.9: in-source concept comparisons."""
     concepts_with_desc = '\n'.join(f"- {c}" for c in concept_titles[:60])
@@ -17,6 +18,22 @@ def _stage_2_9_build_prompt_in_source(
         raw_rel = str(file_path.relative_to(config.raw_root))
     except ValueError:
         raw_rel = file_path.name
+
+    # P1 parity with Stage 2.4 (2026-06-27): ground comparisons in the raw source
+    # so the LLM only contrasts what the SOURCE itself sets side-by-side, using the
+    # source's own dimensions/figures — not comparisons fabricated from memory.
+    if source_context.strip():
+        source_section = (
+            "\n# Source Text (ground comparisons in THIS — do not invent from memory)\n"
+            "Only build a comparison the SOURCE actually makes; use its own contrast\n"
+            "dimensions, figures, and wording. Never fabricate a side-by-side the\n"
+            "source does not draw.\n"
+            "<source>\n"
+            f"{source_context}\n"
+            "</source>\n"
+        )
+    else:
+        source_section = ""
 
     return f"""# Role
 You are maintaining a wiki knowledge base. Review the concepts just generated for a book.
@@ -29,7 +46,7 @@ You are maintaining a wiki knowledge base. Review the concepts just generated fo
 
 # Generated Concepts
 {concepts_with_desc}
-
+{source_section}
 # Task
 Identify **comparison groups** — two OR MORE concepts that the source sets
 side-by-side, where understanding them together illuminates each one.
@@ -102,6 +119,7 @@ def stage_2_9_comparison_generation(
     config: Config,
     template: str = "",
     verbose: bool = False,
+    source_context: str = "",
 ) -> tuple[list[tuple[str, str]], str]:
     """Stage 2.9: Generate in-source concept comparison pages.
 
@@ -136,7 +154,8 @@ def stage_2_9_comparison_generation(
         if verbose:
             print(f"[stage 2.9] In-source comparison — {len(concept_titles)} concepts...")
         prompt = _stage_2_9_build_prompt_in_source(
-            concept_titles, file_path, config, current_domain
+            concept_titles, file_path, config, current_domain,
+            source_context=source_context,
         )
         try:
             response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)

@@ -16,12 +16,14 @@ mkdir -p $PROJECT/raw/{Book,Paper,Presentation}
 # mkdir -p $PROJECT/raw/{Datasheet,Applicationnote,Designexample,Standard,News}
 cd $PROJECT
 
-# 2. Copy the 4 anchor files from the skill's templates/
+# 2. Copy the anchor files from the skill's templates/
+#    schema.md lives at the PROJECT ROOT (NashSU 0.5.2 parity); the 3 aggregate
+#    pages (index/overview/log) live under wiki/.
 SKILL_DIR=~/.agents/skills/improved-wiki
-cp $SKILL_DIR/references/templates/schema.md    ./wiki/schema.md
-cp $SKILL_DIR/references/templates/index.md     ./wiki/index.md
-cp $SKILL_DIR/references/templates/log.md       ./wiki/log.md
-cp $SKILL_DIR/references/templates/overview.md  ./wiki/overview.md
+cp $SKILL_DIR/templates/schema.md    ./schema.md
+cp $SKILL_DIR/templates/index.md     ./wiki/index.md
+cp $SKILL_DIR/templates/log.md       ./wiki/log.md
+cp $SKILL_DIR/templates/overview.md  ./wiki/overview.md
 
 # 3. (raw/ subfolders already created in step 1)
 
@@ -115,7 +117,7 @@ $SKILL_DIR/scripts/ingest.py raw/Book/X.pdf --dry-run
 # Expected: prints "DRY RUN: would process X" and "template: digest-book"
 
 # Check 2: the wiki anchor files exist
-test -f wiki/schema.md && test -f wiki/index.md && test -f wiki/log.md && test -f wiki/overview.md
+test -f schema.md && test -f wiki/index.md && test -f wiki/log.md && test -f wiki/overview.md
 echo $?  # should be 0
 
 # Check 3: the cache file is created/updated after the first ingest
@@ -144,7 +146,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
 | Scanned PDF detected | Normal — type detection (still PyMuPDF-based sampling) routes it to minerU VLM OCR | Check the script logs for "[extract] PDF type: scanned (avg N chars/page from 10-page sample)" |
-| `wiki/index.md` is missing the new source link | The script appends via `index_text.replace("## Sources\n", f"## Sources\n\n{new_link}", 1)` — if the index doesn't have an exact "## Sources\n" header, the append silently no-ops | Make sure your `index.md` template has `## Sources\n` as a standalone line (not `## Sources - `) |
+| `wiki/index.md` is missing the new source link | Stage 3.5 normally rewrites index.md via the LLM; the deterministic fallback (`_index_append_fallback` in `_stage_3_write.py`) inserts after the `## Sources` header line via regex `^##\s+Sources.*$`, so a bilingual `## Sources（来源）` header works. The link is only skipped if there is no `## Sources` header at all | Make sure your `index.md` has a `## Sources` (or `## Sources（来源）`) header line |
 
 ---
 

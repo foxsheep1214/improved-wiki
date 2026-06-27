@@ -104,6 +104,7 @@ def backfill_source_links(content: str) -> tuple[str, int]:
 def scan_wiki(wiki_dir: Path):
     for path in sorted(wiki_dir.rglob("*.md")):
         rel = path.relative_to(wiki_dir)
+        # Write-guard: never backfill source links INTO an aggregate file.
         if rel.name in ("index.md", "log.md", "overview.md", "schema.md"):
             continue
         if rel.parts and rel.parts[0] in ("lint", "REVIEW", "media"):
@@ -126,6 +127,10 @@ def fix_broken_links(wiki_dir: Path, apply: bool):
     pages = []
     for path in sorted(wiki_dir.rglob("*.md")):
         rel = path.relative_to(wiki_dir)
+        # Scan universe = NashSU {index, log}: overview/schema stay valid link
+        # targets so real [[overview]] links aren't mis-flagged as broken. The
+        # engine exempts aggregates from findings, so overview/schema source
+        # pages never get rewritten here.
         if rel.name in ("index.md", "log.md"):
             continue
         if rel.parts and rel.parts[0] in ("lint", "REVIEW", "media"):

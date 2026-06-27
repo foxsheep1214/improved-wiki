@@ -9,13 +9,21 @@ def stage_2_6_source_page(
     current_domain: str = "general",
     verbose: bool = False,
     linkable_slugs: list[str] | None = None,
+    source_context: str = "",
 ) -> tuple[str, str]:
-    """Stage 2.6: Dedicated source page generation (NashSU two-step).
+    """Stage 2.6: Dedicated source page generation.
 
     Separated from concept/entity generation so the LLM can focus entirely
     on producing a high-quality source page from the global digest.
-    This matches NashSU ingest.ts which generates the source page first,
-    then concept/entity pages in a separate pass.
+
+    NOTE — divergence from NashSU 0.5.2 (intentional): NashSU's ingest is a
+    two-step Analysis→Generation flow where the *Generation* step is a SINGLE
+    combined LLM call that emits the source summary page AND all concept/entity
+    FILE blocks together (ingest.ts ~L835-868, buildGenerationPrompt). improved-
+    wiki instead splits the source page into this dedicated call for higher
+    source-page quality. Granularity is aligned with NashSU: one source summary
+    page per raw file at wiki/sources/<slug>.md, built from the accumulated
+    digest; long sources are chunked at the analysis stage.
     """
     try:
         source_rel = str(file_path.relative_to(config.raw_root).with_suffix(""))
@@ -107,10 +115,26 @@ Example:
         f"# Linkable pages\n{linkable_str}\n"
     )
 
+    # P1 parity with Stage 2.4/2.7/2.9 (2026-06-27): ground the summary/TOC/
+    # takeaways in the raw source (trimmed to budget) so the page uses the source's
+    # own wording, formulas, numbers, and chapter structure — not training memory.
+    if source_context.strip():
+        source_section = (
+            "\n# Source Text (ground the summary in THIS — do not write from memory)\n"
+            "Base the summary, TOC, and takeaways on what the source ACTUALLY says:\n"
+            "use its own wording, formulas, numbers, and chapter structure. Do not\n"
+            "fabricate takeaways or topics the source does not contain.\n"
+            "<source>\n"
+            f"{source_context}\n"
+            "</source>\n"
+        )
+    else:
+        source_section = ""
+
     prompt = f"""# Role
 You are writing a **source page** for a Karpathy-pattern wiki knowledge base.
 This page will be the authoritative entry for a {source_kind} in the wiki.
-{template_section}{linkable_rule}
+{template_section}{linkable_rule}{source_section}
 # {info_header}
 ```yaml
 {digest_str}

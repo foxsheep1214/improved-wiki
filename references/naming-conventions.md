@@ -1,6 +1,6 @@
 # Naming Conventions — NashSU-aligned
 
-> **权威来源**：NashSU LLM Wiki app v0.4.23 (`src/lib/ingest.ts`, `lint.ts`, `wiki-page-types.ts`, `wiki-schema.ts`) + improved-wiki `scripts/ingest.py`。
+> **权威来源**：NashSU LLM Wiki app 最新版本（当前 v0.5.2，`src/lib/ingest.ts`, `lint.ts`, `wiki-page-types.ts`, `wiki-schema.ts`, `graph-filters.ts`）+ improved-wiki `scripts/ingest.py`。
 > 旧 karpathy-llm-wiki / HardwareWiki / RadarWiki 的历史惯例不作为参考。
 
 ---
@@ -33,11 +33,13 @@ wiki/
 ├── lint/          # lint findings (improved-wiki 扩展)
 ├── index.md       # 聚合页：索引
 ├── overview.md    # 聚合页：概述
-├── log.md         # 聚合页：变更日志
-└── schema.md      # page type → directory 映射 (NashSU 对齐)
+└── log.md         # 聚合页：变更日志
+
+# 项目根（wiki/ 之外，NashSU 0.5.2 对齐）：
+<project>/schema.md  # page type → directory 映射；放在根目录，不进 wiki/ 扫描
 ```
 
-**来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页）。
+**来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页，均在 wiki/ 下）；`create-project-dialog.tsx`（schema.md 写入项目根 `${pp}/schema.md`）。
 
 ### 1.2 raw/ 子目录（improved-wiki 布局）
 
@@ -118,7 +120,12 @@ wiki/overview.md
 wiki/log.md
 ```
 
-**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件**由 Stage 3.5 程序化 append，LLM 永远不应生成它们**。
+**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件由 Stage 3.5 在每次 ingest 时维护（见 `_stage_3_write.py::stage_3_5_aggregate_repair`），**不应由用户手写**：
+
+- `log.md`：**程序化追加**变更日志条目（确定性，从不调用 LLM）。
+- `index.md` / `overview.md`：默认由 **LLM 整页重写**（喂入磁盘上的权威页面清单 / 内容综合），LLM 调用失败或超出体量上限时回退到确定性追加。
+
+> 注意：与早期文档「纯程序化 append，LLM 永远不应生成」的表述不同——index.md/overview.md 现在确实经过 LLM 重写，需留意内容漂移风险（重写 prompt 已要求逐字保留已有条目描述与 frontmatter）。
 
 ---
 
@@ -427,7 +434,8 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | 项目 | NashSU 原生 | improved-wiki | 说明 |
 |------|------------|---------------|------|
 | Raw 布局 | `raw/sources/<type>/<file>` | `raw/<type>/<任意子目录>/<file>` | 刻意设计，人类友好 |
-| 聚合页排除 | `index.md` + `log.md` | 额外排除 `schema.md` + `overview.md` | NashSU 无 schema.md |
+| 聚合页排除 | `index.md` + `log.md`（lint universe） | findings 豁免 `index/log/overview/schema` | 分层模型见 `_lint_suggest.py` |
+| schema.md 位置 | 项目根 `${pp}/schema.md` | 项目根 `<project>/schema.md`（已对齐） | 旧版曾放 wiki/，0.5.2 起对齐到根 |
 | Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 1.2 独有产物 |
 | Lint 页面 | app UI 直接展示（内存） | `.llm-wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出；属 runtime 状态，不放入 wiki/ |
 | Review 页面 | `review.json`（app UI） | `wiki/REVIEW/<type>/<date>-<stem>-<NNN>.md` + `review.json` | 人类可浏览 + 机器可读双输出 |

@@ -78,11 +78,14 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
             break
 
     schema_text = ""
-    schema_path = config.wiki_dir / "schema.md"
+    # schema.md lives at the project root (NashSU 0.5.2 parity), not in wiki/.
+    schema_path = config.wiki_root / "schema.md"
+    if not schema_path.exists():
+        schema_path = config.wiki_dir / "schema.md"  # back-compat: legacy wiki/ location
     if schema_path.exists():
         schema_text = schema_path.read_text(encoding="utf-8")[:2000]
 
-    user_content = f"""# wiki/schema.md
+    user_content = f"""# schema.md
 {schema_text}
 
 # Newly generated pages (from {raw_file.stem})

@@ -14,8 +14,8 @@ fix computed by a deterministic similarity engine:
 NashSU's runStructuralLint reads the filesystem; this port takes the pages
 in memory as `(short_name, content)` tuples (short_name relative to wiki/,
 e.g. "concepts/alpha.md") so the engine is unit-testable without I/O. The
-caller is responsible for walking wiki/ and excluding index.md / log.md
-(this function also skips them defensively).
+caller is responsible for walking wiki/ and excluding the aggregate anchor
+files (this function also skips them defensively via ANCHOR_FILES).
 """
 from __future__ import annotations
 
@@ -30,7 +30,26 @@ __all__ = [
     "levenshtein",
     "string_similarity",
     "extract_wikilinks",
+    "ANCHOR_FILES",
+    "AGGREGATE_FILES",
 ]
+
+# Link-target UNIVERSE exclusion — NashSU runStructuralLint parity (lint.ts:161
+# in llm_wiki v0.5.2: contentFiles drops only index.md + log.md). overview.md
+# stays IN the universe so it remains valid
+# wikilink targets AND their outbound links still count as inbound for the pages
+# they reference — this is what prevents false "orphan" findings on pages that
+# only the overview links to. Callers import this for their page-collection filter.
+ANCHOR_FILES = {"index.md", "log.md"}
+
+# Aggregate / structural files (≈ NashSU graph STRUCTURAL_IDS minus purpose).
+# These ARE scanned (so their outlinks count toward inbound), but are EXEMPT from
+# findings: never reported as orphan/broken/no-outlinks, so the headless auto-fixer
+# never mutates them. Also serves as the write-guard + dedup/embedding exclusion
+# set; keep cross_source_dedup.py / enrich_wikilinks_retroactive.py write-side
+# literals in sync. (schema.md now lives at the project root like NashSU 0.5.2, so
+# wiki/ scans won't see it; it stays listed here as a defensive/legacy guard.)
+AGGREGATE_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
 
 BROKEN_LINK_SUGGESTION_MIN_SCORE = 0.74
 RELATED_PAGE_SUGGESTION_MIN_SCORE = 0.08
@@ -171,7 +190,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
     content_pages = [
         (name, content)
         for name, content in pages
-        if _get_file_name(name) not in ("index.md", "log.md")
+        if _get_file_name(name) not in ANCHOR_FILES
     ]
 
     data: list[_PageData] = []
@@ -253,6 +272,11 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
     results: list[dict] = []
     for p in data:
         short_name = p.short_name
+
+        # Aggregate files are scanned above (their outlinks count toward inbound),
+        # but are exempt from findings so the headless fixer never mutates them.
+        if _get_file_name(short_name) in AGGREGATE_FILES:
+            continue
 
         # Orphan: no inbound links.
         if inbound_counts.get(p.slug.lower(), 0) == 0:

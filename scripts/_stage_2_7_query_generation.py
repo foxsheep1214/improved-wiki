@@ -9,11 +9,28 @@ def _stage_2_7_build_prompt(
     file_path: Path,
     config: Config,
     current_domain: str = "general",
+    source_context: str = "",
 ) -> str:
     """Build prompt for Stage 2.7: generate open questions from single-source analysis."""
     digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
     if len(digest_str) > 3000:
         digest_str = digest_str[:3000] + "\n... (truncated)"
+
+    # P1 parity with Stage 2.4 (2026-06-27): ground questions in the raw source so
+    # the LLM raises the questions the SOURCE actually leaves open, instead of
+    # inventing generic open questions from training memory.
+    if source_context.strip():
+        source_section = (
+            "\n# Source Text (ground questions in THIS — do not invent from memory)\n"
+            "Base open questions on what the source ACTUALLY says and leaves unresolved:\n"
+            "use its own framing, numbers, and the gaps IT exposes. Do not fabricate\n"
+            "questions from generic domain knowledge.\n"
+            "<source>\n"
+            f"{source_context}\n"
+            "</source>\n"
+        )
+    else:
+        source_section = ""
 
     concepts_str = '\n'.join(f"- {c}" for c in concept_titles[:80])
     entities_str = '\n'.join(f"- {e}" for e in entity_titles[:40])
@@ -42,7 +59,7 @@ You are maintaining a Karpathy-pattern knowledge base wiki. You have just finish
 ```yaml
 {digest_str}
 ```
-
+{source_section}
 # Generated Concepts ({len(concept_titles)} total)
 {concepts_str if concepts_str else '(none)'}
 
@@ -118,6 +135,7 @@ def stage_2_7_query_generation(
     config: Config,
     template: str = "",
     verbose: bool = False,
+    source_context: str = "",
 ) -> tuple[list[tuple[str, str]], str]:
     """Stage 2.7: Generate query pages (open questions) from single-source analysis.
 
@@ -172,7 +190,8 @@ def stage_2_7_query_generation(
 
     prompt = _stage_2_7_build_prompt(
         global_digest, concept_titles, entity_titles,
-        key_claims, file_path, config, current_domain
+        key_claims, file_path, config, current_domain,
+        source_context=source_context,
     )
 
     query_tokens = config.compute_max_tokens(4096)

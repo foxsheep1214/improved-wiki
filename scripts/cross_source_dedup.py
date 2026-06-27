@@ -55,7 +55,9 @@ from _dedup_embedding import (  # noqa: E402
     DuplicatePrefilterError,
 )
 
-ANCHOR_FILES = {"index.md", "log.md", "overview.md"}
+# Aggregate files excluded from dedup candidates (NashSU embedding/graph parity:
+# aggregates aren't dedup'd). Keep in sync with _lint_suggest.AGGREGATE_FILES.
+ANCHOR_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
 STATE_FILES = {
     "lint-cache.json", "lint.json", "ingest-cache.json", "ingest-queue.json",
     "ingest-lock", "lint-lock", "lint-semantic.json", "dedup-report.json",
@@ -247,7 +249,11 @@ def _persist_merge(project_root, result, backup_dir) -> None:
         idx = index_path.read_text(encoding="utf-8")
         pruned = _dedup.rewrite_index_md(idx, removed_slugs)
         if pruned != idx:
-            index_path.write_text(pruned, encoding="utf-8")
+            # Atomic write (tmp + rename) so a crash mid-write can't corrupt
+            # index.md — matches _write_report and the Stage 3.5 writer.
+            tmp = index_path.with_suffix(index_path.suffix + ".tmp")
+            tmp.write_text(pruned, encoding="utf-8")
+            tmp.replace(index_path)
 
 
 def _write_report(path: Path, report: dict) -> None:

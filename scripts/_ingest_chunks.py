@@ -63,25 +63,51 @@ def _generate_all_chunks(
     raw_file: Path, config: Config, template_content: str,
     chunk_total: int, t_start: float, verbose: bool,
     related_pages: list[dict] | None = None,
-) -> tuple[list, list]:
-    """Stage 2.4: single-shot generation across all chunks (NashSU parity, 2026-06-27).
+) -> tuple[list, list, str | None]:
+    """Stage 2.4 generation, source-grounded for full-concept fidelity (P1, 2026-06-27).
 
-    One LLM call emits FILE blocks for every chunk's concepts/entities at once,
-    replacing the former per-chunk loop (N calls → 1). ``existing_refs`` and
-    ``related_pages`` (Stage 2.3 outputs) are folded into the single prompt so
-    the LLM wikilinks to existing pages instead of regenerating them. The
-    per-concept fallback (caller-side) catches any concepts missed, including
-    output-truncation gaps.
+    - 1 chunk  → one grounded single-shot call (the whole source fits one prompt).
+    - >1 chunk → per-chunk generation, each prompt carrying THAT chunk's raw text,
+      so EVERY concept is generated with its exact source passage present.
+
+    A book small enough to fit one generation prompt is also a single chunk, so
+    this is single-shot-equivalent for normal books and full-fidelity for large
+    ones — solving the huge-book "concepts drift to training-memory" failure that
+    a budget-trimmed prefix could not. improved-wiki ingest is not token-sensitive,
+    so the extra per-chunk calls on big books are an accepted cost. ``existing_refs``
+    + ``related_pages`` (Stage 2.3) are threaded so cross-chunk wikilinks resolve.
     """
-    all_file_blocks, generated_slugs, _stop_reason = stage_2_4_generate_all(
-        chunk_analyses, raw_file, config, template_content,
-        verbose=verbose, existing_refs=existing_refs,
-        related_pages=related_pages,
-    )
-    done = chunk_total
-    dt = time.time() - t_start
-    print(f"  [generate] {done}/{chunk_total} [single-shot, {dt:.0f}s]")
-    return all_file_blocks, generated_slugs
+    if len(chunk_meta) <= 1:
+        source_context = chunk_meta[0][1] if chunk_meta else ""
+        all_file_blocks, generated_slugs, stop_reason = stage_2_4_generate_all(
+            chunk_analyses, raw_file, config, template_content,
+            verbose=verbose, existing_refs=existing_refs,
+            related_pages=related_pages, source_context=source_context,
+        )
+        print(f"  [generate] 1/1 [single-shot, grounded, {time.time() - t_start:.0f}s]")
+        return all_file_blocks, generated_slugs, stop_reason
+
+    all_file_blocks: list = []
+    generated_slugs: list = []
+    for meta, analysis in zip(chunk_meta, chunk_analyses):
+        i, chunk_text = meta[0], meta[1]
+        blocks = stage_2_4_generate_chunk(
+            analysis, i, generated_slugs, raw_file, config, template_content,
+            verbose=verbose, chunk_text=chunk_text,
+            existing_refs=existing_refs, related_pages=related_pages,
+        )
+        all_file_blocks.extend(blocks)
+        for path, _ in blocks:
+            slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+            if slug not in generated_slugs:
+                generated_slugs.append(slug)
+        print(f"  [generate] {i + 1}/{chunk_total} [per-chunk, grounded]")
+    print(f"  [generate] {chunk_total}/{chunk_total} per-chunk grounded done "
+          f"[{time.time() - t_start:.0f}s]")
+    # No single stop_reason for the per-chunk path; gaps fall to the caller's
+    # zero-block per-concept fallback. Smaller per-chunk scope makes mid-chunk
+    # truncation unlikely, and each concept is already source-grounded.
+    return all_file_blocks, generated_slugs, None
 
 def _run_chunk_pipeline(
     extracted_text: str, global_digest: dict, raw_file: Path, config: Config,
@@ -178,7 +204,11 @@ def _run_chunk_pipeline(
 
     # \u2500\u2500 Stage 2.4: generate all chunks (associations fed into prompt) \u2500\u2500
     _stage_begin("Stage 2.4: Chunk Generation")
-    all_file_blocks, generated_slugs = _generate_all_chunks(
+    # Generation is always source-grounded (P1): _generate_all_chunks feeds each
+    # chunk's raw text into its prompt. Every concept is generated with its exact
+    # source passage — full fidelity at any book size, no on/off switch (ingest is
+    # not token-sensitive). See _generate_all_chunks / _stage_2_4_build_prompt.
+    all_file_blocks, generated_slugs, gen_stop_reason = _generate_all_chunks(
         chunk_meta, chunk_analyses, incremental_associations, raw_file, config,
         template_content, chunk_total, t_start, verbose,
         related_pages=related_pages)
@@ -209,11 +239,22 @@ def _run_chunk_pipeline(
     # already-written pages as "existing", correctly emits 0 blocks, and
     # then this fallback would burn 20+ wasted LLM calls re-generating pages
     # that are already on disk (confirmed live on the Plett BMS Vol.2 ingest).
+    # Fallback triggers on EITHER (a) zero concept blocks, OR (b) single-shot
+    # output truncation (stop_reason=length): a PARTIAL generation (e.g. 30 of
+    # 50 pages emitted then cut off) would otherwise silently lose the missing
+    # 20. pre_existing_slugs=generated_slugs makes the fallback backfill only the
+    # gap, so its blocks MERGE with (not replace) the good single-shot blocks.
+    # Resume replays end with end_turn (not length) and emit 0 blocks against
+    # already-on-disk pages \u2014 caught only by branch (a)+truly_missing, never by
+    # (b), so resume is never re-generated (see resume note above). (P0, 2026-06-27)
+    _sr = str(gen_stop_reason or "").lower()
+    truncated = ("length" in _sr) or ("max_tok" in _sr) or ("max_output" in _sr)
     truly_missing = [n for n in unique_concepts if n not in incremental_associations]
-    if not concept_blocks and truly_missing and chunk_analyses:
+    if truly_missing and chunk_analyses and (not concept_blocks or truncated):
         n_missed = len(truly_missing)
-        print(f"  [stage 2.4] \u26a0\ufe0f  0/{n_missed} concepts generated "
-              f"\u2014 falling back to per-concept generation "
+        reason = "output truncated" if truncated else f"0/{n_missed} concepts generated"
+        print(f"  [stage 2.4] \u26a0\ufe0f  {reason} "
+              f"\u2014 per-concept fallback to backfill missing "
               f"(pre_existing_slugs={len(generated_slugs)})")
         _fa_analysis, _fa_raw, fa_blocks = _stage_2_4_per_concept_fallback(
             chunk_analyses, global_digest, raw_file, config,
@@ -222,7 +263,11 @@ def _run_chunk_pipeline(
         )
         fa_concept_entity = [(p, c) for p, c in fa_blocks
                              if not p.startswith("sources/")]
-        all_file_blocks = fa_concept_entity
+        # Merge, don't replace: on partial truncation all_file_blocks already
+        # holds the pages single-shot emitted; the fallback (pre_existing_slugs
+        # dedup) only adds the gap pages. In the zero-block case all_file_blocks
+        # is empty, so this is equivalent to the old assignment.
+        all_file_blocks = all_file_blocks + fa_concept_entity
         file_blocks = all_file_blocks
         concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
         entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]

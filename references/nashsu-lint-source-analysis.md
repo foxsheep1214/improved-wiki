@@ -1,4 +1,4 @@
-# NashSU llm_wiki v0.4.23 lint source analysis
+# NashSU llm_wiki lint source analysis（最新版本，当前 v0.5.2）
 
 Detailed source-level comparison of NashSU's actual lint implementation
 (`src/lib/lint.ts`, `src/stores/lint-store.ts`, `src/stores/lint-store.ts`,
@@ -12,7 +12,7 @@ Detailed source-level comparison of NashSU's actual lint implementation
 - `src/components/lint/lint-view.tsx` — 426 lines, the "Run Lint" UI button
 - `src/lib/ingest.ts` — 2993 lines; lint/review interaction at L888-933 (Stage 3.4) + L1097-1104 (Stage 3.4)
 
-**Repo URL**: <https://github.com/nashsu/llm_wiki> (v0.4.23 tag)
+**Repo URL**: <https://github.com/nashsu/llm_wiki> (track the latest release; analysis verified against v0.5.2)
 
 This file is the **why** behind SKILL.md §2.3's lint design. Read it when
 adding lint features, debugging parity issues, or porting the lint to a new

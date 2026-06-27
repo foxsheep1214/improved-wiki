@@ -503,13 +503,22 @@ def stage_3_5_aggregate_repair(
     current_index = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
 
     def _index_append_fallback() -> None:
+        new_link = f"- [[{source_path.stem}]]"
         if not current_index:
+            # Fresh wiki: write the skeleton WITH the new source link, not an
+            # empty skeleton (the latter silently dropped the first ingest).
             stage_3_1_write_wiki_file(
-                index_path, "# Index\n\n## Sources（来源）\n\n", config)
+                index_path, f"# Index\n\n## Sources（来源）\n\n{new_link}\n", config)
+            files_written.append(str(index_path.relative_to(config.wiki_root)))
             return
-        new_link = f"- [[{source_path.stem}]]\n"
-        if "## Sources" in current_index and new_link not in current_index:
-            updated = current_index.replace("## Sources", f"## Sources\n\n{new_link}", 1)
+        if f"[[{source_path.stem}]]" in current_index:
+            return
+        # Insert after the END of the Sources header line so a bilingual header
+        # like "## Sources（来源）" isn't split mid-line.
+        m = re.search(r"(?m)^##\s+Sources.*$", current_index)
+        if m:
+            insert_at = m.end()
+            updated = current_index[:insert_at] + f"\n\n{new_link}" + current_index[insert_at:]
             stage_3_1_write_wiki_file(index_path, updated, config)
             files_written.append(str(index_path.relative_to(config.wiki_root)))
 

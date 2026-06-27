@@ -47,7 +47,7 @@ from _ingest_chunks import _run_chunk_pipeline
 def _prepare_source_page(
     global_digest: dict, raw_file: Path, config: Config,
     template_content: str, progress: dict | None, file_blocks: list,
-    verbose: bool,
+    verbose: bool, source_context: str = "",
 ) -> list:
     """Stage 2.6: generate the source page (dedicated LLM call) and merge into file_blocks."""
     current_domain = _detect_domain(raw_file, template_content, global_digest)
@@ -71,7 +71,7 @@ def _prepare_source_page(
         source_page_response, _ = stage_2_6_source_page(
             global_digest, raw_file, config,
             template=template_content, current_domain=current_domain, verbose=verbose,
-            linkable_slugs=_linkable,
+            linkable_slugs=_linkable, source_context=source_context,
         )
 
     if not source_page_response:
@@ -397,16 +397,24 @@ def _do_prepare(
             concept_count_before = _stage_2_5["concept_count_before"]
             concept_count_after = _stage_2_5["concept_count_after"]
 
+            # Source grounding shared by 2.6/2.7/2.9 (P1): raw source trimmed to
+            # the model-sized budget. Whole-book synthesis calls, so a budgeted
+            # excerpt is the right analog (cf. the single-chunk 2.4 path).
+            _src_grounding = (extracted_text or "")[: config.source_budget]
+
             # Stage 2.6: Source page generation + merge
             file_blocks = _prepare_source_page(
                 global_digest, raw_file, config, template_content, progress,
-                file_blocks, verbose)
+                file_blocks, verbose, source_context=_src_grounding)
             _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
+
+            _q29_source = _src_grounding  # same budgeted excerpt as 2.6
 
             # ── Stage 2.7: Query generation ──
             query_blocks, _ = stage_2_7_query_generation(
                 global_digest, chunk_analyses, file_blocks, raw_file, config,
-                template=template_content, verbose=verbose
+                template=template_content, verbose=verbose,
+                source_context=_q29_source,
             )
             if query_blocks:
                 file_blocks = list(file_blocks) + query_blocks
@@ -424,7 +432,8 @@ def _do_prepare(
             # ── Stage 2.9: Comparison generation ──
             comp_blocks, _ = stage_2_9_comparison_generation(
                 global_digest, chunk_analyses, file_blocks, raw_file, config,
-                template=template_content, verbose=verbose
+                template=template_content, verbose=verbose,
+                source_context=_q29_source,
             )
             if comp_blocks:
                 file_blocks = list(file_blocks) + comp_blocks

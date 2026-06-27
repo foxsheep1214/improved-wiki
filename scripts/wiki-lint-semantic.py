@@ -3,7 +3,8 @@
 wiki-lint-semantic.py — LLM-driven semantic lint for a wiki/.
 
 This is improved-wiki's port of NashSU's runSemanticLint() from
-src/lib/lint.ts (v0.4.23 L161-299). It scans every page's first 500
+src/lib/lint.ts (latest version; v0.5.2 runSemanticLint ~L305, excludes
+only log.md). It scans every page's first 500
 chars + frontmatter, sends the concatenated summaries to an LLM, and
 parses ---LINT:type|severity|title--- blocks back into findings.
 

@@ -30,15 +30,21 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _lint_suggest import run_structural_lint  # noqa: E402
+from _lint_suggest import (  # noqa: E402
+    run_structural_lint,
+    ANCHOR_FILES as _ANCHOR_FILES,
+    AGGREGATE_FILES as _AGGREGATE_FILES,
+)
 from _lint_fixes import (  # noqa: E402
     append_wikilink,
     rewrite_wikilink_target,
     ensure_broken_link_stub,
 )
 
-# Mirrors validate_ingest._LINT_* exclusions: anchors + state + lint/REVIEW/media.
-_ANCHOR_FILES = {"index.md", "log.md", "overview.md"}
+# Scan universe = NashSU {index, log} (overview/schema stay valid link targets,
+# their outlinks count). The engine exempts aggregates from findings, so the
+# fixer never gets an overview/schema finding to apply; _AGGREGATE_FILES is the
+# extra write-guard used on the --from-cache path below. + state + lint/REVIEW/media.
 _STATE_FILES = {
     "lint-cache.json", "ingest-cache.json", "ingest-queue.json",
     "review.json", "review-suggestions.json", "embed-cache.json",
@@ -194,8 +200,11 @@ def main() -> int:
             print(f"ERROR: cache not found: {cache_path}", file=sys.stderr)
             return 2
         all_findings = json.loads(cache_path.read_text(encoding="utf-8"))
+        # Drop any aggregate-file findings: a cache produced by a tool/version
+        # without finding-suppression must not let us mutate index/log/overview/schema.
         findings = [f for f in all_findings
-                    if f.get("type") in ("broken-link", "orphan", "no-outlinks")]
+                    if f.get("type") in ("broken-link", "orphan", "no-outlinks")
+                    and Path(str(f.get("page", ""))).name not in _AGGREGATE_FILES]
         broken  = [f for f in findings if f["type"] == "broken-link"]
         orphans = [f for f in findings if f["type"] == "orphan"]
         no_out  = [f for f in findings if f["type"] == "no-outlinks"]
