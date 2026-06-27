@@ -20,6 +20,7 @@ from _stage_2_analyze import (
 )
 from _stage_2_4_generation import (
     stage_2_4_generate_chunk,
+    stage_2_4_generate_all,
     _stage_2_4_extract_names,
     _stage_2_4_per_concept_fallback,
 )
@@ -63,36 +64,23 @@ def _generate_all_chunks(
     chunk_total: int, t_start: float, verbose: bool,
     related_pages: list[dict] | None = None,
 ) -> tuple[list, list]:
-    """Stage 2.4: sequential generation across all chunks.
+    """Stage 2.4: single-shot generation across all chunks (NashSU parity, 2026-06-27).
 
-    ``existing_refs`` (Stage 2.3 output: {concept_name: [wiki_slugs]}) is fed
-    into each chunk's generation prompt so the LLM wikilinks to existing pages
-    instead of regenerating them. ``related_pages`` (Stage 2.3's
-    stage_2_3_resolve_proposed_connections output) is fed in so the LLM
-    wikilinks to genuinely *related* (not duplicate) existing pages.
-    ``generated_slugs`` accumulates across chunks (sequential, both paths).
+    One LLM call emits FILE blocks for every chunk's concepts/entities at once,
+    replacing the former per-chunk loop (N calls → 1). ``existing_refs`` and
+    ``related_pages`` (Stage 2.3 outputs) are folded into the single prompt so
+    the LLM wikilinks to existing pages instead of regenerating them. The
+    per-concept fallback (caller-side) catches any concepts missed, including
+    output-truncation gaps.
     """
-    all_file_blocks: list = []
-    generated_slugs: list[str] = []
-
-    for i, chunk, _overlap_before, _heading_path in chunk_meta:
-        ca = chunk_analyses[i]
-        if "error" in ca:
-            continue
-        blocks = stage_2_4_generate_chunk(
-            ca, i, generated_slugs, raw_file, config, template_content,
-            verbose=verbose, chunk_text=chunk, existing_refs=existing_refs,
-            related_pages=related_pages)
-        all_file_blocks.extend(blocks)
-        for path, _ in blocks:
-            slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
-            if slug not in generated_slugs:
-                generated_slugs.append(slug)
-        done = i + 1
-        pct = done * 100 // chunk_total
-        eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
-        print(f"  [generate] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
-
+    all_file_blocks, generated_slugs, _stop_reason = stage_2_4_generate_all(
+        chunk_analyses, raw_file, config, template_content,
+        verbose=verbose, existing_refs=existing_refs,
+        related_pages=related_pages,
+    )
+    done = chunk_total
+    dt = time.time() - t_start
+    print(f"  [generate] {done}/{chunk_total} [single-shot, {dt:.0f}s]")
     return all_file_blocks, generated_slugs
 
 def _run_chunk_pipeline(

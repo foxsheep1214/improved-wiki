@@ -569,6 +569,268 @@ Generate the page NOW. Start with ---FILE:...
 """
 
 
+def _stage_2_4_build_all_prompt(
+    chunk_analyses: list[dict],
+    file_path: Path,
+    config: Config,
+    template: str = "",
+    existing_refs: dict | None = None,
+    related_pages: list[dict] | None = None,
+) -> str:
+    """Build ONE generation prompt covering ALL chunks (NashSU single-shot parity).
+
+    Aggregates concepts/entities across every chunk analysis, dedups by slug,
+    and asks the LLM to emit FILE blocks for all of them in a single response.
+    Replaces the former per-chunk generation loop (Stage 2.4 × N calls → 1 call).
+    """
+    existing_refs = existing_refs or {}
+    existing_slugs = list_existing_slugs(config)
+
+    seen_concept_slugs: set[str] = set()
+    concept_lines: list[str] = []
+    concept_slugs: list[tuple[str, str]] = []
+    concept_slug_stems: set[str] = set()
+    for ca in chunk_analyses:
+        if not isinstance(ca, dict) or "error" in ca:
+            continue
+        for c in ca.get("concepts_found", []):
+            if not isinstance(c, dict):
+                continue
+            name = c.get("name", "")
+            slug = slugify(name)
+            if not name or slug in seen_concept_slugs:
+                continue
+            seen_concept_slugs.add(slug)
+            imp = c.get("importance", "core")
+            defn = c.get("definition", "")
+            details = c.get("key_details", [])
+            if name in existing_refs and existing_refs[name]:
+                existing_slug = existing_refs[name][0]
+                concept_lines.append(
+                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
+                    f"do NOT generate a page; wikilink ONLY as [[{existing_slug}]] "
+                    f"(never [[concepts/{slug}]])"
+                )
+            else:
+                concept_lines.append(f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}")
+                concept_slugs.append((name, f"concepts/{slug}"))
+                concept_slug_stems.add(slug)
+                for d in details[:3]:
+                    concept_lines.append(f"      • {d}")
+
+    seen_entity_slugs: set[str] = set()
+    entity_lines: list[str] = []
+    entity_slugs: list[tuple[str, str]] = []
+    for ca in chunk_analyses:
+        if not isinstance(ca, dict) or "error" in ca:
+            continue
+        for e in ca.get("entities_found", []):
+            if not isinstance(e, dict):
+                continue
+            name = e.get("name", "")
+            slug = slugify(name)
+            if not name or slug in seen_entity_slugs:
+                continue
+            seen_entity_slugs.add(slug)
+            role = e.get("role", "")
+            sig = e.get("significance", "")
+            if name in existing_refs and existing_refs[name]:
+                existing_slug = existing_refs[name][0]
+                entity_lines.append(
+                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
+                    f"do NOT generate; wikilink ONLY as [[{existing_slug}]]"
+                )
+            elif slug in concept_slug_stems:
+                entity_lines.append(
+                    f"  - {name} (slug: entities/{slug}) ({role}): {sig} "
+                    f"[DUPLICATE OF CONCEPT concepts/{slug} — SKIP]"
+                )
+            else:
+                entity_lines.append(f"  - {name} (slug: entities/{slug}) ({role}): {sig}")
+                entity_slugs.append((name, f"entities/{slug}"))
+
+    concept_str = "\n".join(concept_lines[:200]) if concept_lines else "(none)"
+    entity_str = "\n".join(entity_lines[:60]) if entity_lines else "(none)"
+
+    linkable = set()
+    for _, s in concept_slugs:
+        linkable.add(s)
+    for _, s in entity_slugs:
+        linkable.add(s)
+    for s in existing_slugs[:200]:
+        linkable.add(s)
+    for slugs in existing_refs.values():
+        for s in slugs:
+            linkable.add(s)
+    for rp in (related_pages or []):
+        slug = rp.get("slug") if isinstance(rp, dict) else None
+        if slug:
+            linkable.add(slug)
+    linkable_list = sorted(linkable)[:300]
+    linkable_str = "\n".join(f"  - {s}" for s in linkable_list) if linkable_list else "(none)"
+
+    template_section = ""
+    if template:
+        template_section = f"\n# Document Type\n<template>\n{template[:1500]}\n</template>\n"
+
+    if existing_refs:
+        ref_lines = []
+        for name, slugs in sorted(existing_refs.items()):
+            links = ", ".join("[[{}]]".format(s) for s in slugs)
+            ref_lines.append("  - {} → already exists as: {}".format(name, links))
+        existing_refs_str = "\n".join(ref_lines)
+    else:
+        existing_refs_str = "(none — this source has no overlap with existing wiki)"
+
+    if related_pages:
+        rel_lines = [
+            "  - [[{}]] (relationship: {})".format(rp["slug"], rp.get("relationship", "related"))
+            for rp in related_pages
+        ]
+        related_pages_str = "\n".join(rel_lines)
+    else:
+        related_pages_str = "(none)"
+
+    return f"""# Role
+You are generating wiki pages for ALL chunks of a book in ONE pass. The complete
+concept/entity lists aggregated across every chunk are below. Generate a page for
+each one that is NOT marked ALREADY COVERED — in a single response.
+
+# Source
+Book: {file_path.stem}
+Chunks: {len(chunk_analyses)}
+{template_section}
+# Existing wiki pages that overlap (Stage 2.3 — DO NOT regenerate; wikilink to them):
+{existing_refs_str}
+
+# Related (not duplicate) existing pages — wikilink to these where relevant, but still generate full new pages for the concepts/entities below:
+{related_pages_str}
+
+# Concepts found across ALL chunks (generate a page for each — skip ALREADY COVERED):
+{concept_str}
+
+# Entities found across ALL chunks (generate a page for key ones — skip ALREADY COVERED / DUPLICATE):
+{entity_str}
+
+# Supplementary foundational pages (use sparingly)
+If the source clearly defines a foundational concept NOT in the lists above AND NOT
+in the Linkable pages list below, you MAY generate a page for it at a new
+`wiki/concepts/<kebab-slug>.md`. Only for genuinely page-worthy building blocks the
+source actually explains — never for passing mentions. Do NOT [[wikilink]] to any
+slug that is not either in the Linkable list or a page you generate in THIS response.
+
+# ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
+- Your FIRST line of output MUST be `---FILE:wiki/concepts/...`
+- Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
+
+# [[wikilink]] Rules — STRICT
+Each concept/entity above includes a slug like (slug: concepts/foo-bar).
+This is the EXACT [[wikilink]] you must use — kebab-case with type prefix.
+
+Correct:  [[concepts/natural-convection-heat-sink]]  [[entities/bell-labs]]
+WRONG:    [[Natural Convection Heat Sink]]  [[convection]]  [[concepts/litz-wire.md]]
+
+# Linkable pages (ONLY these [[wikilinks]] are valid):
+{linkable_str}
+
+Rules:
+1. ONLY use [[wikilinks]] from the "Linkable pages" list above.
+2. Use the EXACT slug shown. Do not change case, add words, or invent new ones.
+3. For concepts/entities below: use the slug from its "(slug: ...)" label.
+4. If no matching slug exists, write the term as PLAIN TEXT with NO [[]].
+5. NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
+6. Math: $inline$ $$display$$
+
+# Output Format — EXACT
+---FILE:wiki/concepts/<slug>.md---
+---
+type: concept
+title: "..."
+domain: general
+tags: [...]
+related: [...]
+sources: ["raw/{file_path.relative_to(config.raw_root)}"]
+created: {time.strftime('%Y-%m-%d')}
+updated: {time.strftime('%Y-%m-%d')}
+---
+
+# Title
+
+(content)
+
+---END FILE---
+---FILE:wiki/entities/<slug>.md---
+(frontmatter + content)
+---END FILE---
+
+Generate a page for EVERY concept listed above that is NOT marked [ALREADY COVERED], in ONE response. Go!
+"""
+
+
+def stage_2_4_generate_all(
+    chunk_analyses: list[dict],
+    file_path: Path,
+    config: Config,
+    template: str = "",
+    verbose: bool = False,
+    existing_refs: dict | None = None,
+    related_pages: list[dict] | None = None,
+) -> tuple[list[tuple[str, str]], list[str], str | None]:
+    """Single-shot generation: ONE LLM call for all chunks (NashSU parity, 2026-06-27).
+
+    Replaces the per-chunk generation loop. Returns (file_blocks, generated_slugs,
+    stop_reason). The per-concept fallback (caller-side) catches any concepts the
+    single shot missed, including output-truncation gaps.
+    """
+    valid = [ca for ca in chunk_analyses if isinstance(ca, dict) and "error" not in ca]
+    has_concepts = any(ca.get("concepts_found") for ca in valid)
+    has_entities = any(ca.get("entities_found") for ca in valid)
+    if not has_concepts and not has_entities:
+        print("  [generate-all] no concepts or entities across all chunks — skipped")
+        return [], [], None
+
+    prompt = _stage_2_4_build_all_prompt(
+        chunk_analyses, file_path, config, template,
+        existing_refs=existing_refs, related_pages=related_pages,
+    )
+    gen_tokens = config.compute_max_tokens(16384)
+
+    for attempt in range(4):
+        try:
+            t0 = time.time()
+            if attempt == 0:
+                print("  [generate-all] single-shot generating (all chunks)...", flush=True)
+            response, stop_reason = call_anthropic_protocol(
+                prompt, config, max_tokens=gen_tokens, label="single-shot generation")
+            blocks = parse_file_blocks(response)
+            dt = time.time() - t0
+            generated_slugs: list[str] = []
+            for path, _ in blocks:
+                slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+                if slug not in generated_slugs:
+                    generated_slugs.append(slug)
+            tag = f" (retry #{attempt})" if attempt > 0 else ""
+            print(f"  [generate-all] OK{tag} — {len(blocks)} blocks "
+                  f"({len(response):,} chars, {stop_reason}) {dt:.0f}s")
+            sr = str(stop_reason).lower()
+            if "length" in sr or "max_tokens" in sr:
+                print(f"  [generate-all] ⚠️ response truncated ({stop_reason}) — "
+                      f"some pages may be missing; per-concept fallback will fill gaps "
+                      f"if zero concept blocks result.")
+            if verbose:
+                print(f"    response: {response[:500]}...")
+            return blocks, generated_slugs, stop_reason
+        except Exception as e:
+            if attempt < 3 and _is_retryable_exception(e):
+                wait = _retry_jitter(2.0, attempt)
+                print(f"  [generate-all] {type(e).__name__} retry {attempt+1}/4 — {wait:.1f}s...")
+                time.sleep(wait)
+                continue
+            print(f"  [generate-all] FAILED: {e}")
+            return [], [], None
+    return [], [], None
+
+
 def stage_2_4_generate_chunk(
     analysis: dict,
     chunk_idx: int,
