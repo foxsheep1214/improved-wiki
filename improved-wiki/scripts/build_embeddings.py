@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-build_embeddings.py — Stage 6 (NashSU-compatible)
-Chunk wiki/ pages and embed them into LanceDB for semantic search.
+build_embeddings.py — wiki embedding engine (LanceDB + bge-m3)
+Chunk wiki/ pages and embed them into LanceDB for semantic search. This is the
+engine Stage 3.7 (_stage_3_7_embed.py) invokes after each ingest, and is runnable
+standalone for a full-index (re)build. (NashSU-compatible embedding layout.)
 
 Default backend: local Ollama with bge-m3 (1024d, best for Chinese).
 Also works with any OpenAI-compatible /v1/embeddings endpoint.

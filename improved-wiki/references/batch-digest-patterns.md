@@ -48,5 +48,6 @@ if source_page.exists():
 
 - `ingest.py` uses a file lock (`.ingest-progress/<hash>.lock`) per project
 - Multiple `ingest.py` processes on the same project serialize automatically
-- minerU OCR has `MINERU_MAX_CONCURRENT=1` (system-wide, enforced by `ingest.py`)
-- LLM calls are serial (conversation mode — one prompt at a time)
+- minerU OCR is strictly serialized system-wide by a cross-process file lock (`fcntl.flock` on `~/.cache/improved-wiki/.mineru.lock`), not a process counter
+- Batch: only the wiki-independent PREFETCH (Phase 0/1 + Stage 2.1/2.2) runs across books in parallel; the wiki-dependent spine (Stage 2.3→write) runs one book at a time so each book's 2.3 dedup/linking sees prior books' pages
+- LLM calls within a single book are serial (conversation mode — one prompt at a time)

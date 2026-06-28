@@ -471,6 +471,22 @@ Analyze THIS CHUNK of the book. Extract:
 chunk_index: {chunk_index + 1}
 chunk_total: {chunk_total}
 
+# ⚠️ YAML STRING QUOTING (CRITICAL — bad escaping aborts the whole parse):
+#   - ANY value containing a backslash (LaTeX: \\text \\frac \\propto \\cdot) or '$'
+#     MUST be SINGLE-quoted. Single quotes treat '\\' as a literal char — no
+#     escaping needed. Inside single quotes, double a literal ' as ''.
+#   - NEVER put LaTeX or '$' in DOUBLE quotes: "\\text" → \\t becomes TAB,
+#     "\\frac" → \\f becomes form-feed, "\\$x" is an invalid escape that ABORTS
+#     the YAML parse and loses every concept below it.
+#   - Plain prose without \\ or $ may use double or single quotes.
+#
+# ⚠️ FORMULAS — LaTeX ALWAYS (the basis for understanding; prevents drift):
+#   EVERY formula you record — whether in a definition, in key_details, or in the
+#   formulas list — MUST be written as LaTeX, transcribed VERBATIM from the source
+#   (same variables, same form). Never paraphrase a formula into words and never
+#   reconstruct it from memory. LaTeX-bearing values follow the single-quote rule
+#   above.
+
 entities_found:
   - name: "..."
     role: "person" | "organization" | "system" | "model" | "standard"
@@ -497,8 +513,8 @@ claims:
     page_ref: "p.NN"                   # for datasheets: REQUIRED; for books: omit if not applicable
 
 formulas:
-  - formula: "LaTeX"          # transcribe verbatim from source; never paraphrase
-    meaning: "..."
+  - formula: '\\text{{Energy}} = \\frac{{1}}{{2}} C V^2'   # SINGLE-quoted; transcribe verbatim, never paraphrase
+    meaning: '...'
     table_ref: "Table N"      # cite source table/figure when available
 
 connections_to_existing_wiki:

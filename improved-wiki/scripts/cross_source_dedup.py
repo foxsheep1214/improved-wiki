@@ -44,7 +44,8 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import _dedup  # noqa: E402
-# _dedup_merge not imported — pure LLM semantic (NashSU dedup.ts parity)
+# Cross-source dedup is pure LLM semantic (no deterministic prefilter) — NashSU
+# dedup.ts parity.
 from _core import ConversationPending  # noqa: E402
 from _paths import detect_runtime_dir  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402

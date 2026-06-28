@@ -12,7 +12,7 @@ import json
 import time
 from pathlib import Path
 
-from _core import BATCH_MAX_CONCURRENT, Config, ProjectLock
+from _core import BATCH_MAX_CONCURRENT, Config, ConversationPending, ProjectLock
 
 
 def _read_queue(config: Config) -> list[dict]:
@@ -188,6 +188,11 @@ def ingest_watch(
                     max_concurrent=max_concurrent,
                     verbose=verbose,
                 )
+            except ConversationPending:
+                # The wave paused at an LLM handoff (prefetch or spine). Not a
+                # failure — re-raise so main() returns 101; the agent answers the
+                # prompt and re-invokes --watch, resuming this wave from cache.
+                raise
             except Exception as e:
                 print(f"[watch] Batch ingest crashed: {e}")
                 import traceback

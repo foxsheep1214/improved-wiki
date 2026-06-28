@@ -10,7 +10,10 @@ from _core import (
     stage_begin as _stage_begin,
     file_sha256,
     is_stage_done,
+    mark_stage_done,
     unmark_stage_done,
+    save_progress,
+    PrepareStopAfter,
 )
 from _stage_2_analyze import (
     _stage_2_1_chunk_text,
@@ -112,6 +115,7 @@ def _generate_all_chunks(
 def _run_chunk_pipeline(
     extracted_text: str, global_digest: dict, raw_file: Path, config: Config,
     template_content: str, progress: dict | None, verbose: bool,
+    analyze_only: bool = False,
 ) -> tuple[list, dict, list, dict]:
     """Stage 2.2 \u2192 2.3 \u2192 2.4: analyze all chunks, detect existing-wiki
     associations, then generate pages with associations fed into each prompt.
@@ -120,6 +124,15 @@ def _run_chunk_pipeline(
     (incremental association detection) can run between them and feed back into
     the generation prompt. Returns
     ``(chunk_analyses, analysis, file_blocks, incremental_associations)``.
+
+    ``analyze_only`` (prefetch boundary, 2026-06-28): Stage 2.2 (chunk analysis)
+    is wiki-independent \u2014 it reads only the book's own text/digest. Stage 2.3 is
+    the first stage that reads ``config.wiki_dir``. In batch mode the next book's
+    2.2 may be prefetched in parallel while the current book holds the serial
+    wiki-write spine; ``analyze_only=True`` runs/caches 2.2 then raises
+    ``PrepareStopAfter("1.5")`` BEFORE the wiki-dependent 2.3+ stages. The cached
+    2.2 is restored later (under ``stage_2_2_done``) when the book reaches the
+    spine and runs 2.3+ for real.
     """
     # Cached: chunk analysis already complete. Stage-completion is the single
     # source of truth in stages.json (stage_2_3_done); chunk_analyses presence
@@ -149,14 +162,32 @@ def _run_chunk_pipeline(
             chunk_analyses = progress["chunk_analyses"]
             print(f"  [stage 2.2] (cached) Chunk Analysis \u2014 {len(chunk_analyses)} chunks")
             _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
+            # 2.3 is already done \u2014 prefetch (2.2) is a no-op, stop before any
+            # wiki-dependent work re-runs.
+            if analyze_only:
+                raise PrepareStopAfter("1.5")
             analysis = progress.get("analysis", {})
             incremental_associations = progress.get("incremental_associations", {})
             return chunk_analyses, analysis, persisted_blocks, incremental_associations
 
-    chunks = _stage_2_1_chunk_text(extracted_text, config.target_chars, config.chunk_overlap,
-                                   target_tokens=config.target_tokens)
-    chunk_total = len(chunks)
+    # Prefetch resume: Stage 2.2 was cached on its own (analyze_only run) but 2.3+
+    # has not run yet. Restore chunk_analyses and skip re-analysis. When the caller
+    # is itself a prefetch (analyze_only), stop again at the 2.2 boundary; otherwise
+    # fall through to run the wiki-dependent 2.3+ stages with the cached analyses.
+    if (progress and "chunk_analyses" in progress
+            and is_stage_done(config, _h, "stage_2_2_done")):
+        chunk_analyses = progress["chunk_analyses"]
+        print(f"  [stage 2.2] (cached) Chunk Analysis \u2014 {len(chunk_analyses)} chunks "
+              f"(prefetched)")
+        _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
+        if analyze_only:
+            raise PrepareStopAfter("1.5")
+        return _generate_from_analyses(
+            chunk_analyses, extracted_text, global_digest, raw_file, config,
+            template_content, verbose)
 
+    # \u2500\u2500 Stage 2.2: build chunk plan + analyze all chunks (wiki-independent) \u2500\u2500
+    chunk_meta, chunk_total = _build_chunk_meta(extracted_text, config)
     est_sec = chunk_total * 75
     print(f"  [stage 2.2] Analyze \u2014 {chunk_total} chunk(s), "
           f"target {config.target_chars:,} chars/chunk (est. {est_sec/60:.0f} min)")
@@ -168,6 +199,32 @@ def _run_chunk_pipeline(
          if k in global_digest},
         ensure_ascii=False, indent=2)
 
+    chunk_analyses = _analyze_all_chunks(
+        chunk_meta, global_digest, accumulated_digest, raw_file, config,
+        template_content, chunk_total, t_start, verbose)
+
+    # Persist 2.2 on its own + mark stage_2_2_done so a prefetch (analyze_only)
+    # can stop here and the later spine run restores chunk_analyses without
+    # re-analyzing. 2.2 is wiki-independent \u2014 safe to cache before 2.3+ runs.
+    save_progress(config, _h, {"chunk_analyses": chunk_analyses})
+    mark_stage_done(config, _h, "stage_2_2_done")
+    if analyze_only:
+        raise PrepareStopAfter("1.5")
+
+    return _generate_from_analyses(
+        chunk_analyses, extracted_text, global_digest, raw_file, config,
+        template_content, verbose, chunk_meta=chunk_meta)
+
+
+def _build_chunk_meta(extracted_text: str, config: Config):
+    """Deterministic chunk plan: ``(chunk_meta, chunk_total)``.
+
+    Chunking is pure (same text + config \u2192 same chunks), so the prefetch-resume
+    path rebuilds it cheaply instead of persisting every chunk's text.
+    """
+    chunks = _stage_2_1_chunk_text(extracted_text, config.target_chars, config.chunk_overlap,
+                                   target_tokens=config.target_tokens)
+    chunk_total = len(chunks)
     chunk_meta: list[tuple[int, str, str, str]] = []
     for i in range(chunk_total):
         chunk = chunks[i]
@@ -178,11 +235,26 @@ def _run_chunk_pipeline(
         heading_path = _stage_2_2_resolve_chunk_heading_path(
             extracted_text, chunk_pos, chunk_pos + len(chunk))
         chunk_meta.append((i, chunk, overlap_before, heading_path))
+    return chunk_meta, chunk_total
 
-    # \u2500\u2500 Stage 2.2: analyze all chunks \u2500\u2500
-    chunk_analyses = _analyze_all_chunks(
-        chunk_meta, global_digest, accumulated_digest, raw_file, config,
-        template_content, chunk_total, t_start, verbose)
+
+def _generate_from_analyses(
+    chunk_analyses: list, extracted_text: str, global_digest: dict, raw_file: Path,
+    config: Config, template_content: str, verbose: bool,
+    chunk_meta=None,
+) -> tuple[list, dict, list, dict]:
+    """Stage 2.3 \u2192 2.4: the wiki-DEPENDENT tail of the chunk pipeline.
+
+    Runs only in the serial spine (one book at a time), so Stage 2.3's
+    ``config.wiki_dir`` reads see pages written by previously-finalized books.
+    ``chunk_meta`` is reused from the fresh path when available, else rebuilt
+    deterministically (prefetch-resume).
+    """
+    if chunk_meta is None:
+        chunk_meta, chunk_total = _build_chunk_meta(extracted_text, config)
+    else:
+        chunk_total = len(chunk_meta)
+    t_start = time.time()
 
     # \u2500\u2500 Stage 2.3: incremental association detection (existing-wiki overlap) \u2500\u2500
     from _stage_2_3_incremental import (

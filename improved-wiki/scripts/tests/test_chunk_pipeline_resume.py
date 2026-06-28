@@ -182,5 +182,94 @@ class TestChunkPipelineResume(unittest.TestCase):
             self.assertFalse(_core.is_stage_done(cfg, h, "stage_2_3_done"))
 
 
+class TestPrefetchBoundary(unittest.TestCase):
+    """analyze_only (prefetch) runs Stage 2.2 then stops at the 2.2/2.3 boundary,
+    BEFORE any wiki-dependent work. A later spine call reuses the cached 2.2."""
+
+    def setUp(self):
+        # Real chunking + heading resolution are irrelevant here; stub the heavy
+        # LLM/analysis bits so the cache/boundary decision is observable offline.
+        self._orig = {
+            "chunk_text": _ingest_chunks._stage_2_1_chunk_text,
+            "analyze": _ingest_chunks._analyze_all_chunks,
+            "heading": _ingest_chunks._stage_2_2_resolve_chunk_heading_path,
+            "verify": _ingest_chunks._verify_stage_2_2_chunks,
+            "generate": _ingest_chunks._generate_from_analyses,
+        }
+        _ingest_chunks._stage_2_1_chunk_text = lambda *_a, **_k: ["chunk-0 text"]
+        _ingest_chunks._stage_2_2_resolve_chunk_heading_path = lambda *_a, **_k: ""
+        _ingest_chunks._verify_stage_2_2_chunks = lambda *_a, **_k: None
+        self._fake_ca = [{"concepts_found": [{"name": "soc"}], "entities_found": []}]
+        _ingest_chunks._analyze_all_chunks = lambda *_a, **_k: self._fake_ca
+
+    def tearDown(self):
+        _ingest_chunks._stage_2_1_chunk_text = self._orig["chunk_text"]
+        _ingest_chunks._analyze_all_chunks = self._orig["analyze"]
+        _ingest_chunks._stage_2_2_resolve_chunk_heading_path = self._orig["heading"]
+        _ingest_chunks._verify_stage_2_2_chunks = self._orig["verify"]
+        _ingest_chunks._generate_from_analyses = self._orig["generate"]
+
+    def _raw_file(self, tmp: Path) -> Path:
+        raw = tmp / "raw" / "book.pdf"
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        raw.write_bytes(b"%PDF-1.4 prefetch boundary test")
+        return raw
+
+    def test_prefetch_stops_before_wiki_dependent_stage_2_3(self):
+        """analyze_only=True caches 2.2 + raises PrepareStopAfter('1.5') WITHOUT
+        entering the wiki-dependent generation tail."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = self._raw_file(tmp)
+            h = _core.file_sha256(raw)
+
+            # If 2.3+ is ever reached, this boom fires instead of PrepareStopAfter.
+            def _boom(*_a, **_k):
+                raise AssertionError("wiki-dependent 2.3+ ran during prefetch")
+            _ingest_chunks._generate_from_analyses = _boom
+
+            with self.assertRaises(_core.PrepareStopAfter):
+                _ingest_chunks._run_chunk_pipeline(
+                    "extracted " * 50, {"key_concepts": ["soc"]}, raw, cfg,
+                    "template", None, verbose=False, analyze_only=True)
+
+            # 2.2 cached for the later spine run.
+            self.assertTrue(_core.is_stage_done(cfg, h, "stage_2_2_done"))
+            self.assertFalse(_core.is_stage_done(cfg, h, "stage_2_3_done"))
+            self.assertEqual(_core.load_progress(cfg, h)["chunk_analyses"], self._fake_ca)
+
+    def test_spine_reuses_cached_2_2_and_runs_generation(self):
+        """After prefetch cached 2.2, a normal (analyze_only=False) call restores
+        chunk_analyses (no re-analysis) and proceeds to the generation tail."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = self._raw_file(tmp)
+            h = _core.file_sha256(raw)
+
+            # Seed the prefetch cache (2.2 done, 2.3 NOT done).
+            _core.save_progress(cfg, h, {"chunk_analyses": self._fake_ca})
+            _core.mark_stage_done(cfg, h, "stage_2_2_done")
+
+            # Re-analysis must NOT happen on the spine resume.
+            _ingest_chunks._analyze_all_chunks = lambda *_a, **_k: (
+                _ for _ in ()).throw(AssertionError("re-analyzed cached 2.2"))
+            # Capture the generation-tail call instead of doing real 2.3/2.4 work.
+            calls = {}
+            def _fake_gen(ca, *_a, **_k):
+                calls["ca"] = ca
+                return ca, {"method": "stub"}, [("concepts/soc.md", "body")], {}
+            _ingest_chunks._generate_from_analyses = _fake_gen
+
+            ca, analysis, blocks, assoc = _ingest_chunks._run_chunk_pipeline(
+                "extracted " * 50, {"key_concepts": ["soc"]}, raw, cfg,
+                "template", _core.load_progress(cfg, h), verbose=False)
+
+            self.assertEqual(calls["ca"], self._fake_ca)  # generation got cached 2.2
+            self.assertEqual(analysis, {"method": "stub"})
+            self.assertEqual(blocks, [("concepts/soc.md", "body")])
+
+
 if __name__ == "__main__":
     unittest.main()

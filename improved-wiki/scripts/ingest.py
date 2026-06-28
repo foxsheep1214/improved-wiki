@@ -250,105 +250,105 @@ def batch_ingest(
     template_override: str | None = None,
     verbose: bool = False,
 ) -> list[dict]:
-    """Ingest multiple books with parallel Stage 0-2 and serial Stage 3+.
+    """Ingest multiple books one at a time through the wiki-write spine, with the
+    next book's wiki-independent stages prefetched in parallel.
 
-    Why this works:
-      - Stage 0-2 (text extraction, digest, chunk analysis, synthesis) are
-        read-only LLM calls. No wiki/ files are written, no shared state
-        is mutated. Different books' Stage 0-2 can run concurrently.
-      - Stage 3+ (file write, cache update, lint, archive, validation)
-        modifies shared wiki/ state. MUST be serialized to avoid races.
+    Cross-book PARALLELISM of wiki-dependent stages is intentionally NOT allowed:
 
-    Max concurrency: {BATCH_MAX_CONCURRENT} by default.  Increase if your
-    LLM API has generous rate limits.  Memory/CPU usage is negligible
-    (just API call orchestration).
+      - **Prefetch (Stage 0/1/2.1/2.2)** is wiki-independent — it reads only each
+        book's own text/digest. Several books run concurrently here (the only
+        speedup): OCR/extraction/caption overlap and chunk analysis is cached.
+      - **Spine (Stage 2.3 → write)** is wiki-dependent — Stage 2.3 links/dedups
+        against ``config.wiki_dir``. Books run ONE AT A TIME, each fully written
+        before the next book's 2.3, so cross-book dedup/linking sees prior pages.
+        (The old "parallel Stage 0-2, write on completion" design ran every
+        book's 2.3-2.9 blind to its siblings — fixed 2026-06-28.)
+
+    Conversation mode: prefetch may leave several pending LLM prompts (answered in
+    parallel); the spine re-raises ConversationPending so only the current book is
+    pending and the next never jumps ahead. Re-invoke resumes from cache.
     """
     if max_concurrent < 1:
         max_concurrent = 1
     max_concurrent = min(max_concurrent, len(raw_files))
+    total_books = len(raw_files)
 
     print(f"\n{'='*60}")
-    print(f"Batch ingest: {len(raw_files)} books, max {max_concurrent} concurrent")
+    print(f"Batch ingest: {total_books} books — prefetch ≤{max_concurrent} parallel, write serial")
     print(f"{'='*60}")
 
-    # Pipeline: parallel prepare (Stage 0-2) → serial write (Stage 3+).
-    # Books are written as soon as their Stage 2 finishes — no need to wait
-    # for all books.  Write order is completion order, not submission order.
     lock = ProjectLock(config, owner_id="batch")
     if not lock.acquire():
         raise RuntimeError("Could not acquire project lock for batch write phase")
 
     results: list[dict] = []
-    prepared_count = 0
-    total_books = len(raw_files)
-
     try:
+        # ── Phase A: parallel PREFETCH (wiki-independent 0/1/2.1/2.2) ──
+        # Safe to overlap across books — none touch wiki/. Each book either
+        # reaches the 2.2/2.3 boundary (PrepareStopAfter) or pauses at an LLM
+        # step (ConversationPending — prompt is on disk for the agent to answer).
+        pending_prefetch: ConversationPending | None = None
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
-            futures: dict[concurrent.futures.Future, Path] = {}
-            for f in raw_files:
-                futures[executor.submit(
-                    _do_prepare, f, config, template_override, verbose
-                )] = f
-
+            futures: dict[concurrent.futures.Future, Path] = {
+                executor.submit(_do_prepare, f, config, template_override,
+                                verbose, True): f
+                for f in raw_files
+            }
+            ready = 0
             for future in as_completed(futures):
-                # Isolate prepare-phase failures per book, the same way the
-                # write phase below is isolated — one bad source (e.g. a
-                # corrupt PDF) must not abort the rest of the batch.
+                name = futures[future].name
                 try:
-                    prepared = future.result()
-                except ConversationPending:
-                    # Conversation-mode handoff: this book paused at an LLM
-                    # step (normal, expected). ConversationPending is a
-                    # BaseException, so the broad `except Exception` below
-                    # does NOT catch it — without this dedicated handler it
-                    # escaped and crashed the whole batch, blocking every
-                    # other book's write phase (bug 2026-06-25). Isolate it
-                    # like a skip; re-invoke resumes this book from cache.
-                    prepared_count += 1
-                    print(f"\n[batch] {prepared_count}/{total_books} paused at LLM "
-                          f"handoff — {futures[future].name} (re-invoke to resume)",
-                          flush=True)
-                    continue
+                    future.result()
+                    ready += 1  # already-complete book (skip/short-circuit)
+                    print(f"[batch] prefetch {ready}/{total_books} ready — {name}", flush=True)
+                except PrepareStopAfter:
+                    ready += 1  # reached the 2.2/2.3 boundary — chunk analysis cached
+                    print(f"[batch] prefetch {ready}/{total_books} ready (2.2 cached) — {name}", flush=True)
+                except ConversationPending as cp:
+                    pending_prefetch = cp
+                    print(f"[batch] prefetch paused at LLM handoff — {name} "
+                          f"(re-invoke to resume)", flush=True)
                 except Exception as e:
-                    prepared_count += 1
-                    print(f"\n[batch] {prepared_count}/{total_books} prepare FAILED for "
-                          f"{futures[future].name}: {e}", flush=True)
+                    print(f"[batch] prefetch FAILED for {name}: {e}", flush=True)
                     import traceback
                     traceback.print_exc()
-                    continue
-                prepared_count += 1
+
+        # If any book is still mid-handoff, hand back so the agent answers those
+        # prefetch prompts and re-invokes. The spine starts only once every book's
+        # 2.2 is cached — keeping spine resumes cheap and strictly ordered.
+        if pending_prefetch is not None:
+            raise pending_prefetch
+
+        # ── Phase B: serial SPINE (wiki-dependent 2.3 → write), one book/time ──
+        # Submission order. A book is fully WRITTEN before the next book's 2.3
+        # runs. On an LLM handoff we re-raise (NOT continue) so only the current
+        # book has a pending prompt and the next never jumps ahead.
+        for i, f in enumerate(raw_files, 1):
+            print(f"\n[batch] spine {i}/{total_books} — {f.name}", flush=True)
+            try:
+                prepared = _do_prepare(f, config, template_override, verbose)
                 if prepared is None:
-                    print(f"\n[batch] {prepared_count}/{total_books} prepared (skipped)", flush=True)
+                    print(f"[batch] {i}/{total_books} skipped (already complete) — {f.name}", flush=True)
                     continue
-
-                print(f"\n[batch] {prepared_count}/{total_books} prepared — writing immediately ({prepared['raw_file'].name})", flush=True)
-                try:
-                    result = _do_write(prepared, verbose=verbose)
-                    results.append(result)
-                except ConversationPending:
-                    # Write-phase LLM step (e.g. 3.3 wikilink enrichment, or a
-                    # page-merge handoff) paused for this book — same
-                    # BaseException-escapes-`except Exception` issue as prepare
-                    # (bug 2026-06-25). 3.1 file writes already landed; re-invoke
-                    # resumes at the paused step. Don't block the other books.
-                    print(f"[batch] {prepared['raw_file'].name} write paused at LLM "
-                          f"handoff (re-invoke to resume)", flush=True)
-                    continue
-                except Exception as e:
-                    print(f"[batch] Write failed for {prepared['raw_file'].name}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
-
-                # Per-book finalization (embeddings + validate + stage_4_1
-                # marker), shared with ingest_one. Deliberately OUTSIDE the write
-                # try/except: a missing embedding stack must pause the run
-                # (no-fallback policy), not be silently isolated per book the way
-                # a single corrupt PDF is. Without this, batch/queue ingests
-                # never embedded, never validated, and never marked complete.
-                if result.get("status") == "ok":
-                    _finalize_book(prepared["raw_file"], config,
-                                   result.get("files_written", []), prepared["h"])
+                result = _do_write(prepared, verbose=verbose)
+            except ConversationPending:
+                # LLM handoff in 2.4/2.8/2.9 or the write phase. Re-raise to stop
+                # the spine here; the agent answers this one prompt and re-invokes,
+                # resuming THIS book before any later book's 2.3 runs.
+                raise
+            except Exception as e:
+                # Isolate a corrupt book — must not abort the rest of the batch.
+                print(f"[batch] {i}/{total_books} FAILED for {f.name}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+                continue
+            results.append(result)
+            # Per-book finalization (embeddings + validate + stage_4_1 marker).
+            # OUTSIDE the try/except: a missing embedding stack must pause the run
+            # (no-fallback policy), not be isolated like a corrupt PDF.
+            if result.get("status") == "ok":
+                _finalize_book(prepared["raw_file"], config,
+                               result.get("files_written", []), prepared["h"])
     finally:
         lock.release()
 
@@ -425,14 +425,19 @@ def main() -> int:
         except ConversationPending:
             return 101
         max_conc = args.parallel if args.parallel > 0 else BATCH_MAX_CONCURRENT
-        ingest_watch(
-            config,
-            poll_interval=args.poll_interval,
-            drain=args.drain,
-            max_concurrent=max_conc,
-            max_retries=args.max_retries,
-            verbose=args.verbose,
-        )
+        try:
+            ingest_watch(
+                config,
+                poll_interval=args.poll_interval,
+                drain=args.drain,
+                max_concurrent=max_conc,
+                max_retries=args.max_retries,
+                verbose=args.verbose,
+            )
+        except ConversationPending:
+            # A wave paused at an LLM handoff — answer the prompt and re-invoke
+            # --watch to resume from cache (same contract as direct ingest).
+            return 101
         return 0
 
     if not args.file:
@@ -471,10 +476,16 @@ def main() -> int:
     # Batch mode: multiple files or explicit --parallel
     if len(raw_files) > 1 or args.parallel > 1:
         max_conc = args.parallel if args.parallel > 0 else BATCH_MAX_CONCURRENT
-        results = batch_ingest(
-            raw_files, config, max_concurrent=max_conc,
-            template_override=args.type, verbose=args.verbose,
-        )
+        try:
+            results = batch_ingest(
+                raw_files, config, max_concurrent=max_conc,
+                template_override=args.type, verbose=args.verbose,
+            )
+        except ConversationPending:
+            # Prefetch or spine paused at an LLM handoff (prompt written to disk).
+            # The agent answers it and re-invokes to resume. Same contract as the
+            # single-book path below.
+            return 101
         ok = sum(1 for r in results if r.get("status") == "ok")
         return 0 if ok == len(results) else 1
 

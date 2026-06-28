@@ -12,7 +12,7 @@
 
 | 维度 | Conversation Mode |
 |------|-------------------|
-| LLM 调用 | 当前对话直接执行（当前模型）；单本书永远串行，仅当多本书batch ingest同时产生多个pending prompt时才派生子代理并行回答 |
+| LLM 调用 | 当前对话直接执行（当前模型）；单本书永远串行。多本书 batch ingest 一本一本地走 wiki 相关阶段（Stage 2.3→write，每本写完再轮下一本，2.3 去重/连边才能看到前一本的页）；仅 wiki 无关的预取（Phase 0/1 + Stage 2.1/2.2）可跨书并行，此时多个 pending prompt 才派生子代理并行回答。绝不并行跑两本书的 2.3+ |
 | API Key | 不需要（仅 caption 需 MiniMax key） |
 | 执行方式 | `ingest.py` 交接（唯一路径，无需 flag） 或 对话中逐步完成 |
 | 状态保存 | 对话上下文 / `.llm-wiki/conversation/` |

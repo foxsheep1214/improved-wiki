@@ -87,8 +87,18 @@ def stage_3_7_embed_new_pages(config: Config, files_written: list[str]) -> None:
     print(f"[stage 3.7] Embedding {len(new_files)} new pages...")
     import subprocess
     script = Path(__file__).parent / "build_embeddings.py"
-    subprocess.run(
+    proc = subprocess.run(
         [sys.executable, str(script), "--project", str(config.wiki_root), "embed"],
-        capture_output=True, timeout=300,
+        capture_output=True, text=True, timeout=300,
     )
+    if proc.returncode != 0:
+        # No silent fallback (consistent with the capability gate above): a failed
+        # embed must not be reported as complete. Pages are already written and
+        # cached, so a re-run resumes from this stage.
+        tail = (proc.stderr or proc.stdout or "").strip()[-1000:]
+        raise RuntimeError(
+            f"Stage 3.7 embedding failed (build_embeddings.py exit "
+            f"{proc.returncode}). Pages are written + cached; fix the embedding "
+            f"stack and re-run to resume.\n{tail}"
+        )
     print(f"[stage 3.7] Embedding complete")

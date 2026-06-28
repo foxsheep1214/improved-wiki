@@ -40,7 +40,7 @@ from _stage_1_3_caption import (  # noqa: E402
 # Constants & Concurrency Control
 # ══════════════════════════════════════════════════════════════════════════════
 
-MINERU_MAX_CONCURRENT = 1
+# minerU is strictly serialized by MINERU_LOCK_FILE (fcntl.flock), not a counter.
 MINERU_API_PORT = int(os.environ.get("MINERU_API_PORT", "19999"))
 MINERU_LOCK_FILE = Path.home() / ".cache" / "improved-wiki" / ".mineru.lock"
 MINERU_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)

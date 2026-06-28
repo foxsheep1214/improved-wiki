@@ -104,11 +104,22 @@ def _do_prepare(
     raw_file: Path, config: Config,
     template_override: str | None = None,
     verbose: bool = False,
+    prefetch_only: bool = False,
 ) -> dict | None:
-    """Stage 0-2 for one book.  Read-only: no shared state writes, no lock needed.
+    """Stage 0-2 for one book.
 
-    Returns a dict with all data needed for Stage 3+, or None on skip/failure.
-    Suitable for parallel execution across multiple books.
+    Two segments with different cross-book safety:
+      - **Wiki-independent (0/1/2.1/2.2)** — reads only the book's own
+        text/digest, writes no wiki/ state. Safe to run for several books in
+        parallel ("prefetch"). ``prefetch_only=True`` runs exactly this segment
+        then raises ``PrepareStopAfter("1.5")`` at the Stage 2.2/2.3 boundary.
+      - **Wiki-dependent (2.3–2.9)** — Stage 2.3 reads ``config.wiki_dir`` to
+        link/dedup against existing pages; 2.4–2.9 build on that. MUST run in the
+        serial spine (one book at a time) so each book sees prior books' written
+        pages. ``prefetch_only=False`` (default) runs the full segment, reusing
+        cached 2.2.
+
+    Returns the prepared dict for Stage 3+, or None on skip/failure.
     """
     _set_current_file(raw_file.name)
     print(f"\n=== [prepare] {raw_file.name} ===")
@@ -322,10 +333,13 @@ def _do_prepare(
                 print(f"  [caption] Inlined VLM captions as alt text into "
                       f"extracted_text ({len(extracted_text):,} chars)")
 
-        # Stage 2.2 + 2.4: Chunk Analysis → Generation (barrier-free pipeline)
+        # Stage 2.2 → 2.3 → 2.4 chunk pipeline. ``analyze_only=prefetch_only``
+        # stops at the 2.2/2.3 boundary (wiki-independent prefetch) by raising
+        # PrepareStopAfter("1.5"); the spine run (prefetch_only=False) reuses the
+        # cached 2.2 and runs the wiki-dependent 2.3+ tail.
         chunk_analyses, analysis, file_blocks, incremental_associations = _run_chunk_pipeline(
             extracted_text, global_digest, raw_file, config, template_content,
-            progress, verbose)
+            progress, verbose, analyze_only=prefetch_only)
 
         # Persist 2.2/2.4 results + mark stage_2_3_done. Without this, a
         # mid-flight resume (e.g. 3.3 enrich conversation handoff) re-enters

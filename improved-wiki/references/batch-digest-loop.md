@@ -40,7 +40,7 @@ tail -f /tmp/ingest_watch.log
 Key options:
 - `--watch` — continuously re-scans `ingest-queue.json` (every 30s by default)
 - `--drain` — exit when the queue is empty (omit to loop forever)
-- `--parallel N` — max concurrent books for Stage 1.1-2 (default: 4 in batch)
+- `--parallel N` — max concurrent books for the wiki-independent PREFETCH only (Phase 0/1 + Stage 2.1/2.2; default: 4). The wiki-dependent spine (Stage 2.3→write) always runs one book at a time regardless of N.
 - `--poll-interval SECS` — override the 30s queue re-scan interval
 - `--max-retries N` — max attempts per queued entry before giving up (default: 3)
 
@@ -55,8 +55,9 @@ python3 ~/.agents/skills/improved-wiki/scripts/ingest.py \
   --parallel 4
 ```
 
-This processes all matching PDFs concurrently (up to `--parallel` at once)
-and exits when done. Dedup is automatic — `ingest.py` skips books that
+This prefetches the wiki-independent stages of all matching PDFs concurrently
+(up to `--parallel` at once), then writes them one at a time, and exits when
+done. Dedup is automatic — `ingest.py` skips books that
 already have a source page in `wiki/sources/`.
 
 ## Legacy: Subprocess Loop (Advanced / Custom Logic)
