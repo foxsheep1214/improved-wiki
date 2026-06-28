@@ -108,7 +108,7 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
                                    [src, "raw/Book/other.pdf"])              # multi-source -> keep
             con = self._write(cfg, "concepts/tmp.md", [src])                 # orphan concept
 
-            removed = _source_lifecycle._cleanup_orphan_pages(cfg.wiki_root, stem)
+            removed = _source_lifecycle._cleanup_orphan_pages(cfg.wiki_root, stem, cfg)
 
             self.assertFalse(q.exists(), "orphan query should be deleted")
             self.assertFalse(c_in.exists(), "orphan in-source comparison should be deleted")
@@ -116,6 +116,31 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
             self.assertTrue(c_hub.exists(), "sources:[] hub comparison must be kept")
             self.assertTrue(c_shared.exists(), "multi-source comparison must be kept")
             self.assertEqual(removed, 3)
+
+    def test_schema_defined_folder_pages_are_swept(self):
+        """Schema-driven routing: a page in a schema-defined folder (people/) is an
+        orphan derived page and must be cleaned on --delete, just like a concept."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_root.mkdir(parents=True, exist_ok=True)
+            # schema.md declares an extra typed folder beyond the base set.
+            (cfg.wiki_root / "schema.md").write_text(
+                "# Schema\n| type | directory |\n|--|--|\n"
+                "| person | wiki/people/ |\n| concept | wiki/concepts |\n",
+                encoding="utf-8")
+            stem = "Some Book"
+            src = f"raw/Book/{stem}.pdf"
+
+            person = self._write(cfg, "people/ada-lovelace.md", [src])   # orphan, schema folder
+            person_shared = self._write(cfg, "people/shared.md",
+                                        [src, "raw/Book/other.pdf"])      # multi-source -> keep
+
+            removed = _source_lifecycle._cleanup_orphan_pages(cfg.wiki_root, stem, cfg)
+
+            self.assertFalse(person.exists(), "orphan schema-folder page should be deleted")
+            self.assertTrue(person_shared.exists(), "multi-source schema-folder page must be kept")
+            self.assertEqual(removed, 1)
 
 
 class TestPreserveStageCounters(unittest.TestCase):

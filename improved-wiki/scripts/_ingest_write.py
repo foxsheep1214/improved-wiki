@@ -9,6 +9,9 @@ from _core import (
     Config,
     is_safe_ingest_path,
     list_existing_slugs,
+    load_schema_md,
+    schema_folders,
+    BASE_PAGE_DIRS,
     is_stage_done,
     get_stage_payload,
     mark_stage_done,
@@ -150,8 +153,11 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     hard_failures: list[str] = []
     source_block: tuple[str, str] | None = None
 
-    _VALID_SUBDIRS = {"sources", "concepts", "entities", "queries", "comparisons",
-                      "synthesis", "findings", "thesis"}
+    # Base page types + any schema-defined folders (NashSU schema-driven routing):
+    # a page in a schema folder (e.g. wiki/methodology/, wiki/people/) is accepted
+    # instead of being auto-corrected/dropped. Non-schema folders still fall through
+    # to auto-correct (typo safety net).
+    _VALID_SUBDIRS = set(BASE_PAGE_DIRS) | schema_folders(load_schema_md(config))
     _LISTING_PAGES = {"index.md", "log.md", "overview.md", "schema.md"}
 
     try:

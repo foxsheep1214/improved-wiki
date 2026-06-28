@@ -778,6 +778,39 @@ def list_existing_slugs(config: Config) -> list[str]:
     return slugs
 
 
+# Base page-type folders always valid regardless of schema (the fixed core types).
+BASE_PAGE_DIRS = {
+    "sources", "concepts", "entities", "queries", "comparisons",
+    "synthesis", "findings", "thesis",
+}
+
+
+def load_schema_md(config: Config) -> str:
+    """Raw schema.md text, or '' if absent.
+
+    schema.md lives at the project root (NashSU 0.5.2 parity); the wiki/ location
+    is read as a back-compat fallback.
+    """
+    for p in (config.wiki_root / "schema.md", config.wiki_dir / "schema.md"):
+        try:
+            if p.exists():
+                return p.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    return ""
+
+
+def schema_folders(schema_text: str) -> set[str]:
+    """Folder names declared in schema.md (the part after ``wiki/`` in each table
+    row), e.g. ``{'sources', 'methodology', 'people'}``.
+
+    NashSU schema-driven routing: the schema defines which typed folders exist for
+    this project. Used to (a) tell the generation LLM which folders it may route
+    pages into and (b) let the writer accept those pages instead of dropping them.
+    """
+    return set(re.findall(r"wiki/([a-z0-9][a-z0-9_-]*)", schema_text or ""))
+
+
 # ── Path safety (NashSU parity: isSafeIngestPath) ──
 
 _WINDOWS_RESERVED = {"con", "prn", "aux", "nul"}

@@ -39,7 +39,9 @@ wiki/
 <project>/schema.md  # page type → directory 映射；放在根目录，不进 wiki/ 扫描
 ```
 
-**来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页，均在 wiki/ 下）；`create-project-dialog.tsx`（schema.md 写入项目根 `${pp}/schema.md`）。
+**Schema 驱动路由（NashSU parity, 2026-06-28）**：上面 8 种是**基础** page type，始终可用。`schema.md` 还可以声明**额外的 typed 文件夹**（如 `wiki/people/`、`wiki/methods/`、`wiki/decisions/`、`wiki/methodology/`）。这些额外文件夹会：(1) 被注入 Stage 2.4 生成提示词，告诉 LLM "一个人物 → people/、一个方法 → methods/，否则用 concepts/entities"（`_schema_routing_block`）；(2) 被写盘阶段接受而非丢弃（`_VALID_SUBDIRS = BASE_PAGE_DIRS ∪ schema_folders(schema.md)`）。非 schema 声明的文件夹仍走 auto-correct/drop（拼写错误兜底）。基础 8 种之外无额外文件夹时，提示词不注入（默认项目无噪音）。
+
+**来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页，均在 wiki/ 下）；`ingest.ts:1830/1839/1840`（schema-defined typed pages 路由）；`create-project-dialog.tsx`（schema.md 写入项目根 `${pp}/schema.md`）。
 
 ### 1.2 raw/ 子目录（improved-wiki 布局）
 

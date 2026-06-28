@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Optional
 
 from _paths import detect_runtime_dir
-from _core import source_slug_from_raw_path
+from _core import (
+    source_slug_from_raw_path,
+    load_schema_md,
+    schema_folders,
+    BASE_PAGE_DIRS,
+)
 from _frontmatter_array import parse_frontmatter_array
 
 
@@ -65,7 +70,7 @@ def delete_source(raw_file: Path, config) -> int:
 
     # 3. Clean up derived pages (concepts/entities whose ONLY source is this file)
     source_stem = raw_file.stem
-    derived_count = _cleanup_orphan_pages(wiki_root, source_stem)
+    derived_count = _cleanup_orphan_pages(wiki_root, source_stem, config)
     removed += derived_count
     if derived_count:
         print(f"[lifecycle] Cleaned up {derived_count} derived pages")
@@ -82,19 +87,28 @@ def delete_source(raw_file: Path, config) -> int:
     return removed
 
 
-def _cleanup_orphan_pages(wiki_root: Path, source_stem: str) -> int:
+# schema.md may list folders that aren't LLM-generated per-source page types.
+_NON_PAGE_DIRS = {"media", "raw", "page-history", "chats"}
+
+
+def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config) -> int:
     """Remove derived pages whose ONLY source reference is this book.
 
-    Covers concepts, entities, queries, and comparisons. Queries and in-source
-    comparisons are source-specific derived pages (Stage 2.7 / 2.9) and were
-    previously left behind by --delete, so a re-ingest stacked stale duplicates
-    next to the freshly generated ones. Comparison pages with ``sources: []``
-    (e.g. hand-authored or multi-source hub pages) never match the single-source
-    test below — they are correctly preserved.
+    Covers concepts, entities, queries, comparisons, plus any schema-defined
+    typed folders (NashSU schema-driven routing — people/, methods/, etc.), so a
+    page routed there by Stage 2.4 is cleaned on --delete just like a concept page.
+    The single-source test below is the guard: pages with ``sources: []`` or with
+    more than one source (hand-authored or multi-source hub pages) never match and
+    are correctly preserved. synthesis/findings/thesis are intentionally excluded
+    (cross-source higher-order pages, not per-source derived).
     """
+    base_types = ("concepts", "entities", "queries", "comparisons")
+    extra = schema_folders(load_schema_md(config)) - BASE_PAGE_DIRS - _NON_PAGE_DIRS
+    page_types = base_types + tuple(sorted(extra))
+
     removed = 0
     history_dir = wiki_root / "page-history"
-    for page_type in ("concepts", "entities", "queries", "comparisons"):
+    for page_type in page_types:
         page_dir = wiki_root / "wiki" / page_type
         if not page_dir.exists():
             continue
