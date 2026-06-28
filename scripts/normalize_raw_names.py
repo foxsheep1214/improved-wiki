@@ -226,7 +226,7 @@ def _stage_0_1_check_rule(filepath: Path, rule: dict, vendors: List[str],
 
     vf = rule.get('vendor_field')
     if vf is not None and isinstance(vf, int) and 0 <= vf < len(parts):
-        if parts[vf] not in vendors:
+        if vendors and parts[vf] not in vendors:
             issues.append(("error", f"未识别的 Vendor：「{parts[vf]}」"))
 
     yf = rule.get('year_field')
@@ -361,10 +361,10 @@ def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: boo
 # ── CLI ─────────────────────────────────────────────────────────
 
 def _stage_0_1_find_project_root() -> Optional[Path]:
-    """Walk up from CWD to find a project with raw/NAMING.md."""
+    """Walk up from CWD to find a project with a schema.md at its root."""
     cwd = Path.cwd()
     for p in [cwd] + list(cwd.parents):
-        if (p / 'raw' / 'NAMING.md').exists():
+        if (p / 'schema.md').exists():
             return p
     return None
 
@@ -383,12 +383,12 @@ def main():
 
     project_root = args.project or _stage_0_1_find_project_root()
     if project_root is None:
-        print("Error: Could not find raw/NAMING.md. "
+        print("Error: Could not find schema.md. "
               "Run from a wiki project or use --project.")
         return 1
 
     raw_root = project_root / 'raw'
-    naming_md = raw_root / 'NAMING.md'
+    naming_md = project_root / 'schema.md'
 
     if not naming_md.exists():
         print(f"Error: {naming_md} not found. Create it first.")
@@ -398,6 +398,17 @@ def main():
     if not rules:
         print(f"Error: No ```yaml rules``` block found in {naming_md}")
         return 1
+
+    # Load vendor list/prefixes from raw/Datasheet/VENDORS.yaml (datasheet-folder
+    # scoped; kept out of schema.md to avoid bloating LLM context). Merged into
+    # rules so vendor_field validation in _stage_0_1_check_rule works.
+    vendors_file = raw_root / 'Datasheet' / 'VENDORS.yaml'
+    if vendors_file.exists():
+        vdata = _stage_0_1_parse_simple_yaml(vendors_file.read_text(encoding='utf-8'))
+        if vdata.get('vendors'):
+            rules['vendors'] = vdata['vendors']
+        if vdata.get('vendor_prefixes'):
+            rules['vendor_prefixes'] = vdata['vendor_prefixes']
 
     mode = "🔧 修正" if args.fix else "🔍 检查"
     scope = f"（最近 {args.recent} 分钟内修改的文件）" if args.recent else ""
