@@ -352,8 +352,10 @@ def batch_ingest(
 
     Design (pipeline, not barrier):
       - The slow non-LLM part of EVERY book (Phase 0/1 = minerU + caption) runs in
-        a detached background subprocess launched at batch start. They serialize on
-        the minerU fcntl.flock but otherwise overlap with the main conversation.
+        a detached background subprocess: the spine head (book 1) is launched at
+        batch start so it wins the flock; each later book is launched right after
+        the prior book's extraction (pipelined), so they extract in spine order
+        and overlap the prior book's LLM spine instead of racing for the flock.
       - The main conversation drives books ONE AT A TIME: wait for book N's
         Phase 0/1 (bg) → 2.1/2.2 (LLM handoffs) → 2.3+ spine (LLM handoffs).
         So minerU[N+1] runs while spine[N] is being answered.
@@ -378,13 +380,15 @@ def batch_ingest(
         raise RuntimeError("Could not acquire project lock for batch write phase")
 
     bg_state = _load_bg_state(config)
-    # Launch bg extract for every book whose Phase 0/1 isn't already cached.
-    # _launch_bg_extract checks PID aliveness internally, so stale (dead) entries
-    # get re-launched rather than blocking the wait.
-    for f in raw_files:
-        h = file_sha256(f)
-        if not is_stage_done(config, h, "stage_1_3_done"):
-            _launch_bg_extract(f, config, bg_state)
+    # Launch ONLY the spine head's (book 1) bg extract upfront so it wins the
+    # minerU flock and the spine can start ASAP. Later books are launched
+    # PIPELINED — each right after the prior book's extraction completes (see the
+    # loop) — so they extract in spine order. Launching all upfront let them race
+    # for the flock: a non-head book could grab it first and delay book 1's spine
+    # (observed 2026-06-29). _launch_bg_extract is idempotent (skips alive PIDs),
+    # so re-invocations after a handoff don't relaunch.
+    if raw_files and not is_stage_done(config, file_sha256(raw_files[0]), "stage_1_3_done"):
+        _launch_bg_extract(raw_files[0], config, bg_state)
 
     results: list[dict] = []
     try:
@@ -399,6 +403,15 @@ def batch_ingest(
                 print(f"[batch] waiting for bg extract (Phase 0/1) — {f.name}", flush=True)
                 if not _wait_extract_done(config, h):
                     print(f"[batch] bg extract timed out — falling back to sync — {f.name}", flush=True)
+
+            # Pipeline: this book's Phase 0/1 is done — launch the NEXT book's bg
+            # extract now so it runs (flock-serialized, in spine order) during this
+            # book's LLM spine. Launched AFTER this book's extraction so ordering is
+            # strict (no flock race). Idempotent: skips if already done/alive.
+            if i < total_books:
+                nxt = raw_files[i]  # i is 1-based → raw_files[i] is book i+1
+                if not is_stage_done(config, file_sha256(nxt), "stage_1_3_done"):
+                    _launch_bg_extract(nxt, config, bg_state)
 
             # 2.1/2.2 (Phase 0/1 cached). Raises ConversationPending on an LLM
             # handoff (chunk prompt); PrepareStopAfter at the 2.2/2.3 boundary.
