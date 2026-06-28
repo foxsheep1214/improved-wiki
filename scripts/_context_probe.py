@@ -25,8 +25,19 @@ import time
 from pathlib import Path
 
 # Dedicated conversation prefix so the probe is shared across all files in a
-# batch and isolated from per-source (per-file-hash) conversation dirs.
-_PROBE_PREFIX = "ctxprobe"
+# batch and isolated from per-source (per-file-hash) conversation dirs. The
+# prefix is MODEL-NAMESPACED (``ctxprobe-<model>``): the conversation router
+# caches the probe Q&A independently of probed-context.json, so a shared
+# ``ctxprobe`` dir would replay the prior model's answer when the model changes
+# (making "a model change triggers one probe" false). Namespacing by model means
+# a different model → different dir → fresh probe, while the same model stays
+# cached (no re-probe loop). See clear_probe_cache() for the same-model force path.
+_PROBE_PREFIX_BASE = "ctxprobe"
+
+
+def _probe_prefix(model: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]", "-", (model or "unknown").strip()) or "unknown"
+    return f"{_PROBE_PREFIX_BASE}-{safe}"
 
 _PROBE_MIN = 8_000          # no real model answers below this
 _PROBE_MAX = 10_000_000     # no current model exceeds this
@@ -80,6 +91,28 @@ def save_cached(config, context: int) -> None:
     _cache_path(config).write_text(json.dumps(d, indent=2), encoding="utf-8")
 
 
+def clear_probe_cache(config) -> None:
+    """Force a genuine fresh probe by clearing BOTH cache layers.
+
+    The probe has two independent caches: the parsed value in
+    ``probed-context.json`` and the conversation router's Q&A under
+    ``conversation/ctxprobe*``. Deleting only the former does NOT re-probe — the
+    router replays the cached answer. This clears both (all model-namespaced
+    ctxprobe dirs), so the next ``resolve_context`` does a real round-trip.
+    Wired to ``ingest.py --reprobe``.
+    """
+    import shutil
+
+    try:
+        _cache_path(config).unlink()
+    except FileNotFoundError:
+        pass
+    conv_root = config.runtime_dir / "conversation"
+    if conv_root.exists():
+        for d in conv_root.glob(f"{_PROBE_PREFIX_BASE}*"):
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def _parse_context(text: str) -> int:
     """Extract the first 4+ digit integer from the response (tolerates prose/commas)."""
     cleaned = (text or "").replace(",", "").replace(" ", "")
@@ -92,7 +125,7 @@ def probe_context(config) -> int:
     from _llm_api import call_anthropic_protocol
 
     saved_prefix = config.conversation_prefix
-    config.conversation_prefix = _PROBE_PREFIX
+    config.conversation_prefix = _probe_prefix(config.llm_model)
     try:
         resp, _stop = call_anthropic_protocol(
             _PROBE_PROMPT, config, max_tokens=64, label="context-probe"

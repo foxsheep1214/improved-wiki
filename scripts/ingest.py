@@ -503,7 +503,25 @@ def main() -> int:
              "only do Phase 0/1 — minerU+caption — and never touch wiki/). The batch "
              "coordinator holds the lock; a bg extract must not deadlock on it.",
     )
+    parser.add_argument(
+        "--reprobe", action="store_true",
+        help="Force a fresh context-window probe: clear BOTH cache layers "
+             "(probed-context.json + conversation/ctxprobe*) and exit. The next "
+             "ingest then probes the live model once. Deleting probed-context.json "
+             "alone does NOT re-probe — the conversation router replays the old answer.",
+    )
     args = parser.parse_args()
+
+    # ── Force-reprobe: one-shot maintenance action (clear caches, exit) ──
+    # Standalone like --delete so the handoff re-invocation never re-clears the
+    # in-flight answer (which would loop). The subsequent normal ingest re-probes.
+    if args.reprobe:
+        from _context_probe import clear_probe_cache
+        config = Config.from_env()
+        clear_probe_cache(config)
+        print("[context-probe] caches cleared (probed-context.json + conversation/ctxprobe*) "
+              "— next ingest will probe the live model.")
+        return 0
 
     # ── Watch mode: continuous queue consumer ──
     if args.watch:
