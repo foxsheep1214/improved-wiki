@@ -1,6 +1,6 @@
 # Batch Digest Patterns and Pitfalls
 
-## ❌ `claude -p` cannot run 20-stage ingest pipeline
+## ❌ `claude -p` cannot run 19-stage ingest pipeline
 
 Using `claude -p "digest this book"` for batch wiki ingestion fails (exit=1) for every book. The `-p` (print/non-interactive) mode:
 - Cannot handle the multi-step `ingest.py` conversation-mode handoff (exit 101 prompt-file pattern)

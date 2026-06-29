@@ -373,4 +373,4 @@ Deep research is the **outward-facing** complement to auto-ingest's **inward-fac
                     └──────────────────┘
 ```
 
-Both auto-ingest and deep research write through the same `writeFileBlocks` → `validate_ingest.py` path. Both update `ingest-cache.json`. Both trigger aggregate repair. The wiki doesn't know or care where knowledge came from — only that it's structured, linked, and verified.
+Both auto-ingest and deep research write through the same `writeFileBlocks` → Stage 3.1 写盘 path. Both update `ingest-cache.json`. Both trigger aggregate repair (Stage 3.5). The wiki doesn't know or care where knowledge came from — only that it's structured, linked, and verified.

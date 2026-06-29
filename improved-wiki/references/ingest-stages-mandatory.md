@@ -1,13 +1,13 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——improved-wiki 流水线的 18 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——improved-wiki 流水线的 19 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
 tags: [ingest, mandatory, pipeline]
 related: [SKILL.md, known-issues, scanned-pdf-ocr-pipeline, image-caption-strategy]
 ---
 
 # 强制 Ingest Stage 清单
 
-improved-wiki 流水线 = **18 个 active Stage（含 Phase 0 前置门，跨 5 个 Phase）+ Lint + Graph**。编号与 `ingest.py` 代码一致，**编号即执行顺序**。任何 Stage 都不能跳过。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
+improved-wiki 流水线 = **19 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**。编号与 `ingest.py` 代码一致，**编号即执行顺序**。任何 Stage 都不能跳过。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
 
 **跳过的代价**：raw 是 sacred（图也是 raw 的一部分）；缺 stage 产物则审计无法回溯；不写 cache 下次重跑；跳过的 stage 永远不会被补做，错误留在 wiki 里。
 
