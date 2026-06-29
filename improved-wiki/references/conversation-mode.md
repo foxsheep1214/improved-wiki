@@ -335,10 +335,9 @@ sources: ["raw/Book/书名.pdf"]
 3. Stage 2.1: 采样文本 + prompt → global digest YAML
 4. Stage 2.2: 分 N 次读取文本块 + prompt → N 个 chunk 分析 YAML
 5. Stage 2.3: 增量关联检测（与已有 wiki 页面匹配）
-6. Stage 2.4: digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）
-7. Stage 2.5: 概念去重合并（多 chunk 书）
-8. Stage 2.6: 源页面生成
-9. Stage 2.7-2.9: Query 生成 → 跨源解析 → Comparison 生成
+6. Stage 2.4: digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）+ 源内概念去重收尾（多 chunk 书，原 2.5）
+7. Stage 2.6: 源页面生成
+8. Stage 2.7-2.9: Query 生成 → 跨源解析（原 2.8，已并入 2.7）→ Comparison 生成
 10. Stage 3.1: 写盘（所有 FILE 块）
 11. Stage 3.2: 图片注入 source 页
 12. Stage 3.3: 跨域 slug 碰撞审查

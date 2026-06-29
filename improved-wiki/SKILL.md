@@ -1,18 +1,18 @@
 ---
 name: improved-wiki
-description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). 19 active ingest Stages (Phase 0 included) across 4 Phases (0-3). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode, the only path (no external API key) — the calling agent answers each prompt with the current conversation's model; in multi-book batch ingest, books run one at a time through the wiki-dependent stages (2.3+), and sub-agents may answer the parallel prompts only from the wiki-independent prefetch (Phase 0/1 + Stage 2.1/2.2) of other books. Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
+description: "Class-level umbrella for the Karpathy/NashSU LLM-Wiki ingestion pipeline (three peer commands: Ingest, Lint, Graph). 17 active ingest Stages (Phase 0 included) across 4 Phases (0-3). Three modes: auto-ingest (batch), chat-ingest (interactive), deep-research (closed-loop web→wiki, NashSU deep-research.ts parity). Use when ingesting a PDF/PPTX/DOCX, researching a topic into the wiki, validating an ingest, debugging failed tasks, or auditing wiki completeness. All text-generation LLM work runs in conversation mode, the only path (no external API key) — the calling agent answers each prompt with the current conversation's model; in multi-book batch ingest, books run one at a time through the wiki-dependent stages (2.3+), and sub-agents may answer the parallel prompts only from the wiki-independent prefetch (Phase 0/1 + Stage 2.1/2.2) of other books. Phase 0 OCR uses local minerU (free); image captioning (Stage 1.3) is the one exception and calls MiniMax VLM. Graph (the knowledge-graph command) is separate from lint — NashSU graph-view CLI parity, four-signal weighted graph + Louvain communities, deterministic (no LLM)."
 tags: [ingest, mandatory, nashsu, pipeline, scan-pdf, mineru, local-ocr, knowledge-graph, louvain]
 related_skills: [karpathy-llm-wiki, llm-wiki-local]
 ---
 
 # improved-wiki
 
-Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (19 active Stages across 4 Phases — Phase 0 included: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint, run explicitly; never auto-triggered by ingest/lint, NashSU-aligned). (No post-ingest validation phase — removed for NashSU alignment; `validate_ingest.py` stays as a standalone manual check. NashSU's only ingest-time check, schema routing, runs at write time in Stage 3.1.)
+Karpathy LLM-Wiki pattern + NashSU v0.4.25 pipeline. Three peer commands: **Ingest** (17 active Stages across 4 Phases — Phase 0 included: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich), **Lint** (structural + semantic), **Graph** (knowledge graph — separate from lint, run explicitly; never auto-triggered by ingest/lint, NashSU-aligned). (No post-ingest validation phase — removed for NashSU alignment; `validate_ingest.py` stays as a standalone manual check. NashSU's only ingest-time check, schema routing, runs at write time in Stage 3.1.)
 
 ```
 Phase 0: [0.1 raw-naming] → [0.2 source dedup]  (pre-processing gates)
-Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.5→2.6→2.7→2.8→2.9→3.1→3.2→3.4→3.5→3.7
-        (execution order per _ingest_prepare.py::_do_prepare / _ingest_write.py::_do_write; 2.3 = existing-wiki association detection (between analysis and generation); 2.6 = source page; 3.4 = review, runs after 3.2 on already-written files; 3.7 = embeddings; same-slug collisions merged at 3.1 write)
+Ingest: 1.1→1.2→1.3→2.1→2.2→2.3→2.4→2.6→2.7→2.9→3.1→3.2→3.4→3.5→3.7
+        (execution order per _ingest_prepare.py::_do_prepare / _ingest_write.py::_do_write; 2.3 = existing-wiki association detection (between analysis and generation); 2.4 includes an in-source concept-dedup closing sub-step (former Stage 2.5); 2.6 = source page; 2.7 includes a cross-source query-resolution closing sub-step (former Stage 2.8); 3.4 = review, runs after 3.2 on already-written files; 3.7 = embeddings; same-slug collisions merged at 3.1 write)
 
 Phase 0: Pre-processing gates  (raw naming, source dedup)
 Phase 1: Extraction            (text extraction, image extract, caption)
@@ -68,7 +68,7 @@ Two other external-API dependencies (not text generation):
 - `references/query-generation.md` — Stage 2.7: auto-generate `wiki/queries/`
 - `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (in-source concept pairs AND systematic multi-way 3+ comparisons)
 - `references/domains.md` — domain classification for graph partitioning / query routing
-- `references/dedup-design.md` — two dedup tiers: intra-source (Stage 2.5, ingest-time) vs cross-source (CLI, lint-time); distinct responsibilities, not interchangeable
+- `references/dedup-design.md` — two dedup tiers: intra-source (Stage 2.4 closing sub-step, ingest-time) vs cross-source (CLI, lint-time); distinct responsibilities, not interchangeable
 - `references/scanned-pdf-ocr-pipeline.md` — minerU local API extraction pipeline (all PDFs: text/scanned/mixed unified)
 - `references/raw-naming-conventions.md` — raw 文件命名规范检查机制（项目级 `raw/NAMING.md` + auto-check）
 - `references/chat-ingest.md` ⭐ — interactive human-guided ingest (NashSU startIngest/executeIngestWrites parity)
@@ -93,7 +93,7 @@ Two other external-API dependencies (not text generation):
 - `references/known-issues.md` — current bugs and workarounds
 - `references/initial-setup.md` — first-time project bootstrap
 - `references/batch-digest-loop.md` — batch ingest with resume
-- `references/batch-digest-patterns.md` — batch ingest pitfalls: why `claude -p` cannot drive the 19-stage pipeline, Python-loop + `wiki/sources/<stem>.md` dedup pattern
+- `references/batch-digest-patterns.md` — batch ingest pitfalls: why `claude -p` cannot drive the 17-stage pipeline, Python-loop + `wiki/sources/<stem>.md` dedup pattern
 - `references/re-ingest-comparison.md` — re-ingest a book to compare old vs new pipeline results (backup → delete → re-ingest → compare)
 - `references/maintenance-cleanup.md` — periodic cleanup of stale files (`.digested`, temp dirs, `.DS_Store`, empty-slug `.md` bug residual)
 - `references/cron-installation.md` — cron-based automation
@@ -144,7 +144,7 @@ Two other external-API dependencies (not text generation):
 | Category | Scripts |
 |----------|---------|
 | Core | `ingest.py`, `_core.py`, `_llm_api.py`, `_paths.py`, `_language.py`, `_frontmatter.py` |
-| Stage Modules (Phase 0-3) | `_stage_1_extract.py` (1.1 facade → `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py`), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3: existing-wiki association detect), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.5), `_stage_2_6_source_page.py` (2.6: source page), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.8), `_stage_2_9_comparison.py` (2.9), `_stage_3_4_review.py` (3.4), `_stage_2_base.py` (公共导入), `_stage_3_write.py` (3.1 incl. page-merge, 3.5), `_stage_3_2_inject_images.py` (3.2), `_stage_3_7_embed.py` (3.7, final stage), `_stage_validators.py` (Stage 0 验证门 + StageValidationError) |
+| Stage Modules (Phase 0-3) | `_stage_1_extract.py` (1.1 facade → `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py`), `_stage_2_analyze.py` (2.1-2.2), `_stage_2_3_incremental.py` (2.3: existing-wiki association detect), `_stage_2_4_generation.py` (2.4), `_stage_2_5_dedup.py` (2.4 dedup 收尾, ex-2.5), `_stage_2_6_source_page.py` (2.6: source page), `_stage_2_7_query_generation.py` (2.7), `_stage_2_8_query_resolve.py` (2.7 resolve 收尾, ex-2.8), `_stage_2_9_comparison.py` (2.9), `_stage_3_4_review.py` (3.4), `_stage_2_base.py` (公共导入), `_stage_3_write.py` (3.1 incl. page-merge, 3.5), `_stage_3_2_inject_images.py` (3.2), `_stage_3_7_embed.py` (3.7, final stage), `_stage_validators.py` (Stage 0 验证门 + StageValidationError) |
 | Ingest orchestrator splits | `ingest.py` (CLI + `ingest_one`/`batch_ingest`) → `_ingest_skip.py` (Stage 0.2 去重/skip), `_ingest_chunks.py` (chunk 流水线), `_ingest_prepare.py` (综合/source page), `_ingest_write.py` (写盘 + post-ingest) |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
 | Lint | `wiki-lint.sh`, `wiki-lint-semantic.py`, `validate_ingest.py`, `validate-frontmatter.sh`, `normalize_raw_names.py` |

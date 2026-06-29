@@ -407,11 +407,13 @@ def _do_prepare(
             concept_count_before, concept_count_after = _pcache.get(
                 "concept_merge_stats", (0, 0))
             dedup_was_run = _pcache.get("dedup_was_run", False)
-            print(f"  [stage 2.5–2.9] (cached) tail outputs restored — "
+            print(f"  [stage 2.4–2.9] (cached) tail outputs restored — "
                   f"{len(file_blocks)} blocks")
         else:
-            # Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
-            # Runs before the source page so the index lists de-duplicated concepts.
+            # Stage 2.4 closing sub-step: in-source concept dedup & merge
+            # (multi-chunk books only). Runs before the source page so the index
+            # lists de-duplicated concepts. (Former standalone Stage 2.5; folded
+            # into 2.4 — embedding prefilter + LLM confirm, no-fallback raise.)
             from _stage_2_5_dedup import stage_2_5_dedup
             _stage_2_5 = stage_2_5_dedup(file_blocks, chunk_analyses, config, verbose=verbose)
             file_blocks = _stage_2_5["file_blocks"]
@@ -439,18 +441,23 @@ def _do_prepare(
                 template=template_content, verbose=verbose,
                 source_context=_q29_source,
             )
+            # Stage 2.7 closing sub-step: cross-source query resolution (former
+            # standalone Stage 2.8; folded into 2.7). Embedding prefilter matches
+            # each new query against existing concept/entity pages; LLM judge
+            # closes queries already answered elsewhere, defaults to "kept".
+            # no-fallback: a missing embedding stack raises here (clean re-run —
+            # stage_2_9_done is set only after the whole tail succeeds).
             if query_blocks:
                 file_blocks = list(file_blocks) + query_blocks
-
-            # ── Stage 2.8: Cross-source query resolution ──
-            # LLM judge closes queries already answered elsewhere; defaults to "kept".
-            from _stage_2_8_query_resolve import (stage_2_8_resolve_queries,
-                                                   _stage_2_8_update_file_blocks_after_resolution)
-            query_resolutions = stage_2_8_resolve_queries(file_blocks, config.wiki_dir, config)
-            if any(r["status"] == "closed" for r in query_resolutions.values()):
-                before_q = len(file_blocks)
-                file_blocks = _stage_2_8_update_file_blocks_after_resolution(file_blocks, query_resolutions)
-                print(f"  [stage 2.8] Removed {before_q - len(file_blocks)} closed query block(s)")
+                from _stage_2_8_query_resolve import (stage_2_8_resolve_queries,
+                                                       _stage_2_8_update_file_blocks_after_resolution)
+                query_resolutions = stage_2_8_resolve_queries(file_blocks, config.wiki_dir, config)
+                if any(r["status"] == "closed" for r in query_resolutions.values()):
+                    before_q = len(file_blocks)
+                    file_blocks = _stage_2_8_update_file_blocks_after_resolution(file_blocks, query_resolutions)
+                    print(f"  [stage 2.7] Removed {before_q - len(file_blocks)} closed query block(s)")
+            else:
+                query_resolutions = {}
 
             # ── Stage 2.9: Comparison generation ──
             comp_blocks, _ = stage_2_9_comparison_generation(

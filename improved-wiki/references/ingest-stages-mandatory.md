@@ -1,13 +1,13 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——improved-wiki 流水线的 19 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——improved-wiki 流水线的 17 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
 tags: [ingest, mandatory, pipeline]
 related: [SKILL.md, known-issues, scanned-pdf-ocr-pipeline, image-caption-strategy]
 ---
 
 # 强制 Ingest Stage 清单
 
-improved-wiki 流水线 = **19 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**。编号与 `ingest.py` 代码一致，**编号即执行顺序**。任何 Stage 都不能跳过。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
+improved-wiki 流水线 = **17 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾、跨源 query 解析原 2.8 并入 2.7 收尾，功能保留、编号退休）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。任何 Stage 都不能跳过。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
 
 **跳过的代价**：raw 是 sacred（图也是 raw 的一部分）；缺 stage 产物则审计无法回溯；不写 cache 下次重跑；跳过的 stage 永远不会被补做，错误留在 wiki 里。
 
@@ -25,11 +25,9 @@ improved-wiki 流水线 = **19 个 active Stage（含 Phase 0 前置门，跨 4 
 | 2.1 | `stage_2_1_global_digest` | 全局摘要 |
 | 2.2 | `stage_2_2_chunk_analysis` | 逐 chunk 分析（**全部 chunk 分析完**再进入 2.3） |
 | 2.3 | `stage_2_3_*`（`_stage_2_3_incremental.py`） | 已存在 wiki 关联检测（在 2.2 与 2.4 之间，读 wiki） |
-| 2.4 | `_stage_2_4_generate_*`（逐 chunk 生成） | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发） |
-| 2.5 | `_stage_2_5_*`（`_stage_2_5_dedup.py`） | 源内概念去重合并（多 chunk） |
-| 2.6 | `stage_2_6_source_page` | 源页生成（源索引；2.5 之后） |
-| 2.7 | `stage_2_7_query_generation` | 问题生成 |
-| 2.8 | `_stage_2_8_resolve_queries` | 跨源 query 解析（LLM judge） |
+| 2.4 | `_stage_2_4_generate_*` + `_stage_2_5_dedup.py` | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发）+ 源内概念去重收尾（embedding 语义初筛 cosine≥0.82 + LLM 确认，多 chunk；无回退） |
+| 2.6 | `stage_2_6_source_page` | 源页生成（源索引；2.4 之后） |
+| 2.7 | `stage_2_7_query_generation` + `_stage_2_8_query_resolve.py` | 问题生成 + 跨源 query 解析（embedding 语义初筛 cosine≥0.82 + LLM judge；无回退） |
 | 2.9 | `stage_2_9_comparison_generation` | 源内对比生成 |
 | 3.1 | `stage_3_1_write_wiki_file` | 文件写盘（含同名 slug 三层 page-merge，NashSU parity） |
 | 3.2 | `stage_3_2_inject_images` | 图片注入 source 页 |
@@ -96,25 +94,17 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.4 · Generation（single-pass pipeline）
 - **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再逐 chunk 生成概念/实体页（源锚定；≤1 chunk 走单发）。**不是** analyze→generate 逐 chunk 交错——全部分析在前，生成在后（2.3 夹在中间，需要全量分析结果）。默认生成 source/concept/entity；若 `schema.md` 声明了额外 typed 文件夹（NashSU schema 驱动路由），LLM 可把贴切的页路由进去（人物→people/、方法→methods/ 等），写盘阶段会接受这些 schema 文件夹。
 - **子步骤（生成前）· 增量关联验证**：`_stage_2_3_resolve_proposed_connections` 拿 2.2 chunk 分析自报的 `connections_to_existing_wiki` 去磁盘验证（确认被引用的 concept/entity/source 页真实存在），产出 verified `incremental_associations` 作为 2.4 生成的 Linkable pages 列表——只允许 LLM wikilink 到真实存在的页面，防止幻觉链接。wiki 为空时跳过。
+- **子步骤（生成后收尾）· 源内概念去重**（原 Stage 2.5，已并入 2.4）：对同一本书内部概念去重合并（防同名异义重复页）。**embedding 语义初筛**（cosine ≥0.82，复用 `_dedup_embedding.candidate_pairs`，取代旧的词级 Jaccard，能抓跨语言/同义重复如 傅里叶变换 vs Fourier transform）+ LLM 逐组确认，失败保守不合并。**无回退**：embedding stack 不可用则 `raise` 暂停（不退回 Jaccard）。跳过条件：单 chunk 书。go/no-go：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。
 - **子步骤（生成后）· 源页生成**：所有 chunk 生成完，`stage_2_6_source_page` 从 global digest 生成源页（源索引，列出概念/实体/问题/对比），并入 file_blocks。源页正文按 doctype 分支：book → `## Book Summary` + `## Table of Contents & Key Concepts` + `## Key Takeaways`；paper → `## Paper Summary` + `## Methodology & Results` + `## Key Takeaways`（论文无章节目录，不套 chapter）。与 NashSU Step 2 把 source page 作为生成产物 item 1 对齐。go/no-go：source page 路径为 `wiki/sources/<stem>.md`。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
 - **go/no-go**：`stages.file_blocks_generated ≥ 1`；source page FILE block 存在；概念页路径在 `wiki/concepts/` 下。
 - **completion path**：单遍生成产出 0 concept（或单发被截断）→ per-concept 生成（每 concept 一次 LLM 调用）补齐缺口。
 
-### Stage 2.5 · Concept Dedup & Merge
-- **作用**：2.4 生成所有 chunk 的 concept/entity 后，对同一本书内部概念去重合并（防同名异义重复页）。确定性初筛（Jaccard ≥0.6 + 停用词过滤）+ LLM 确认，失败保守不合并。
-- **跳过条件**：单 chunk 书。
-- **go/no-go**：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。
-
-### Stage 2.7 · Query Auto-Generation
+### Stage 2.7 · Query Auto-Generation + Cross-source Resolution
 - **作用**：基于 2.4 的 concept/entity，识别书中提出但未完全解答的开放问题，生成 `wiki/queries/<slug>.md`。详见 `query-generation.md`。
 - **跳过条件**：source 类型为 `datasheet`/`standard`（纯事实罗列）。
 - **go/no-go**：0-5 个 query FILE block 或 `---QUERIES: 0---` 标记；每个 query frontmatter 含 `type: query`+`title:`+`sources:`。
-
-### Stage 2.8 · Cross-source Query Resolution
-- **作用**：对 2.7 的 query 检索 wiki 已有页面是否已回答。已答 → 关闭删除；未答 → 保留。LLM judge，不确定一律 kept。
-- **跳过条件**：2.7 无 query，或 wiki 为空。
-- **go/no-go**：`query_resolutions` 已记录（可为 `[]`）。
+- **子步骤（生成后收尾）· 跨源 query 解析**（原 Stage 2.8，已并入 2.7）：对刚生成的 query 检索 wiki 已有页面是否已回答。**embedding 语义初筛**（cosine ≥0.82：query 标题/正文 ↔ 已有 concept/entity 页向量，取代旧的标题词级 Jaccard，能匹配问句标题 vs 名词概念）+ LLM judge；已答 → 关闭删除，未答/不确定一律 kept。**无回退**：embedding stack 不可用则 `raise` 暂停。**空 wiki**（无已有页可比）→ 全部 kept 且**不 embed**（真 no-op，非回退）。跳过条件：2.7 无 query。go/no-go：`query_resolutions` 已记录（可为 `[]`）。
 
 ### Stage 2.9 · Comparison Auto-Generation（源内）
 - **作用**：源内概念对比（两个高度相关概念 → 对比页，对比维度 ≥4，至多 2 页）。详见 `comparison-generation.md`。
@@ -159,16 +149,18 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## 强制顺序与依赖
 
 ```
-0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.5 → 2.6 → 2.7 → 2.8 → 2.9
+0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.1 → 2.2 → 2.3 → 2.4 → 2.6 → 2.7 → 2.9
      → 3.1 → 3.2 → 3.4 → 3.5 → 3.7
+
+（2.4 含源内去重收尾[原 2.5]；2.7 含跨源 query 解析收尾[原 2.8]）
 ```
 
 关键依赖：
 - 1.2 先于 1.3（先有图才能 caption）；1.2/1.3 先于 3.2（注入图引用）
 - 2.1/2.2 永远不跳（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
-- 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.5 依赖 2.4（单 chunk 跳过）；2.6 源页在 2.5 之后
-- Phase 2 全在内存（2.3→2.4→2.5→2.6→2.7→2.8→2.9 串行），产出统一由 3.1 写盘
-- 2.7 conditional（datasheet/standard 跳过）；2.8 conditional（2.7 无 query 或 wiki 空跳过）；2.9 conditional（无 concept 或 concept <2 跳过）
+- 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.4 生成后收尾跑源内去重（原 2.5，单 chunk 跳过）；2.6 源页在 2.4 之后
+- Phase 2 全在内存（2.3→2.4→2.6→2.7→2.9 串行），产出统一由 3.1 写盘
+- 2.7 conditional（datasheet/standard 跳过 query 生成）；2.7 跨源解析收尾 conditional（无 query 或 wiki 空跳过，原 2.8）；2.9 conditional（无 concept 或 concept <2 跳过）
 - **3.1 写盘时同名 slug 走 page-merge**（NashSU parity）
 - 3.4 在已写盘文件上运行；3.5 在所有页面写盘后
 - 3.7 强制（缺 stack 暂停），是**最后一个 stage**；之后 `_finalize_book` 置完成标记
