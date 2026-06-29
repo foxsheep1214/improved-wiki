@@ -13,6 +13,7 @@ technical document.
 """
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -21,7 +22,12 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from _language import detect_language  # noqa: E402
+from _language import (  # noqa: E402
+    detect_language,
+    build_language_directive,
+    get_output_language,
+    OUTPUT_LANGUAGE_ENV,
+)
 
 
 class TestMathGreekNotGreek(unittest.TestCase):
@@ -85,6 +91,71 @@ class TestChineseAndEnglish(unittest.TestCase):
 
     def test_plain_english(self):
         self.assertEqual(detect_language("This is a plain English sentence about radar."), "English")
+
+
+class TestDirectivePreservationClauses(unittest.TestCase):
+    """build_language_directive must port NashSU buildLanguageDirective's
+    preservation rules so the LLM localizes prose but NEVER translates
+    proper nouns, technical identifiers, URLs, paper titles, or code."""
+
+    def test_directive_states_mandatory_language(self):
+        directive = build_language_directive("This is plain English text.")
+        self.assertIn("MANDATORY OUTPUT LANGUAGE", directive)
+        self.assertIn("English", directive)
+
+    def test_directive_has_proper_noun_preservation(self):
+        directive = build_language_directive("先进米波雷达是一种重要的雷达体制。")
+        # Localized prose language is Chinese...
+        self.assertIn("Chinese (中文)", directive)
+        # ...but the preservation clauses must be present verbatim.
+        self.assertIn("Do not translate, transliterate", directive)
+        self.assertIn("proper nouns", directive)
+        self.assertIn("organization names", directive)
+        self.assertIn("acronyms", directive)
+        self.assertIn("code identifiers", directive)
+        self.assertIn("file names", directive)
+        self.assertIn("URLs", directive)
+        self.assertIn("paper titles", directive)
+        self.assertIn("citation strings", directive)
+
+    def test_directive_has_override_ordering_clause(self):
+        directive = build_language_directive("plain English")
+        self.assertIn("overrides weaker style instructions", directive)
+        self.assertIn("does not override", directive)
+
+
+class TestOutputLanguageOverride(unittest.TestCase):
+    """IMPROVED_WIKI_OUTPUT_LANGUAGE forces the output language regardless of
+    the source text (NashSU getOutputLanguage parity)."""
+
+    def setUp(self):
+        self._old = os.environ.get(OUTPUT_LANGUAGE_ENV)
+
+    def tearDown(self):
+        if self._old is None:
+            os.environ.pop(OUTPUT_LANGUAGE_ENV, None)
+        else:
+            os.environ[OUTPUT_LANGUAGE_ENV] = self._old
+
+    def test_auto_default_detects_from_text(self):
+        os.environ.pop(OUTPUT_LANGUAGE_ENV, None)
+        self.assertEqual(get_output_language("先进米波雷达是雷达体制。"), "Chinese")
+
+    def test_explicit_auto_value_still_detects(self):
+        os.environ[OUTPUT_LANGUAGE_ENV] = "auto"
+        self.assertEqual(get_output_language("先进米波雷达是雷达体制。"), "Chinese")
+
+    def test_override_forces_language_over_source(self):
+        os.environ[OUTPUT_LANGUAGE_ENV] = "French"
+        # Source is Chinese, but override forces French.
+        self.assertEqual(get_output_language("先进米波雷达是雷达体制。"), "French")
+        directive = build_language_directive("先进米波雷达是雷达体制。")
+        self.assertIn("French", directive)
+        self.assertNotIn("Chinese (中文)", directive)
+
+    def test_override_blank_falls_back_to_detect(self):
+        os.environ[OUTPUT_LANGUAGE_ENV] = ""
+        self.assertEqual(get_output_language("先进米波雷达是雷达体制。"), "Chinese")
 
 
 if __name__ == "__main__":

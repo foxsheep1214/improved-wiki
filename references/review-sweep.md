@@ -1,6 +1,6 @@
 # Review Sweep — Auto-Resolution of Review Items
 
-NashSU v0.4.25 parity for `sweep-reviews.ts`: automatically resolve pending review items when subsequent ingests address their underlying condition.
+NashSU v0.5.3 parity for `sweep-reviews.ts`: automatically resolve pending review items when subsequent ingests address their underlying condition. Two stages: deterministic rule-based resolution (exact page-match; conservative — only `missing-page`/`duplicate` auto-resolve by rule, `contradiction`/`suggestion`/`confirm` stay pending for human judgment), then a conversation-mode LLM semantic judge for still-pending items (`--no-llm` skips it). Reviews carry a content-stable FNV-1a `review_id` (port of `reviewIdFor`) + `normalizeReviewTitle` so dedup/resolution survives re-ingest.
 
 ## Core Idea
 

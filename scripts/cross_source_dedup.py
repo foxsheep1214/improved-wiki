@@ -8,7 +8,7 @@ inline filter on one source's blocks before write. This module is thorough:
 backs up, writes a report, and rewrites all `[[wikilinks]]` + `related:`
 across the wiki so merges leave no broken links.
 
-LLM semantic detection (NashSU `dedup.ts` v0.4.25 parity): detects same-topic
+LLM semantic detection (NashSU `dedup.ts` + `dedup-runner.ts` v0.5.3 parity): detects same-topic
 different-name slugs (synonyms, EN/中文, singular/plural, abbrev/full) via
 LLM-driven self-check, then LLM body-merge each group.
 
@@ -32,12 +32,14 @@ Exit codes: 0 done; 101 conversation pending; 2 config error.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Callable
+from typing import List
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -49,12 +51,25 @@ import _dedup  # noqa: E402
 from _core import ConversationPending  # noqa: E402
 from _paths import detect_runtime_dir  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
-from _frontmatter import parse_frontmatter  # noqa: E402
 from _dedup_embedding import (  # noqa: E402
     candidate_pairs,
     cluster_by_pairs,
     DuplicatePrefilterError,
 )
+from _dedup_storage import add_not_duplicate, load_not_duplicates  # noqa: E402
+
+# ── Prefilter / detector tuning (NashSU dedup-runner.ts parity) ──────────────
+# The cross-source prefilter threshold is deliberately BELOW the intra-source
+# module default (0.82) — NashSU dedup-runner overrides candidate_pairs with
+# DEDUP_PREFILTER_THRESHOLD=0.68 so weaker/non-multilingual embedders still
+# surface cross-language and abbrev/full aliases. (NashSU dedup-runner.ts)
+DEDUP_PREFILTER_THRESHOLD = 0.68
+# NashSU packs candidate clusters into <=80-summary batches per LLM detector
+# call (DEDUP_DETECTOR_BATCH_SUMMARIES). (NashSU dedup-runner.ts)
+DEDUP_DETECTOR_BATCH_SUMMARIES = 80
+# NashSU only full-scans on zero candidate pairs when summaries<=250
+# (DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT). (NashSU dedup-runner.ts)
+DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT = 250
 
 # Aggregate files excluded from dedup candidates (NashSU embedding/graph parity:
 # aggregates aren't dedup'd). Keep in sync with _lint_suggest.AGGREGATE_FILES.
@@ -121,47 +136,146 @@ def _slug_from_path(project_relative: str) -> str:
     return os.path.splitext(project_relative.split("/")[-1])[0]
 
 
-def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilter):
-    """Run the LLM duplicate detector, optionally pre-clustered by embeddings.
+def _is_embedding_coverage_error(ex: Exception) -> bool:
+    """True for the DuplicatePrefilterError variants that mean "couldn't embed
+    enough pages". Mirrors NashSU isEmbeddingCoverageError. (NashSU dedup-runner.ts)"""
+    msg = str(ex).lower()
+    return ("could not embed enough pages" in msg
+            or "embedded only" in msg)
 
-    With ``embedding_prefilter`` (GAP-3): embed every page, cluster by cosine
-    similarity, and run the LLM detector per cluster — so each LLM call sees a
-    small candidate set instead of the whole wiki in one prompt. Falls back to
-    the full single-call scan if embeddings can't cover enough pages.
-    """
-    if not embedding_prefilter:
-        return _dedup.detect_duplicate_groups(summaries, llm_call, not_duplicates=not_duplicates)
 
-    summary_by_slug = {s.slug: s for s in summaries}
-    emb_pages: list[dict] = []
-    for path, content in pages:
-        slug = _slug_from_path(path)
-        if slug not in summary_by_slug:
-            continue
-        s = summary_by_slug[slug]
-        _, body = parse_frontmatter(content)
-        emb_pages.append({"id": slug, "title": s.title, "tags": s.tags, "body": body})
+def _normalize_slug_group_key(slugs) -> str:
+    """Order-independent, case-insensitive key. Mirrors NashSU normalizeSlugGroupKey."""
+    return "\t".join(sorted(s.lower() for s in slugs))
 
-    try:
-        pairs = candidate_pairs(emb_pages)
-        clusters = cluster_by_pairs([pg["id"] for pg in emb_pages], pairs)
-    except DuplicatePrefilterError as ex:
-        print(f"[dedup] embedding prefilter failed ({ex}); "
-              f"falling back to full scan.")
-        return _dedup.detect_duplicate_groups(summaries, llm_call, not_duplicates=not_duplicates)
 
-    print(f"[dedup] embedding prefilter → {len(pairs)} candidate pair(s), "
-          f"{len(clusters)} cluster(s); running LLM detector per cluster.")
-    groups: list[dict] = []
+def _filter_whitelisted_pairs(pairs, not_duplicates):
+    """Drop candidate pairs that are on the not-duplicates whitelist BEFORE
+    clustering, so a whitelisted pair can't drag a cluster together. Pair ids
+    are slugs (emb_pages use slug as id). Mirrors NashSU filterWhitelistedPairs.
+    (NashSU dedup-runner.ts)"""
+    if not not_duplicates:
+        return pairs
+    not_dup_set = {_normalize_slug_group_key(g) for g in not_duplicates if len(g) >= 2}
+    return [(a, b) for a, b in pairs
+            if _normalize_slug_group_key([a, b]) not in not_dup_set]
+
+
+def _batch_candidate_clusters(clusters, summary_by_slug):
+    """Pack candidate clusters into <=DEDUP_DETECTOR_BATCH_SUMMARIES-summary
+    batches so a very large cluster doesn't blow up one LLM call. Mirrors
+    NashSU batchCandidateClusters. (NashSU dedup-runner.ts)"""
+    batches: List[list] = []
+    current: list = []
     for cluster in clusters:
         cluster_summaries = [summary_by_slug[sid] for sid in cluster
                              if sid in summary_by_slug]
         if len(cluster_summaries) < 2:
             continue
+        if (current
+                and len(current) + len(cluster_summaries) > DEDUP_DETECTOR_BATCH_SUMMARIES):
+            batches.append(current)
+            current = []
+        current.extend(cluster_summaries)
+        if len(current) >= DEDUP_DETECTOR_BATCH_SUMMARIES:
+            batches.append(current)
+            current = []
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _unique_duplicate_groups(groups):
+    """Dedup identical detected groups across batches/clusters (order- and
+    case-insensitive on the slug set). Mirrors NashSU uniqueDuplicateGroups.
+    (NashSU dedup-runner.ts)"""
+    seen: set = set()
+    out: List[dict] = []
+    for g in groups:
+        key = _normalize_slug_group_key(g["slugs"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(g)
+    return out
+
+
+def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilter):
+    """Run the LLM duplicate detector, optionally pre-clustered by embeddings.
+
+    With ``embedding_prefilter`` (GAP-3): embed every page's short description,
+    cluster by cosine similarity, drop whitelisted pairs, then run the LLM
+    detector per size-bounded batch — so each LLM call sees a small candidate
+    set instead of the whole wiki in one prompt.
+
+    Empty-prefilter / coverage handling follows NashSU dedup-runner:
+      - zero candidate pairs: full-scan only when summaries<=250 (recall for
+        small/medium wikis); large wikis return [] (avoids the #359 hang).
+      - coverage error: fall back to a full LLM scan only for small/medium
+        wikis; large wikis skip (return []) rather than hang.
+    """
+    if not embedding_prefilter:
+        return _dedup.detect_duplicate_groups(summaries, llm_call, not_duplicates=not_duplicates)
+
+    summary_by_slug = {s.slug: s for s in summaries}
+    emb_pages: List[dict] = []
+    for path, content in pages:
+        slug = _slug_from_path(path)
+        if slug not in summary_by_slug:
+            continue
+        s = summary_by_slug[slug]
+        # NashSU vectors summary.description (the short blurb), not the full
+        # body, for candidate generation. (NashSU summaryToEmbeddingPage)
+        emb_pages.append({"id": slug, "title": s.title, "tags": s.tags,
+                          "body": s.description or ""})
+
+    try:
+        # NashSU dedup-runner overrides the module default (0.82, the
+        # intra-source value) with DEDUP_PREFILTER_THRESHOLD=0.68 so
+        # cross-language/abbrev aliases aren't missed. (NashSU dedup-runner.ts)
+        pairs = candidate_pairs(emb_pages, threshold=DEDUP_PREFILTER_THRESHOLD)
+    except DuplicatePrefilterError as ex:
+        if (len(summaries) > DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT
+                and _is_embedding_coverage_error(ex)):
+            print(f"[dedup] embedding prefilter coverage too low ({ex}); "
+                  f"skipping full fallback for large wiki "
+                  f"({len(summaries)} > {DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT}).")
+            return []
+        print(f"[dedup] embedding prefilter failed ({ex}); "
+              f"falling back to full scan.")
+        return _dedup.detect_duplicate_groups(summaries, llm_call, not_duplicates=not_duplicates)
+
+    if not pairs:
+        # Preserve recall for small/medium wikis: a weak or non-multilingual
+        # embedder can miss exactly the cross-language aliases the detector is
+        # meant to find. Large wikis return [] — the old full scan is what
+        # caused #359 hangs. (NashSU dedup-runner.ts)
+        if len(summaries) <= DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT:
+            return _dedup.detect_duplicate_groups(
+                summaries, llm_call, not_duplicates=not_duplicates)
+        print(f"[dedup] no candidate pairs and large wiki "
+              f"({len(summaries)} > {DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT}); "
+              f"skipping detector.")
+        return []
+
+    # Drop whitelisted pairs BEFORE clustering. (NashSU dedup-runner.ts)
+    filtered_pairs = _filter_whitelisted_pairs(pairs, not_duplicates)
+    if not filtered_pairs:
+        return []
+
+    clusters = cluster_by_pairs([pg["id"] for pg in emb_pages], filtered_pairs)
+    if not clusters:
+        return []
+
+    batches = _batch_candidate_clusters(clusters, summary_by_slug)
+    print(f"[dedup] embedding prefilter → {len(filtered_pairs)} candidate pair(s), "
+          f"{len(clusters)} cluster(s), {len(batches)} detector batch(es).")
+    groups: List[dict] = []
+    for batch in batches:
         sub_groups = _dedup.detect_duplicate_groups(
-            cluster_summaries, llm_call, not_duplicates=not_duplicates)
+            batch, llm_call, not_duplicates=not_duplicates)
         groups.extend(sub_groups)
-    return groups
+    return _unique_duplicate_groups(groups)
 
 
 def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
@@ -176,7 +290,9 @@ def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
         return {"groups": 0, "applied": []}
 
     not_duplicates = list(whitelist_pairs or [])
-    not_duplicates += load_whitelist(runtime / "dedup-whitelist.json")
+    # Runtime whitelist read goes through the ported _dedup_storage reader so
+    # read and the --mark-not-duplicate write share one file + format.
+    not_duplicates += load_not_duplicates(runtime)
 
     print(f"[dedup] scanning {len(summaries)} pages for semantic duplicates ...")
     groups = _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilter)
@@ -196,38 +312,70 @@ def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
 
     applied: list[dict] = []
     if apply and groups:
-        backup_dir = runtime / f"dedup-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        pages_by_slug = {_slug_from_path(p): (p, c) for p, c in pages}
-        for g in groups:
-            if g.get("confidence") == "low" and not apply_low_confidence:
-                continue
-            canonical_slug = g["slugs"][0]
-            group_pages = []
-            for slug in g["slugs"]:
-                entry = pages_by_slug.get(slug)
-                if entry is None:
-                    group_pages = []
-                    break
-                path, content = entry
-                group_pages.append({"slug": slug, "path": path, "content": content})
-            if len(group_pages) < 2:
-                continue
-            other_pages = [{"path": p, "content": c} for p, c in pages
-                           if _slug_from_path(p) not in {gp["slug"] for gp in group_pages}]
-            result = _dedup.merge_duplicate_group(
-                group_pages, canonical_slug, other_pages, llm_call, today=today)
-            _persist_merge(project_root, result, backup_dir)
-            removed = {_slug_from_path(p) for p in result.pages_to_delete}
-            applied.append({"canonical": canonical_slug, "merged_away": sorted(removed),
-                            "rewrites": [r["path"] for r in result.rewrites]})
-            print(f"[dedup] merged → {canonical_slug} "
-                  f"(removed {sorted(removed)}, {len(result.rewrites)} rewrite(s))")
+        # Serialize the merge+persist phase with a file lock so two concurrent
+        # cross_source_dedup invocations can't interleave cross-reference
+        # rewrites (last-write-wins data loss). This is the one-shot-CLI
+        # equivalent of NashSU's persistent dedup-queue.ts: we port the
+        # serialization GUARANTEE, not the persistent Zustand task queue (YAGNI).
+        with _merge_lock(runtime):
+            applied = _apply_merges(project_root, runtime, groups, pages,
+                                    llm_call, today, apply_low_confidence)
 
     _write_report(runtime / "dedup-report.json", {
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
         "apply": apply, "phase2": {"groups": groups, "applied": applied}})
     return {"groups": groups, "applied": applied}
+
+
+@contextlib.contextmanager
+def _merge_lock(runtime: Path):
+    """Exclusive file lock (fcntl.flock) around the merge+persist phase. The
+    CLI equivalent of dedup-queue.ts serialization — see _apply_merges caller."""
+    runtime.mkdir(parents=True, exist_ok=True)
+    lock_path = runtime / "dedup-merge.lock"
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
+                  apply_low_confidence) -> list:
+    """Merge each detected group and persist. Must run under _merge_lock."""
+    applied: list = []
+    backup_dir = runtime / f"dedup-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    pages_by_slug = {_slug_from_path(p): (p, c) for p, c in pages}
+    for g in groups:
+        if g.get("confidence") == "low" and not apply_low_confidence:
+            continue
+        canonical_slug = g["slugs"][0]
+        group_pages = []
+        for slug in g["slugs"]:
+            entry = pages_by_slug.get(slug)
+            if entry is None:
+                group_pages = []
+                break
+            path, content = entry
+            group_pages.append({"slug": slug, "path": path, "content": content})
+        if len(group_pages) < 2:
+            continue
+        other_pages = [{"path": p, "content": c} for p, c in pages
+                       if _slug_from_path(p) not in {gp["slug"] for gp in group_pages}]
+        result = _dedup.merge_duplicate_group(
+            group_pages, canonical_slug, other_pages, llm_call, today=today)
+        _persist_merge(project_root, result, backup_dir)
+        removed = {_slug_from_path(p) for p in result.pages_to_delete}
+        applied.append({"canonical": canonical_slug, "merged_away": sorted(removed),
+                        "rewrites": [r["path"] for r in result.rewrites]})
+        print(f"[dedup] merged → {canonical_slug} "
+              f"(removed {sorted(removed)}, {len(result.rewrites)} rewrite(s))")
+    return applied
 
 
 def _persist_merge(project_root, result, backup_dir) -> None:
@@ -277,12 +425,28 @@ def main(argv: list[str] | None = None) -> int:
                         help="Pre-cluster pages by embedding similarity before the LLM "
                              "detector (bounds LLM call size on large wikis; needs local Ollama)")
     parser.add_argument("--whitelist", action="append", default=[])
+    parser.add_argument("--mark-not-duplicate", nargs=2, metavar=("SLUG_A", "SLUG_B"),
+                        default=None,
+                        help="Record a not-duplicate pair to dedup-whitelist.json "
+                             "(idempotent) so the detector won't re-suggest it, then exit.")
     args = parser.parse_args(argv)
 
     project_root = Path(args.project or os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
     if not (project_root / "wiki").is_dir():
         print(f"ERROR: wiki/ not found under {project_root}", file=sys.stderr)
         return 2
+
+    # Whitelist WRITE action: record a not-duplicate pair and exit (no LLM,
+    # no handoff). NashSU dedup-storage.addNotDuplicate parity.
+    if args.mark_not_duplicate is not None:
+        runtime = detect_runtime_dir(project_root)
+        added = add_not_duplicate(runtime, list(args.mark_not_duplicate))
+        pair = ", ".join(args.mark_not_duplicate)
+        if added:
+            print(f"[dedup] recorded not-duplicate pair: [{pair}]")
+        else:
+            print(f"[dedup] not-duplicate pair already recorded: [{pair}]")
+        return 0
 
     apply = not args.dry_run
 

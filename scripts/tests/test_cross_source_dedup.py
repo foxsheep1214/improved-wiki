@@ -8,6 +8,7 @@ Run:  python3 scripts/tests/test_cross_source_dedup.py
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 import cross_source_dedup as ds  # noqa: E402
 import _dedup  # noqa: E402
+import _dedup_storage as dstore  # noqa: E402
+from _dedup import EntitySummary  # noqa: E402
 from _frontmatter_array import parse_frontmatter_array  # noqa: E402
 
 FIXED_TODAY = lambda: "2026-06-19"  # noqa: E731
@@ -216,6 +219,248 @@ class TestMainConversationHandoff(unittest.TestCase):
             # Written report nests phase-2 results under "phase2".
             self.assertEqual(report["phase2"]["groups"], [])
             self.assertFalse(report["apply"])
+
+
+def _summ(slug, desc="", title=None, tags=None):
+    return EntitySummary(slug=slug, path=f"wiki/entities/{slug}.md",
+                         type="entity", title=title or slug,
+                         tags=tags or [], description=desc)
+
+
+class TestPrefilterThresholdOverride(unittest.TestCase):
+    """Task 1+2: cross-source path must call candidate_pairs with the 0.68
+    override (NOT the 0.82 module default) and vector the short description."""
+
+    def test_passes_068_threshold_and_description_body(self):
+        summaries = [_summ("a", "alpha desc"), _summ("b", "beta desc")]
+        pages = [("wiki/entities/a.md", _page("type: entity\ntitle: a", "FULL BODY A")),
+                 ("wiki/entities/b.md", _page("type: entity\ntitle: b", "FULL BODY B"))]
+        captured = {}
+
+        def fake_candidate_pairs(emb_pages, *, threshold):
+            captured["threshold"] = threshold
+            captured["bodies"] = {p["id"]: p["body"] for p in emb_pages}
+            return []  # no pairs → small wiki falls back to full scan
+
+        orig = ds.candidate_pairs
+        ds.candidate_pairs = fake_candidate_pairs
+        try:
+            ds._detect_groups(summaries, pages, lambda s, u: '{"groups": []}',
+                              [], embedding_prefilter=True)
+        finally:
+            ds.candidate_pairs = orig
+
+        self.assertEqual(captured["threshold"], ds.DEDUP_PREFILTER_THRESHOLD)
+        self.assertEqual(captured["threshold"], 0.68)
+        # Vectored the short description, NOT the full body.
+        self.assertEqual(captured["bodies"]["a"], "alpha desc")
+        self.assertNotIn("FULL BODY", captured["bodies"]["a"])
+
+
+class TestBatching(unittest.TestCase):
+    """Task 3: clusters packed into <=80-summary batches; identical groups
+    deduped across batches."""
+
+    def test_many_clusters_bounded_per_batch(self):
+        # NashSU batchCandidateClusters packs WHOLE clusters; it flushes once a
+        # batch reaches >=80, so no batch combines clusters past the cap. (A
+        # single oversized cluster stays whole — NashSU does not sub-split one
+        # cluster.) 50 two-member clusters = 100 summaries → must be >1 batch,
+        # each <= 80.
+        summary_by_slug = {f"s{i}": _summ(f"s{i}") for i in range(100)}
+        clusters = [[f"s{2*i}", f"s{2*i+1}"] for i in range(50)]
+        batches = ds._batch_candidate_clusters(clusters, summary_by_slug)
+        self.assertGreater(len(batches), 1)
+        for b in batches:
+            self.assertLessEqual(len(b), ds.DEDUP_DETECTOR_BATCH_SUMMARIES)
+        self.assertEqual(sum(len(b) for b in batches), 100)
+
+    def test_single_oversized_cluster_kept_whole(self):
+        # Faithful to NashSU: one 200-member cluster is one batch, not split.
+        summary_by_slug = {f"s{i}": _summ(f"s{i}") for i in range(200)}
+        clusters = [[f"s{i}" for i in range(200)]]
+        batches = ds._batch_candidate_clusters(clusters, summary_by_slug)
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(len(batches[0]), 200)
+
+    def test_small_clusters_packed_together(self):
+        summary_by_slug = {f"s{i}": _summ(f"s{i}") for i in range(6)}
+        clusters = [["s0", "s1"], ["s2", "s3"], ["s4", "s5"]]
+        batches = ds._batch_candidate_clusters(clusters, summary_by_slug)
+        self.assertEqual(len(batches), 1)  # 6 < 80 → all in one batch
+        self.assertEqual(len(batches[0]), 6)
+
+    def test_unique_groups_dedups_across_batches(self):
+        groups = [
+            {"slugs": ["paos", "聚磷菌"], "reason": "r1", "confidence": "high"},
+            {"slugs": ["聚磷菌", "PAOS"], "reason": "r2", "confidence": "low"},  # same set
+            {"slugs": ["x", "y"], "reason": "r3", "confidence": "high"},
+        ]
+        out = ds._unique_duplicate_groups(groups)
+        self.assertEqual(len(out), 2)
+        keys = {ds._normalize_slug_group_key(g["slugs"]) for g in out}
+        self.assertIn(ds._normalize_slug_group_key(["paos", "聚磷菌"]), keys)
+        self.assertIn(ds._normalize_slug_group_key(["x", "y"]), keys)
+
+
+class TestEmptyPrefilterLimit(unittest.TestCase):
+    """Task 4: zero candidate pairs → full scan only when summaries<=250."""
+
+    def _run(self, n_summaries, candidate_return):
+        summaries = [_summ(f"s{i}", f"desc{i}") for i in range(n_summaries)]
+        pages = [(f"wiki/entities/s{i}.md",
+                  _page(f"type: entity\ntitle: s{i}", f"body{i}"))
+                 for i in range(n_summaries)]
+        called = {"full_scan": 0}
+
+        def fake_detect(subset, llm, *, not_duplicates):
+            called["full_scan"] += 1
+            return []
+
+        orig_cp = ds.candidate_pairs
+        orig_dd = ds._dedup.detect_duplicate_groups
+        ds.candidate_pairs = lambda emb, *, threshold: candidate_return
+        ds._dedup.detect_duplicate_groups = fake_detect
+        try:
+            ds._detect_groups(summaries, pages, lambda s, u: "", [],
+                              embedding_prefilter=True)
+        finally:
+            ds.candidate_pairs = orig_cp
+            ds._dedup.detect_duplicate_groups = orig_dd
+        return called["full_scan"]
+
+    def test_small_wiki_empty_pairs_falls_back_to_full_scan(self):
+        # 10 summaries, no pairs → full scan runs once.
+        self.assertEqual(self._run(10, []), 1)
+
+    def test_large_wiki_empty_pairs_skips_full_scan(self):
+        # 251 summaries (> 250 limit), no pairs → no full scan (avoid #359 hang).
+        self.assertEqual(self._run(251, []), 0)
+
+    def test_coverage_error_large_wiki_skips(self):
+        summaries = [_summ(f"s{i}", f"d{i}") for i in range(251)]
+        pages = [(f"wiki/entities/s{i}.md", _page(f"type: entity\ntitle: s{i}", "b"))
+                 for i in range(251)]
+        called = {"full_scan": 0}
+
+        def boom(emb, *, threshold):
+            raise ds.DuplicatePrefilterError("embedded only 3/251 pages")
+
+        def fake_detect(subset, llm, *, not_duplicates):
+            called["full_scan"] += 1
+            return []
+
+        orig_cp, orig_dd = ds.candidate_pairs, ds._dedup.detect_duplicate_groups
+        ds.candidate_pairs = boom
+        ds._dedup.detect_duplicate_groups = fake_detect
+        try:
+            out = ds._detect_groups(summaries, pages, lambda s, u: "", [],
+                                    embedding_prefilter=True)
+        finally:
+            ds.candidate_pairs, ds._dedup.detect_duplicate_groups = orig_cp, orig_dd
+        self.assertEqual(out, [])
+        self.assertEqual(called["full_scan"], 0)  # large wiki skipped
+
+
+class TestWhitelistPairPrefilter(unittest.TestCase):
+    """Task 5: whitelisted pairs dropped BEFORE clustering."""
+
+    def test_filters_whitelisted_pair(self):
+        pairs = [("paos", "聚磷菌"), ("x", "y")]
+        not_dup = [["PAOS", "聚磷菌"]]  # case-insensitive match
+        out = ds._filter_whitelisted_pairs(pairs, not_dup)
+        self.assertEqual(out, [("x", "y")])
+
+    def test_empty_whitelist_passthrough(self):
+        pairs = [("a", "b")]
+        self.assertEqual(ds._filter_whitelisted_pairs(pairs, []), pairs)
+
+    def test_whitelisted_pair_removed_before_clustering(self):
+        # paos--聚磷菌 whitelisted; bridging pair to a third page also present.
+        # Pre-cluster filter must drop the whitelisted edge so it can't merge.
+        summaries = [_summ("paos", "d"), _summ("聚磷菌", "d"), _summ("z", "d")]
+        pages = [(f"wiki/entities/{s.slug}.md",
+                  _page(f"type: entity\ntitle: {s.slug}", "b")) for s in summaries]
+        detector_batches = []
+
+        def fake_cp(emb, *, threshold):
+            return [("paos", "聚磷菌")]  # only the whitelisted pair
+
+        def fake_detect(subset, llm, *, not_duplicates):
+            detector_batches.append([s.slug for s in subset])
+            return []
+
+        orig_cp, orig_dd = ds.candidate_pairs, ds._dedup.detect_duplicate_groups
+        ds.candidate_pairs = fake_cp
+        ds._dedup.detect_duplicate_groups = fake_detect
+        try:
+            ds._detect_groups(summaries, pages, lambda s, u: "",
+                              [["paos", "聚磷菌"]], embedding_prefilter=True)
+        finally:
+            ds.candidate_pairs, ds._dedup.detect_duplicate_groups = orig_cp, orig_dd
+        # All pairs filtered out → no clusters → detector never called.
+        self.assertEqual(detector_batches, [])
+
+
+class TestWhitelistWritePath(unittest.TestCase):
+    """Task 6: --mark-not-duplicate records a pair idempotently."""
+
+    def test_add_not_duplicate_idempotent(self):
+        with tempfile.TemporaryDirectory() as t:
+            rt = Path(t)
+            self.assertTrue(dstore.add_not_duplicate(rt, ["paos", "聚磷菌"]))
+            # Re-add same pair (any order/casing) → no-op.
+            self.assertFalse(dstore.add_not_duplicate(rt, ["聚磷菌", "PAOS"]))
+            loaded = dstore.load_not_duplicates(rt)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(sorted(loaded[0]), sorted(["paos", "聚磷菌"]))
+
+    def test_add_rejects_single_slug(self):
+        with tempfile.TemporaryDirectory() as t:
+            self.assertFalse(dstore.add_not_duplicate(Path(t), ["only"]))
+
+    def test_cli_mark_not_duplicate_writes_and_is_read_by_detector(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_wiki(root)
+            rc = ds.main(["--project", str(root),
+                          "--mark-not-duplicate", "paos", "聚磷菌"])
+            self.assertEqual(rc, 0)
+            # Written to dedup-whitelist.json under runtime dir.
+            from _paths import detect_runtime_dir
+            rt = detect_runtime_dir(root)
+            loaded = dstore.load_not_duplicates(rt)
+            self.assertEqual(len(loaded), 1)
+            # run_phase2 picks it up as a whitelist pair → suppresses the group.
+            report = ds.run_phase2(root, _mock_llm(), apply=False, today=FIXED_TODAY)
+            self.assertEqual(report["groups"], [])
+
+
+class TestMergeLock(unittest.TestCase):
+    """Task 7: merge+persist runs under an exclusive file lock."""
+
+    def test_merge_lock_serializes(self):
+        with tempfile.TemporaryDirectory() as t:
+            rt = Path(t)
+            # Re-entrant from a different fd must block; we assert the lock file
+            # is created and a second non-blocking acquire fails while held.
+            import fcntl
+            with ds._merge_lock(rt):
+                lock_path = rt / "dedup-merge.lock"
+                self.assertTrue(lock_path.exists())
+                fd = os.open(str(lock_path), os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(fd)
+            # After release, a non-blocking acquire succeeds.
+            fd = os.open(str(rt / "dedup-merge.lock"), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 if __name__ == "__main__":

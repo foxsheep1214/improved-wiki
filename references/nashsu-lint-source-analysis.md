@@ -1,4 +1,11 @@
-# NashSU llm_wiki lint source analysis（最新版本，当前 v0.5.2）
+# NashSU llm_wiki lint source analysis（re-verified against v0.5.3, 2026-06-29）
+
+> **2026-06-29 correction**: this doc was first written against v0.5.2 and §5/§6
+> below were WRONG about 0.5.3. NashSU 0.5.3 **does** persist lint to disk
+> (`.llm-wiki/lint.json` via `persist.ts` + `auto-save.ts`), and its `handleFix`
+> **does** mutate files (which the port has ported as `--fix-links` /
+> `--delete-orphans`). §5/§6 are corrected below; the structural/semantic specs
+> in §2–§4 were re-verified and remain accurate for 0.5.3.
 
 Detailed source-level comparison of NashSU's actual lint implementation
 (`src/lib/lint.ts`, `src/stores/lint-store.ts`, `src/stores/lint-store.ts`,
@@ -276,16 +283,21 @@ SEARCH: ADC SNR budget | radar SNR budget
 
 ## 5. Persisted vs ephemeral: the BIG divergence
 
-| Layer | Desktop app | improved-wiki | Why the gap |
+| Layer | Desktop app (0.5.3) | improved-wiki | Notes |
 |---|---|---|---|
-| `lint.json` (structural) | In-memory only (`useLintStore`) | On disk (`<state_dir>/.lint-cache.json` + `lint-extra.json`) | Cron needs to consume findings; review workflow needs them visible |
-| `lint-semantic.json` (semantic) | In-memory only | On disk (`<state_dir>/lint-semantic.json`) | Same reason |
-| `review.json` | On disk (`.llm-wiki/review.json`) | On disk (`.llm-wiki/review.json`) | App reloads on launch; both tools need shared state |
+| structural lint | On disk: `.llm-wiki/lint.json` (`persist.ts` saveLintItems/loadLintItems + `auto-save.ts` debounced 1s, flush-on-switch, load-on-open) | On disk: `<state_dir>/lint-cache.json` | Both persist; only filename/shape differ |
+| semantic lint | On disk: same `lint.json` store (`useLintStore`) | On disk: `<state_dir>/lint-semantic.json` (kept separate — see §7.6) | Both persist |
+| `review.json` | On disk (`.llm-wiki/review.json`) | On disk (`.llm-wiki/review.json`) | Aligned |
 
-**Consequence**: when the user closes the LLM Wiki desktop app, all lint results
-are lost. The next session has empty findings until they click "Run Lint" again.
-Improved-wiki persists them, so cron / scripts / future-sessions can act on
-historical findings without re-running.
+**Correction (2026-06-29)**: an earlier version claimed NashSU lint was
+"in-memory only / lost on app close" and listed a non-existent `lint-extra.json`.
+Both are false for 0.5.3: NashSU persists `useLintStore` to `.llm-wiki/lint.json`
+(`lint-store.ts` gained `setItems` + `syncCounterFromItems` precisely to reload
+from disk), and the port's real files are `lint-cache.json` + `lint-semantic.json`
+(there is no `lint-extra.json`). So persistence is **aligned in intent**, not a
+divergence. The only real differences are cosmetic: filename/shape (`lint.json`
+vs `lint-cache.json` + `lint-semantic.json`) and the port's extra per-finding
+`.md` pages under `<state_dir>/lint/`.
 
 **Human-browsable lint pages location (2026-06-21)**: NashSU has no on-disk lint
 pages at all (app UI renders findings from `useLintStore`). improved-wiki writes
@@ -307,19 +319,31 @@ on next app launch if both wrote in the same session.
 
 ---
 
-## 6. UI's "Fix" action — not ported (yet)
+## 6. UI's "Fix" action — ported as `--fix-links` / `--delete-orphans`
 
-`lint-view.tsx` L118-185+ has `handleFix(item)` that:
-- For `broken-link` items: navigates to the page that contains the broken link
-- For `orphan` items: opens the orphan page (no auto-fix, just a navigation aid)
-- For `no-outlinks` items: same navigation aid
-- For `semantic` items: opens the affected pages (if `affectedPages` present)
+**Correction (2026-06-29)**: an earlier version said `handleFix` was "not ported"
+and "just a navigation aid". Both are wrong for 0.5.3.
 
-Improved-wiki does NOT have a UI for "Fix" — it's CLI-only. To "fix" a finding,
-the user opens the wiki page manually and edits. This is a **deliberate
-divergence**: improved-wiki is the pipeline, the desktop app is the experience.
-The skill is not trying to replicate the UI; it provides the lint output and
-the rest is human-driven.
+In 0.5.3 `lint-view.tsx` `handleFix(item)` actually MUTATES files via
+`lint-fixes.ts`:
+- `broken-link` → `rewriteWikilinkTarget` (or `ensureBrokenLinkStub` when there
+  is no suggestion) — rewrites the link / creates a stub page.
+- `orphan` → `appendWikilink` from the suggested source (gives it an inbound
+  link), or `handleDeleteOrphan` → `cascadeDeleteWikiPagesWithRefs`.
+- `no-outlinks` → `appendWikilink` to the suggested target.
+- `semantic` → routed to the Review store for manual resolution.
+
+The port HAS these (CLI, not UI):
+- `--fix-links` → `wiki-lint-fix.py` + `_lint_fixes.py`
+  (`rewriteWikilinkTarget` / `appendWikilink` / `ensureBrokenLinkStub`).
+- `--delete-orphans` → `wiki-lint-fix.py` `cascade_delete_orphans` (file + index
+  entry + inbound `[[links]]` + `related:` refs; dry-run by default, `--apply`
+  to delete). Embedding-chunk removal is the one piece not done from the CLI (no
+  LanceDB handle) — re-embed clears the phantom chunks.
+
+The only genuine gap vs the desktop Fix surface is the per-item Review-store
+fallback when a finding has no suggestion (the port silently skips those rather
+than handing off to `review.json`).
 
 ---
 
@@ -330,7 +354,7 @@ lint", check these:
 
 1. **`lint.json` shape** — every finding has `{type, severity, page, detail, id, createdAt}`. No `affectedPages` (that's semantic-only).
 2. **Detail strings exact** — `orphan` = "No other pages link to this page." / `no-outlinks` = "This page has no [[wikilink]] references to other pages." / `broken-link` = `` `Broken link: [[${link}]] — target page not found.` ``
-3. **Severity values** — `broken-link` is `warning`; the other two are `info`. Never `error` (that'd be `missing-frontmatter` from `lint-extra.json`).
+3. **Severity values** — `broken-link` is `warning`; the other two are `info`. Never `error` (`missing-frontmatter` is an improved-wiki-only structural extra, emitted by `wiki-lint.sh`, not part of NashSU's `lint.json`).
 4. **Case-insensitive resolution** — `[[Transformer]]` and `[[transformer]]` resolve the same way.
 5. **Dual indexing** — `[[foo]]` resolves to `entities/foo.md` if that file exists.
 6. **`lint-semantic.json` separate from `lint.json`** — don't merge them; the app's lint view shows them together via the UI but the on-disk state files are separate.

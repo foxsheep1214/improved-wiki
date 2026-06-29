@@ -1,12 +1,22 @@
 #!/bin/bash
 # wiki-lint.sh — Mechanical scan of wiki/ for structural problems.
 #
-# Lint phases (mirrors Ingest's Phase convention):
-#   Phase 0 · 前置检查     — lock
-#   Phase 1 · 结构扫描     — collect pages, run structural detection (6 categories)
-#   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic)
-#   Phase 3 · 写入         — write .lint-cache.json + .llm-wiki/lint/*.md + summary
+# Lint phases (logical taxonomy, mirrors Ingest's Phase convention). NOTE: the
+# numbering is a CLASSIFICATION, not the execution order — see "Execution order"
+# below.
+#   Phase 0 · 前置检查     — lock, runtime-dir detect/migrate
+#   Phase 1 · 结构扫描     — collect pages, run MECHANICAL structural detection
+#                            (7 categories, NO LLM). Includes the frontmatter /
+#                            domain / role checks — these are mechanical YAML
+#                            checks, NOT the LLM "semantic" phase (Phase 2).
+#   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic); the ONLY LLM phase
+#   Phase 3 · 写入         — write lint-cache.json + .llm-wiki/lint/*.md + summary
 #   Phase 4 · 自动修复     — optional --fix / --fix-links
+#
+# Execution order (phases do NOT run in numeric order):
+#   0 lock → 1 structural → 3 write cache + lint pages → 2 semantic (--semantic)
+#   → --sweep → --strict → 4 auto-fix (--fix / --fix-links).
+#   I.e. Phase 3 (write) runs BEFORE Phase 2 (semantic).
 #
 # Detects 7 categories of issues:
 #   1. broken-link        — [[wikilink]] points to a non-existent page
@@ -18,8 +28,10 @@
 #   7. invalid-role        — entity page has a `role:` value outside the canonical
 #                            set, or a non-entity page carries `role:`
 #
-# Plus a 5th category when --semantic is passed:
-#   5. semantic       — LLM-driven contradiction/stale/missing-page/suggestion
+# Plus an 8th category when --semantic is passed (Phase 2, LLM-driven):
+#   8. semantic       — contradiction / stale / missing-page / suggestion /
+#                       cross-domain-ambiguity / wrong-domain (all collapsed to
+#                       finding type 'semantic')
 #
 # Output:
 #   - .llm-wiki/lint/*.md         — human-browsable lint pages (each finding one .md)
@@ -36,7 +48,8 @@
 #   $ ./wiki-lint.sh --fix                      # auto-fix: missing-frontmatter, missing-domain
 #   $ ./wiki-lint.sh --fix-links                # apply suggested_target/source wikilink fixes
 #   $ ./wiki-lint.sh --json-only                # old behavior: JSON only, no .llm-wiki/lint/ pages
-#   $ ./wiki-lint.sh --sweep                    # also report auto-resolvable review items (read-only)
+#   $ ./wiki-lint.sh --sweep                    # also report auto-resolvable review items (read-only, rule-based)
+#   $ ./wiki-lint.sh --delete-orphans           # PREVIEW orphan cascade delete (dry-run; apply via wiki-lint-fix.py --apply)
 #
 # Configuration via env:
 #   IMPROVED_WIKI_ROOT — path to project root (default: cwd)
@@ -99,6 +112,7 @@ FIX_LINKS=false
 JSON_ONLY=false
 SWEEP=false
 DEDUP=false
+DELETE_ORPHANS=false
 SEMANTIC_LIMIT=""
 SEMANTIC_TOKENS=""
 for arg in "$@"; do
@@ -112,6 +126,7 @@ for arg in "$@"; do
     --json-only)  JSON_ONLY=true ;;
     --sweep)       SWEEP=true ;;
     --dedup)       DEDUP=true ;;
+    --delete-orphans) DELETE_ORPHANS=true ;;
     --dry-run)     ;;  # consumed; forwarded to dedup_sweep by the --dedup branch
     --semantic-limit=*) SEMANTIC_LIMIT="${arg#*=}" ;;
     --semantic-tokens=*) SEMANTIC_TOKENS="${arg#*=}" ;;
@@ -481,13 +496,15 @@ if [ "$SEMANTIC" = true ]; then
 fi
 
 # ---------- Optional: review sweep report (read-only, --sweep) ----------
-# Runs sweep_reviews.py in dry-run (never --apply) so lint stays non-mutating.
-# Surfaces how many pending wiki/REVIEW/ items are now auto-resolvable; closing
-# them still requires the standalone `sweep_reviews.py --apply` command.
+# Runs sweep_reviews.py in dry-run (never --apply) AND --no-llm so lint stays
+# non-mutating and never triggers the sweep's conversation-mode LLM judge
+# (which would exit 101 and hand off mid-report). This is a rule-based read-only
+# count only; the LLM judge + actual resolution live in the standalone
+# `sweep_reviews.py --apply` command.
 if [ "$SWEEP" = true ]; then
-  echo "[lint] --sweep: scanning wiki/REVIEW/ for auto-resolvable items..."
+  echo "[lint] --sweep: scanning wiki/REVIEW/ for auto-resolvable items (rule-based)..."
   SWEEP_SUMMARY=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
-      --project "$WIKI_ROOT" --json 2>/dev/null \
+      --project "$WIKI_ROOT" --no-llm --json 2>/dev/null \
     | sed -n '/^--- JSON ---$/,$p' | sed '1d' \
     | python3 -c "
 import json, sys
@@ -605,6 +622,19 @@ if [ "$FIX_LINKS" = true ]; then
   python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply \
     --from-cache "$LINT_CACHE" \
     --project-root "$WIKI_ROOT"
+fi
+
+# ── Orphan cascade delete (--delete-orphans; DESTRUCTIVE, preview-only here) ──
+# Deleting an orphan cascades (page file + index.md entry + inbound [[links]] +
+# related: refs), so the lint command only PREVIEWS it (dry-run, no writes). To
+# actually delete, run the standalone applier with --apply:
+#   wiki-lint-fix.py --delete-orphans --apply --from-cache <cache> --project-root <root>
+if [ "$DELETE_ORPHANS" = true ]; then
+  echo "[lint] --delete-orphans: previewing orphan cascade delete (dry-run, no writes)..."
+  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans \
+    --from-cache "$LINT_CACHE" \
+    --project-root "$WIKI_ROOT"
+  echo "[lint] --delete-orphans: preview only — re-run wiki-lint-fix.py with --apply to delete"
 fi
 
 exit 0

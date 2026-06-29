@@ -3,9 +3,25 @@
 Supports 25+ languages via Unicode script ranges and Latin-script diacritic/word
 patterns. Used by ingest.py for output validation and wiki-lint-semantic.py for
 LLM language directives.
-"""
 
+Output language override
+------------------------
+``build_language_directive`` auto-detects the target language from the sampled
+text. To force a fixed output language regardless of source, set the env var
+``IMPROVED_WIKI_OUTPUT_LANGUAGE`` to a language name (e.g. ``English``,
+``Chinese``, ``French``). The default value ``auto`` keeps auto-detection.
+This mirrors NashSU getOutputLanguage (output-language.ts): an explicit,
+non-``auto`` value forces the language; otherwise it falls back to detection.
+"""
+from __future__ import annotations
+
+import os
 import re
+from typing import Dict
+
+# Env var that forces the LLM output language (NashSU getOutputLanguage parity).
+# "auto" (the default) keeps auto-detection from the sampled text.
+OUTPUT_LANGUAGE_ENV = "IMPROVED_WIKI_OUTPUT_LANGUAGE"
 
 
 def detect_language(text: str) -> str:
@@ -53,27 +69,78 @@ def detect_language(text: str) -> str:
     return "English"
 
 
+# Display / prompt names per language (NashSU getLanguagePromptName parity,
+# language-metadata.ts). Falls back to the bare language name when absent.
+_PROMPT_NAME_MAP: Dict[str, str] = {
+    "Chinese": "Chinese (中文)",
+    "Japanese": "Japanese (日本語)",
+    "Korean": "Korean (한국어)",
+    "Russian": "Russian (Русский)",
+    "Arabic": "Arabic (العربية)",
+    "Persian": "Persian (فارسی)",
+    "Hebrew": "Hebrew (עברית)",
+    "Thai": "Thai (ไทย)",
+    "Hindi": "Hindi (हिन्दी)",
+    "Bengali": "Bengali (বাংলা)",
+    "Tamil": "Tamil (தமிழ்)",
+    "Greek": "Greek (Ελληνικά)",
+    "Georgian": "Georgian (ქართული)",
+    "Armenian": "Armenian (Հայերեն)",
+}
+
+
+def _get_language_prompt_name(lang: str) -> str:
+    """NashSU getLanguagePromptName parity: localized display name for a
+    language, or the bare name when no mapping exists."""
+    return _PROMPT_NAME_MAP.get(lang, lang)
+
+
+def get_output_language(fallback_text: str = "") -> str:
+    """Effective output language for LLM content generation.
+
+    NashSU getOutputLanguage (output-language.ts) parity: if the user has set
+    an explicit, non-"auto" override (via ``IMPROVED_WIKI_OUTPUT_LANGUAGE``),
+    use it; otherwise auto-detect from ``fallback_text``.
+    """
+    configured = os.environ.get(OUTPUT_LANGUAGE_ENV, "").strip()
+    if configured and configured.lower() != "auto":
+        return configured
+    return detect_language((fallback_text or "English")[:2000])
+
+
 def build_language_directive(text: str) -> str:
-    """Build a language directive string for LLM prompts."""
-    lang = detect_language(text[:2000])
-    name_map = {
-        "Chinese": "Chinese (中文)",
-        "Japanese": "Japanese (日本語)",
-        "Korean": "Korean (한국어)",
-        "Russian": "Russian (Русский)",
-        "Arabic": "Arabic (العربية)",
-        "Persian": "Persian (فارسی)",
-        "Hebrew": "Hebrew (עברית)",
-        "Thai": "Thai (ไทย)",
-        "Hindi": "Hindi (हिन्दी)",
-        "Bengali": "Bengali (বাংলা)",
-        "Tamil": "Tamil (தமிழ்)",
-        "Greek": "Greek (Ελληνικά)",
-        "Georgian": "Georgian (ქართული)",
-        "Armenian": "Armenian (Հայերեն)",
-    }
-    display = name_map.get(lang, lang)
-    return f"All output MUST be in {display}. Respond in {lang}."
+    """Build a strong language directive to inject into LLM system prompts.
+
+    NashSU buildLanguageDirective (output-language.ts) parity: state the
+    mandatory output language for prose AND the proper-noun /
+    technical-identifier / URL / paper-title / code-identifier preservation
+    rules so the model localizes surrounding prose but NEVER translates
+    identifiers. Honors the IMPROVED_WIKI_OUTPUT_LANGUAGE override.
+
+    Signature is kept backward-compatible (single positional ``text`` arg) for
+    existing ingest + lint callers.
+    """
+    lang = get_output_language(text)
+    prompt_lang = _get_language_prompt_name(lang)
+    return "\n".join([
+        f"## ⚠️ MANDATORY OUTPUT LANGUAGE: {prompt_lang}",
+        "",
+        f"Write surrounding natural-language prose in **{prompt_lang}**.",
+        f"All generated prose, including prose titles and section headings, "
+        f"must be in {prompt_lang}.",
+        "Do not translate, transliterate, or describe proper nouns and "
+        "technical identifiers unless the source already uses a "
+        "well-established localized form.",
+        "Preserve organization names, product names, model names, dataset "
+        "names, tool/library names, acronyms, code identifiers, file names, "
+        "URLs, paper titles, citation strings, and technical terms that have "
+        "no widely-used localized equivalent in their standard original form.",
+        f"The source material or wiki content may be in a different language; "
+        f"use it as evidence, but keep generated prose in {prompt_lang}.",
+        "This language rule overrides weaker style instructions, but it does "
+        "not override the proper-noun and technical-identifier preservation "
+        "rule above.",
+    ])
 
 
 # ── Script detection ──

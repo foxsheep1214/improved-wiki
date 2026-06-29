@@ -1,5 +1,6 @@
 
 from _stage_2_base import *
+from _review_utils import review_id_for
 
 
 def _render_review_page(rtype: str, title: str, desc: str, affected: list[str],
@@ -21,8 +22,13 @@ def _render_review_page(rtype: str, title: str, desc: str, affected: list[str],
         )
     else:
         search_section = ""
+    # Content-stable review id (NashSU review-store.ts reviewIdFor parity):
+    # FNV-1a over (type :: normalized-title). The same logical review keeps the
+    # same id across re-ingest, so resolved state survives via field-union dedup.
+    review_id = review_id_for(rtype, title)
     return f"""---
 type: review
+review_id: {review_id}
 review_type: {rtype}
 severity: {severity}
 affected_pages: [{', '.join(affected)}]

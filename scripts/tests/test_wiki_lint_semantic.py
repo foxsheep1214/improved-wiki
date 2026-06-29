@@ -106,6 +106,34 @@ class TestBatching(unittest.TestCase):
         self.assertEqual(len(out), 3)
 
 
+class TestLanguageDirectiveInPrompt(unittest.TestCase):
+    """The enriched language directive (proper-noun / identifier preservation
+    clauses + override) must reach the semantic-lint system prompt."""
+
+    def test_preservation_clauses_present_in_system_prompt(self):
+        wls = _load_module()
+        summaries = [("concepts/buck.md", "A buck converter steps down voltage.")]
+        system_prompt, _ = wls.build_prompt(summaries)
+        self.assertIn("MANDATORY OUTPUT LANGUAGE", system_prompt)
+        self.assertIn("Do not translate, transliterate", system_prompt)
+        self.assertIn("paper titles", system_prompt)
+        self.assertIn("URLs", system_prompt)
+
+    def test_output_language_override_reaches_prompt(self):
+        wls = _load_module()
+        old = os.environ.get("IMPROVED_WIKI_OUTPUT_LANGUAGE")
+        os.environ["IMPROVED_WIKI_OUTPUT_LANGUAGE"] = "French"
+        try:
+            summaries = [("concepts/buck.md", "A buck converter steps down voltage.")]
+            system_prompt, _ = wls.build_prompt(summaries)
+            self.assertIn("French", system_prompt)
+        finally:
+            if old is None:
+                os.environ.pop("IMPROVED_WIKI_OUTPUT_LANGUAGE", None)
+            else:
+                os.environ["IMPROVED_WIKI_OUTPUT_LANGUAGE"] = old
+
+
 class TestSemanticLintBatchedE2E(unittest.TestCase):
     def test_two_batches_resume_separately(self):
         """3 pages, batch size 2 → 2 batches. Round 1: batch 1 pending (101).

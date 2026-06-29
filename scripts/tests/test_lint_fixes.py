@@ -38,6 +38,16 @@ class TestMakeQuerySlug(unittest.TestCase):
     def test_truncates_to_50(self):
         self.assertLessEqual(len(f.make_query_slug("a" * 200)), 50)
 
+    def test_strips_underscores(self):
+        # NashSU /[^\p{L}\p{N}-]/gu strips '_'; Python \w would keep it.
+        self.assertEqual(f.make_query_slug("foo_bar"), "foobar")
+
+    def test_strips_leading_trailing_underscores(self):
+        self.assertEqual(f.make_query_slug("_x_"), "x")
+
+    def test_underscore_does_not_become_hyphen(self):
+        self.assertEqual(f.make_query_slug("a_b_c"), "abc")
+
 
 class TestAppendWikilink(unittest.TestCase):
     def test_appends_under_existing_related(self):
@@ -113,6 +123,102 @@ class TestStub(unittest.TestCase):
             f.stub_title_from_broken_target("missing-thing"),
             "missing thing",
         )
+
+    def test_stub_uses_utc_date(self):
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory() as td:
+            full, _, _ = f.ensure_broken_link_stub(td, "missing-thing")
+            text = full.read_text(encoding="utf-8")
+            utc_today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            self.assertIn(f"created: {utc_today}", text)
+            self.assertIn(f"updated: {utc_today}", text)
+
+
+class TestNormalizeWikiRefKey(unittest.TestCase):
+    def test_collapses_case_space_hyphen_underscore(self):
+        for variant in ("KV Cache", "kv-cache", "kv_cache", "KV-Cache"):
+            self.assertEqual(f.normalize_wiki_ref_key(variant), "kvcache")
+
+    def test_strips_path_and_md(self):
+        self.assertEqual(
+            f.normalize_wiki_ref_key("wiki/concepts/kv-cache.md"), "kvcache")
+
+    def test_backslash_path(self):
+        self.assertEqual(
+            f.normalize_wiki_ref_key("concepts\\kv-cache.md"), "kvcache")
+
+
+class TestBuildDeletedKeys(unittest.TestCase):
+    def test_includes_slug_and_title(self):
+        keys = f.build_deleted_keys([("kv-cache", "KV Cache")])
+        self.assertIn("kvcache", keys)
+
+    def test_skips_empty(self):
+        keys = f.build_deleted_keys([("foo", "")])
+        self.assertEqual(keys, {"foo"})
+
+
+class TestExtractFrontmatterTitle(unittest.TestCase):
+    def test_plain(self):
+        self.assertEqual(
+            f.extract_frontmatter_title("---\ntitle: KV Cache\n---\n"), "KV Cache")
+
+    def test_quoted(self):
+        self.assertEqual(
+            f.extract_frontmatter_title('---\ntitle: "KV Cache"\n---\n'), "KV Cache")
+
+    def test_missing(self):
+        self.assertEqual(f.extract_frontmatter_title("---\ntype: x\n---\n"), "")
+
+
+class TestCleanIndexListing(unittest.TestCase):
+    def test_drops_deleted_entry_keeps_others(self):
+        text = (
+            "# Index\n"
+            "- [[kv-cache]] caching\n"
+            "- [[attention]] attn\n"
+        )
+        out = f.clean_index_listing(text, {"kvcache"})
+        self.assertNotIn("[[kv-cache]]", out)
+        self.assertIn("[[attention]]", out)
+
+    def test_title_form_entry_matched(self):
+        text = "- [[KV Cache]] caching\n- [[Attention]] attn\n"
+        out = f.clean_index_listing(text, {"kvcache"})
+        self.assertNotIn("KV Cache", out)
+        self.assertIn("Attention", out)
+
+    def test_no_keys_is_noop(self):
+        text = "- [[kv-cache]] x\n"
+        self.assertEqual(f.clean_index_listing(text, set()), text)
+
+    def test_substring_sibling_not_wiped(self):
+        # deleted slug "ai" must not take down [[OpenAI]] (Bug B).
+        text = "- [[ai]] x\n- [[OpenAI]] y\n"
+        out = f.clean_index_listing(text, {"ai"})
+        self.assertNotIn("[[ai]]", out)
+        self.assertIn("[[OpenAI]]", out)
+
+
+class TestStripDeletedWikilinks(unittest.TestCase):
+    def test_plain_to_text(self):
+        self.assertEqual(
+            f.strip_deleted_wikilinks("see [[kv-cache]] here", {"kvcache"}),
+            "see kv-cache here")
+
+    def test_alias_to_display(self):
+        self.assertEqual(
+            f.strip_deleted_wikilinks("see [[kv-cache|the cache]] here", {"kvcache"}),
+            "see the cache here")
+
+    def test_surviving_link_untouched(self):
+        self.assertEqual(
+            f.strip_deleted_wikilinks("[[attention]]", {"kvcache"}),
+            "[[attention]]")
+
+    def test_substring_sibling_not_stripped(self):
+        out = f.strip_deleted_wikilinks("[[ai]] [[OpenAI]]", {"ai"})
+        self.assertEqual(out, "ai [[OpenAI]]")
 
 
 if __name__ == "__main__":

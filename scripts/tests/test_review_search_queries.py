@@ -63,6 +63,34 @@ class TestSweepRoundTrip(unittest.TestCase):
         self.assertEqual(fm.get("search_queries"), [])
 
 
+class TestReviewIdInFrontmatter(unittest.TestCase):
+    """Stage 3.4 writes a content-stable review_id (NashSU reviewIdFor) into the
+    review page frontmatter so resolved state survives re-ingest."""
+
+    def test_review_id_present_and_stable(self):
+        md1 = review._render_review_page(
+            "missing-page", "Missing page: 注意力机制", "desc", [], [],
+            "high", "2026-06-28", "Book",
+        )
+        md2 = review._render_review_page(
+            "missing-page", "注意力机制", "different desc later", ["c/x.md"], [],
+            "low", "2026-06-29", "Book2",
+        )
+        fm1 = sweep_reviews._parse_frontmatter(md1)
+        fm2 = sweep_reviews._parse_frontmatter(md2)
+        self.assertTrue(fm1["review_id"].startswith("review-"))
+        # Same (type, normalized title) → same id despite prefix + other fields.
+        self.assertEqual(fm1["review_id"], fm2["review_id"])
+
+    def test_review_id_differs_by_type(self):
+        a = review._render_review_page("missing-page", "X", "", [], [], "low", "d", "s")
+        b = review._render_review_page("duplicate", "X", "", [], [], "low", "d", "s")
+        self.assertNotEqual(
+            sweep_reviews._parse_frontmatter(a)["review_id"],
+            sweep_reviews._parse_frontmatter(b)["review_id"],
+        )
+
+
 class TestPromptAsksForSearchQueries(unittest.TestCase):
     """The Stage 3.4 system prompt must instruct the LLM to emit search_queries
     for suggestion/missing-page (NashSU SEARCH-line parity)."""

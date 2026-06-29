@@ -19,6 +19,9 @@
 ### 必须用 venv Python（系统 Python 缺 fitz + 版本太旧）
 用 `~/.venv/bin/python3`。fitz（PyMuPDF）仍用于 Stage 1.1 的 garbled 检测采样。**且** stage 模块用 PEP 604 union 语法（`str | None`），需 Python 3.10+；macOS 系统 `/usr/bin/python3` 是 3.9，会抛 `TypeError: unsupported operand type(s) for |`——这是 #1 首次运行失败原因。
 
+### 删除页面后 LanceDB 留残留向量，需重 embed
+`build_embeddings.py embed` 是 `mode="overwrite"` 全量重建，全 skill 无增量删向量的 API。任何删除——`--delete`（源生命周期）和 lint `--delete-orphans`——都不清向量块，被删页可能在向量搜索里短暂命中（链接已失效），直到下次 `build_embeddings.py embed` 重建即清除。NashSU 用增量 `removePageEmbedding`；CLI 用整表重建达成同一端状态（无残留向量），刻意不移植增量删（YAGNI，且与重建式索引不符）。删除后想立即干净就重跑 embed。
+
 ### Wikilink enrichment merge loop after Stage 3.1
 Stage 3.1 写盘后，pipeline 生成多个 `LLM-task-*.md` merge prompt（`.llm-wiki/conversation/<hash>/`），每个让 agent 把已有 wiki 页与新内容合并。re-run 时会重新发现并 re-merge。高效处理：用 `delegate_task` 批量；wikilink 建议 JSON 任务输出 `{}` 可安全跳过（Stage 2.4 已加内联 wikilink 时无质量损失）。
 

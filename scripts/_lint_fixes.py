@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_lint_fixes.py — auto-fixes for structural lint findings.
 
-Faithful port of NashSU ``src/lib/lint-fixes.ts`` (v0.5.1). Three fixes that
+Faithful port of NashSU ``src/lib/lint-fixes.ts`` (verified against v0.5.3). Three fixes that
 ``_lint_suggest.run_structural_lint`` surfaces suggestions for but the old
 improved-wiki never applied:
 
@@ -33,23 +33,35 @@ __all__ = [
     "stub_relative_path_from_broken_target",
     "stub_title_from_broken_target",
     "ensure_broken_link_stub",
+    "normalize_wiki_ref_key",
+    "build_deleted_keys",
+    "extract_frontmatter_title",
+    "clean_index_listing",
+    "strip_deleted_wikilinks",
 ]
 
 
 # ── slug (port of wiki-filename.ts:makeQuerySlug) ────────────────────────────
 
-_NON_SLUG_RE = re.compile(r"[^\w-]", re.UNICODE)
+# Strip everything that is NOT a Unicode letter, Unicode digit, or ASCII hyphen.
+# NashSU makeQuerySlug uses /[^\p{L}\p{N}-]/gu which STRIPS underscores; Python's
+# \w would KEEP '_' (it includes the connector-punctuation class), so we must not
+# use \w here. We approximate \p{L}\p{N} with str.isalnum() per-character below,
+# because Python's `re` has no \p{…} property escapes.
+def _is_slug_char(ch: str) -> bool:
+    return ch == "-" or ch.isalnum()
 
 
 def make_query_slug(title: str) -> str:
     """Unicode-aware kebab slug. Keeps letters/digits across all scripts
-    (Latin, CJK, Cyrillic …) plus ASCII hyphen. NFKC-normalized, lowercased,
+    (Latin, CJK, Cyrillic …) plus ASCII hyphen. Underscores are stripped
+    (matching NashSU ``/[^\\p{L}\\p{N}-]/gu``). NFKC-normalized, lowercased,
     whitespace→hyphen, runs collapsed, trimmed, truncated to 50 chars (by
     codepoint). Falls back to ``"query"`` when nothing usable remains.
     """
     slug = unicodedata.normalize("NFKC", title).strip()
     slug = re.sub(r"\s+", "-", slug)
-    slug = _NON_SLUG_RE.sub("", slug)
+    slug = "".join(ch for ch in slug if _is_slug_char(ch))
     slug = re.sub(r"-+", "-", slug).strip("-").lower()
     truncated = slug[:50]
     return truncated if truncated else "query"
@@ -159,8 +171,11 @@ def ensure_broken_link_stub(
         return full_path, relative_path, False
     full_path.parent.mkdir(parents=True, exist_ok=True)
     title = stub_title_from_broken_target(broken_target)
-    from time import strftime
-    date = strftime("%Y-%m-%d")
+    # UTC date — NashSU ensureBrokenLinkStub uses new Date().toISOString().slice(0,10),
+    # i.e. UTC, not local. time.strftime() would use local time and drift across
+    # timezones, so we read UTC explicitly.
+    from datetime import datetime, timezone
+    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     safe_title = title.replace('"', '\\"')
     content = (
         "---\n"
@@ -177,3 +192,84 @@ def ensure_broken_link_stub(
     )
     full_path.write_text(content, encoding="utf-8")
     return full_path, relative_path, True
+
+
+# ── cascade-delete cleanup helpers (port of wiki-cleanup.ts) ─────────────────
+# Pure string-level helpers used by wiki-lint-fix.py's --delete-orphans cascade.
+# Faithful ports of NashSU src/lib/wiki-cleanup.ts (v0.5.3):
+#   normalizeWikiRefKey, buildDeletedKeys, extractFrontmatterTitle,
+#   cleanIndexListing, stripDeletedWikilinks.
+
+_TITLE_RE = re.compile(r"^title:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
+# `- [[Target]] description` / `* [[T|D]]` — the primary wikilink of a list item.
+_INDEX_ENTRY_RE = re.compile(r"^\s*[-*]\s*\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]")
+# [[target]] or [[target|display]] anywhere in body prose.
+_WIKILINK_BODY_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]")
+_REFKEY_STRIP_RE = re.compile(r"[\s\-_]+")
+
+
+def normalize_wiki_ref_key(s: str) -> str:
+    """Canonicalise a wiki ref so lookups ignore case and the
+    space/hyphen/underscore boundary (port of wiki-cleanup.ts:normalizeWikiRefKey).
+    Strips path prefixes and a trailing ``.md``. E.g. ``KV Cache``,
+    ``kv-cache``, ``kv_cache`` and ``wiki/concepts/kv-cache.md`` all collapse
+    to ``kvcache``."""
+    normalized = s.strip().replace("\\", "/")
+    leaf = normalized.split("/")[-1] if normalized else normalized
+    without_md = leaf[:-3] if leaf.lower().endswith(".md") else leaf
+    return _REFKEY_STRIP_RE.sub("", without_md.lower())
+
+
+def build_deleted_keys(infos):
+    """Build a set of normalized keys for a batch of (slug, title) deletions —
+    BOTH slug-form and title-form (port of wiki-cleanup.ts:buildDeletedKeys).
+    ``infos`` is an iterable of ``(slug, title)`` tuples."""
+    keys = set()
+    for slug, title in infos:
+        if slug:
+            keys.add(normalize_wiki_ref_key(slug))
+        if title:
+            keys.add(normalize_wiki_ref_key(title))
+    return keys
+
+
+def extract_frontmatter_title(content: str) -> str:
+    """Extract the ``title:`` value from YAML-ish frontmatter, tolerating
+    optional single/double quotes (port of wiki-cleanup.ts:extractFrontmatterTitle).
+    Returns ``""`` when no title line is found."""
+    m = _TITLE_RE.search(content)
+    return m.group(1).strip() if m else ""
+
+
+def clean_index_listing(text: str, deleted_keys) -> str:
+    """Drop list-item lines from an index-style file when their primary
+    wikilink targets a deleted page (port of wiki-cleanup.ts:cleanIndexListing).
+    Anchored to wikilink structure, not substring matching."""
+    if not deleted_keys:
+        return text
+
+    def _keep(line: str) -> bool:
+        m = _INDEX_ENTRY_RE.match(line)
+        if not m:
+            return True
+        return normalize_wiki_ref_key(m.group(1).strip()) not in deleted_keys
+
+    return "\n".join(line for line in text.split("\n") if _keep(line))
+
+
+def strip_deleted_wikilinks(text: str, deleted_keys) -> str:
+    """Replace wikilinks pointing to deleted pages with plain text, leaving
+    links to surviving pages alone (port of wiki-cleanup.ts:stripDeletedWikilinks).
+    ``[[deleted]]`` → ``deleted``; ``[[deleted|display]]`` → ``display``;
+    ``[[kept]]`` unchanged."""
+    if not deleted_keys:
+        return text
+
+    def _sub(m):
+        target = m.group(1)
+        display = m.group(2)
+        if normalize_wiki_ref_key(target.strip()) not in deleted_keys:
+            return m.group(0)
+        return display if display is not None else target
+
+    return _WIKILINK_BODY_RE.sub(_sub, text)

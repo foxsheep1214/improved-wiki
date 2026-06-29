@@ -35,6 +35,10 @@ cp $SKILL_DIR/templates/overview.md  ./wiki/overview.md
 #    key needed. The only external key is for image captioning (MiniMax VLM):
 export IMPROVED_WIKI_ROOT=$(pwd)
 export MINIMAX_CN_API_KEY=***   # only needed if your source has images to caption
+# Optional: force the wiki's output language (NashSU outputLanguage parity).
+# 'auto' (default / unset) detects per source; set to e.g. Chinese or English
+# to force every generated page + lint directive into that language.
+export IMPROVED_WIKI_OUTPUT_LANGUAGE=auto
 
 # 6. Dry-run to verify detection
 $SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf --dry-run

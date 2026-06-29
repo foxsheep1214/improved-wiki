@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_lint_suggest.py — structural wiki lint with a link-suggestion engine.
 
-Faithful port of the structural half of NashSU `src/lib/lint.ts` (v0.4.25):
+Faithful port of the structural half of NashSU `src/lib/lint.ts` (verified against v0.5.3):
 orphan / broken-link / no-outlinks detection, each enriched with a suggested
 fix computed by a deterministic similarity engine:
 
@@ -35,7 +35,7 @@ __all__ = [
 ]
 
 # Link-target UNIVERSE exclusion — NashSU runStructuralLint parity (lint.ts:161
-# in llm_wiki v0.5.2: contentFiles drops only index.md + log.md). overview.md
+# in llm_wiki v0.5.3: contentFiles drops only index.md + log.md). overview.md
 # stays IN the universe so it remains valid
 # wikilink targets AND their outbound links still count as inbound for the pages
 # they reference — this is what prevents false "orphan" findings on pages that
