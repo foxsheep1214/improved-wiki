@@ -344,9 +344,9 @@ sources: ["raw/Book/书名.pdf"]
 12. Stage 3.3: 跨域 slug 碰撞审查
 13. Stage 3.4: Review 审查建议
 14. Stage 3.5: 程序化追加 index/log + LLM 重写 overview
-16. Stage 3.7: Embeddings（LanceDB）
-17. Stage 4.1: validate_ingest 自动验证
-18. Wikilink enrichment: 多轮 LLM-task merge（可用 delegate_task 批量处理）
+16. Stage 3.7: Embeddings（LanceDB）— **最后一个 stage**，之后 `_finalize_book` 置完成标记
+    （原 Stage 4.1 自动验证体检已移除以对齐 NashSU；`validate_ingest.py` 保留为独立手动工具）
+17. Wikilink enrichment: 多轮 LLM-task merge（可用 delegate_task 批量处理）
 ```
 
 ---

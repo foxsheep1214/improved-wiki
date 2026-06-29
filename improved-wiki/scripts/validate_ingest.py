@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Stage 4.1: per-project ingest validator (final verification gate).
+"""Standalone per-project ingest validator (manual check — NOT an auto-run stage).
 
-validate_ingest.py — per-project 13-stage ingest validator
+validate_ingest.py — per-project 13-stage ingest validator. Run manually for a
+post-hoc audit; the former auto-run "Stage 4.1" was removed for NashSU alignment
+(NashSU has no post-ingest verification stage). Still used by the lint tooling.
 
 Aligns with ingest.py actual output: reads from .llm-wiki/ingest-cache.json
 cache entry + disk state.  Does NOT look for intermediate files (full.txt,
