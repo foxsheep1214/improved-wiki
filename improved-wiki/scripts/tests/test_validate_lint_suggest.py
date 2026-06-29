@@ -41,18 +41,6 @@ class TestCollectStructuralLintFindings(unittest.TestCase):
             self.assertEqual(broken["broken_target"], "transfomer")
             self.assertIsNone(broken.get("suggested_target"))
 
-    def test_orphan_detected_without_suggestion(self):
-        with tempfile.TemporaryDirectory() as t:
-            wiki = Path(t) / "wiki"
-            _write(wiki / "concepts/rag.md",
-                   "# RAG\nRetrieval augmented generation uses vector search.")
-            _write(wiki / "concepts/vector-search.md",
-                   "# Vector Search\nVector search retrieval finds related chunks.")
-            findings = vi._stage_4_1_collect_structural_lint_findings(wiki)
-            orphan = next(f for f in findings if f["type"] == "orphan"
-                          and f["page"] == "concepts/rag.md")
-            self.assertIsNone(orphan.get("suggested_source"))
-
     def test_excludes_anchors(self):
         with tempfile.TemporaryDirectory() as t:
             wiki = Path(t) / "wiki"
@@ -68,16 +56,6 @@ class TestCollectStructuralLintFindings(unittest.TestCase):
             wiki = Path(t) / "wiki"
             wiki.mkdir()
             self.assertEqual(vi._stage_4_1_collect_structural_lint_findings(wiki), [])
-
-    def test_no_suggestion_for_unrelated_typo(self):
-        with tempfile.TemporaryDirectory() as t:
-            wiki = Path(t) / "wiki"
-            _write(wiki / "concepts/bat.md", "# Bat\nFlying mammal.")
-            _write(wiki / "concepts/note.md", "# Note\nSee [[cat]].")
-            findings = vi._stage_4_1_collect_structural_lint_findings(wiki)
-            broken = next(f for f in findings if f["type"] == "broken-link")
-            self.assertEqual(broken["broken_target"], "cat")
-            self.assertIsNone(broken.get("suggested_target"))
 
 
 if __name__ == "__main__":

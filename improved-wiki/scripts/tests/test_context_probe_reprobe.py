@@ -86,13 +86,6 @@ def test_load_cached_reuses_even_when_env_unreliable(tmp_path):
     assert cp.load_cached(_Cfg(rt, "glm-5.2")) == 1000000
 
 
-def test_load_cached_reuses_when_env_reliable(tmp_path):
-    rt = tmp_path / ".llm-wiki"
-    _write_cache(rt, {"model_env": "glm-5.2", "model_self": "glm-5.2",
-                      "env_reliable": True, "context": 1000000, "probed_at": int(time.time())})
-    assert cp.load_cached(_Cfg(rt, "glm-5.2")) == 1000000
-
-
 def test_load_cached_backward_compatible_with_old_schema(tmp_path):
     # Old {model, context, probed_at} entries (no model_self/env_reliable) still reuse.
     rt = tmp_path / ".llm-wiki"

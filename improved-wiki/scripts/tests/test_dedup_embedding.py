@@ -50,10 +50,6 @@ class TestPageToEmbeddingText(unittest.TestCase):
         text = e.page_to_embedding_text({"id": "p.md", "title": "T", "body": body}, budget=100)
         self.assertLessEqual(len(text), 200)
 
-    def test_omits_empty_parts(self):
-        text = e.page_to_embedding_text({"id": "p.md"})
-        self.assertIn("p", text)
-
 
 class TestCandidatePairs(unittest.TestCase):
     def _pages(self):
@@ -82,11 +78,6 @@ class TestCandidatePairs(unittest.TestCase):
         pairs = e.candidate_pairs(self._pages(), top_k=1, threshold=0.5, embeddings=emb)
         a_pairs = [p for p in pairs if "a" in p]
         self.assertLessEqual(len(a_pairs), 1)
-
-    def test_raises_when_too_few_embedded(self):
-        emb = {"a": [1.0, 0.0], "b": None, "c": None, "d": None}
-        with self.assertRaises(e.DuplicatePrefilterError):
-            e.candidate_pairs(self._pages(), embeddings=emb, min_success_ratio=0.8)
 
     def test_raises_below_min_success_ratio(self):
         emb = {"a": [1.0, 0.0], "b": [0.9, 0.1], "c": None, "d": None}

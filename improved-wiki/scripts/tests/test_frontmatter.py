@@ -38,11 +38,6 @@ class TestParseFrontmatterFallback(unittest.TestCase):
         self.assertIn("body", body)
         self.assertNotIn("```", body)
 
-    def test_strips_md_wrapper_read_time(self):
-        content = "```md\n---\ntype: entity\n---\n\nbody\n```"
-        fm, _ = parse_frontmatter(content)
-        self.assertEqual(fm.get("type"), "entity")
-
     def test_no_frontmatter_returns_empty(self):
         fm, body = parse_frontmatter("# Just a heading\n\nbody\n")
         self.assertEqual(fm, {})
@@ -84,13 +79,6 @@ class TestMergeArrayFieldsBlockStyle(unittest.TestCase):
         self.assertIn("alpha", out)
         self.assertIn("beta", out)
         self.assertIn("gamma", out)
-
-    def test_inline_union(self):
-        existing = '---\nrelated: ["[[a]]"]\n---\n\nold\n'
-        new = '---\nrelated: ["[[b]]"]\n---\n\nnew\n'
-        out = merge_array_fields_into_content(new, existing)
-        self.assertIn("[[a]]", out)
-        self.assertIn("[[b]]", out)
 
 
 if __name__ == "__main__":

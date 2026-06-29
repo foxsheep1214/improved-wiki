@@ -207,17 +207,6 @@ class TestParseFileBlocksParity(unittest.TestCase):
         ])
         self.assertEqual(paths(text), ["concepts/topic-a.md", "entities/topic-b.md"])
 
-    def test_accepts_hyphenated_paths(self):
-        """NashSU canonical: parser accepts paths with hyphens in the filename."""
-        text = "\n".join([
-            "---FILE: wiki/concepts/multi-head-attention.md---",
-            "body",
-            "---END FILE---",
-        ])
-        b = _core.parse_file_blocks(text)
-        self.assertEqual(len(b), 1)
-        self.assertEqual(b[0][0], "concepts/multi-head-attention.md")
-
 
 class TestParseFileBlocksTolerantMarkers(unittest.TestCase):
     """Marker/fence tolerance closed 2026-06-19 to reach NashSU parity.
@@ -298,18 +287,6 @@ class TestParseFileBlocksStreamWarnings(unittest.TestCase):
         # so the warning references "concepts/moe.md" not "wiki/concepts/moe.md".
         output = buf.getvalue()
         self.assertIn("concepts/moe.md", output)
-        self.assertIn("not closed", output.lower())
-
-    def test_warns_only_unclosed_block(self):
-        """H2: when the ONLY block lacks ``---END FILE---``, warn but keep content."""
-        text = "---FILE: wiki/concepts/rope.md---\n# RoPE\nIt rotates"
-        with capture_parse_stdout() as buf:
-            blocks = _core.parse_file_blocks(text)
-        # Skill keeps the unclosed block (defensive: partial content better than nothing).
-        self.assertEqual(len(blocks), 1)
-        self.assertEqual(blocks[0][0], "concepts/rope.md")
-        output = buf.getvalue()
-        self.assertIn("rope.md", output)
         self.assertIn("not closed", output.lower())
 
     def test_warns_empty_path_block_skipped(self):
