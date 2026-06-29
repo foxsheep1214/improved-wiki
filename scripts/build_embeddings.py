@@ -89,31 +89,14 @@ def parse_args():
     return args
 
 
-ARGS = parse_args()
-ROOT = ARGS.project
-WIKI = f"{ROOT}/wiki"
-
-# Import shared runtime detection from sibling script
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-if _script_dir not in sys.path:
-    sys.path.insert(0, _script_dir)
-from _paths import detect_runtime_dir
-
-RUNTIME_DIR = str(detect_runtime_dir(Path(ROOT)))
-LANCE_DIR = f"{RUNTIME_DIR}/lancedb"
-EMBED_CACHE = f"{RUNTIME_DIR}/embed-cache.json"
-MAX_CHARS = ARGS.max_chars
-
-BASE_URL, MODEL, API_KEY, DIMS = get_embed_config()
-if ARGS.model:
-    MODEL = ARGS.model
-if ARGS.base_url:
-    BASE_URL = ARGS.base_url
-
-os.makedirs(LANCE_DIR, exist_ok=True)
-os.makedirs(RUNTIME_DIR, exist_ok=True)
-
-print(f"[embedding] backend: {BASE_URL}  model: {MODEL}")
+# CLI globals (ARGS/ROOT/WIKI/RUNTIME_DIR/LANCE_DIR/EMBED_CACHE/MAX_CHARS and the
+# resolved embed config) are initialized by _init_cli() from the __main__ block
+# below — NEVER at import time. Importing this module (e.g.
+# `from build_embeddings import embed_texts` in _dedup_embedding.py) must not call
+# parse_args(): doing so parsed the *parent* process's argv (the ingest book path)
+# against the {embed,search,stats} subparser and crashed the whole pipeline with
+# SystemExit(2) right after Stage 2.4. embed_texts() is a pure function and needs
+# none of these globals.
 
 # ── Chunking ────────────────────────────────────────────────────────
 
@@ -298,7 +281,34 @@ def cmd_stats():
         print(f"✗ Table not found: {e}")
 
 
+def _init_cli():
+    """Parse CLI args + initialize embed globals. Call ONLY from __main__ — not at
+    import time (see the note above the chunking section)."""
+    global ARGS, ROOT, WIKI, RUNTIME_DIR, LANCE_DIR, EMBED_CACHE, MAX_CHARS
+    global BASE_URL, MODEL, API_KEY, DIMS
+    ARGS = parse_args()
+    ROOT = ARGS.project
+    WIKI = f"{ROOT}/wiki"
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    if _script_dir not in sys.path:
+        sys.path.insert(0, _script_dir)
+    from _paths import detect_runtime_dir
+    RUNTIME_DIR = str(detect_runtime_dir(Path(ROOT)))
+    LANCE_DIR = f"{RUNTIME_DIR}/lancedb"
+    EMBED_CACHE = f"{RUNTIME_DIR}/embed-cache.json"
+    MAX_CHARS = ARGS.max_chars
+    BASE_URL, MODEL, API_KEY, DIMS = get_embed_config()
+    if ARGS.model:
+        MODEL = ARGS.model
+    if ARGS.base_url:
+        BASE_URL = ARGS.base_url
+    os.makedirs(LANCE_DIR, exist_ok=True)
+    os.makedirs(RUNTIME_DIR, exist_ok=True)
+    print(f"[embedding] backend: {BASE_URL}  model: {MODEL}")
+
+
 if __name__ == "__main__":
+    _init_cli()
     if ARGS.command == "embed":
         cmd_embed()
     elif ARGS.command == "search":
