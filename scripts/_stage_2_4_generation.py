@@ -3,6 +3,14 @@ from __future__ import annotations
 from _stage_2_base import *
 from _language import build_language_directive
 
+# NashSU parity: the accumulating "already generated" context fed into each
+# chunk's prompt is BOUNDED, mirroring NashSU's trimLongText(globalDigest). The
+# full generated_slugs list still drives per-concept SKIP membership checks and
+# the (independently capped) Linkable list, so dedup quality is unaffected — only
+# the displayed "SKIP these" block is windowed to the most-recent N. Matches the
+# per-concept fallback's existing generated_slugs[:50] cap.
+GENERATED_DISPLAY_MAX = 50
+
 
 def _collect_formulas_block(analyses: list[dict], cap: int = 60) -> str:
     """Render the verbatim-LaTeX formulas Stage 2.2 transcribed as a grounding
@@ -211,7 +219,22 @@ def _stage_2_4_build_prompt(
         "\n".join(schema_candidate_lines[:40]) if schema_candidate_lines else "(none)"
     )
 
-    generated_str = "\n".join(f"  - {s}" for s in generated_slugs) if generated_slugs else "(none yet — you are the first chunk)"
+    # Display only the most-recent window (NashSU-bounded); the full list is still
+    # used for SKIP membership (above) and the Linkable list (below), so older
+    # pages remain linkable and are never regenerated.
+    if not generated_slugs:
+        generated_str = "(none yet — you are the first chunk)"
+    else:
+        shown = generated_slugs[-GENERATED_DISPLAY_MAX:]
+        generated_lines = [f"  - {s}" for s in shown]
+        omitted = len(generated_slugs) - len(shown)
+        if omitted > 0:
+            generated_lines.insert(
+                0,
+                f"  (… {omitted} earlier page(s) omitted — they remain in the "
+                f"Linkable pages list below and must NOT be regenerated)",
+            )
+        generated_str = "\n".join(generated_lines)
 
     # Build linkable slugs list: all slugs the LLM is allowed to wikilink to.
     linkable = set()
