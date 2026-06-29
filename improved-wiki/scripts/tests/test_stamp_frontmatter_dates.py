@@ -21,7 +21,6 @@ import _stage_3_write as s3  # noqa: E402
 FM = """---
 type: source
 title: "X"
-domain: general
 created: 2026-06-20
 updated: 2026-06-20
 ---

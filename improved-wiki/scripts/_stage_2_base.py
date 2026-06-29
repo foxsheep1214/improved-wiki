@@ -27,7 +27,6 @@ from _core import (
     progress_path,
     load_cache,
     save_cache,
-    detect_domain,
     list_existing_slugs,
     load_schema_md,
     schema_folders,

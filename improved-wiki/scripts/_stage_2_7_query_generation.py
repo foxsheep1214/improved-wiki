@@ -8,7 +8,6 @@ def _stage_2_7_build_prompt(
     key_claims: list[dict],
     file_path: Path,
     config: Config,
-    current_domain: str = "general",
     source_context: str = "",
 ) -> str:
     """Build prompt for Stage 2.7: generate open questions from single-source analysis."""
@@ -49,9 +48,6 @@ def _stage_2_7_build_prompt(
     return f"""# Role
 You are maintaining a Karpathy-pattern knowledge base wiki. You have just finished generating source/concept/entity pages for a book.
 
-# Current Domain
-{current_domain}
-
 # Book Context
 - Title: {file_path.stem}
 - Canonical source path: raw/{raw_rel}
@@ -89,7 +85,6 @@ Bad examples (do NOT generate):
 ---
 type: query
 title: "{{question ending with ?}}"
-domain: {current_domain}
 tags: [{{2-4 tags}}]
 related: [{{2-4 wikilink stems from generated concepts/entities}}]
 sources: ["raw/{raw_rel}"]
@@ -162,17 +157,11 @@ def stage_2_7_query_generation(
     # Get concept/entity titles from generated file blocks
     concept_titles = []
     entity_titles = []
-    source_domain = None
-    for path, content in file_blocks:
-        is_concept_or_entity = path.startswith("concepts/") or path.startswith("entities/")
+    for path, _ in file_blocks:
         if path.startswith("concepts/"):
             concept_titles.append(path.replace("concepts/", "").replace(".md", ""))
         elif path.startswith("entities/"):
             entity_titles.append(path.replace("entities/", "").replace(".md", ""))
-        if source_domain is None and is_concept_or_entity:
-            m = re.search(r"^domain:\s*(\S+)", content, re.MULTILINE)
-            if m:
-                source_domain = m.group(1).strip().strip("\"'")
 
     # If no concepts generated, skip
     if not concept_titles:
@@ -180,17 +169,9 @@ def stage_2_7_query_generation(
             print("[stage 2.7] Skipped — no concepts generated")
         return [], ""
 
-    # Detect domain: prefer the domain this source's own concept/entity pages
-    # already used, so query pages stay consistent with their sibling pages
-    # (global_digest never actually carries a "domain" key under book_meta,
-    # so the old lookup always silently fell back to "general"). Fall back to
-    # the deterministic keyword detector — same one Stage 2.6 uses — only
-    # when no concept/entity page was generated for this source.
-    current_domain = source_domain or detect_domain(file_path, template, global_digest)
-
     prompt = _stage_2_7_build_prompt(
         global_digest, concept_titles, entity_titles,
-        key_claims, file_path, config, current_domain,
+        key_claims, file_path, config,
         source_context=source_context,
     )
 

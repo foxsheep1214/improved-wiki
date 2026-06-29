@@ -6,8 +6,8 @@
 # below.
 #   Phase 0 · 前置检查     — lock, runtime-dir detect/migrate
 #   Phase 1 · 结构扫描     — collect pages, run MECHANICAL structural detection
-#                            (7 categories, NO LLM). Includes the frontmatter /
-#                            domain / role checks — these are mechanical YAML
+#                            (5 categories, NO LLM). Includes the frontmatter /
+#                            role checks — these are mechanical YAML
 #                            checks, NOT the LLM "semantic" phase (Phase 2).
 #   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic); the ONLY LLM phase
 #   Phase 3 · 写入         — write lint-cache.json + .llm-wiki/lint/*.md + summary
@@ -18,19 +18,17 @@
 #   → --sweep → --strict → 4 auto-fix (--fix / --fix-links).
 #   I.e. Phase 3 (write) runs BEFORE Phase 2 (semantic).
 #
-# Detects 7 categories of issues:
+# Detects 5 categories of issues:
 #   1. broken-link        — [[wikilink]] points to a non-existent page
 #   2. orphan              — page no other page links to
 #   3. no-outlinks         — page has no outbound [[wikilink]]s
 #   4. missing-frontmatter — page lacks the required YAML block
-#   5. missing-domain      — concept/entity page lacks 'domain' in frontmatter
-#   6. invalid-domain      — domain value not in allowed list (see references/domains.md)
-#   7. invalid-role        — entity page has a `role:` value outside the canonical
+#   5. invalid-role        — entity page has a `role:` value outside the canonical
 #                            set, or a non-entity page carries `role:`
 #
-# Plus an 8th category when --semantic is passed (Phase 2, LLM-driven):
-#   8. semantic       — contradiction / stale / missing-page / suggestion /
-#                       cross-domain-ambiguity / wrong-domain (all collapsed to
+# Plus a 6th category when --semantic is passed (Phase 2, LLM-driven):
+#   6. semantic       — contradiction / stale / missing-page / suggestion /
+#                       term-ambiguity (all collapsed to
 #                       finding type 'semantic')
 #
 # Output:
@@ -45,7 +43,7 @@
 #   $ ./wiki-lint.sh --summary                  # one-line summary only
 #   $ ./wiki-lint.sh --strict                   # exit 1 for critical issues
 #   $ ./wiki-lint.sh --semantic                 # also run LLM semantic lint
-#   $ ./wiki-lint.sh --fix                      # auto-fix: missing-frontmatter, missing-domain
+#   $ ./wiki-lint.sh --fix                      # auto-fix: missing-frontmatter
 #   $ ./wiki-lint.sh --fix-links                # apply suggested_target/source wikilink fixes
 #   $ ./wiki-lint.sh --json-only                # old behavior: JSON only, no .llm-wiki/lint/ pages
 #   $ ./wiki-lint.sh --sweep                    # also report auto-resolvable review items (read-only, rule-based)
@@ -186,11 +184,8 @@ from pathlib import Path
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from _lint_suggest import run_structural_lint
-from _lint_domains import load_valid_domains
 
 wiki_dir = Path(os.environ["WIKI_DIR"])
-skill_root = Path(os.environ["SCRIPT_DIR"]).parent
-project_root = wiki_dir.parent
 findings: list[dict] = []
 now_ms = int(time.time() * 1000)
 
@@ -199,8 +194,7 @@ now_ms = int(time.time() * 1000)
 #    No slug_map here: broken-link/orphan/no-outlinks detection + suggestions
 #    are delegated to run_structural_lint (single source of truth), which
 #    builds its own case-insensitive dual-index slug map internally.
-STATE_SKIP = {"lint-cache.json", "ingest-cache.json", "ingest-queue.json", "ingest-lock",
-              "domains.md"}  # domains.md is a project config file, not a wiki page
+STATE_SKIP = {"lint-cache.json", "ingest-cache.json", "ingest-queue.json", "ingest-lock"}
 ANCHOR_FILES = {"index.md", "log.md"}  # NashSU parity: only these 2 excluded from structural lint
 
 SKIP_DIRS = {"lint", "REVIEW", "media"}
@@ -264,43 +258,16 @@ for stem, path in pages.items():
             "createdAt": now_ms,
         })
 
-# 5. Find pages with missing or invalid 'domain' field
-#    Domain is required for concept and entity pages (used for graph
-#    partitioning and query routing — not for slug collision, which is
-#    handled by Stage 3.1 page-merge since 2026-06-26).
-#    Source/comparison/synthesis/etc pages are exempt.
-#    Valid-domain set is loaded from <project>/wiki/domains.md (project-level
-#    override) or <skill>/references/domains.md (skill default) — NOT
-#    hardcoded. If neither parses (empty set), invalid-domain is skipped
-#    (lenient) so non-hardware wikis aren't flagged for using their own
-#    domains. missing-domain is always checked (presence of the field).
-VALID_DOMAINS = load_valid_domains(project_root, skill_root)
-
-def _normalize_domain(d: str) -> str:
-    """Normalize domain strings: lowercase, spaces→dashes, common aliases."""
-    d = d.strip().strip('"').strip("'").lower()
-    d = d.replace(" ", "-").replace("_", "-")
-    # Common LLM-generated aliases → canonical
-    aliases = {
-        "rf-and-microwave-engineering": "rf-microwave",
-        "analog-electronics": "analog-circuits",
-        "digital-electronics": "digital-circuits",
-        "people": "general",
-        "person": "general",
-        "power": "power-electronics",
-        "thermal": "thermal-management",
-        "signal": "signal-integrity",
-        "pcb": "pcb-design",
-    }
-    return aliases.get(d, d)
-DOMAIN_APPLICABLE_DIRS = {"concepts", "entities"}
-# Canonical entity roles (NashSU parity). `role:` is only valid on entity pages.
+# 5. Entity role validation (NashSU parity): `role:` is only valid on entity
+#    pages and must be one of the canonical roles. A non-entity page carrying
+#    `role:` is flagged. Only concept/entity pages are scanned; other types exempt.
 VALID_ROLES = {"person", "organization", "system", "standard", "model", "device"}
+ROLE_CHECK_DIRS = {"concepts", "entities"}
 for stem, path in pages.items():
     # Determine page directory from relative path
     rel = str(path.relative_to(wiki_dir))
     page_dir = rel.split("/")[0] if "/" in rel else ""
-    if page_dir not in DOMAIN_APPLICABLE_DIRS:
+    if page_dir not in ROLE_CHECK_DIRS:
         continue
     text = contents.get(stem)
     if text is None:
@@ -309,14 +276,12 @@ for stem, path in pages.items():
     if not fm_match:
         continue  # already caught by missing-frontmatter
     fm_text = fm_match.group(1)
-    # Also extract page type from frontmatter to double-check
+    # Extract page type from frontmatter
     page_type = ""
     for line in fm_text.split("\n"):
         m = re.match(r'type:\s*(\S+)', line)
         if m:
             page_type = m.group(1).strip()
-    # Entity role validation (NashSU parity): `role:` is only meaningful on
-    # entity pages and must be one of the canonical roles.
     role_found = None
     for line in fm_text.split("\n"):
         m = re.match(r'role:\s*(\S+)', line)
@@ -342,33 +307,6 @@ for stem, path in pages.items():
                 "id": f"lint-ir-{stem}",
                 "createdAt": now_ms,
             })
-    # Only concept and entity pages need domain
-    if page_type not in ("concept", "entity"):
-        continue
-    domain_found = None
-    for line in fm_text.split("\n"):
-        m = re.match(r'domain:\s*(\S+)', line)
-        if m:
-            domain_found = m.group(1).strip()
-            break
-    if domain_found is None:
-        findings.append({
-            "type": "missing-domain",
-            "severity": "warning",
-            "page": str(path.relative_to(wiki_dir)),
-            "detail": "Concept/entity page missing 'domain' field in frontmatter. Add 'domain: <domain-slug>' (see references/domains.md).",
-            "id": f"lint-md-{stem}",
-            "createdAt": now_ms,
-        })
-    elif VALID_DOMAINS and _normalize_domain(domain_found) not in VALID_DOMAINS:
-        findings.append({
-            "type": "invalid-domain",
-            "severity": "warning",
-            "page": str(path.relative_to(wiki_dir)),
-            "detail": f"Domain '{domain_found}' is not in the allowed list. Valid domains: {', '.join(sorted(VALID_DOMAINS))}.",
-            "id": f"lint-id-{stem}",
-            "createdAt": now_ms,
-        })
 
 print(json.dumps(findings, ensure_ascii=False, indent=2))
 PYEOF
@@ -385,7 +323,7 @@ from collections import Counter
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
 c = Counter(f['type'] for f in findings)
 total = sum(c.values())
-parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'missing-domain: {c.get(\"missing-domain\", 0)}', f'invalid-domain: {c.get(\"invalid-domain\", 0)}', f'invalid-role: {c.get(\"invalid-role\", 0)}']
+parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-role: {c.get(\"invalid-role\", 0)}']
 print(' | '.join(parts))
 ")
 
@@ -537,8 +475,6 @@ parts = [f'{total} findings',
          f'orphan: {c.get(\"orphan\", 0)}',
          f'no-outlinks: {c.get(\"no-outlinks\", 0)}',
          f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}',
-         f'missing-domain: {c.get(\"missing-domain\", 0)}',
-         f'invalid-domain: {c.get(\"invalid-domain\", 0)}',
          f'invalid-role: {c.get(\"invalid-role\", 0)}',
          f'semantic: {c.get(\"semantic\", 0)}']
 print(' | '.join(parts))
@@ -562,7 +498,7 @@ if [ "$STRICT" = true ]; then
   HAS_ERRORS=$(python3 -c "
 import json
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
-errors = sum(1 for f in findings if f['type'] in ('broken-link', 'missing-frontmatter', 'missing-domain'))
+errors = sum(1 for f in findings if f['type'] in ('broken-link', 'missing-frontmatter'))
 print(errors)
 ")
   if [ "$HAS_ERRORS" != "0" ]; then
@@ -573,7 +509,7 @@ fi
 
 # ── Auto-fix (NashSU lint-fixes.ts parity) ──
 if [ "$AUTO_FIX" = true ]; then
-  echo "[lint] Auto-fix: repairing missing-domain and missing-frontmatter..."
+  echo "[lint] Auto-fix: repairing missing-frontmatter..."
   TIMESTAMP=$(date +%Y-%m-%d)
 
   FIXED=$(python3 << PYEOF
@@ -592,17 +528,10 @@ for f in items:
     if not path.exists():
         continue
     t = f.get('type', '')
-    if t == 'missing-domain':
-        text = path.read_text()
-        if 'domain:' not in text[:500]:
-            text = re.sub(r'(^title:.+$)', r'\1\ndomain: general', text, count=1, flags=re.MULTILINE)
-            path.write_text(text)
-            fixed += 1
-            print(f"  fixed missing-domain: {page_rel}")
-    elif t == 'missing-frontmatter':
+    if t == 'missing-frontmatter':
         text = path.read_text()
         if not text.startswith('---'):
-            fm = f'---\ntype: concept\ntitle: "{path.stem}"\ndomain: general\ncreated: ${TIMESTAMP}\nupdated: ${TIMESTAMP}\ntags: []\nrelated: []\n---\n\n'
+            fm = f'---\ntype: concept\ntitle: "{path.stem}"\ncreated: ${TIMESTAMP}\nupdated: ${TIMESTAMP}\ntags: []\nrelated: []\n---\n\n'
             path.write_text(fm + text)
             fixed += 1
             print(f"  fixed missing-frontmatter: {page_rel}")

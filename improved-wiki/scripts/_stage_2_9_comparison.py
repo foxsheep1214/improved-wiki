@@ -8,7 +8,6 @@ def _stage_2_9_build_prompt_in_source(
     concept_titles: list[str],
     file_path: Path,
     config: Config,
-    current_domain: str = "general",
     source_context: str = "",
 ) -> str:
     """Build prompt for Stage 2.9: in-source concept comparisons."""
@@ -37,9 +36,6 @@ def _stage_2_9_build_prompt_in_source(
 
     return f"""# Role
 You are maintaining a wiki knowledge base. Review the concepts just generated for a book.
-
-# Current Domain
-{current_domain}
 
 # Source
 {file_path.stem} (raw/{raw_rel})
@@ -74,7 +70,6 @@ Generate at most 3 comparison pages. Output 0 if no genuine comparison exists.
 ---
 type: comparison
 title: "{{Concept A}} vs {{Concept B}}"
-domain: {current_domain}
 tags: [{{2-4 tags}}]
 related: [{{concept-A-stem}}, {{concept-B-stem}}]
 sources: ["raw/{raw_rel}"]
@@ -140,11 +135,6 @@ def stage_2_9_comparison_generation(
             print("[stage 2.9] Skipped — no concepts/entities generated")
         return [], ""
 
-    current_domain = (
-        global_digest.get("book_meta", {}).get("domain", "general")
-        if isinstance(global_digest.get("book_meta"), dict)
-        else "general"
-    )
     comp_tokens = config.compute_max_tokens(4096)
     all_blocks: list[tuple[str, str]] = []
 
@@ -154,7 +144,7 @@ def stage_2_9_comparison_generation(
         if verbose:
             print(f"[stage 2.9] In-source comparison — {len(concept_titles)} concepts...")
         prompt = _stage_2_9_build_prompt_in_source(
-            concept_titles, file_path, config, current_domain,
+            concept_titles, file_path, config,
             source_context=source_context,
         )
         try:

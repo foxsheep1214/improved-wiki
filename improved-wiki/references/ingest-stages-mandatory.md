@@ -109,7 +109,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.9 · Comparison Auto-Generation（源内）
 - **作用**：源内概念对比（两个高度相关概念 → 对比页，对比维度 ≥4，至多 2 页）。详见 `comparison-generation.md`。
 - **跳过条件**：本次 concept 和 entity 都为空，或 concept 数 <2（无对比对）。
-- **go/no-go**：comparison FILE block 或 `---COMPARISONS_IN_SOURCE: 0---` 标记；frontmatter 含 `type: comparison`+`title:`+`domain:`。
+- **go/no-go**：comparison FILE block 或 `---COMPARISONS_IN_SOURCE: 0---` 标记；frontmatter 含 `type: comparison`+`title:`。
 
 ---
 

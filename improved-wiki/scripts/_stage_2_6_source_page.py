@@ -7,7 +7,6 @@ def stage_2_6_source_page(
     file_path: Path,
     config: Config,
     template: str = "",
-    current_domain: str = "general",
     verbose: bool = False,
     linkable_slugs: list[str] | None = None,
     source_context: str = "",
@@ -265,7 +264,6 @@ Your ENTIRE response MUST be wrapped in EXACTLY ONE file block:
 ---
 type: source
 title: "{title}"
-domain: {current_domain}
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 tags: [tag1, tag2, tag3]

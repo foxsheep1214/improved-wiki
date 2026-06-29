@@ -74,7 +74,6 @@ from _core import (
     load_stages, mark_stage_done, is_stage_done, get_stage_payload,
     ProjectLock,
     BATCH_MAX_CONCURRENT,
-    detect_domain as _detect_domain,
     list_existing_slugs,
     parse_yaml_block, parse_simple_yaml, parse_file_blocks,
     FOLDER_TO_TEMPLATE,

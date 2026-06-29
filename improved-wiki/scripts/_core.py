@@ -690,62 +690,6 @@ class ProjectLock:
         self.__exit__(None, None, None)
 
 
-# ── Domain detection ──
-
-_DOMAIN_KEYWORDS: dict[str, str] = {
-    "rf": "rf", "radio": "rf", "antenna": "rf", "microwave": "rf",
-    "radar": "rf", "waveguide": "rf",
-    "power": "power", "converter": "power", "inverter": "power",
-    "rectifier": "power", "switching": "power", "buck": "power",
-    "boost": "power", "ldo": "power",
-    "analog": "analog", "op-amp": "analog", "operational amplifier": "analog",
-    "adc": "analog", "dac": "analog", "pll": "analog",
-    "digital": "digital", "fpga": "digital", "verilog": "digital",
-    "vhdl": "digital", "cmos digital": "digital", "microcontroller": "digital",
-    "signal-integrity": "signal-integrity", "signal integrity": "signal-integrity",
-    "si ": "signal-integrity", "crosstalk": "signal-integrity",
-    "eye diagram": "signal-integrity", "jitter": "signal-integrity",
-    "emc": "emc", "emi": "emc", "electromagnetic compatibility": "emc",
-    "shielding": "emc",
-    "thermal": "thermal", "heat": "thermal", "cooling": "thermal",
-    "heatsink": "thermal", "temperature": "thermal",
-    "battery": "battery", "lithium": "battery", "soc": "battery",
-    "state of charge": "battery", "bms": "battery",
-    "semiconductor": "semiconductor", "mosfet": "semiconductor",
-    "igbt": "semiconductor", "gan": "semiconductor", "sic": "semiconductor",
-    "wafer": "semiconductor",
-    "embedded": "embedded", "arm": "embedded", "cortex": "embedded",
-    "rtos": "embedded", "firmware": "embedded",
-}
-
-_TEMPLATE_DOMAIN: dict[str, str] = {
-    "digest-datasheet": "semiconductor",
-    "digest-applicationnote": "semiconductor",
-}
-
-
-def detect_domain(file_path: Path, template: str,
-                  global_digest: dict | None = None) -> str:
-    title_lower = file_path.stem.lower()
-    template_name = Path(template).name if template else ""
-    if template_name in _TEMPLATE_DOMAIN:
-        return _TEMPLATE_DOMAIN[template_name]
-    for keyword, domain in _DOMAIN_KEYWORDS.items():
-        if keyword in title_lower:
-            return domain
-    if global_digest:
-        outline = global_digest.get("outline", [])
-        outline_str = " ".join(
-            (c.get("title", "") + " " + str(c.get("key_topics", ""))
-             if isinstance(c, dict) else str(c))
-            for c in outline
-        ).lower()
-        for keyword, domain in _DOMAIN_KEYWORDS.items():
-            if keyword in outline_str:
-                return domain
-    return "general"
-
-
 def list_existing_slugs(config: Config) -> list[str]:
     """Stems of existing knowledge pages under wiki/, for the digest's
     existing-pages context and incremental-association detection.

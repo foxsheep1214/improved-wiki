@@ -323,7 +323,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             "---",
             "type: source",
             f'title: "{title}"',
-            "domain: general",
             f"created: {today_str}",
             f"updated: {today_str}",
             "tags: []",

@@ -168,19 +168,12 @@ wiki/log.md
 ---
 type: source | concept | entity | query | comparison | synthesis | finding | thesis
 title: "页面标题"
-domain: circuit-fundamentals | power-electronics | thermal-management | emc | signal-integrity | digital-circuits | pcb-design | rf-microwave | radar-systems | analog-circuits | semiconductor-devices | reliability-engineering | general
 tags: [tag1, tag2]
 related: [other-slug, another-slug]
 created: 2026-06-14
 updated: 2026-06-14
 ---
 ```
-
-**`domain` 字段**（必填，concept/entity 页面必须包含）：
-- 指明概念所属领域，用于消歧义和跨领域链接
-- 取值见 `references/domains.md`
-- 跨领域通用概念标注 `general`
-- source 页面可从 `domain: general` 或省略
 
 **来源**：`ingest.ts:634-648`（prompt 指令）；`parse_and_write.py:104-111`（improved-wiki 校验）。
 
@@ -344,10 +337,8 @@ Lint 页面位于运行时目录（不在 `wiki/` 下）——它们是派生诊
 | `orphan` | info | 无入向链接 |
 | `no-outlinks` | info | 无出向链接 |
 | `missing-frontmatter` | error | 缺 YAML frontmatter（improved-wiki 扩展） |
-| `missing-domain` | warning | concept/entity 页面缺少 `domain` 字段（domain 供 graph 分区/query 用） |
-| `invalid-domain` | warning | `domain` 值不在允许列表中 |
 
-**`--strict` 模式**：`broken-link`、`missing-frontmatter`、`missing-domain` 触发 `exit 1`。
+**`--strict` 模式**：`broken-link`、`missing-frontmatter` 触发 `exit 1`。
 
 **来源**：`lint.ts:5`。
 

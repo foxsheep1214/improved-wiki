@@ -133,7 +133,6 @@ class Page:
     title: str
     page_type: str        # frontmatter 'type:' lowercased; 'other' if missing
     role: str             # frontmatter 'role:' lowercased (entity role); '' if none
-    domain: str
     sources: tuple[str, ...]
     links: tuple[str, ...]   # raw wikilink/related targets as written
     path: Path
@@ -192,7 +191,6 @@ def load_pages(wiki_root: Path, include_hidden: bool = False) -> dict[str, Page]
             continue
         title = str(fm.get("title", md.stem))
         role = str(fm.get("role", "")).lower().strip()
-        domain = str(fm.get("domain", "")).lower().strip()
         sources = tuple(s for s in _as_list(fm.get("sources")))
         # Direct links = [[wikilinks]] in body + `related:` frontmatter paths.
         targets: list[str] = []
@@ -201,7 +199,7 @@ def load_pages(wiki_root: Path, include_hidden: bool = False) -> dict[str, Page]
         links = tuple(t for t in targets if t)
         pages[node_id] = Page(
             node_id=node_id, stem=md.stem, title=title, page_type=page_type,
-            role=role, domain=domain, sources=sources, links=links, path=md,
+            role=role, sources=sources, links=links, path=md,
         )
     return pages
 
@@ -625,7 +623,7 @@ def _node_payload(nid: str, pages: dict[str, Page], lg: LinkGraph,
     p = pages[nid]
     return {
         "id": nid, "stem": p.stem, "title": p.title, "type": p.page_type,
-        "role": p.role, "domain": p.domain,
+        "role": p.role,
         "linkCount": lg.link_counts.get(nid, 0),
         "community": assign.get(nid, -1),
     }
@@ -1039,7 +1037,6 @@ def write_clusters(clusters_dir: Path, communities: list[Community],
             "---",
             "type: index",
             f"title: \"Cluster {c.cid:03d}\"",
-            "domain: graph",
             "tags: [knowledge-graph, cluster]",
             "---",
             "",

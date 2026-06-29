@@ -46,7 +46,6 @@ def _page(body: str, sources: str = "raw/Book/X.pdf") -> str:
         "---\n"
         "type: source\n"
         'title: "X"\n'
-        "domain: rf-electronics\n"
         "tags: [phased-array]\n"
         "related: []\n"
         f'sources: ["{sources}"]\n'

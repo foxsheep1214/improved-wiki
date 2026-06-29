@@ -22,7 +22,7 @@
 
 本阶段自动生成源内对比页：同源内**两个或多个**天然适合对比的概念，`concept ≥ 2` 时运行。既包括成对对比（如 CCM vs DCM），也包括源自身系统性 benchmark 的**多方对比（3+ 方）**（如 Phased-Array vs MIMO vs Phased-MIMO）。
 
-跨域同名碰撞交给 Stage 3.1 写盘时的 page-merge 处理（NashSU parity）。`domain` frontmatter 字段供 graph 分区 / query 用。
+跨域同名碰撞交给 Stage 3.1 写盘时的 page-merge 处理（NashSU parity）。
 
 ---
 
@@ -46,7 +46,6 @@
 ---
 type: comparison
 title: "{Concept A} vs {Concept B}"
-domain: {current_domain}
 tags: [{2-4 个标签}]
 related: [{concept-A-stem}, {concept-B-stem}]
 sources: ["raw/{相对路径}"]
@@ -70,7 +69,7 @@ updated: {today}
 
 - **go**：生成 0-N 个源内对比 FILE block，或输出 `---COMPARISONS_IN_SOURCE: 0---` 标记
 - **no-go**：既无 comparison block 也无 `---COMPARISONS_IN_SOURCE: 0---` 标记 → 2.9 未完成，重跑
-- 每个 comparison frontmatter 含 `type: comparison` + `title:` + `domain:` 三必填字段
+- 每个 comparison frontmatter 含 `type: comparison` + `title:` 两必填字段
 
 ---
 

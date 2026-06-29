@@ -9,7 +9,6 @@ from pathlib import Path
 from _core import (
     Config,
     PrepareStopAfter,
-    detect_domain as _detect_domain,
     detect_template_type,
     load_template,
     file_sha256,
@@ -51,7 +50,6 @@ def _prepare_source_page(
     associations: dict | None = None,
 ) -> list:
     """Stage 2.6: generate the source page (dedicated LLM call) and merge into file_blocks."""
-    current_domain = _detect_domain(raw_file, template_content, global_digest)
     if progress and "source_page_response" in progress:
         source_page_response = progress["source_page_response"]
         print(f"  [stage 2.6] (cached) Source page already generated")
@@ -76,7 +74,7 @@ def _prepare_source_page(
         _linkable.extend(list_existing_slugs(config))
         source_page_response, _ = stage_2_6_source_page(
             global_digest, raw_file, config,
-            template=template_content, current_domain=current_domain, verbose=verbose,
+            template=template_content, verbose=verbose,
             linkable_slugs=_linkable, source_context=source_context,
             associations=associations,
             generated_concepts=_gen_concepts, generated_entities=_gen_entities,
@@ -95,7 +93,7 @@ def _prepare_source_page(
     source_rel = f"sources/{raw_file.relative_to(config.raw_root).with_suffix('.md')}"
     book_meta = global_digest.get("book_meta", {})
     title = book_meta.get("title", raw_file.stem) if isinstance(book_meta, dict) else raw_file.stem
-    stub = f"---\ntype: source\ntitle: \"{title}\"\ndomain: general\n"
+    stub = f"---\ntype: source\ntitle: \"{title}\"\n"
     stub += f"created: {time.strftime('%Y-%m-%d')}\nupdated: {time.strftime('%Y-%m-%d')}\n"
     stub += f"tags: []\nrelated: []\nsources: [\"raw/{raw_file.relative_to(config.raw_root)}\"]\n---\n\n"
     stub += f"**Title:** {title}\n**Author:** {raw_file.stem}\n\n"
@@ -183,7 +181,6 @@ def _do_prepare(
             stage_1_3_result = (progress or {}).get("stage_1_3", {"captioned": 0})
             global_digest = (progress or {}).get("global_digest", {})
             template_name = detect_template_type(raw_file, config.raw_root, template_override)
-            current_domain = _detect_domain(raw_file, load_template(template_name), global_digest)
             return {
                 "raw_file": raw_file, "config": config, "h": h, "method": method,
                 "extracted_text": extracted_text, "global_digest": global_digest,
@@ -192,7 +189,7 @@ def _do_prepare(
                 "stage_1_3_result": stage_1_3_result, "template_name": template_name,
                 "query_count": 0, "comp_count": 0,
                 "concept_merge_stats": (0, 0), "dedup_was_run": False,
-                "current_domain": current_domain, "incremental_associations": {},
+                "incremental_associations": {},
                 "query_resolutions": {}, "enrich_enabled": False,
             }
 
@@ -487,7 +484,6 @@ def _do_prepare(
         analysis["__extract_method"] = method
 
         print(f"  [prepare] ✅ done — {len(file_blocks)} blocks")
-        current_domain = _detect_domain(raw_file, template_content, global_digest)
         return {
             "raw_file": raw_file, "config": config,
             "h": h, "method": method, "extracted_text": extracted_text,
@@ -501,7 +497,6 @@ def _do_prepare(
             "comp_count": comp_count,
             "concept_merge_stats": (concept_count_before, concept_count_after),
             "dedup_was_run": dedup_was_run,
-            "current_domain": current_domain,
             "incremental_associations": incremental_associations,
             "query_resolutions": query_resolutions,
             "enrich_enabled": getattr(config, "enrich_enabled", True),

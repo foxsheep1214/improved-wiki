@@ -20,7 +20,7 @@ from _core import (
     heartbeat as _heartbeat, file_tag as _file_tag,
     stage_begin as _stage_begin, stage_end as _stage_end,
     llm_call_progress as _llm_call_progress, llm_call_done as _llm_call_done,
-    load_cache, save_cache, detect_domain, list_existing_slugs,
+    load_cache, save_cache, list_existing_slugs,
     parse_yaml_block, parse_file_blocks,
     is_safe_ingest_path, _WINDOWS_RESERVED, _ILLEGAL_CHARS_RE,
     source_slug_from_raw_path,

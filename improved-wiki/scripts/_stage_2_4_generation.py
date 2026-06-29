@@ -369,7 +369,6 @@ Rules:
 ---
 type: concept
 title: "..."
-domain: general
 tags: [...]
 related: [...]
 sources: ["raw/{file_path.relative_to(config.raw_root)}"]
@@ -386,7 +385,6 @@ updated: {time.strftime('%Y-%m-%d')}
 ---
 type: entity
 role: "<role from the entity list: person|organization|system|standard|model|device>"
-domain: general
 title: "<entity name>"
 tags: [...]
 related: [...]
@@ -648,7 +646,6 @@ Do NOT write preamble, analysis, or commentary. Parser IGNORES non-FILE text.
 ---FILE:wiki/concepts/{slug}.md---
 ---
 type: concept
-domain: general
 title: "{name}"
 tags: [...]
 related: []
@@ -702,7 +699,6 @@ Do NOT write preamble, analysis, or commentary.
 ---FILE:wiki/entities/{slug}.md---
 ---
 type: entity
-domain: general
 title: "{entity_name}"
 tags: [...]
 related: []
@@ -933,7 +929,6 @@ Rules:
 ---
 type: concept
 title: "..."
-domain: general
 tags: [...]
 related: [...]
 sources: ["raw/{file_path.relative_to(config.raw_root)}"]
@@ -950,7 +945,6 @@ updated: {time.strftime('%Y-%m-%d')}
 ---
 type: entity
 role: "<role from the entity list: person|organization|system|standard|model|device>"
-domain: general
 title: "<entity name>"
 tags: [...]
 related: [...]

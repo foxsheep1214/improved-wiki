@@ -67,7 +67,6 @@ Two other external-API dependencies (not text generation):
 - `references/ingest-stages-mandatory.md` — ingest stage checklist (Phase 0-4 + Lint + Graph, ⭐ easy-to-skip stages marked)
 - `references/query-generation.md` — Stage 2.7: auto-generate `wiki/queries/`
 - `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (in-source concept pairs AND systematic multi-way 3+ comparisons)
-- `references/domains.md` — domain classification for graph partitioning / query routing
 - `references/dedup-design.md` — two dedup tiers: intra-source (Stage 2.4 closing sub-step, ingest-time) vs cross-source (CLI, lint-time); distinct responsibilities, not interchangeable
 - `references/scanned-pdf-ocr-pipeline.md` — minerU local API extraction pipeline (all PDFs: text/scanned/mixed unified)
 - `references/raw-naming-conventions.md` — raw 文件命名规范检查机制（项目级 `raw/NAMING.md` + auto-check）
@@ -83,7 +82,6 @@ Two other external-API dependencies (not text generation):
 
 **Conventions**:
 - `references/naming-conventions.md` — file naming, frontmatter, wikilink, directory conventions (NashSU-aligned)
-- `references/domains.md` — domain classification for graph partitioning / query routing
 - `references/raw-layout-compat.md` — raw/ layout convention (type subdirs, nested, template mapping)
 
 **Operations**:
@@ -127,8 +125,7 @@ Two other external-API dependencies (not text generation):
 - **Aggregate repair safety** (NashSU parity): proportional size caps for index + overview, FILE block output filtering
 - **Wikilink enrichment**: auto-adds `[[wikilinks]]` after page write (NashSU enrich-wikilinks parity)
 - **Source lifecycle**: `--delete` removes source page + cache + orphan concepts/entities + media
-- **Lint auto-fix**: `wiki-lint.sh --fix` repairs missing-domain and missing-frontmatter; `--fix-links` applies the suggestion engine's `suggested_target`/`suggested_source` (rewrites broken `[[wikilinks]]`, appends `## Related` links for orphan/no-outlinks); `--delete-orphans` previews an orphan cascade-delete (file + index entry + inbound `[[links]]` + `related:` refs — dry-run in lint; apply via `wiki-lint-fix.py --delete-orphans --apply`, NashSU `cascadeDeleteWikiPagesWithRefs` parity)
-- **Project-level domains**: `wiki-lint.sh` reads the valid-domain set from `<project>/wiki/domains.md` (override) or the skill default — not hardcoded, so RadarWiki / 自然科学知识库 use their own domains without spurious `invalid-domain` findings
+- **Lint auto-fix**: `wiki-lint.sh --fix` repairs missing-frontmatter; `--fix-links` applies the suggestion engine's `suggested_target`/`suggested_source` (rewrites broken `[[wikilinks]]`, appends `## Related` links for orphan/no-outlinks); `--delete-orphans` previews an orphan cascade-delete (file + index entry + inbound `[[links]]` + `related:` refs — dry-run in lint; apply via `wiki-lint-fix.py --delete-orphans --apply`, NashSU `cascadeDeleteWikiPagesWithRefs` parity)
 - **Semantic lint batching**: `wiki-lint-semantic.py` splits page summaries into 200-page batches (one conversation handoff each) so it scales to 7594-page wikis without blowing context; cross-batch findings are deduped
 - **Queue watch**: `--watch --drain` daemon mode consuming `ingest-queue.json`
 - **Standalone validation** (no longer auto-run): `validate_ingest.py` is a manual post-ingest check (the auto-run Stage 4.1 was removed for NashSU alignment). In-pipeline go/no-go gates still run per-stage via `_stage_validators.py` (`_verify_stage_1_1_text`, `_verify_stage_2_2_chunks`, etc.).
