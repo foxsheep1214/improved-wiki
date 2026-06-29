@@ -201,7 +201,10 @@ def _infer_stage(prompt: str) -> str:
     if "finished generating source/concept/entity pages" in head:
         return "Stage-2-7-QueryGeneration"
     if "reviewing concept pages generated from the same source for duplicates" in head:
-        return "Stage-2-5-DedupConfirm"
+        # The in-source dedup-confirm was folded into Stage 2.4's closing when the
+        # numbering was consolidated (2.5/2.8 retired); the stage code already
+        # prints "[stage 2.4]" for it, so label its cache files to match.
+        return "Stage-2-4-DedupConfirm"
     if "just generated concept/entity pages for a book" in head:
         return "Stage-2-9-Comparison"
     if "review the concepts just generated for a book" in head.lower():
