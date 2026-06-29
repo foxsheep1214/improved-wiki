@@ -94,5 +94,40 @@ class TestGeneratedSlugsDisplayCap(unittest.TestCase):
             self.assertIn("ALREADY COVERED — SKIP", prompt)
 
 
+class TestLinkableNeverDropsMustLinkTargets(unittest.TestCase):
+    """Regression (book-2 re-ingest): the Linkable-pages list was sorted then
+    truncated to 300, so an ALREADY-COVERED target (from Stage 2.3 existing_refs)
+    that sorts late was dropped from the displayed list — yet the ALREADY-COVERED
+    instruction still told the LLM to wikilink to it → a link absent from the
+    allowed list. Must-link targets (this chunk's slugs, prior-chunk slugs,
+    existing_refs targets, related pages) must NEVER be dropped by the cap."""
+
+    def test_existing_ref_target_survives_cap(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            # 200 background existing pages + 150 this-chunk concepts → >300 total,
+            # all sorting BEFORE the target so the old [:300] cap drops it.
+            bg = [f"concepts/aaa-{i:04d}" for i in range(200)]
+            this_chunk = [{"name": f"Concept Aab {i:04d}", "definition": "x",
+                           "importance": "core"} for i in range(150)]
+            orig = gen.list_existing_slugs
+            gen.list_existing_slugs = lambda config: list(bg)
+            try:
+                prompt = gen._stage_2_4_build_prompt(
+                    {"concepts_found": this_chunk, "entities_found": []},
+                    "chunk text", 1, cfg.raw_root / "book.pdf", cfg,
+                    existing_refs={"Zeta Theorem": ["concepts/zzz-target"]},
+                )
+            finally:
+                gen.list_existing_slugs = orig
+            # The ALREADY-COVERED target must appear in the Linkable pages list.
+            start = prompt.index("# Linkable pages")
+            linkable = prompt[start:]
+            self.assertIn("concepts/zzz-target", linkable)
+
+
 if __name__ == "__main__":
     unittest.main()

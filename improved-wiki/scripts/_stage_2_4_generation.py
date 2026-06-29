@@ -11,6 +11,11 @@ from _language import build_language_directive
 # per-concept fallback's existing generated_slugs[:50] cap.
 GENERATED_DISPLAY_MAX = 50
 
+# Soft cap on the displayed Linkable-pages list. Must-link targets (this chunk's
+# slugs, prior-chunk pages, Stage 2.3 existing_refs, related pages) are always
+# kept; only the background fill of other existing wiki pages is bounded by this.
+_LINKABLE_TOTAL_CAP = 400
+
 
 def _collect_formulas_block(analyses: list[dict], cap: int = 60) -> str:
     """Render the verbatim-LaTeX formulas Stage 2.2 transcribed as a grounding
@@ -236,35 +241,41 @@ def _stage_2_4_build_prompt(
             )
         generated_str = "\n".join(generated_lines)
 
-    # Build linkable slugs list: all slugs the LLM is allowed to wikilink to.
-    linkable = set()
+    # Build the linkable-slugs list in two tiers. MUST-LINK targets are slugs the
+    # prompt EXPLICITLY instructs the LLM to wikilink to — this chunk's own
+    # concepts/entities, prior-chunk pages, Stage 2.3 existing_refs (ALREADY
+    # COVERED targets), and related pages. These must NEVER be dropped: the old
+    # code merged everything into one set, sorted, then truncated to 300, so an
+    # ALREADY-COVERED target that sorted late vanished from the list while the
+    # ALREADY-COVERED instruction still referenced it (book-2 re-ingest bug).
+    # The background FILL (other existing wiki pages) is what the cap bounds.
+    must_link = set()
     for _, s in concept_slugs:
-        linkable.add(s)
+        must_link.add(s)
     for _, s in entity_slugs:
-        linkable.add(s)
+        must_link.add(s)
     for _, s in schema_candidate_slugs:
-        linkable.add(s)
+        must_link.add(s)
     for s in generated_slugs:
         if "/" in s:
-            linkable.add(s)
+            must_link.add(s)
         else:
-            linkable.add(f"concepts/{s}")
-            linkable.add(f"entities/{s}")
-    for s in existing_slugs[:200]:
-        linkable.add(s)
-    # Stage 2.3 overlap slugs: these EXISTING pages replace the skipped new
-    # concepts/entities, so they MUST be linkable (the LLM is told to wikilink
-    # to them instead of regenerating). existing_refs values are bare stems.
+            must_link.add(f"concepts/{s}")
+            must_link.add(f"entities/{s}")
+    # existing_refs values are bare stems for EXISTING pages the LLM links to
+    # instead of regenerating.
     for slugs in existing_refs.values():
         for s in slugs:
-            linkable.add(s)
+            must_link.add(s)
     for rp in (related_pages or []):
         slug = rp.get("slug") if isinstance(rp, dict) else None
         if slug:
-            linkable.add(slug)
-    linkable_list = sorted(linkable)
-    if len(linkable_list) > 300:
-        linkable_list = linkable_list[:300]
+            must_link.add(slug)
+    # Background fill: other existing wiki pages, bounded so the prompt stays a
+    # reasonable size. Never displaces a must-link target.
+    fill = sorted(s for s in set(existing_slugs[:200]) if s not in must_link)
+    room = max(0, _LINKABLE_TOTAL_CAP - len(must_link))
+    linkable_list = sorted(must_link) + fill[:room]
     linkable_str = "\n".join(f"  - {s}" for s in linkable_list) if linkable_list else "(none)"
 
     template_section = ""
