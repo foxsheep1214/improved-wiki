@@ -33,6 +33,12 @@ __all__ = [
     "stage_3_5_aggregate_repair", # Stage 3.5
 ]
 
+# Per-side cap on body text shown to the LLM page-merge prompt. Was a hardcoded
+# 3000 that truncated normal pages mid-content and made the body-shrink
+# threshold (0.7 * full body length) unachievable. 24K comfortably holds a full
+# wiki page and stays within the merge output budget (config.max_tokens).
+MERGE_PROMPT_BODY_CAP = 24000
+
 # ---------- File writing ----------
 
 def _extract_fm_field(content: str, field_name: str) -> str:
@@ -276,21 +282,32 @@ def _stage_3_1_merge_page_content(existing_text: str, new_text: str, config: Con
         # the LLM tries to reproduce (bug 2026-06-25).
         old_body = strip_embedded_images_section(parse_frontmatter(prev_content)[1])
         new_body = strip_embedded_images_section(parse_frontmatter(merged_content)[1])
+        # Show each body up to a generous cap, NOT a hardcoded 3K. The
+        # body-shrink threshold (_frontmatter.merge_page_content) rejects a
+        # merge below 0.7 * max(full old, full new); truncating the prompt to 3K
+        # meant any page whose body exceeds ~4.3K was shown only its head, so the
+        # LLM could not reproduce ≥70% of the full body and the no-fallback
+        # policy raised RuntimeError on a legitimate merge (2026-06-30 ohms-law,
+        # re-ingesting 无源器件篇). Normal-sized pages are now shown in full.
+        cap = MERGE_PROMPT_BODY_CAP
         prompt = f"""Merge two versions of a wiki page. Preserve ALL unique information from both.
 Do NOT drop claims, entities, formulas, or references from either version.
 
 # Existing page content
-{old_body[:3000]}
+{old_body[:cap]}
 
 # New content (from latest ingest)
-{new_body[:3000]}
+{new_body[:cap]}
 
 # Task
 Output the merged page body (no frontmatter, no code fences).
 The merged version should contain everything from both versions,
 with duplicates consolidated and new information integrated.
 """
-        response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
+        # Give the merge the model's real output budget so it can reproduce both
+        # bodies; the old hardcoded 4096 capped output at ~16K chars, itself
+        # below-threshold for larger pages.
+        response, _ = call_anthropic_protocol(prompt, config, max_tokens=config.max_tokens)
         merged_body = response.strip()
         if len(merged_body) < 100:
             # No fallback: an empty/tiny LLM merge response means the main path
