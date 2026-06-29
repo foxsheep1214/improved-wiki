@@ -68,9 +68,26 @@ def _stage_2_frontmatter_title(content: str) -> str:
     return m.group(1).strip().strip("\"'")
 
 
+_TITLE_STOPWORDS = {
+    "and", "or", "of", "the", "in", "on", "at", "to", "an", "vs",
+    "for", "with", "by", "a", "as", "from",
+}
+
+
 def _stage_2_title_words(title: str) -> set:
-    """Word-level token set for title-overlap Jaccard matching (case-insensitive, len>1)."""
-    return set(w.lower() for w in re.split(r"[\s/]+", title) if len(w) > 1)
+    """Content-word token set for title-overlap Jaccard matching.
+
+    Case-insensitive, len>1, with connective stopwords removed. Without the
+    stopword strip, "Series and parallel capacitors" vs "Series and parallel
+    batteries" shared {series, and, parallel} → Jaccard 0.6, so a Stage 2.3
+    association wrongly flagged the capacitor concept as ALREADY COVERED by the
+    battery page (book-2 re-ingest). Dropping connectives lets the head noun
+    decide the match.
+    """
+    return set(
+        w.lower() for w in re.split(r"[\s/]+", title)
+        if len(w) > 1 and w.lower() not in _TITLE_STOPWORDS
+    )
 
 # Explicitly re-export underscore-prefixed helpers. Without __all__, the
 # `from _stage_2_base import *` used by every Stage 2.x module EXCLUDES

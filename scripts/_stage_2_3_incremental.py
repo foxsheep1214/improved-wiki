@@ -51,7 +51,7 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
                 continue
             if slug_form == slug.lower():
                 matches.append(slug)
-            elif name_words and len(name_words & words) / len(name_words | words) >= 0.5:
+            elif name_words and len(name_words & words) / len(name_words | words) > 0.5:
                 matches.append(slug)
         if matches:
             associations[name] = matches
@@ -109,7 +109,7 @@ def stage_2_3_resolve_proposed_connections(wiki_root: Path, chunk_analyses: list
                 ratio = len(page_words & words) / len(page_words | words)
                 if ratio > best_ratio:
                     best_ratio, best_slug = ratio, stem
-            if best_ratio >= 0.5:
+            if best_ratio > 0.5:
                 match = best_slug
         if match and match not in seen:
             seen.add(match)
