@@ -181,6 +181,14 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
             _infer_stage("# Role\nYou are generating wiki pages for ONE chunk.\n"),
             "Stage-2-4-Generation")
 
+    def test_dedup_confirm_labeled_under_stage_2_4(self):
+        # The in-source dedup-confirm was folded into Stage 2.4's closing when the
+        # numbering was consolidated (2.5 retired). Its cache label must align to
+        # 2.4 (the stage code already prints "[stage 2.4]" for it).
+        prompt = ("You are reviewing concept pages generated from the same source "
+                  "for duplicates.\n\n### Concept 1: ...\n")
+        self.assertEqual(_infer_stage(prompt), "Stage-2-4-DedupConfirm")
+
     def test_non_directive_prompt_untouched(self):
         # Prompts that do NOT open with the directive (e.g. the cached 2.1/2.2
         # digest/chunk-analysis prompts) must infer exactly as before, so their
