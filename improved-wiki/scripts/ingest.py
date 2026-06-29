@@ -581,7 +581,7 @@ def main() -> int:
         from _source_lifecycle import delete_source
         for f in args.file:
             rf = Path(f).expanduser().resolve()
-            delete_source(rf, config)
+            delete_source(rf, config, dry_run=args.dry_run)
         return 0
 
     config = Config.from_env()

@@ -927,26 +927,172 @@ def parse_yaml_block(response: str) -> dict:
         return parse_simple_yaml(yaml_text)
 
 
-def parse_simple_yaml(text: str) -> dict:
+def _yaml_is_blank_or_comment(line: str) -> bool:
+    s = line.strip()
+    return (not s) or s.startswith("#")
+
+
+def _yaml_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _yaml_scalar(s: str) -> Any:
+    """Parse a YAML scalar: inline flow list/map, quoted string, or bare text.
+    Surrounding matching quotes are stripped (the prior flat parser kept them,
+    but downstream consumers slugify/strip names, so stripping is safer)."""
+    s = s.strip()
+    if not s:
+        return ""
+    if s.startswith("[") and s.endswith("]"):
+        inner = s[1:-1].strip()
+        if not inner:
+            return []
+        return [_yaml_scalar(p) for p in _yaml_split_flow(inner)]
+    if s.startswith("{") and s.endswith("}"):
+        inner = s[1:-1].strip()
+        d: dict[str, Any] = {}
+        for part in _yaml_split_flow(inner):
+            if ":" in part:
+                k, v = part.split(":", 1)
+                d[k.strip()] = _yaml_scalar(v)
+        return d
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        return s[1:-1]
+    return s
+
+
+def _yaml_split_flow(inner: str) -> list[str]:
+    """Split a flow-collection body on top-level commas (ignores commas inside
+    nested [], {}, or quotes)."""
+    parts, buf, depth, quote = [], [], 0, ""
+    for ch in inner:
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in ('"', "'"):
+            quote = ch
+            buf.append(ch)
+        elif ch in "[{":
+            depth += 1
+            buf.append(ch)
+        elif ch in "]}":
+            depth -= 1
+            buf.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append("".join(buf).strip())
+    return [p for p in parts if p]
+
+
+def _yaml_dedent_block(block_lines: list[str]) -> str:
+    while block_lines and not block_lines[-1].strip():
+        block_lines.pop()
+    indents = [_yaml_indent(l) for l in block_lines if l.strip()]
+    base = min(indents) if indents else 0
+    return "\n".join(l[base:] if len(l) >= base else l for l in block_lines)
+
+
+def _yaml_parse_block(lines: list[str], i: int, min_indent: int) -> tuple[Any, int]:
+    n = len(lines)
+    while i < n and _yaml_is_blank_or_comment(lines[i]):
+        i += 1
+    if i >= n or _yaml_indent(lines[i]) < min_indent:
+        return {}, i
+    if lines[i].strip().startswith("- "):
+        return _yaml_parse_list(lines, i, _yaml_indent(lines[i]))
+    return _yaml_parse_map(lines, i, _yaml_indent(lines[i]))
+
+
+_YAML_KEY_RE = re.compile(r"^([\w][\w_\-./]*):\s?(.*)$")
+_YAML_BLOCK_SCALAR = {"|", ">", "|-", ">-", "|+", ">+"}
+
+
+def _yaml_parse_map(lines: list[str], i: int, indent: int) -> tuple[dict, int]:
     result: dict[str, Any] = {}
-    current_list_key: str | None = None
-    for line in text.split("\n"):
-        if not line.strip() or line.strip().startswith("#"):
+    n = len(lines)
+    while i < n:
+        if _yaml_is_blank_or_comment(lines[i]):
+            i += 1
             continue
-        if line.startswith("  - ") and current_list_key:
-            # Use unwrapped value since we always set current_list_key
-            result[current_list_key].append(line[4:].strip())
+        cur = _yaml_indent(lines[i])
+        if cur < indent:
+            break
+        if cur > indent:
+            i += 1
             continue
-        m = re.match(r"^(\w[\w_]*):\s*(.*)", line)
-        if m:
-            key, value = m.group(1), m.group(2).strip()
-            if value == "":
-                result[key] = []
-                current_list_key = key
+        s = lines[i].strip()
+        if s.startswith("- "):
+            break
+        m = _YAML_KEY_RE.match(s)
+        if not m:
+            i += 1
+            continue
+        key, val_str = m.group(1), m.group(2).strip()
+        i += 1
+        if val_str in _YAML_BLOCK_SCALAR:
+            block: list[str] = []
+            while i < n and (_yaml_is_blank_or_comment(lines[i]) or _yaml_indent(lines[i]) > indent):
+                block.append(lines[i])
+                i += 1
+            result[key] = _yaml_dedent_block(block)
+        elif val_str == "":
+            j = i
+            while j < n and _yaml_is_blank_or_comment(lines[j]):
+                j += 1
+            if j < n and _yaml_indent(lines[j]) > indent:
+                child, i = _yaml_parse_block(lines, i, indent + 1)
+                result[key] = child
             else:
-                result[key] = value
-                current_list_key = None
-    return result
+                result[key] = []
+        else:
+            result[key] = _yaml_scalar(val_str)
+    return result, i
+
+
+def _yaml_parse_list(lines: list[str], i: int, indent: int) -> tuple[list, int]:
+    items: list[Any] = []
+    n = len(lines)
+    while i < n:
+        if _yaml_is_blank_or_comment(lines[i]):
+            i += 1
+            continue
+        cur = _yaml_indent(lines[i])
+        if cur != indent or not lines[i].strip().startswith("- "):
+            break
+        rest = lines[i].strip()[2:]
+        if _YAML_KEY_RE.match(rest):
+            # Map item: synthesize the first key (at indent+2) plus every
+            # deeper line belonging to this item.
+            item_indent = indent + 2
+            sub = [(" " * item_indent) + rest]
+            i += 1
+            while i < n and (_yaml_is_blank_or_comment(lines[i]) or _yaml_indent(lines[i]) > indent):
+                sub.append(lines[i])
+                i += 1
+            val, _ = _yaml_parse_map(sub, 0, item_indent)
+            items.append(val)
+        else:
+            items.append(_yaml_scalar(rest))
+            i += 1
+    return items, i
+
+
+def parse_simple_yaml(text: str):
+    """Indentation-aware parser for the YAML SUBSET the ingest prompts emit.
+    Used ONLY when PyYAML is unavailable (or yaml.safe_load crashes on CJK
+    curly quotes). Unlike the prior flat parser — which collapsed every list
+    item to a bare string and so dropped the nested dicts in concepts_found /
+    entities_found / review items, leaving Stage 2.4 generation and Stage 3.4
+    review with empty inputs — this handles nested maps, lists of maps, block
+    scalars (| / >), inline flow collections, and a top-level list (review
+    YAML). Returns a dict or list mirroring yaml.safe_load's shape."""
+    value, _ = _yaml_parse_block(text.split("\n"), 0, 0)
+    return value
 
 
 def parse_file_blocks(response: str) -> list[tuple[str, str]]:

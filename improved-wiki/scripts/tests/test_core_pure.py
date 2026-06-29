@@ -74,6 +74,54 @@ class TestParseSimpleYaml(unittest.TestCase):
         out = _core.parse_simple_yaml("# header\n\nkey: val\n")
         self.assertEqual(out, {"key": "val"})
 
+    def test_list_of_dicts_preserves_nested_keys(self):
+        # Regression: the prior flat parser collapsed each list item to a bare
+        # string, so concepts_found became list[str] and Stage 2.4's
+        # `isinstance(c, dict)` filter dropped every concept ("(none)").
+        text = (
+            "concepts_found:\n"
+            '  - name: "Robust Chaotic Map"\n'
+            '    importance: "core"\n'
+            '    definition: "Robust over a wide parameter range."\n'
+            "    key_details:\n"
+            '      - "detail one"\n'
+            '      - "detail two"\n'
+            '  - name: "Chaos Theory"\n'
+            '    importance: "supporting"\n'
+        )
+        out = _core.parse_simple_yaml(text)
+        concepts = out["concepts_found"]
+        self.assertEqual(len(concepts), 2)
+        self.assertTrue(all(isinstance(c, dict) for c in concepts))
+        self.assertEqual(concepts[0]["name"], "Robust Chaotic Map")
+        self.assertEqual(concepts[0]["key_details"], ["detail one", "detail two"])
+        self.assertEqual(concepts[1]["importance"], "supporting")
+
+    def test_top_level_list_of_dicts(self):
+        # Stage 3.4 review YAML is a top-level list; the prior parser returned
+        # {} for it, so review always produced "0 review pages".
+        text = (
+            "- id: 1\n"
+            "  type: confirm\n"
+            '  title: "check"\n'
+            '  affected_pages: ["concepts/x.md", "concepts/y.md"]\n'
+            "  search_queries: []\n"
+            "- id: 2\n"
+            "  type: suggestion\n"
+            '  search_queries: ["q one", "q two"]\n'
+        )
+        out = _core.parse_simple_yaml(text)
+        self.assertIsInstance(out, list)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[0]["affected_pages"], ["concepts/x.md", "concepts/y.md"])
+        self.assertEqual(out[1]["search_queries"], ["q one", "q two"])
+
+    def test_inline_flow_list_and_block_scalar(self):
+        text = "tags: [a, b, c]\nbody: |\n  line one\n  line two\n"
+        out = _core.parse_simple_yaml(text)
+        self.assertEqual(out["tags"], ["a", "b", "c"])
+        self.assertEqual(out["body"], "line one\nline two")
+
 
 class TestParseYamlBlock(unittest.TestCase):
     """Extract first ```yaml fenced block; fall back on CJK-quote crash."""
