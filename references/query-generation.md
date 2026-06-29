@@ -8,7 +8,7 @@
 |------|-----|
 | 入口函数 | `stage_2_7_query_generation()`（`scripts/_stage_2_7_query_generation.py`） |
 | prompt 构建 | `_stage_2_7_build_prompt()`（同文件，**唯一真相源**） |
-| 执行位置 | `_ingest_prepare.py::_do_prepare`，顺序：2.6 源页生成 → **2.7 query** → 2.8 跨源 query 解析 |
+| 执行位置 | `_ingest_prepare.py::_do_prepare`，顺序：2.6 源页生成 → **2.7 query**（生成 + 跨源 query 解析收尾，原 2.8 已并入；embedding 语义初筛 cosine≥0.82 + LLM judge，无回退） |
 | 输入 | `global_digest`、`chunk_analyses`（取 claims）、`file_blocks`（取已生成 concept/entity 标题）、`raw_file`、`config` |
 | 输出 | `(query_blocks, raw_response)`；query_blocks 并入 `file_blocks`，由 Stage 3.1/3.2 统一写盘 |
 | LLM 调用 | 单次，`max_tokens = config.compute_max_tokens(4096)` |

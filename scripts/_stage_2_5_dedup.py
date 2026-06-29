@@ -1,22 +1,29 @@
-"""Stage 2.5: 源内去重 (intra-source dedup) — concept collapse within ONE source.
+"""Stage 2.4 closing sub-step: 源内去重 (intra-source dedup) — concept collapse
+within ONE source.
 
 Runs during ingest, BEFORE write, as a filter on the LLM's just-generated
 file_blocks for this one book. Catches the case where the LLM names the same
 concept twice within a single source (e.g. emits both `PAO` and `聚磷菌`
-blocks). Deterministic candidate (title word-overlap or definition Jaccard
->= 0.6) + LLM confirm per group; unconfirmed groups are left intact
-(conservative — never merge on LLM failure). Does NOT rewrite cross-references
-(pages not written yet) and does NOT look at the existing wiki (cross-source
-awareness is Stage 2.3's job). This is distinct from the lint-time cross-source
-dedup (跨源去重, `cross_source_dedup.py`) which merges across the whole wiki.
+blocks). Candidate groups come from an embedding (cosine) semantic prefilter —
+NOT word-Jaccard — so cross-language / synonym duplicates (傅里叶变换 vs Fourier
+transform, word-overlap ≈ 0) are actually caught; each group is then confirmed
+by an LLM (unconfirmed groups are left intact — conservative, never merge on
+LLM failure). no-fallback: if the embedding stack is unavailable the prefilter
+RAISES (pauses ingest) rather than silently degrading to Jaccard. Does NOT
+rewrite cross-references (pages not written yet) and does NOT look at the
+existing wiki (cross-source awareness is Stage 2.3's job). This is distinct
+from the lint-time cross-source dedup (跨源去重, `cross_source_dedup.py`) which
+merges across the whole wiki.
 
-Refactored 2026-06-21 for explicit stage naming.
+Refactored 2026-06-21 for explicit stage naming; embedding prefilter 2026-06-29
+(folded into Stage 2.4, the 2.5 number retired).
 """
 from pathlib import Path
 import re
 from _llm_api import call_anthropic_protocol
+from _dedup_embedding import candidate_pairs, cluster_by_pairs
 
-DEDUP_JACCARD_THRESHOLD = 0.6
+DEDUP_COSINE_THRESHOLD = 0.82
 
 
 def _stage_2_5_extract_concept_blocks(file_blocks):
@@ -37,39 +44,22 @@ def _stage_2_5_extract_concept_blocks(file_blocks):
     return concepts
 
 
-_STOPWORDS = {"the", "a", "an", "of", "in", "on", "for", "and", "or", "to",
-              "with", "by", "is", "are", "be", "as", "at", "from", "that", "this",
-              "it", "its", "into", "using", "use", "used", "via", "per", "than"}
+def _stage_2_5_find_duplicate_concepts(concepts, *, embeddings=None):
+    """Embedding (cosine) prefilter over this source's just-generated concepts.
 
-
-def _stage_2_5_word_set(s):
-    return set(w for w in re.split(r"[\s,，。.;:、]+", s.lower())
-               if len(w) > 1 and w not in _STOPWORDS)
-
-
-def _stage_2_5_find_duplicate_concepts(concepts):
-    duplicates = []
-    processed = set()
-    for i, c1 in enumerate(concepts):
-        if i in processed:
-            continue
-        group = [i]
-        processed.add(i)
-        w1 = _stage_2_5_word_set(c1["title"] + " " + c1["definition_snippet"])
-        for j in range(i + 1, len(concepts)):
-            if j in processed:
-                continue
-            c2 = concepts[j]
-            t_overlap = (c1["title"].lower() in c2["title"].lower() or
-                         c2["title"].lower() in c1["title"].lower())
-            w2 = _stage_2_5_word_set(c2["title"] + " " + c2["definition_snippet"])
-            overlap = len(w1 & w2) / max(len(w1 | w2), 1)
-            if (t_overlap and overlap >= 0.4) or overlap >= DEDUP_JACCARD_THRESHOLD:
-                group.append(j)
-                processed.add(j)
-        if len(group) > 1:
-            duplicates.append(group)
-    return duplicates
+    Returns candidate groups as lists of indices into ``concepts`` (groups of
+    >1), to be confirmed by the LLM. ``embeddings`` (slug→vec) may be injected
+    for tests; otherwise vectors are computed live via the Ollama stack. Lets
+    DuplicatePrefilterError propagate (no-fallback) when too few concepts embed.
+    """
+    if len(concepts) < 2:
+        return []
+    pages = [{"id": c["slug"], "title": c["title"], "tags": [],
+              "body": c["definition_snippet"]} for c in concepts]
+    pairs = candidate_pairs(pages, threshold=DEDUP_COSINE_THRESHOLD, embeddings=embeddings)
+    clusters = cluster_by_pairs([p["id"] for p in pages], pairs)
+    slug_to_index = {c["slug"]: i for i, c in enumerate(concepts)}
+    return [[slug_to_index[sid] for sid in cl] for cl in clusters]
 
 
 def _stage_2_5_confirm_prompt(group_concepts):
@@ -95,7 +85,7 @@ def _stage_2_5_confirm_merge_with_llm(group_concepts, config):
     try:
         response, _ = call_anthropic_protocol(prompt, config, max_tokens=200, label="dedup-confirm")
     except Exception as e:
-        print("  [stage 2.5] LLM confirm failed: {} — keeping all candidates".format(e))
+        print("  [stage 2.4] LLM confirm failed: {} — keeping all candidates".format(e))
         return False, ""
     m = re.search(r"MERGE:\s*(yes|no)", response, re.IGNORECASE)
     if not m or m.group(1).lower() != "yes":
@@ -193,7 +183,7 @@ def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = Fals
     concept_count_before = sum(1 for p, _ in file_blocks if "/concepts/" in p)
     dedup_was_run = len(chunk_analyses) > 1
     if not dedup_was_run:
-        print(f"  [stage 2.5] Skipped (single chunk; {concept_count_before} concepts)")
+        print(f"  [stage 2.4] Skipped (single chunk; {concept_count_before} concepts)")
         return {
             "file_blocks": file_blocks,
             "dedup_was_run": False,
@@ -207,10 +197,10 @@ def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = Fals
     file_blocks = _stage_2_5_apply_merge_rules(file_blocks, merge_rules)
     concept_count_after = sum(1 for p, _ in file_blocks if "/concepts/" in p)
     if merge_rules:
-        print(f"  [stage 2.5] Dedup: {concept_count_before} → {concept_count_after} "
+        print(f"  [stage 2.4] Dedup: {concept_count_before} → {concept_count_after} "
               f"concepts ({len(merge_rules)} merge rule(s))")
     else:
-        print(f"  [stage 2.5] No duplicate concepts ({concept_count_after} concepts)")
+        print(f"  [stage 2.4] No duplicate concepts ({concept_count_after} concepts)")
     return {
         "file_blocks": file_blocks,
         "dedup_was_run": True,

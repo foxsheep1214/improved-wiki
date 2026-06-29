@@ -1,16 +1,28 @@
-"""Stage 2.8: Cross-source Query Resolution
+"""Stage 2.7 closing sub-step: Cross-source Query Resolution
 
-For each generated query, search existing wiki pages and use an LLM judge to
-decide: closed (answer already exists) or kept (still open).
-Defaults to "kept" on any uncertainty or LLM failure — never auto-deletes
-a query without explicit LLM confirmation.
+For each generated query, find related existing wiki pages via an embedding
+(cosine) semantic prefilter — NOT title word-Jaccard — so a natural-language
+question ("什么是傅里叶变换") actually matches a noun-titled concept page
+("Fourier Transform") it shares few literal words with. An LLM judge then
+decides: closed (answer already exists) or kept (still open). Defaults to
+"kept" on any uncertainty or LLM failure — never auto-deletes a query without
+explicit LLM confirmation.
 
-Refactored 2026-06-21 for explicit stage naming.
+no-fallback: if the embedding stack is unavailable the prefilter RAISES (pauses
+ingest) rather than degrading to Jaccard. Empty wiki (nothing to resolve
+against) short-circuits to "kept" for every query WITHOUT embedding — that is a
+genuine no-op, not a fallback.
+
+Refactored 2026-06-21 for explicit stage naming; embedding prefilter 2026-06-29
+(folded into Stage 2.7, the 2.8 number retired).
 """
 from pathlib import Path
 import re
 from _llm_api import call_anthropic_protocol
-from _stage_2_base import _stage_2_frontmatter_title, _stage_2_title_words
+from _stage_2_base import _stage_2_frontmatter_title
+from _dedup_embedding import cosine_similarity, embed_pages, DuplicatePrefilterError
+
+RESOLVE_COSINE_THRESHOLD = 0.82
 
 
 def _stage_2_8_extract_query_blocks(file_blocks):
@@ -30,30 +42,67 @@ def _stage_2_8_extract_query_blocks(file_blocks):
     return queries
 
 
-def _stage_2_8_find_related_wiki_pages(wiki_root, query_title, threshold=0.6):
+def _stage_2_8_load_existing_pages(wiki_root):
+    """Load existing concept/entity pages once (id namespaced by folder so a
+    concept and entity sharing a stem don't collide in the embeddings dict)."""
+    pages = []
     if not wiki_root.is_dir():
-        return []
-    related = []
-    q_words = _stage_2_title_words(query_title)
-    if not q_words:
-        return related
-    for page_dir in [wiki_root / "concepts", wiki_root / "entities"]:
+        return pages
+    for sub in ("concepts", "entities"):
+        page_dir = wiki_root / sub
         if not page_dir.is_dir():
             continue
         for page_file in page_dir.glob("*.md"):
             try:
                 content = page_file.read_text(encoding="utf-8", errors="ignore")
-                title = _stage_2_frontmatter_title(content)
-                if not title:
-                    continue
-                p_words = _stage_2_title_words(title)
-                if not p_words:
-                    continue
-                if len(q_words & p_words) / len(q_words | p_words) >= threshold:
-                    related.append((page_file.stem, title))
             except Exception:
-                pass
-    return related
+                continue
+            title = _stage_2_frontmatter_title(content)
+            if not title:
+                continue
+            body = re.sub(r"^---\n.*?\n---\n", "", content, flags=re.DOTALL)
+            pages.append({
+                "id": f"{sub}/{page_file.stem}",
+                "stem": page_file.stem,
+                "title": title,
+                "tags": [],
+                "body": body[:1500],
+            })
+    return pages
+
+
+def _stage_2_8_query_id(query):
+    return "__query__" + query["slug"]
+
+
+def _stage_2_8_embed_existing_and_queries(existing_pages, queries, *, min_success_ratio=0.8):
+    """Embed existing pages + query pages in one batched call. no-fallback:
+    raises DuplicatePrefilterError if too few embed (mirrors candidate_pairs)."""
+    query_pages = [{"id": _stage_2_8_query_id(qy), "title": qy["title"],
+                    "tags": [], "body": qy["body"]} for qy in queries]
+    all_pages = existing_pages + query_pages
+    embeddings = embed_pages(all_pages)
+    embedded = [v for v in embeddings.values() if v]
+    if all_pages and len(embedded) / len(all_pages) < min_success_ratio:
+        raise DuplicatePrefilterError(
+            f"embedded only {len(embedded)}/{len(all_pages)} query-resolution pages")
+    return embeddings
+
+
+def _stage_2_8_find_related_wiki_pages(query, existing_pages, embeddings,
+                                       threshold=RESOLVE_COSINE_THRESHOLD, top_k=8):
+    """Cosine-rank existing pages against one query; return the top_k above
+    threshold as (stem, title). Empty when the query failed to embed."""
+    qvec = embeddings.get(_stage_2_8_query_id(query))
+    if not qvec:
+        return []
+    scored = []
+    for page in existing_pages:
+        sim = cosine_similarity(qvec, embeddings.get(page["id"]))
+        if sim >= threshold:
+            scored.append((sim, page["stem"], page["title"]))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [(stem, title) for _, stem, title in scored[:top_k]]
 
 
 def _stage_2_8_judge_prompt(query, related):
@@ -86,11 +135,11 @@ def _stage_2_8_judge_query_resolution(query, related, config):
     try:
         response, _ = call_anthropic_protocol(prompt, config, max_tokens=200, label="query-resolve")
     except Exception as e:
-        print("  [stage 2.8] LLM judge failed for '{}': {} — defaulting to kept".format(query["slug"], e))
+        print("  [stage 2.7] LLM judge failed for '{}': {} — defaulting to kept".format(query["slug"], e))
         return "kept", "llm-unavailable"
     m = re.search(r"STATUS:\s*(closed|kept)", response, re.IGNORECASE)
     if not m:
-        print("  [stage 2.8] Could not parse judge response for '{}' — defaulting to kept".format(query["slug"]))
+        print("  [stage 2.7] Could not parse judge response for '{}' — defaulting to kept".format(query["slug"]))
         return "kept", "unparseable"
     status = m.group(1).lower()
     reason = ""
@@ -100,18 +149,34 @@ def _stage_2_8_judge_query_resolution(query, related, config):
     return status, reason
 
 
-def stage_2_8_resolve_queries(file_blocks, wiki_root, config):
+def stage_2_8_resolve_queries(file_blocks, wiki_root, config, *, embeddings=None):
     resolutions = {}
     queries = _stage_2_8_extract_query_blocks(file_blocks)
+    if not queries:
+        return resolutions
+
+    existing_pages = _stage_2_8_load_existing_pages(wiki_root)
+    if not existing_pages:
+        # Empty wiki: nothing to resolve against. Keep every query without
+        # embedding (genuine no-op, not a fallback) — avoids a spurious raise
+        # on the very first ingest into an empty wiki.
+        for query in queries:
+            resolutions[query["slug"]] = {
+                "status": "kept", "resolution_pages": [], "reason": "no existing wiki pages"}
+        return resolutions
+
+    if embeddings is None:
+        embeddings = _stage_2_8_embed_existing_and_queries(existing_pages, queries)
+
     for query in queries:
-        related = _stage_2_8_find_related_wiki_pages(wiki_root, query["title"])
+        related = _stage_2_8_find_related_wiki_pages(query, existing_pages, embeddings)
         status, reason = _stage_2_8_judge_query_resolution(query, related, config)
         resolutions[query["slug"]] = {
             "status": status,
             "resolution_pages": [s for s, _ in related],
             "reason": reason,
         }
-        print("  [stage 2.8] query '{}' -> {} ({})".format(query["slug"], status, reason))
+        print("  [stage 2.7] query '{}' -> {} ({})".format(query["slug"], status, reason))
     return resolutions
 
 
