@@ -326,6 +326,25 @@ def _stage_1_1_scanned_build_parse_body(
         parts.append(b'Content-Disposition: form-data; name="parse_method"')
         parts.append(b"")
         parts.append(_PARSE_METHOD_OVERRIDE.encode())
+    # minerU Image Analysis gate (opt-in, env-controlled). The hybrid-engine
+    # backend disables image/chart analysis on the default effort="medium" and
+    # only runs it on effort="high" (per-image class/sub_class/content: charts →
+    # markdown tables, formula-images → LaTeX, flowcharts → mermaid, text-images
+    # → OCR). Sending NO effort field preserves the server default (medium) and
+    # the current behavior exactly. Set IMPROVED_WIKI_MINERU_EFFORT=high to turn
+    # it on. effort is validated server-side to {medium,high}; ignore anything
+    # else so a typo can't break extraction.
+    _effort = os.environ.get("IMPROVED_WIKI_MINERU_EFFORT", "").strip().lower()
+    if _effort in ("medium", "high"):
+        parts.append(f"--{boundary}".encode())
+        parts.append(b'Content-Disposition: form-data; name="effort"')
+        parts.append(b"")
+        parts.append(_effort.encode())
+        if _effort == "high":
+            parts.append(f"--{boundary}".encode())
+            parts.append(b'Content-Disposition: form-data; name="image_analysis"')
+            parts.append(b"")
+            parts.append(b"true")
     if with_images:
         for field in ("return_images", "return_content_list"):
             parts.append(f"--{boundary}".encode())

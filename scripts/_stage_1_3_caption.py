@@ -270,13 +270,30 @@ def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
             except Exception:
                 continue
 
-            caps = b.get("image_caption", [])
+            # chart blocks carry their printed label in chart_caption (not
+            # image_caption); read both so a chart's figure label still anchors
+            # the caption now that charts are first-class at effort=high.
+            caps = b.get("image_caption", []) or b.get("chart_caption", [])
             mineru_caption = " ".join(c.strip() for c in caps if c and c.strip())
+
+            # minerU Image Analysis structured extraction — present only at
+            # effort=high (IMPROVED_WIKI_MINERU_EFFORT=high). For image/chart
+            # blocks the VLM emits a `content` field: chart → markdown data
+            # table, formula-image → LaTeX, flowchart → mermaid, text-image →
+            # OCR'd on-figure text, plus a `sub_type` (line/spectrogram/
+            # flowchart/text_image/natural_image/...). Captured here as GROUNDING
+            # for the Stage 1.3 caption (a faithful data anchor), NOT as a
+            # replacement for the description. Empty string at effort=medium, so
+            # this is a no-op unless high is enabled.
+            mineru_content = (b.get("content") or "").strip()
+            mineru_sub_type = (b.get("sub_type") or "").strip()
 
             before = _collect_block_text(blocks, i, -1, CONTEXT_CHARS)
             after = _collect_block_text(blocks, i, +1, CONTEXT_CHARS)
             ctx_map[md5_8] = {
                 "mineru_caption": mineru_caption,
+                "mineru_content": mineru_content,
+                "mineru_sub_type": mineru_sub_type,
                 "context_before": before,
                 "context_after": after,
             }
@@ -458,7 +475,7 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
     page_hint = f" (source page {page})" if page is not None else ""
 
     has_ctx = bool(ctx and (ctx.get("context_before") or ctx.get("context_after")
-                            or ctx.get("mineru_caption")))
+                            or ctx.get("mineru_caption") or ctx.get("mineru_content")))
     if not has_ctx:
         return (
             f"Describe this image factually{page_hint} for a knowledge-base index. "
@@ -483,6 +500,22 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
         parts.append(f"[Figure caption (reference only — do NOT copy)] {mineru_cap}")
     parts.append(f"[Text before image]\n{before or '(none)'}")
     parts.append(f"[Text after image]\n{after or '(none)'}")
+    mineru_content = (ctx or {}).get("mineru_content", "")
+    mineru_sub_type = (ctx or {}).get("mineru_sub_type", "")
+    if mineru_content:
+        st = f" classified as '{mineru_sub_type}'" if mineru_sub_type else ""
+        parts.append(
+            f"[minerU structured extraction of THIS figure{st} — GROUNDING] "
+            "minerU's layout model already parsed this figure into the structured "
+            "form below (a chart's data as a markdown table, a formula as LaTeX, a "
+            "flowchart as mermaid, or OCR'd on-figure text). Treat any numbers, "
+            "axis labels, units, or structure it contains as ground truth and fold "
+            "those specifics into your description so the caption carries the real "
+            "data, not vague prose. BUT if it is clearly degenerate (e.g. a table of "
+            "repeated or placeholder values that do not reflect actual readings), "
+            "ignore it and describe what you actually see.\n"
+            f"{mineru_content[:1800]}"
+        )
     parts.append(
         "Now describe this image factually for a knowledge-base index. Include: any "
         "visible text verbatim (original language, do not translate), chart axes and "
