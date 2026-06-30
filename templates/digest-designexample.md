@@ -86,10 +86,8 @@ limitations:
 
 key_entities:
   - name: "<reference design id>"
-    role: "model"
     wikilink_target: "<stem>"
   - name: "<manufacturer>"
-    role: "organization"
     wikilink_target: "<existing-slug>"
 
 key_concepts:

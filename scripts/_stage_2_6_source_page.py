@@ -81,7 +81,7 @@ Papers are not books — do NOT impose a chapter-by-chapter outline. Write flowi
 ## Key Entities
 
 List **EVERY entity page from the "Generated pages" block above** (do NOT omit any), one bullet per entity, each with:
-- **Name + type** (person / organization / dataset / tool / model).
+- **Name + type** — briefly, what kind of thing it is.
 - **Role in this paper** — central vs. peripheral, one sentence.
 - **Exists in wiki** — use the status shown in the Generated pages block. Wikilink each to its slug.
 
@@ -127,7 +127,7 @@ Then list **EVERY concept page from the "Generated pages" block above** (this in
 ## Key Entities
 
 List **EVERY entity page from the "Generated pages" block above** (do NOT omit any), one bullet per entity, each with:
-- **Name + type** (person / organization / standard / device / system / model).
+- **Name + type** — briefly, what kind of thing it is.
 - **Role in this book** — central vs. peripheral, one sentence.
 - **Exists in wiki** — use the status shown in the Generated pages block. Wikilink each to its slug.
 

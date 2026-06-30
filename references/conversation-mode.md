@@ -73,7 +73,6 @@ outline:
 
 key_entities:
   - name: "..."
-    role: "person" | "organization" | "system" | "model" | "standard"
 
 key_concepts:
   - name: "..."

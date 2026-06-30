@@ -64,10 +64,8 @@ components_used_in_example:
 
 key_entities:
   - name: "<AN id>"
-    role: "model"  # app notes are "model" entities
     wikilink_target: "SLVA477"
   - name: "<manufacturer>"
-    role: "organization"
     wikilink_target: "<existing-slug>"
 
 key_concepts:

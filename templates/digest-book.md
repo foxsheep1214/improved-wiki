@@ -31,9 +31,8 @@ outline:
     key_topics: ["topic 1", "topic 2"]        # ingest.py uses key_topics, not sections
     start_marker: "<distinctive opening text>"  # for chunk boundary detection
 
-key_entities:   # people, organizations, systems, models
+key_entities:   # named things: people, organizations, systems, models, …
   - name: "<entity>"
-    type: "person" | "organization" | "system" | "model" | "standard" | "device"
     description: "<1-2 sentence definition>"
     first_appears: "<chapter/section reference>"
 

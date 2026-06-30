@@ -1,4 +1,5 @@
-"""Tests for normalize_page_types — type/role normalization (audit point ②)."""
+"""Tests for normalize_page_types — collapse role-as-type and strip the
+obsolete entity `role:` field (NashSU flat `type: entity` model)."""
 import sys
 import unittest
 from pathlib import Path
@@ -15,18 +16,18 @@ def _page(fm_type: str, extra: str = "", body: str = "# X\n") -> str:
 
 
 class TestNormalizeFrontmatter(unittest.TestCase):
-    def test_role_as_type_becomes_entity_plus_role(self):
+    def test_role_as_type_becomes_flat_entity(self):
         out, changes = npt.normalize_frontmatter(_page("person"))
         self.assertIn("type: entity", out)
-        self.assertIn("role: person", out)
         self.assertNotIn("type: person", out)
-        self.assertEqual(len(changes), 1)
+        self.assertNotIn("role:", out)
+        self.assertTrue(changes)
 
-    def test_each_role_type_migrated(self):
+    def test_each_role_type_migrated_to_flat_entity(self):
         for role in npt.ROLE_TYPES:
             out, changes = npt.normalize_frontmatter(_page(role))
             self.assertIn("type: entity", out)
-            self.assertIn(f"role: {role}", out)
+            self.assertNotIn("role:", out)
             self.assertTrue(changes)
 
     def test_entities_typo_fixed(self):
@@ -34,18 +35,27 @@ class TestNormalizeFrontmatter(unittest.TestCase):
         self.assertIn("type: entity", out)
         self.assertNotIn("type: entities", out)
 
-    def test_canonical_type_untouched(self):
+    def test_canonical_type_without_role_untouched(self):
         for ty in ("concept", "entity", "source", "query", "comparison"):
             out, changes = npt.normalize_frontmatter(_page(ty))
             self.assertEqual(out, _page(ty))
             self.assertEqual(changes, [])
 
-    def test_existing_role_not_clobbered(self):
-        page = "---\ntype: person\nrole: engineer\ntitle: X\n---\n# X\n"
+    def test_obsolete_role_field_stripped_from_entity(self):
+        # The common migration: type: entity pages still carrying a role: line.
+        page = "---\ntype: entity\nrole: person\ntitle: X\n---\n# X\n"
         out, changes = npt.normalize_frontmatter(page)
         self.assertIn("type: entity", out)
-        self.assertIn("role: engineer", out)
-        self.assertNotIn("role: person", out)
+        self.assertIn("title: X", out)
+        self.assertNotIn("role:", out)
+        self.assertTrue(changes)
+
+    def test_stray_role_on_non_entity_stripped(self):
+        page = "---\ntype: concept\nrole: person\n---\n# X\n"
+        out, changes = npt.normalize_frontmatter(page)
+        self.assertIn("type: concept", out)
+        self.assertNotIn("role:", out)
+        self.assertTrue(changes)
 
     def test_idempotent(self):
         page = _page("organization")

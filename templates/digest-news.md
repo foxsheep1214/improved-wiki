@@ -40,7 +40,6 @@ key_facts:
 
 key_entities:
   - name: "<company or person>"
-    role: "organization" | "person"
     wikilink_target: "<existing-slug>"
 
 key_concepts:

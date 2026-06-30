@@ -63,13 +63,10 @@ deprecated_or_removed:
 
 key_entities:
   - name: "<SDO, e.g. IEEE>"
-    role: "organization"
     wikilink_target: "IEEE"
   - name: "<Working Group, e.g. IEEE 802.11>"
-    role: "organization"
     wikilink_target: "IEEE-802-11-WG"
   - name: "<Standard number>"
-    role: "standard"
     wikilink_target: "<stem>"
 
 key_concepts:

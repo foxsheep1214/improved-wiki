@@ -165,7 +165,6 @@ def _stage_2_4_build_prompt(
     for e in entities:
         if isinstance(e, dict):
             name = e.get("name", "")
-            role = e.get("role", "")
             sig = e.get("significance", "")
             slug = slugify(name)
             if name in existing_refs and existing_refs[name]:
@@ -179,17 +178,25 @@ def _stage_2_4_build_prompt(
                 # or a prior one) — skip the duplicate entity page; wikilink to
                 # the concept page instead.
                 entity_lines.append(
-                    f"  - {name} (slug: entities/{slug}) ({role}): {sig} "
+                    f"  - {name} (slug: entities/{slug}): {sig} "
                     f"[DUPLICATE OF CONCEPT concepts/{slug} — SKIP]"
                 )
             else:
                 entity_lines.append(
-                    f"  - {name} (slug: entities/{slug}) ({role}): {sig}"
+                    f"  - {name} (slug: entities/{slug}): {sig}"
                 )
                 entity_slugs.append((name, f"entities/{slug}"))
 
-    concept_str = "\n".join(concept_lines[:100]) if concept_lines else "(none)"
-    entity_str = "\n".join(entity_lines[:30]) if entity_lines else "(none)"
+    # NOTE: these caps are LINE counts, but each concept emits a header line PLUS
+    # up to 3 key_detail bullets (~4 lines/concept). A low cap therefore silently
+    # truncates the TAIL concepts of a dense chunk from the GENERATE list while
+    # they remain in the linkable list (concept_slugs, uncapped) → broken links to
+    # never-generated pages. The Stage 2.2 density guideline targets up to ~40
+    # concepts/chunk (≈160 lines), so the cap must sit well above that; ingest is
+    # not token-sensitive and the chunk text already dominates the prompt. Bumped
+    # 100→480 / 30→160 (2026-06-30) so realistic high-density chunks are never cut.
+    concept_str = "\n".join(concept_lines[:480]) if concept_lines else "(none)"
+    entity_str = "\n".join(entity_lines[:160]) if entity_lines else "(none)"
 
     # NashSU 0.5.3 parity: schema-typed candidates pre-identified by Stage 2.2.
     # Surface them explicitly so generation routes a page into the candidate's
@@ -398,9 +405,6 @@ Rules:
 6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-7. Entity pages MUST include a `role:` frontmatter field copied from the entity's
-   "(role)" in the list above (person|organization|system|standard|model|device).
-   Omit the line only if the listed role is empty.
 
 # Output Format — EXACT
 ---FILE:wiki/concepts/<slug>.md---
@@ -422,7 +426,6 @@ updated: {time.strftime('%Y-%m-%d')}
 ---FILE:wiki/entities/<slug>.md---
 ---
 type: entity
-role: "<role from the entity list: person|organization|system|standard|model|device>"
 title: "<entity name>"
 tags: [...]
 related: [...]
@@ -838,7 +841,6 @@ def _stage_2_4_build_all_prompt(
             if not name or slug in seen_entity_slugs:
                 continue
             seen_entity_slugs.add(slug)
-            role = e.get("role", "")
             sig = e.get("significance", "")
             if name in existing_refs and existing_refs[name]:
                 existing_slug = existing_refs[name][0]
@@ -848,15 +850,19 @@ def _stage_2_4_build_all_prompt(
                 )
             elif slug in concept_slug_stems:
                 entity_lines.append(
-                    f"  - {name} (slug: entities/{slug}) ({role}): {sig} "
+                    f"  - {name} (slug: entities/{slug}): {sig} "
                     f"[DUPLICATE OF CONCEPT concepts/{slug} — SKIP]"
                 )
             else:
-                entity_lines.append(f"  - {name} (slug: entities/{slug}) ({role}): {sig}")
+                entity_lines.append(f"  - {name} (slug: entities/{slug}): {sig}")
                 entity_slugs.append((name, f"entities/{slug}"))
 
-    concept_str = "\n".join(concept_lines[:200]) if concept_lines else "(none)"
-    entity_str = "\n".join(entity_lines[:60]) if entity_lines else "(none)"
+    # Same line-vs-concept caveat as _stage_2_4_build_prompt: these are LINE caps
+    # and each concept emits ~4 lines, so a low cap silently drops tail concepts
+    # (which stay linkable → broken links). Single-shot covers a whole small book
+    # in one prompt, so allow generous headroom. Bumped 200→800 / 60→200 (2026-06-30).
+    concept_str = "\n".join(concept_lines[:800]) if concept_lines else "(none)"
+    entity_str = "\n".join(entity_lines[:200]) if entity_lines else "(none)"
 
     linkable = set()
     for _, s in concept_slugs:
@@ -974,9 +980,6 @@ Rules:
 6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-7. Entity pages MUST include a `role:` frontmatter field copied from the entity's
-   "(role)" in the list above (person|organization|system|standard|model|device).
-   Omit the line only if the listed role is empty.
 
 # Output Format — EXACT
 ---FILE:wiki/concepts/<slug>.md---
@@ -998,7 +1001,6 @@ updated: {time.strftime('%Y-%m-%d')}
 ---FILE:wiki/entities/<slug>.md---
 ---
 type: entity
-role: "<role from the entity list: person|organization|system|standard|model|device>"
 title: "<entity name>"
 tags: [...]
 related: [...]

@@ -23,12 +23,10 @@ import graph  # noqa: E402
 
 def _write_page(wiki_dir: Path, stem: str, *, type_: str = "concept",
                 title: str = "", sources=None, related=None, body_links=None,
-                role: str = "", subdir: str = "") -> None:
+                subdir: str = "") -> None:
     fm_lines = ["---", f"type: {type_}"]
     if title:
         fm_lines.append(f"title: {title}")
-    if role:
-        fm_lines.append(f"role: {role}")
     if sources:
         fm_lines.append("sources:")
         for s in sources:

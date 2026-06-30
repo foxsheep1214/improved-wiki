@@ -11,6 +11,7 @@ from _core import (
     list_existing_slugs,
     load_schema_md,
     schema_folders,
+    parse_wiki_schema_routing,
     BASE_PAGE_DIRS,
     is_stage_done,
     get_stage_payload,
@@ -23,6 +24,7 @@ from _core import (
 from _stage_3_write import (
     _stage_3_1_wiki_path_for_source,
     _stage_3_1_auto_correct_wiki_path,
+    _stage_3_1_schema_route,
     _stage_3_1_canonicalize_sources_field,
     _stage_3_1_stamp_frontmatter_dates,
     stage_3_1_write_wiki_file,
@@ -157,7 +159,11 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # a page in a schema folder (e.g. wiki/methodology/, wiki/people/) is accepted
     # instead of being auto-corrected/dropped. Non-schema folders still fall through
     # to auto-correct (typo safety net).
-    _VALID_SUBDIRS = set(BASE_PAGE_DIRS) | schema_folders(load_schema_md(config))
+    _schema_md_text = load_schema_md(config)
+    _VALID_SUBDIRS = set(BASE_PAGE_DIRS) | schema_folders(_schema_md_text)
+    # Precise type→dir map for write-time schema routing (NashSU
+    # validateWikiPageRouting parity). Built once per book.
+    _routing = parse_wiki_schema_routing(_schema_md_text)
     _LISTING_PAGES = {"index.md", "log.md", "overview.md", "schema.md"}
 
     try:
@@ -247,6 +253,17 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
         if not rel_path.endswith(".md"):
             rel_path = rel_path + ".md"
+
+        # Schema routing (NashSU validateWikiPageRouting parity): place the page
+        # in the directory its frontmatter `type` declares (schema typeDirs →
+        # base types). Auto-corrects type↔dir mismatches the accept-list above
+        # cannot catch — e.g. a type:concept page sitting in a schema folder, or
+        # a schema type:person page written to entities/.
+        if basename not in _LISTING_PAGES:
+            routed = _stage_3_1_schema_route(rel_path, content, _routing)
+            if routed != rel_path:
+                print(f"  [write] Schema-routed: {rel_path} → {routed}")
+                rel_path = routed
 
         # Skip per-block language check for minerU OCR — OCR text from garbled
         # PDFs confuses the detector (e.g. C0 control chars → wrong language).
