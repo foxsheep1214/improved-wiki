@@ -23,7 +23,7 @@ from _core import (
     load_cache, save_cache, list_existing_slugs,
     parse_yaml_block, parse_file_blocks,
     is_safe_ingest_path, _WINDOWS_RESERVED, _ILLEGAL_CHARS_RE,
-    source_slug_from_raw_path,
+    source_slug_from_raw_path, schema_route_dir,
 )
 from _llm_api import call_anthropic_protocol
 from _frontmatter_array import parse_frontmatter_array
@@ -188,29 +188,41 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
             # Default: treat as concept (most common case for Chinese wiki)
             return f"concepts/{slug}.md"
 
-    # ── Schema routing validation (NashSU parity: validateWikiPageRouting) ──
-    # After all corrections, verify that frontmatter type matches directory.
-    # This catches LLM writing type:concept to entities/ or vice versa.
-    if rel_path and fm_type:
-        _TYPE_TO_DIR = {
-            "source": "sources", "concept": "concepts", "entity": "entities",
-            "query": "queries", "comparison": "comparisons",
-            "synthesis": "synthesis", "finding": "findings",
-            "thesis": "thesis", "methodology": "methodology",
-        }
-        expected_dir = _TYPE_TO_DIR.get(fm_type)
-        if expected_dir:
-            actual_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-            if actual_dir and actual_dir != expected_dir:
-                print(f"  ⚠️  [schema] Type '{fm_type}' in '{actual_dir}/' → routing to '{expected_dir}/'")
-                if "/" in rel_path:
-                    rel_path = f"{expected_dir}/{rel_path.split('/', 1)[1]}"
-                else:
-                    rel_path = f"{expected_dir}/{rel_path}"
-            elif not actual_dir:
-                rel_path = f"{expected_dir}/{rel_path}"
-
+    # NOTE: type↔directory schema-routing validation is NOT done here. Every
+    # branch above returns before this point (this function only fires for paths
+    # whose top dir is NOT a valid subdir), so a schema check here would be dead
+    # code AND base-type-only. Schema routing runs at the write boundary via
+    # _stage_3_1_schema_route(), which consults the project's schema typeDirs.
     return None
+
+
+def _stage_3_1_schema_route(rel_path: str, content: str,
+                            routing: dict[str, str]) -> str:
+    """Route a page to the directory its frontmatter ``type`` declares (schema
+    typeDirs first, then the fixed base types) — NashSU ``validateWikiPageRouting``
+    applied at write time.
+
+    Unlike NashSU (which DROPS a misrouted page), the writer auto-corrects by
+    MOVING it: lossless and consistent with the writer's no-silent-fallback
+    policy and its existing path auto-correct. The frontmatter ``type`` is the
+    source of truth; the file is placed in that type's folder. Returns the
+    (possibly rewritten) wiki-relative path (NO ``wiki/`` prefix).
+
+    Left unchanged: unknown/unroutable types (don't guess), already-correct
+    pages, and ``sources/`` pages (they keep their raw-mirroring subdirectories).
+    """
+    fm_type = _extract_fm_field(content, "type").strip().strip('"').strip("'")
+    target = schema_route_dir(fm_type, routing)
+    if target is None:                   # unknown/unroutable type — leave it
+        return rel_path                  # (NB: "" is a valid target = wiki root)
+    norm = rel_path[len("wiki/"):] if rel_path.startswith("wiki/") else rel_path
+    top = norm.split("/", 1)[0] if "/" in norm else ""
+    if top == target:                    # already correctly routed (incl. root: ""=="")
+        return rel_path
+    if target == "sources" or top == "sources":
+        return rel_path                  # source pages keep their subdir layout
+    basename = norm.rsplit("/", 1)[-1] if "/" in norm else norm
+    return basename if target == "" else f"{target}/{basename}"
 
 
 def _stage_3_1_wiki_path_for_source(raw_file: Path, config: Config) -> Path:

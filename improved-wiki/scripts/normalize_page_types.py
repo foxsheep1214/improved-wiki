@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """normalize_page_types.py — normalize page `type` frontmatter across a wiki.
 
-Problem: ~190 pages use an entity ROLE as the page TYPE
-(`type: person/organization/system/standard/model/device`), conflating the
-two axes. This breaks schema routing (type↔directory), makes type statistics
-meaningless, and corrupts the Graph command's type-affinity signal.
+Two idempotent migrations:
+  1. role-as-type → `type: entity`. Legacy pages used an entity ROLE as the page
+     TYPE (`type: person/organization/system/standard/model/device`), conflating
+     the role and type axes. Collapse them to the flat NashSU type `entity`.
+  2. strip the obsolete `role:` field. The skill no longer carries a separate
+     entity `role:` axis — NashSU has no such field: entities are a flat
+     `type: entity`, and finer distinctions (person vs organization vs …) come
+     from schema-defined typed folders, not a frontmatter enum. Any leftover
+     `role:` line is removed.
+Also fixes the `entities` typo. The canonical page-type vocabulary is the NashSU
+set: source, concept, entity, query, comparison, synthesis, finding, thesis,
+methodology — plus any custom type a project declares in schema.md.
 
-This migrates role-as-type → `type: entity` + `role: <role>`, and fixes the
-`entities` typo. The canonical page-type vocabulary is:
-  source, concept, entity, query, comparison, synthesis, findings, thesis,
-  methodology (all independent top-level types, NashSU parity). Entity roles
-  live in a separate `role:` field: person, organization, system, standard,
-  model, device, ...
-
-Idempotent: a page already `type: entity` (with or without role) is untouched.
+Idempotent: a page already `type: entity` with no `role:` line is untouched.
 
 Usage:
   IMPROVED_WIKI_ROOT=/path python3 normalize_page_types.py --check
@@ -27,7 +28,8 @@ import re
 import sys
 from pathlib import Path
 
-# Entity roles that were mistakenly used as page `type`.
+# Entity roles that legacy pages mistakenly used as the page `type`. Detected
+# here only to collapse them back to `type: entity` (the role axis is removed).
 ROLE_TYPES = {"person", "organization", "system", "standard", "model", "device"}
 # Typos / aliases → canonical type.
 TYPE_ALIASES = {"entities": "entity"}
@@ -52,35 +54,28 @@ def normalize_frontmatter(content: str) -> tuple[str, list[str]]:
     old_type = type_match.group(1).strip()
 
     new_type = old_type
-    new_role = None
     if old_type in ROLE_TYPES:
         new_type = "entity"
-        new_role = old_type
-        changes.append(f"type: {old_type} → type: entity + role: {old_type}")
+        changes.append(f"type: {old_type} → type: entity")
     elif old_type in TYPE_ALIASES:
         new_type = TYPE_ALIASES[old_type]
         changes.append(f"type: {old_type} → type: {new_type} (typo)")
-    else:
-        return content, []  # already canonical (or unknown type — leave alone)
 
     lines = fm.split("\n")
+    if any(re.match(r"^role:\s*\S+", ln) for ln in lines):
+        changes.append("removed obsolete role: field")
+
+    if not changes:
+        return content, []  # already canonical, no role line — leave alone
+
     out: list[str] = []
-    type_written = False
-    role_written = False
-    has_role = any(re.match(r"^role:\s*\S+", ln) for ln in lines)
     for ln in lines:
+        if re.match(r"^role:\s*\S+", ln):
+            continue  # drop the obsolete entity role axis
         if re.match(r"^type:\s*\S+", ln):
             out.append(f"type: {new_type}")
-            type_written = True
-            if new_role and not has_role and not role_written:
-                out.append(f"role: {new_role}")
-                role_written = True
             continue
-        if new_role and has_role and re.match(r"^role:\s*\S+", ln) and not role_written:
-            role_written = True  # keep existing role, don't clobber
         out.append(ln)
-    if not type_written:
-        return content, []
 
     new_fm = "\n".join(out)
     return f"---\n{new_fm}\n---{body}", changes

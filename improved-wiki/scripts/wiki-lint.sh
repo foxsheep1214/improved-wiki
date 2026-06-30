@@ -6,8 +6,8 @@
 # below.
 #   Phase 0 · 前置检查     — lock, runtime-dir detect/migrate
 #   Phase 1 · 结构扫描     — collect pages, run MECHANICAL structural detection
-#                            (5 categories, NO LLM). Includes the frontmatter /
-#                            role checks — these are mechanical YAML
+#                            (4 categories, NO LLM). Includes the frontmatter
+#                            checks — these are mechanical YAML
 #                            checks, NOT the LLM "semantic" phase (Phase 2).
 #   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic); the ONLY LLM phase
 #   Phase 3 · 写入         — write lint-cache.json + .llm-wiki/lint/*.md + summary
@@ -18,13 +18,11 @@
 #   → --sweep → --strict → 4 auto-fix (--fix / --fix-links).
 #   I.e. Phase 3 (write) runs BEFORE Phase 2 (semantic).
 #
-# Detects 5 categories of issues:
+# Detects 4 categories of issues:
 #   1. broken-link        — [[wikilink]] points to a non-existent page
 #   2. orphan              — page no other page links to
 #   3. no-outlinks         — page has no outbound [[wikilink]]s
 #   4. missing-frontmatter — page lacks the required YAML block
-#   5. invalid-role        — entity page has a `role:` value outside the canonical
-#                            set, or a non-entity page carries `role:`
 #
 # Plus a 6th category when --semantic is passed (Phase 2, LLM-driven):
 #   6. semantic       — contradiction / stale / missing-page / suggestion /
@@ -205,7 +203,13 @@ now_ms = int(time.time() * 1000)
 #    are delegated to run_structural_lint (single source of truth), which
 #    builds its own case-insensitive dual-index slug map internally.
 STATE_SKIP = {"lint-cache.json", "ingest-cache.json", "ingest-queue.json", "ingest-lock"}
-ANCHOR_FILES = {"index.md", "log.md"}  # NashSU parity: only these 2 excluded from structural lint
+ANCHOR_FILES = {"index.md", "log.md"}  # NashSU parity: only these 2 excluded from page COLLECTION
+# Aggregate pages stay IN the scan universe (so their outlinks count toward inbound,
+# preventing false orphans on pages only the overview links to) but are EXEMPT from
+# FINDINGS — matching _lint_suggest.AGGREGATE_FILES and the suggestion/semantic/fix
+# engines. The pipeline writes overview.md / schema.md without content frontmatter by
+# design, so the missing-frontmatter check must skip them (else a false positive).
+AGGREGATE_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
 
 SKIP_DIRS = {"lint", "REVIEW", "clusters", "media"}  # clusters/ = graph-generated, not source knowledge (match semantic lint + graph.py)
 pages: dict[str, Path] = {}          # original stem -> Path
@@ -253,8 +257,11 @@ for _f in run_structural_lint(structural_pages):
     _f["createdAt"] = now_ms
     findings.append(_f)
 
-# 4. Find missing frontmatter
+# 4. Find missing frontmatter (aggregate pages are exempt — they have no
+#    content frontmatter by design; matches AGGREGATE_FILES / the engine).
 for stem, path in pages.items():
+    if path.name in AGGREGATE_FILES:
+        continue
     text = contents.get(stem)
     if text is None:
         continue
@@ -267,56 +274,6 @@ for stem, path in pages.items():
             "id": f"lint-mf-{stem}",
             "createdAt": now_ms,
         })
-
-# 5. Entity role validation (NashSU parity): `role:` is only valid on entity
-#    pages and must be one of the canonical roles. A non-entity page carrying
-#    `role:` is flagged. Only concept/entity pages are scanned; other types exempt.
-VALID_ROLES = {"person", "organization", "system", "standard", "model", "device"}
-ROLE_CHECK_DIRS = {"concepts", "entities"}
-for stem, path in pages.items():
-    # Determine page directory from relative path
-    rel = str(path.relative_to(wiki_dir))
-    page_dir = rel.split("/")[0] if "/" in rel else ""
-    if page_dir not in ROLE_CHECK_DIRS:
-        continue
-    text = contents.get(stem)
-    if text is None:
-        continue
-    fm_match = re.match(r'^---\s*\n(.*?)\n---', text, re.DOTALL)
-    if not fm_match:
-        continue  # already caught by missing-frontmatter
-    fm_text = fm_match.group(1)
-    # Extract page type from frontmatter
-    page_type = ""
-    for line in fm_text.split("\n"):
-        m = re.match(r'type:\s*(\S+)', line)
-        if m:
-            page_type = m.group(1).strip()
-    role_found = None
-    for line in fm_text.split("\n"):
-        m = re.match(r'role:\s*(\S+)', line)
-        if m:
-            role_found = m.group(1).strip().strip('"').strip("'")
-            break
-    if role_found is not None:
-        if page_type != "entity":
-            findings.append({
-                "type": "invalid-role",
-                "severity": "warning",
-                "page": str(path.relative_to(wiki_dir)),
-                "detail": f"'role:' field only valid on entity pages (this page is type '{page_type}'). Remove the role: line.",
-                "id": f"lint-ir-{stem}",
-                "createdAt": now_ms,
-            })
-        elif role_found not in VALID_ROLES:
-            findings.append({
-                "type": "invalid-role",
-                "severity": "warning",
-                "page": str(path.relative_to(wiki_dir)),
-                "detail": f"Role '{role_found}' is not in the allowed set. Valid roles: {', '.join(sorted(VALID_ROLES))}.",
-                "id": f"lint-ir-{stem}",
-                "createdAt": now_ms,
-            })
 
 print(json.dumps(findings, ensure_ascii=False, indent=2))
 PYEOF
@@ -333,7 +290,7 @@ from collections import Counter
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
 c = Counter(f['type'] for f in findings)
 total = sum(c.values())
-parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-role: {c.get(\"invalid-role\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
+parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
 print(' | '.join(parts))
 ")
 
@@ -485,7 +442,6 @@ parts = [f'{total} findings',
          f'orphan: {c.get(\"orphan\", 0)}',
          f'no-outlinks: {c.get(\"no-outlinks\", 0)}',
          f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}',
-         f'invalid-role: {c.get(\"invalid-role\", 0)}',
          f'read-error: {c.get(\"read-error\", 0)}',
          f'semantic: {c.get(\"semantic\", 0)}']
 print(' | '.join(parts))
@@ -544,9 +500,9 @@ for f in items:
         if not text.startswith('---'):
             # Derive type from the top-level directory (NashSU WIKI_TYPE_DIRS),
             # not a hard-coded 'concept': an entities/sources/queries/... page
-            # given type: concept breaks type<->directory schema routing and
-            # trips the invalid-role check in this same lint run. 'concept' stays
-            # the genuine fallback for pages outside a recognized type dir.
+            # given type: concept breaks type<->directory schema routing.
+            # 'concept' stays the genuine fallback for pages outside a
+            # recognized type dir.
             DIR_TYPE = {'entities':'entity','concepts':'concept','sources':'source','queries':'query','comparisons':'comparison','synthesis':'synthesis','findings':'finding','thesis':'thesis','methodology':'methodology'}
             ptype = DIR_TYPE.get(page_rel.split('/')[0], 'concept')
             fm = f'---\ntype: {ptype}\ntitle: "{path.stem}"\ncreated: ${TIMESTAMP}\nupdated: ${TIMESTAMP}\ntags: []\nrelated: []\n---\n\n'

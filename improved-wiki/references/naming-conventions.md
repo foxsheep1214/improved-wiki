@@ -166,7 +166,7 @@ wiki/log.md
 
 ```yaml
 ---
-type: source | concept | entity | query | comparison | synthesis | finding | thesis
+type: source | concept | entity | query | comparison | synthesis | finding | thesis | methodology
 title: "页面标题"
 tags: [tag1, tag2]
 related: [other-slug, another-slug]

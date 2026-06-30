@@ -47,7 +47,6 @@ results:
 
 key_entities:   # same schema as digest-book.md
   - name: "<entity>"
-    role: "person" | "organization" | "system" | "model" | "standard"
     wikilink_target: "<entity-slug>"
 
 key_concepts:

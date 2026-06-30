@@ -38,10 +38,8 @@ slide_summary:
 # Extract the meat: claims, concepts, entities
 key_entities:
   - name: "<speaker>"
-    role: "person"
     wikilink_target: "<existing-slug>"
   - name: "<affiliation>"
-    role: "organization"
     wikilink_target: "<existing-slug>"
 
 key_concepts:

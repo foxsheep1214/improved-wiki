@@ -282,7 +282,6 @@ outline:
 
 key_entities:
   - name: "..."
-    role: "person" | "organization" | "system" | "model" | "standard"
 
 key_concepts:
   - name: "..."
@@ -552,7 +551,6 @@ chunk_total: {chunk_total}
 
 entities_found:
   - name: "..."
-    role: "person" | "organization" | "system" | "model" | "standard"
     significance: "..."     # why this entity matters (1 sentence)
 
 concepts_found:

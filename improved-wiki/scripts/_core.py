@@ -755,6 +755,111 @@ def schema_folders(schema_text: str) -> set[str]:
     return set(re.findall(r"wiki/([a-z0-9][a-z0-9_-]*)", schema_text or ""))
 
 
+# Canonical page-type → folder map for the fixed base types (NashSU
+# WIKI_TYPE_DIRS parity). Schema-declared custom types extend/override this via
+# parse_wiki_schema_routing(); the project schema wins on conflict.
+BASE_TYPE_TO_DIR = {
+    "source": "sources", "concept": "concepts", "entity": "entities",
+    "query": "queries", "comparison": "comparisons", "synthesis": "synthesis",
+    "finding": "findings", "thesis": "thesis", "methodology": "methodology",
+}
+
+_SCHEMA_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]*$", re.IGNORECASE)
+
+
+def parse_wiki_schema_routing(schema_text: str) -> dict[str, str]:
+    """Parse the ``## Page Types`` table of schema.md into a ``{type: dir}`` map
+    (NashSU ``wiki-schema.ts`` ``parseWikiSchemaRouting`` parity).
+
+    Scoped to the first heading whose text is "Page Types" (case-insensitive),
+    consuming rows until the next heading at the same-or-shallower level. Within
+    that section only pipe-delimited rows are read; the leading/trailing ``|``
+    cells are dropped, giving cells[0]=type, cells[1]=dir. A row is kept only
+    when type matches ``/^[a-z][a-z0-9_-]*$/i`` and dir is exactly ``wiki`` or
+    starts with ``wiki/``. Dirs are returned BARE (no ``wiki/`` prefix, no
+    trailing slash; ``wiki`` → ``""`` = wiki root) to match the writer's
+    wiki-relative path space. Returns ``{}`` when nothing parses, so routing is
+    a no-op (NashSU-aligned: absent/empty schema → no validation).
+
+    Unlike the loose ``schema_folders()`` (whole-text folder-name scan, used for
+    the writer accept-list), this builds the precise type↔dir pairing the
+    validator needs.
+    """
+    lines = (schema_text or "").split("\n")
+    start, heading_level = -1, 6
+    for i, raw in enumerate(lines):
+        m = re.match(r"^(#{1,6})\s+(.+?)\s*#*$", raw.strip())
+        if m and re.match(r"^page\s+types$", m.group(2).strip(), re.IGNORECASE):
+            start, heading_level = i, len(m.group(1))
+            break
+    if start < 0:
+        return {}
+    type_dirs: dict[str, str] = {}
+    for raw in lines[start + 1:]:
+        h = re.match(r"^(#{1,6})\s+", raw.strip())
+        if h and len(h.group(1)) <= heading_level:
+            break
+        if not raw.strip().startswith("|"):
+            continue
+        cells = [c.strip() for c in raw.split("|")[1:-1]]
+        if len(cells) < 2:
+            continue
+        ptype, pdir = cells[0], cells[1]
+        if not _SCHEMA_TYPE_RE.match(ptype):
+            continue
+        if pdir != "wiki" and not pdir.startswith("wiki/"):
+            continue
+        bare = ("" if pdir == "wiki" else pdir[len("wiki/"):]).rstrip("/")
+        # Defense-in-depth: a typo'd/malicious dir cell must not escape wiki/
+        # (e.g. `wiki/../etc`). schema.md is project-authored, but a bad row
+        # should be dropped, not turned into a path-traversal write target.
+        if bare.startswith("/") or any(seg == ".." for seg in bare.split("/")):
+            continue
+        type_dirs[ptype] = bare
+    return type_dirs
+
+
+def schema_route_dir(fm_type: str, routing: dict[str, str]) -> str | None:
+    """Authoritative bare folder for a page ``type``: schema-declared typeDirs
+    first, then the fixed base map. ``None`` if the type is unknown (unroutable —
+    the caller should leave the page where it is rather than guess)."""
+    if not fm_type:
+        return None
+    if fm_type in routing:
+        return routing[fm_type]
+    return BASE_TYPE_TO_DIR.get(fm_type)
+
+
+def validate_wiki_page_routing(rel_path: str, fm_type: str,
+                               routing: dict[str, str]) -> str | None:
+    """NashSU ``validateWikiPageRouting`` parity — return an issue string when a
+    page's frontmatter ``type`` disagrees with its directory under the project
+    schema, else ``None``.
+
+    Bidirectional: (a) a schema-declared type sitting outside its declared dir;
+    (b) a page inside a schema-declared dir carrying a different type. ``rel_path``
+    is wiki-relative (a leading ``wiki/`` is tolerated). An empty ``fm_type`` is
+    never an issue (untyped pages are allowed). With an empty ``routing`` (no
+    schema.md) this is always ``None`` — NashSU-aligned.
+    """
+    fm_type = (fm_type or "").strip().strip('"').strip("'")
+    if not fm_type:
+        return None
+    norm = rel_path.replace("\\", "/").lstrip("/")
+    if norm.startswith("wiki/"):
+        norm = norm[len("wiki/"):]
+    actual_dir = norm.rsplit("/", 1)[0] if "/" in norm else ""
+    expected = routing.get(fm_type)
+    if expected is not None and actual_dir != expected:
+        return (f'type "{fm_type}" must be under "{expected or "(wiki root)"}/", '
+                f'not "{actual_dir or "(wiki root)"}/"')
+    for t, d in routing.items():
+        if d == actual_dir and t != fm_type:
+            return (f'pages under "{actual_dir or "(wiki root)"}/" must use '
+                    f'type "{t}", but found "{fm_type}"')
+    return None
+
+
 # ── Path safety (NashSU parity: isSafeIngestPath) ──
 
 _WINDOWS_RESERVED = {"con", "prn", "aux", "nul"}

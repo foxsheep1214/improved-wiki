@@ -74,7 +74,6 @@ applications_marketed:
 
 key_entities:
   - name: "<e.g. Texas Instruments>"
-    role: "organization"
     wikilink_target: "Texas-Instruments"
 
 key_concepts:
