@@ -189,7 +189,3 @@ def _stage_2_8_update_file_blocks_after_resolution(file_blocks, resolutions):
             continue
         result.append((path, content))
     return result
-
-
-def _stage_2_8_verify_query_resolution(checkpoint):
-    return "query_resolutions" in checkpoint

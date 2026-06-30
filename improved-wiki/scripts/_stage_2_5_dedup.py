@@ -187,13 +187,6 @@ def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
     return result
 
 
-def _stage_2_5_verify_dedup_merge(checkpoint, chunk_count):
-    if chunk_count <= 1:
-        checkpoint["concept_merge_rules"] = []
-        return True
-    return "concept_merge_rules" in checkpoint
-
-
 def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = False) -> dict:
     """Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
 

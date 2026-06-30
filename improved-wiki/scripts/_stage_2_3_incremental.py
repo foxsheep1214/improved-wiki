@@ -116,10 +116,3 @@ def stage_2_3_resolve_proposed_connections(wiki_root: Path, chunk_analyses: list
             type_dir = existing[match][0]
             resolved.append({"slug": f"{type_dir}/{match}", "relationship": rel})
     return resolved
-
-
-def _stage_2_3_verify_incremental_associations(checkpoint: dict, wiki_root=None) -> bool:
-    if wiki_root and not (wiki_root / "concepts").is_dir():
-        checkpoint["incremental_associations"] = {}
-        return True
-    return "incremental_associations" in checkpoint

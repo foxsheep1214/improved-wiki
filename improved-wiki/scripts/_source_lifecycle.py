@@ -9,7 +9,6 @@ list_source_pages(): list all pages derived from a given source.
 
 import json, shutil, time
 from pathlib import Path
-from typing import Optional
 
 from _paths import detect_runtime_dir
 from _core import (

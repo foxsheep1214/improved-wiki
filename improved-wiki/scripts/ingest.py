@@ -48,7 +48,6 @@ import subprocess
 import sys
 import time
 import traceback
-from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
@@ -61,7 +60,6 @@ from _core import (
     stage_begin as _stage_begin,
     stage_end as _stage_end,
     heartbeat as _heartbeat,
-    llm_call_progress as _llm_call_progress,
     llm_call_done as _llm_call_done,
     record_rate_limit as _record_rate_limit,
     rate_limit_cooldown_remaining as _rate_limit_cooldown_remaining,
@@ -101,21 +99,15 @@ from _stage_2_4_generation import (
     _stage_2_4_extract_names,
     _stage_2_4_per_concept_fallback,
 )
-from _stage_2_6_source_page import stage_2_6_source_page
 from _source_filter import is_sensitive_config_source_file
-from _stage_2_7_query_generation import stage_2_7_query_generation, _stage_2_7_build_prompt
-from _stage_2_9_comparison import stage_2_9_comparison_generation
-from _stage_3_4_review import stage_3_4_review_suggestions
 from _stage_3_write import (
     stage_3_1_write_wiki_file, stage_3_5_aggregate_repair,
     _stage_3_1_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
-    _stage_3_1_sanitize_ingested_content,
     _stage_3_1_auto_correct_wiki_path, _stage_3_1_contains_cjk, _stage_3_1_make_cjk_slug,
     _stage_3_1_backup_existing_page,
 )
 from _stage_3_2_inject_images import stage_3_2_inject_images
 from _stage_3_7_embed import stage_3_7_embed_new_pages
-from _enrich_wikilinks import enrich_wikilinks_batch
 from _watch import ingest_watch
 from _stage_validators import (verify_stage_0, StageValidationError, _verify_or_die, _verify_stage_1_1_text, _verify_stage_2_1_digest, _verify_stage_2_2_chunks, _verify_stage_2_4_file_blocks, validate_stage_outputs)
 
@@ -124,14 +116,11 @@ from _stage_validators import (verify_stage_0, StageValidationError, _verify_or_
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir  # noqa: E402
-from _llm_api import set_progress_hook  # noqa: E402
 from _conversation_router import (  # noqa: E402,F401  (import side-effect: registers conversation router)
     call_anthropic_protocol,
     _load_task_manifest,
 )
 from _context_probe import resolve_context  # noqa: E402  (live context-window probe)
-# Wire up progress hook for LLM API calls
-set_progress_hook(_llm_call_progress)
 
 # ── Ingest orchestration helpers (refactored 2026-06-24: extracted from ingest.py) ──
 from _ingest_skip import _should_stop_after
