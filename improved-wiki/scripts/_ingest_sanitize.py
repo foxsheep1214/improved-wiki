@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_ingest_sanitize.py — clean up an LLM-generated wiki page body before write.
 
-Faithful port of NashSU ``src/lib/ingest-sanitize.ts`` (v0.5.1).
+Faithful port of NashSU ``src/lib/ingest-sanitize.ts``.
 
 NashSU's audit of one real corpus (67 entity pages) found 30/67 pages had
 frontmatter that couldn't be parsed strictly. Four recurring shapes the model

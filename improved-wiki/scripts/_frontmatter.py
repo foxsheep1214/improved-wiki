@@ -2,7 +2,7 @@
 """
 _frontmatter.py — Unified frontmatter parse/merge/write utility.
 
-Aligns with NashSU's frontmatter.ts + page-merge.ts v0.4.25.
+Aligns with NashSU's frontmatter.ts + page-merge.ts.
 Three-layer merge: array union → LLM body merge → locked fields.
 
 Usage:

@@ -1,6 +1,6 @@
 """_review_utils.py — shared helpers for reasoning about review items.
 
-Port of NashSU 0.5.3 ``src/lib/review-utils.ts`` (``normalizeReviewTitle`` +
+Port of NashSU ``src/lib/review-utils.ts`` (``normalizeReviewTitle`` +
 ``REVIEW_TITLE_PREFIX_RE``) and the content-stable id / field-union dedup from
 ``src/stores/review-store.ts`` (``reviewIdFor`` / ``unionField`` /
 ``mergeReviewItems`` / ``normalizeReviewItems``).

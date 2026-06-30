@@ -60,7 +60,7 @@ def _collect_formulas_block(analyses: list[dict], cap: int = 60) -> str:
 
 
 # Folders that may appear in schema.md but are not LLM-generated page types.
-# Shared constant lives in _stage_2_base.SCHEMA_NON_PAGE_DIRS (NashSU 0.5.3
+# Shared constant lives in _stage_2_base.SCHEMA_NON_PAGE_DIRS (NashSU
 # schema-typed-candidates parity — used by Stage 2.2 analysis too).
 
 
@@ -198,7 +198,7 @@ def _stage_2_4_build_prompt(
     concept_str = "\n".join(concept_lines[:480]) if concept_lines else "(none)"
     entity_str = "\n".join(entity_lines[:160]) if entity_lines else "(none)"
 
-    # NashSU 0.5.3 parity: schema-typed candidates pre-identified by Stage 2.2.
+    # NashSU parity: schema-typed candidates pre-identified by Stage 2.2.
     # Surface them explicitly so generation routes a page into the candidate's
     # folder instead of re-deriving the type from concepts/entities. Skip any
     # whose slug is already covered (existing/prior-chunk) — wikilink only.
@@ -363,7 +363,7 @@ Chunk: {chunk_index + 1}
 # Entities found in this chunk (generate a page for key ones — skip ALREADY COVERED):
 {entity_str}
 
-# Schema-typed pages found in this chunk (NashSU 0.5.3 parity — generate at wiki/<folder>/<slug>.md when NOT already covered; skip ALREADY COVERED):
+# Schema-typed pages found in this chunk (NashSU parity — generate at wiki/<folder>/<slug>.md when NOT already covered; skip ALREADY COVERED):
 {schema_candidates_str}
 
 # Supplementary foundational pages (use sparingly)

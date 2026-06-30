@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_dedup_embedding.py — vector-embedding candidate generation for dedup.
 
-Faithful port of NashSU ``src/lib/dedup_embedding.ts`` (verified against v0.5.3). Pre-filters
+Faithful port of NashSU ``src/lib/dedup_embedding.ts``. Pre-filters
 pages by cosine similarity so the downstream LLM duplicate-detector only sees
 a small candidate set instead of the whole wiki in one prompt (GAP-3).
 

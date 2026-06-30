@@ -16,7 +16,7 @@ Unified image captioning. Implemented as `stage_1_3_caption_images()` /
 - **PPTX/DOCX** — `_stage_1_2_extract_images_office()` 从 zip 内 `ppt/media`/`word/media` 取图
 
 > **NashSU parity**：caption 调用模型与 prompt 结构直接对齐
-> NashSU v0.4.25 的 `src/lib/vision-caption.ts`（`captionImage` 一图一调用 +
+> NashSU 的 `src/lib/vision-caption.ts`（`captionImage` 一图一调用 +
 > `buildCaptionPromptWithContext`）与 `src/lib/image-caption-pipeline.ts`
 > （`CONTEXT_CHARS=150`、SHA-256 缓存、markdown alt 重写）+ `ingest.ts` Step 0.6
 > （提图后、生成 LLM 前 inline caption）。

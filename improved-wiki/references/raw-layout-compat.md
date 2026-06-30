@@ -49,7 +49,7 @@ raw/
 │   └── ...
 ```
 
-**When it appears**: any project that started life in the NashSU LLM Wiki desktop app (v0.4.x), which uses `raw/sources/<type>/<file>` as its standard.
+**When it appears**: any project that started life in the NashSU LLM Wiki desktop app, which uses `raw/sources/<type>/<file>` as its standard.
 
 **Detection**: `parts[0]` is `sources` (or `assets`), so we skip it and use `parts[1]` as the type. If `parts[1]` is in `FOLDER_TO_TEMPLATE`, use it; if not, fall through to Layout C.
 

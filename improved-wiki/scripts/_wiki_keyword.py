@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """_wiki_keyword.py — keyword search over wiki/, ported from NashSU
-``src-tauri/src/commands/search.rs`` (v0.5.1).
+``src-tauri/src/commands/search.rs``.
 
 Pure-Python keyword retrieval with CJK bigram tokenization, stopword
 filtering, and the same weighted scoring table as NashSU's Rust backend:

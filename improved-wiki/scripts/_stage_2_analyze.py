@@ -341,7 +341,7 @@ The source is a **{file_path.parent.name}** document. Follow these type-specific
 
 
 def _stage_2_2_schema_types_block(config: Config) -> str:
-    """NashSU 0.5.3 parity — tell Stage 2.2 which schema-defined page types
+    """NashSU parity — tell Stage 2.2 which schema-defined page types
     (beyond entity/concept) this project supports, so the analysis can flag
     schema-typed candidates for the generation stage to route.
 
@@ -355,7 +355,7 @@ def _stage_2_2_schema_types_block(config: Config) -> str:
     if not extra:
         return ""
     return (
-        "\n# Schema-Defined Page Types (NashSU 0.5.3 parity)\n"
+        "\n# Schema-Defined Page Types (NashSU parity)\n"
         "This project's schema.md defines extra typed page types beyond entity/concept. "
         "When THIS chunk genuinely contains content fitting one of these types, record it "
         "under `schema_typed_candidates` below so the generation stage can route a page "
@@ -582,7 +582,7 @@ connections_to_existing_wiki:
   - existing_page: "..."
     relationship: "extends" | "contrasts" | "applies" | "cites"
 
-# Schema-typed page candidates (NashSU 0.5.3 parity). ONLY when the project
+# Schema-typed page candidates (NashSU parity). ONLY when the project
 # schema defines extra types AND this chunk genuinely contains matching content.
 # `type` MUST be one of the schema types listed above. Leave empty (`[]`) when
 # the schema adds no types or this chunk has no matching content. NEVER invent

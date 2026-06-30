@@ -1,4 +1,4 @@
-"""Tests for _lint_fixes — ported from NashSU lint-fixes.ts (v0.5.1).
+"""Tests for _lint_fixes — ported from NashSU lint-fixes.ts.
 
 Covers make_query_slug, append_wikilink, rewrite_wikilink_target, and
 ensure_broken_link_stub (uses tempfile). Stdlib unittest only.

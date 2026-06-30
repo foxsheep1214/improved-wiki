@@ -1,4 +1,4 @@
-"""Tests for _ingest_sanitize — ported from NashSU ingest-sanitize.ts (v0.5.1).
+"""Tests for _ingest_sanitize — ported from NashSU ingest-sanitize.ts.
 
 Covers the four corruption patterns: outer code fence, `frontmatter:` prefix,
 missing opening fence, and wikilink-list inside frontmatter. Plus conservative

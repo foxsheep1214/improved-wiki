@@ -17,7 +17,7 @@ mkdir -p $PROJECT/raw/{Book,Paper,Presentation}
 cd $PROJECT
 
 # 2. Copy the anchor files from the skill's templates/
-#    schema.md lives at the PROJECT ROOT (NashSU 0.5.2 parity); the 3 aggregate
+#    schema.md lives at the PROJECT ROOT; the 3 aggregate
 #    pages (index/overview/log) live under wiki/.
 SKILL_DIR=~/.agents/skills/improved-wiki
 cp $SKILL_DIR/templates/schema.md    ./schema.md

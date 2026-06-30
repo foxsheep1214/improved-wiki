@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""graph.py — Knowledge graph builder (NashSU 0.5.3 graph-view CLI parity).
+"""graph.py — Knowledge graph builder (NashSU graph-view CLI).
 
 Peer command of Ingest/Lint. Deterministic — no LLM, no embedding. Reads
 ``wiki/**/*.md`` frontmatter (title/type/sources) + ``[[wikilinks]]`` and
@@ -1143,7 +1143,7 @@ def run_query(wiki_root: Path, slug: str, top_n: int) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build knowledge graph (NashSU 0.5.3 parity)")
+    parser = argparse.ArgumentParser(description="Build knowledge graph (NashSU parity)")
     parser.add_argument("--wiki-root", type=Path, help="Wiki project root (default: cwd)")
     parser.add_argument("--output", type=Path, help="graph.json output path (default: <runtime>/graph.json)")
     parser.add_argument("--mode", choices=["build", "query"], default="build",

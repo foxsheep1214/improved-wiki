@@ -1,4 +1,4 @@
-"""_source_filter.py — Raw source safety filter (NashSU 0.5.3 source-filter.ts parity).
+"""_source_filter.py — Raw source safety filter (NashSU source-filter.ts).
 
 Prevents agent/tool config files (API keys, MCP/CLI settings) from entering
 the ingest pipeline. A file is "sensitive" when it BOTH lives under a known

@@ -1,4 +1,4 @@
-"""Tests for _source_filter.py — NashSU 0.5.3 source-filter.ts parity.
+"""Tests for _source_filter.py — NashSU source-filter.ts.
 
 Verifies the sensitive-config gate is narrow: only config extensions under
 known agent/tool config dirs are refused. Stdlib unittest only.

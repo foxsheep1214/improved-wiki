@@ -8,7 +8,7 @@ inline filter on one source's blocks before write. This module is thorough:
 backs up, writes a report, and rewrites all `[[wikilinks]]` + `related:`
 across the wiki so merges leave no broken links.
 
-LLM semantic detection (NashSU `dedup.ts` + `dedup-runner.ts` v0.5.3 parity): detects same-topic
+LLM semantic detection (NashSU `dedup.ts` + `dedup-runner.ts` parity): detects same-topic
 different-name slugs (synonyms, EN/中文, singular/plural, abbrev/full) via
 LLM-driven self-check, then LLM body-merge each group.
 

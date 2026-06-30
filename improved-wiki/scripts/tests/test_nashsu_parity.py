@@ -1,4 +1,4 @@
-"""NashSU parity tests — ported from llm_wiki-0.4.25/src/lib/ingest-parse.test.ts.
+"""NashSU parity tests — ported from NashSU src/lib/ingest-parse.test.ts.
 
 Verifies the skill's `_core.parse_file_blocks` / `is_safe_ingest_path` against the
 black-box cases the NashSU app tests. Stdlib `unittest` only.

@@ -122,7 +122,7 @@ class TestWriterAcceptsSchemaFolders(unittest.TestCase):
 
 
 class TestSchemaTypedCandidates(unittest.TestCase):
-    """NashSU 0.5.3 parity — Stage 2.2 flags schema-typed candidates, Stage 2.4
+    """NashSU parity — Stage 2.2 flags schema-typed candidates, Stage 2.4
     surfaces them so generation routes a page into the candidate's folder."""
 
     def test_stage_2_2_block_only_with_extras(self):

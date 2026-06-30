@@ -1,6 +1,6 @@
 # Naming Conventions — NashSU-aligned
 
-> **权威来源**：NashSU LLM Wiki app 最新版本（当前 v0.5.2，`src/lib/ingest.ts`, `lint.ts`, `wiki-page-types.ts`, `wiki-schema.ts`, `graph-filters.ts`）+ improved-wiki `scripts/ingest.py`。
+> **权威来源**：NashSU LLM Wiki app 最新版本（`src/lib/ingest.ts`, `lint.ts`, `wiki-page-types.ts`, `wiki-schema.ts`, `graph-filters.ts`）+ improved-wiki `scripts/ingest.py`。
 > 旧 karpathy-llm-wiki / HardwareWiki / RadarWiki 的历史惯例不作为参考。
 
 ---
@@ -19,7 +19,7 @@ wiki/
 ├── synthesis/     # type: synthesis  — 跨领域综合
 ├── findings/      # type: finding    — 研究发现
 ├── thesis/        # type: thesis     — 工作假说
-├── methodology/   # type: methodology — 方法论（NashSU 0.5.3 顶级 type）
+├── methodology/   # type: methodology — 方法论（NashSU 支持的顶级 type）
 ├── media/         # 提取的图片 (镜像 raw/ 结构: book/<slug>/ 等)
 ├── REVIEW/        # pipeline↔人类握手点 (improved-wiki 扩展)
 │   ├── confirm/       # 需要确认的可疑内容
@@ -32,7 +32,7 @@ wiki/
 ├── overview.md    # 聚合页：概述
 └── log.md         # 聚合页：变更日志
 
-# 项目根（wiki/ 之外，NashSU 0.5.2 对齐）：
+# 项目根（wiki/ 之外）：
 <project>/schema.md  # page type → directory 映射；放在根目录，不进 wiki/ 扫描
 ```
 

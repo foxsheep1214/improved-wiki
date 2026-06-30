@@ -1,4 +1,4 @@
-"""Tests for _dedup — ported from NashSU dedup.test.ts (v0.4.25).
+"""Tests for _dedup — ported from NashSU dedup.test.ts.
 
 Covers the three stages: extract_entity_summary, parse_detector_response,
 detect_duplicate_groups (mock LLM), rewrite_cross_references, rewrite_index_md,

@@ -1,4 +1,4 @@
-"""Tests for graph.py — NashSU 0.5.3 graph-view parity.
+"""Tests for graph.py — NashSU graph-view.
 
 In-memory page fixtures (no network). Pages are written to a temp wiki dir so
 the real load_pages/build pipeline runs end to end.

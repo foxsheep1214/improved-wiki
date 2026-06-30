@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_frontmatter_array.py — frontmatter array-field parse / write / union.
 
-Faithful port of NashSU `src/lib/sources-merge.ts` (v0.4.25). The skill's
+Faithful port of NashSU `src/lib/sources-merge.ts`. The skill's
 existing `_frontmatter.parse_frontmatter` only understands the INLINE array
 form (`name: [a, b]`); this module also handles the BLOCK form
 (`name:\n  - a\n  - b`), which the dedup subsystem (`_dedup.py`) and the

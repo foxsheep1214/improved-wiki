@@ -1,4 +1,4 @@
-"""Tests for the NashSU 0.5.3 sweep-reviews + review-utils port.
+"""Tests for the NashSU sweep-reviews + review-utils port.
 
 Covers the behavior changes:
   - field-name fix: dispatch reads `review_type`, not `type` (which is always

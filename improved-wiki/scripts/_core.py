@@ -732,7 +732,7 @@ BASE_PAGE_DIRS = {
 def load_schema_md(config: Config) -> str:
     """Raw schema.md text, or '' if absent.
 
-    schema.md lives at the project root (NashSU 0.5.2 parity); the wiki/ location
+    schema.md lives at the project root (NashSU); the wiki/ location
     is read as a back-compat fallback.
     """
     for p in (config.wiki_root / "schema.md", config.wiki_dir / "schema.md"):

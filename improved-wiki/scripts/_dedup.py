@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_dedup.py — duplicate-entity / -concept detection and merge.
 
-Faithful port of NashSU `src/lib/dedup.ts` (verified against v0.5.3).
+Faithful port of NashSU `src/lib/dedup.ts`.
 
 Problem: across re-ingests the LLM names the same topic differently
 (`paos` vs `聚磷菌`, `dpao` vs `dpaos`, `vfa` vs `volatile-fatty-acids`).

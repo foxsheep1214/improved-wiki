@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_lint_fixes.py — auto-fixes for structural lint findings.
 
-Faithful port of NashSU ``src/lib/lint-fixes.ts`` (verified against v0.5.3). Three fixes that
+Faithful port of NashSU ``src/lib/lint-fixes.ts``. Three fixes that
 ``_lint_suggest.run_structural_lint`` surfaces suggestions for but the old
 improved-wiki never applied:
 
@@ -196,7 +196,7 @@ def ensure_broken_link_stub(
 
 # ── cascade-delete cleanup helpers (port of wiki-cleanup.ts) ─────────────────
 # Pure string-level helpers used by wiki-lint-fix.py's --delete-orphans cascade.
-# Faithful ports of NashSU src/lib/wiki-cleanup.ts (v0.5.3):
+# Faithful ports of NashSU src/lib/wiki-cleanup.ts:
 #   normalizeWikiRefKey, buildDeletedKeys, extractFrontmatterTitle,
 #   cleanIndexListing, stripDeletedWikilinks.
 

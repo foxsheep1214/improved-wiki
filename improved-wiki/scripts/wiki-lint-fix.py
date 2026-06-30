@@ -237,7 +237,7 @@ def cascade_delete_orphans(
     """Cascade-delete orphan pages and every reference to them across the wiki.
 
     Faithful port of NashSU lint-view.tsx:handleDeleteOrphan ->
-    wiki-page-delete.ts:cascadeDeleteWikiPagesWithRefs (v0.5.3). Steps:
+    wiki-page-delete.ts:cascadeDeleteWikiPagesWithRefs. Steps:
 
       1. Read each target's title (for index/related matching) + snapshot its
          slug (file stem). Captured BEFORE deletion.

@@ -1,4 +1,4 @@
-"""Tests for _dedup_embedding — ported from NashSU dedup_embedding.ts (v0.5.1).
+"""Tests for _dedup_embedding — ported from NashSU dedup_embedding.ts.
 
 Covers the pure functions: cosine_similarity, page_to_embedding_text,
 candidate_pairs (with injected embeddings, no network), cluster_by_pairs,
