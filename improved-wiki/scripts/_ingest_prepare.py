@@ -165,13 +165,13 @@ def _do_prepare(
                 if _invalidated:
                     save_progress(config, h, progress)
         # ── write_phase short-circuit (Bug 2 fix, 2026-06-25) ──
-        # If the Stage 3.1-3.3 write phase already completed in a prior run,
+        # If the Stage 3.1-3.2 write phase already completed in a prior run,
         # skip the entire 2.x pipeline. Re-running Stage 2.4 generation would
         # cache-miss every resume because the generation prompt hash drifts
         # with wiki state (pages written/rewritten), looping forever before
         # _do_write can be reached. _do_write handles write_phase_done by
-        # setting _write_blocks=[] and skipping 3.1/3.2/3.3, then runs
-        # 3.4-4.1 over the on-disk wiki. chunk_analyses/analysis are not
+        # setting _write_blocks=[] and skipping 3.1/3.2, then runs
+        # 3.4-3.7 over the on-disk wiki. chunk_analyses/analysis are not
         # needed post-write (3.4+ scan the wiki dir, not file_blocks).
         if is_stage_done(config, h, "write_phase"):
             print("  [prepare] write_phase marker present — skipping 2.x prepare")
@@ -347,7 +347,7 @@ def _do_prepare(
             progress, verbose, analyze_only=prefetch_only)
 
         # Persist 2.2/2.4 results + mark stage_2_3_done. Without this, a
-        # mid-flight resume (e.g. 3.3 enrich conversation handoff) re-enters
+        # mid-flight resume (e.g. an enrich conversation handoff) re-enters
         # _run_chunk_pipeline, misses the cached skip, and re-runs Stage 2.4
         # generation — whose prompt hash drifts with wiki state, so it cache-
         # misses every resume and loops before _do_write is reached. Merge-write

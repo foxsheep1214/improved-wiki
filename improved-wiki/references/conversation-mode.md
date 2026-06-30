@@ -337,14 +337,13 @@ sources: ["raw/Book/书名.pdf"]
 6. Stage 2.4: digest + analyses + prompt → FILE 块（---FILE:wiki/<path>--- 格式）+ 源内概念去重收尾（多 chunk 书，原 2.5）
 7. Stage 2.6: 源页面生成
 8. Stage 2.7-2.9: Query 生成 → 跨源解析（原 2.8，已并入 2.7）→ Comparison 生成
-10. Stage 3.1: 写盘（所有 FILE 块）
-11. Stage 3.2: 图片注入 source 页
-12. Stage 3.3: 跨域 slug 碰撞审查
-13. Stage 3.4: Review 审查建议
-14. Stage 3.5: 程序化追加 index/log + LLM 重写 overview
-16. Stage 3.7: Embeddings（LanceDB）— **最后一个 stage**，之后 `_finalize_book` 置完成标记
+9. Stage 3.1: 写盘（所有 FILE 块）+ 同名 slug 页合并（slug 碰撞在此处理，无独立 stage）
+10. Stage 3.2: 图片注入 source 页
+11. Stage 3.4: Review 审查建议
+12. Stage 3.5: 程序化追加 index/log + LLM 重写 overview
+13. Stage 3.7: Embeddings（LanceDB）— **最后一个 stage**，之后 `_finalize_book` 置完成标记
     （原 Stage 4.1 自动验证体检已移除以对齐 NashSU；`validate_ingest.py` 保留为独立手动工具）
-17. Wikilink enrichment: 多轮 LLM-task merge（可用 delegate_task 批量处理）
+14. Wikilink enrichment: 多轮 LLM-task merge（可用 delegate_task 批量处理）
 ```
 
 ---

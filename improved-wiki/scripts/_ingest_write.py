@@ -160,17 +160,18 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     existing_slugs = list_existing_slugs(config) if enrich_enabled else []
     enrich_candidates: list[tuple[str, Path]] = []
 
-    # Option A: stage-aware resume.  If the write phase (3.1 write loop +
-    # enrichment + 3.2 inject + 3.3 collision) already completed in a prior
-    # run, skip it entirely.  Re-running the write loop would spuriously fire
-    # page-merge LLM round-trips because post-write steps (enrichment, image
-    # injection) have mutated page bodies.  Restore file list from the marker.
+    # Option A: stage-aware resume.  If the write phase (3.1 write loop —
+    # incl. same-slug page-merge / slug-collision handling — + enrichment +
+    # 3.2 inject) already completed in a prior run, skip it entirely.
+    # Re-running the write loop would spuriously fire page-merge LLM
+    # round-trips because post-write steps (enrichment, image injection) have
+    # mutated page bodies.  Restore file list from the marker.
     write_phase_done = is_stage_done(config, h, "write_phase")
     # write_loop_done is the finer-grained 3.1-only gate: the write loop
-    # completed but enrichment/3.2/3.3 have not. A 3.3-enrich ConversationPending
+    # completed but enrichment/3.2 have not. An enrich ConversationPending
     # handoff fires AFTER the write loop; without this marker, resume would
     # re-run 3.1 and spuriously re-merge every page. On write_loop_done resume
-    # we still need to run enrich + 3.2 + 3.3, so enrich_candidates are
+    # we still need to run enrich + 3.2, so enrich_candidates are
     # reconstructed from the persisted file list instead of collected in-loop.
     write_loop_done = (not write_phase_done
                        and is_stage_done(config, h, "write_loop_done"))
@@ -276,7 +277,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         if enrich_enabled and not is_listing:
             enrich_candidates.append((rel_path, full_path))
 
-    # Mark the 3.1 write loop complete so an enrich/3.2/3.3 ConversationPending
+    # Mark the 3.1 write loop complete so an enrich/3.2 ConversationPending
     # resume skips the loop (preventing spurious page re-merge). Only when the
     # loop ran fresh — not on write_phase_done / write_loop_done resumes.
     if not (write_phase_done or write_loop_done):
