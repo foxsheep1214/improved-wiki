@@ -23,8 +23,6 @@ import time as _time
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-
 
 # ── Lightweight YAML block parser (no PyYAML dependency) ────────
 

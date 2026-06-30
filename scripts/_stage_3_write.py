@@ -272,11 +272,6 @@ from _frontmatter import (
     strip_embedded_images_section,
 )
 
-# TODO: migrate callers and remove — backward-compat aliases (internal use; not exported)
-_parse_frontmatter = parse_frontmatter
-_merge_frontmatter_arrays = union_arrays
-_fmt_frontmatter = write_frontmatter
-
 
 def _stage_3_1_merge_page_content(existing_text: str, new_text: str, config: Config) -> str:
     """NashSU 3-layer merge: delegates to _frontmatter.merge_page_content.

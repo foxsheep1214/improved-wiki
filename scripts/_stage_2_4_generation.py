@@ -1152,63 +1152,6 @@ def stage_2_4_generate_chunk(
 
 
 
-# ---------- Stage 2: Synthesis (legacy, for small books) ----------
-
-def _stage_2_4_build_image_reference_section(file_path: Path, config: Config) -> str:
-    """Build a compact list of available images for the Stage 2 prompt."""
-    slug = _stage_1_2_media_slug(file_path, config)
-    media_dir = config.wiki_dir / "media" / slug
-    if not media_dir.exists():
-        return "（本书无提取图片）\n"
-
-    manifest_path = media_dir / "_manifest.json"
-    captioned = 0
-    total = 0
-    sample_lines: list[str] = []
-
-    if manifest_path.exists():
-        m = json.loads(manifest_path.read_text(encoding="utf-8"))
-        images = m.get("images", [])
-        # Legacy guard: skip full-page renders from old ingests (source:"page-render").
-        # Current pipeline no longer produces these.
-        images = [i for i in images if i.get("source") != "page-render"]
-        total = len(images)
-        for img in sorted(images, key=lambda x: (x["page"], x.get("img_idx_in_page", 0)))[:60]:
-            cap_path = media_dir / (img["filename"] + ".caption.txt")
-            cap = cap_path.read_text(encoding="utf-8").strip()[:70] if cap_path.exists() else ""
-            sample_lines.append(f"  p{img['page']} `{img['filename']}`: {cap}")
-            if cap:
-                captioned += 1
-    else:
-        # Loose files (minerU, old cloud OCR without manifest)
-        for f in sorted(media_dir.iterdir()):
-            if f.suffix.lower() in (".jpg", ".jpeg", ".png"):
-                # Legacy guard: skip old full-page renders (pNNNN.jpg without
-                # -mineru_ / -fig suffix). Current pipeline no longer produces these.
-                stem = f.stem
-                if re.match(r"^p\d{4}$", stem) and "-mineru_" not in stem:
-                    continue
-                total += 1
-                cap_path = media_dir / (f.name + ".caption.txt")
-                cap = cap_path.read_text(encoding="utf-8").strip()[:70] if cap_path.exists() else ""
-                if total <= 60:
-                    sample_lines.append(f"  `{f.name}`: {cap}")
-                if cap:
-                    captioned += 1
-
-    if total == 0:
-        return "（本书无提取图片）\n"
-
-    section = f"本书共 {total} 张图（{captioned} 有caption）。图片位于 wiki/media/{slug}/。\n"
-    section += "在 concept/entity 页面中用 ![](media/{}/filename) 引用相关图片。\n".format(slug)
-    section += "关键图片示例：\n"
-    section += "\n".join(sample_lines[:60])
-    if total > 60:
-        section += f"\n  ... （共 {total} 张，仅列前 60）"
-    return section + "\n"
-
-
-
 def _stage_2_4_extract_names(chunk_analyses: list[dict]) -> tuple[list[str], list[str]]:
     """Extract deduplicated concept and entity names from chunk analyses."""
     all_concepts: list[str] = []

@@ -33,7 +33,6 @@ import time
 import urllib.request
 import urllib.error
 import zipfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 # Shared infrastructure
