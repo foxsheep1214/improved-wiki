@@ -49,6 +49,24 @@ _PROBE_MIN = 8_000          # no real model answers below this
 _PROBE_MAX = 10_000_000     # no current model exceeds this
 _PROBE_CACHE_TTL = 7 * 24 * 3600   # re-probe after 7 days (model may upgrade)
 
+# Known-model validation. The probe prompt asks the model to "give the largest
+# value you are confident of", so a cautious KNOWN model can lowball its context
+# (→ chunks sized too small) and a confused one can overshoot (→ chunks too large
+# to drive). When the self-report names a model we have an authoritative spec
+# for, we pin the context to that spec instead of trusting the model's guess.
+# Unknown models keep their self-report (still sanity-gated to [MIN, MAX]).
+# Sources: claude-api skill model table (2026-06) for Claude; glm-5.2 from the
+# user's own runtime note. Update when a model's real context window changes.
+_KNOWN_MODEL_CONTEXT = {
+    "claude-fable-5": 1_000_000,
+    "claude-opus-4-8": 1_000_000,
+    "claude-opus-4-7": 1_000_000,
+    "claude-opus-4-6": 1_000_000,
+    "claude-sonnet-4-6": 1_000_000,
+    "claude-haiku-4-5": 200_000,
+    "glm-5.2": 1_000_000,
+}
+
 _PROBE_PROMPT = """\
 You are being asked two factual questions about your own runtime configuration.
 
@@ -95,6 +113,25 @@ def _identities_match(self_reported: str | None, env_name: str | None):
     if not a or not b:
         return None  # can't tell — don't penalize, fall back to env-name reuse
     return a == b or a in b or b in a
+
+
+def _known_context(model_self: str | None) -> int | None:
+    """Authoritative context for a recognized model, else None.
+
+    Matches the model's self-report against ``_KNOWN_MODEL_CONTEXT`` with the
+    same normalized, substring-tolerant comparison as ``_identities_match`` so
+    ``Claude-Opus-4-8`` / ``anthropic/claude-opus-4-8`` all resolve. Matched
+    against the self-report (the model actually answering), NOT the env name,
+    which the probe deliberately distrusts.
+    """
+    a = _norm_model(model_self)
+    if not a:
+        return None
+    for name, ctx in _KNOWN_MODEL_CONTEXT.items():
+        b = _norm_model(name)
+        if a == b or a in b or b in a:
+            return ctx
+    return None
 
 
 def load_cached(config) -> int | None:
@@ -222,6 +259,15 @@ def probe_context(config) -> int:
             f'"probed_at": {int(time.time())}}} and re-run, or run ingest.py --reprobe. '
             f"See references/context-probe.md."
         )
+
+    # Known-model validation: pin a recognized model to its authoritative spec
+    # rather than trusting a possibly-cautious (lowballed) or confused
+    # (overshot) self-reported number. Unknown models keep ``raw``.
+    known = _known_context(model_self)
+    if known is not None and known != raw:
+        print(f"[context-probe] known-model validation: '{model_self}' self-reported "
+              f"{raw:,} tokens but the authoritative spec is {known:,} — using the spec.")
+        raw = known
 
     env_reliable = _identities_match(model_self, config.llm_model)
     save_cached(config, raw, model_self, env_reliable)

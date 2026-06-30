@@ -65,6 +65,21 @@ class Stage23AssociationDetection(unittest.TestCase):
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("ohms-law", assoc)
 
+    def test_accent_and_apostrophe_variant_matched(self):
+        # Regression (Op Amps re-ingest 2026-06-30): an existing page titled with
+        # an accent + possessive apostrophe must still dedup against the plain
+        # variant. Before accent/punct folding, "Thévenin's Theorem" vs
+        # "Thevenin's Theorem" tokenized to disjoint head nouns (Jaccard 0.33)
+        # and a duplicate page slipped through Stage 2.3.
+        with tempfile.TemporaryDirectory() as d:
+            wiki = Path(d)
+            _write_concept(wiki, "Thevenins-Theorem", "Thévenin's Theorem")
+            chunks = [{"concepts_found": [{"name": "Thevenin's Theorem"}],
+                       "entities_found": []}]
+            assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
+            self.assertIn("Thevenin's Theorem", assoc)
+            self.assertIn("Thevenins-Theorem", assoc["Thevenin's Theorem"])
+
 
 if __name__ == "__main__":
     unittest.main()

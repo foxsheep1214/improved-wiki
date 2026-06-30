@@ -94,3 +94,44 @@ def test_load_cached_backward_compatible_with_old_schema(tmp_path):
 
 
 import time  # noqa: E402  (used by cache-payload timestamps above)
+
+
+# ── Known-model validation (pin recognized models to authoritative spec) ──
+
+def test_known_context_matches_normalized_and_proxy_prefixed():
+    # case/punct insensitive + substring tolerance (proxy "anthropic/" prefix)
+    assert cp._known_context("Claude-Opus-4-8") == 1_000_000
+    assert cp._known_context("anthropic/claude-opus-4-8") == 1_000_000
+    assert cp._known_context("claude-haiku-4-5") == 200_000
+    assert cp._known_context("glm-5.2") == 1_000_000
+
+
+def test_known_context_unknown_or_missing_returns_none():
+    assert cp._known_context("deepseek-v4") is None
+    assert cp._known_context("") is None
+    assert cp._known_context(None) is None
+
+
+def test_known_model_corrects_lowballed_self_report(monkeypatch, tmp_path):
+    # A cautious opus-4-8 answering 200000 (the probe prompt invites a "confident"
+    # lowball) must be pinned UP to its real 1M spec, not sized into tiny chunks.
+    rt = tmp_path / ".llm-wiki"
+    cfg = _Cfg(rt, "claude-opus-4-8")
+    cfg.conversation_prefix = "x"
+    import _llm_api  # noqa: E402
+    monkeypatch.setattr(_llm_api, "call_anthropic_protocol",
+                        lambda *a, **k: ("claude-opus-4-8\n200000", None))
+    assert cp.probe_context(cfg) == 1_000_000
+    import json
+    assert json.loads((rt / "probed-context.json").read_text())["context"] == 1_000_000
+
+
+def test_unknown_model_keeps_self_report(monkeypatch, tmp_path):
+    # Unknown models are NOT pinned — their in-range self-report is trusted as-is.
+    rt = tmp_path / ".llm-wiki"
+    cfg = _Cfg(rt, "deepseek-v4")
+    cfg.conversation_prefix = "x"
+    import _llm_api  # noqa: E402
+    monkeypatch.setattr(_llm_api, "call_anthropic_protocol",
+                        lambda *a, **k: ("deepseek-v4\n524288", None))
+    assert cp.probe_context(cfg) == 524288

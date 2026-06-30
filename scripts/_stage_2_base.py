@@ -5,7 +5,7 @@ Created 2026-06-21 as part of Phase 2 consolidation.
 """
 from __future__ import annotations
 
-import json, os, re, sys, time
+import json, os, re, sys, time, unicodedata
 from pathlib import Path
 
 _script_dir = Path(__file__).resolve().parent
@@ -83,11 +83,24 @@ def _stage_2_title_words(title: str) -> set:
     association wrongly flagged the capacitor concept as ALREADY COVERED by the
     battery page (book-2 re-ingest). Dropping connectives lets the head noun
     decide the match.
+
+    Each token is also accent-folded (NFKD, drop combining marks) and stripped
+    of non-alphanumerics before comparison, so orthographic variants of the SAME
+    title still match. Without this, "Thévenin's Theorem" (existing page) vs
+    "Thevenin's Theorem" (new) tokenized to {thévenin's,theorem} vs
+    {thevenin's,theorem} → Jaccard 0.33, letting a duplicate slip past Stage 2.3
+    dedup (Op Amps re-ingest, 2026-06-30). Folding both to {thevenins,theorem}
+    → Jaccard 1.0. Folding is applied identically to both sides, so it cannot
+    create a false match between genuinely different head nouns.
     """
-    return set(
-        w.lower() for w in re.split(r"[\s/]+", title)
-        if len(w) > 1 and w.lower() not in _TITLE_STOPWORDS
-    )
+    words = set()
+    for w in re.split(r"[\s/]+", title):
+        folded = unicodedata.normalize("NFKD", w)
+        folded = "".join(c for c in folded if not unicodedata.combining(c))
+        tok = re.sub(r"[^a-z0-9]+", "", folded.lower())
+        if len(tok) > 1 and tok not in _TITLE_STOPWORDS:
+            words.add(tok)
+    return words
 
 # Explicitly re-export underscore-prefixed helpers. Without __all__, the
 # `from _stage_2_base import *` used by every Stage 2.x module EXCLUDES

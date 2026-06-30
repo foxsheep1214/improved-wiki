@@ -210,19 +210,32 @@ def cmd_embed():
 
     if to_embed:
         t0 = time.time()
-        vecs = embed_texts([c["chunk_text"] for c in to_embed], BASE_URL, MODEL, API_KEY)
+        # Persist the cache incrementally (every SAVE_EVERY chunks) instead of
+        # once at the very end. cmd_embed embeds the ENTIRE uncached backlog of
+        # the wiki, which for a large or freshly-backfilled wiki can exceed a
+        # single run's wall clock (the Stage 3.7 caller enforces a cap, and
+        # Ollama itself can stall). With a single trailing write, a kill mid-
+        # backfill discarded every vector embedded so far and the next run
+        # restarted from zero — the backfill could never converge. Saving per
+        # slice means a crash loses at most one slice, and re-runs resume from
+        # the saved cache. A fast incremental embed (only new pages uncached)
+        # still does a single slice + save, so the common path is unchanged.
+        SAVE_EVERY = 512
+        dim = None
+        done = 0
+        for i in range(0, len(to_embed), SAVE_EVERY):
+            sl = to_embed[i:i + SAVE_EVERY]
+            vecs = embed_texts([c["chunk_text"] for c in sl], BASE_URL, MODEL, API_KEY)
+            if vecs and dim is None:
+                dim = len(vecs[0])
+                print(f"  Detected dims: {dim}")
+            for c, v in zip(sl, vecs):
+                cache[c["text_sha16"]] = v
+            with open(EMBED_CACHE, "w") as f:
+                json.dump(cache, f)
+            done += len(sl)
+            print(f"  Embedded {done}/{len(to_embed)} (cache {len(cache)} entries)")
         print(f"  Embed time: {time.time() - t0:.1f}s")
-
-        # Auto-detect dimensions
-        if vecs:
-            dim = len(vecs[0])
-            print(f"  Detected dims: {dim}")
-
-        for c, v in zip(to_embed, vecs):
-            cache[c["text_sha16"]] = v
-        with open(EMBED_CACHE, "w") as f:
-            json.dump(cache, f)
-        print(f"  Cache: {len(cache)} entries")
 
     # Write LanceDB
     db = lancedb.connect(LANCE_DIR)

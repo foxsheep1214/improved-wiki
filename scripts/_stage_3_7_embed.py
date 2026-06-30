@@ -99,9 +99,27 @@ def stage_3_7_embed_new_pages(config: Config, files_written: list[str]) -> None:
     print(f"[stage 3.7] Embedding {len(new_files)} new pages...")
     import subprocess
     script = Path(__file__).parent / "build_embeddings.py"
+    # build_embeddings.py `embed` re-chunks and embeds EVERY uncached page in the
+    # whole wiki (incremental via a per-chunk sha cache), not just `new_files`.
+    # On a healthy run only the new pages' chunks are uncached, so it returns in
+    # seconds. But the FIRST embed after a backlog — e.g. a project that predates
+    # the Stage 3.7 path-bug fix (2026-06-30) and therefore never actually
+    # embedded — must backfill the entire wiki, which can take many minutes. A
+    # fixed 300s cap turns that legitimate one-time backfill into a false
+    # RuntimeError under the no-fallback policy (each re-run only chips away
+    # within one 300s window and never reaches the completion marker). Scale the
+    # cap with the wiki's page count (the actual embed workload), floored at
+    # 600s, so a large backfill has room to finish while a genuinely hung embed
+    # still eventually trips. The cap only bounds slow runs — a fast incremental
+    # embed returns immediately regardless.
+    try:
+        page_count = sum(1 for _ in config.wiki_dir.rglob("*.md"))
+    except Exception:
+        page_count = len(new_files)
+    embed_timeout = max(600, page_count * 2)
     proc = subprocess.run(
         [sys.executable, str(script), "--project", str(config.wiki_root), "embed"],
-        capture_output=True, text=True, timeout=300,
+        capture_output=True, text=True, timeout=embed_timeout,
     )
     if proc.returncode != 0:
         # No silent fallback (consistent with the capability gate above): a failed
