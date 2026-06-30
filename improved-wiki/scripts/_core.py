@@ -698,17 +698,24 @@ def list_existing_slugs(config: Config) -> list[str]:
     the Stage 2.1/2.2 LLM:
       - wiki/REVIEW/**  — review/audit item pages (date-prefixed suggestion,
         missing-page, contradiction, duplicate, confirm files + _audit_*)
+      - wiki/clusters/** — graph.py-generated per-community hub pages
+        (type: index). These are DERIVED graph artifacts, not knowledge content
+        (graph.py itself excludes them via GRAPH_SKIP_DIRS to avoid ingesting
+        its own output); the ingest must not feed them to the dedup/association
+        LLM as if they were existing concept/entity pages.
+      - wiki/lint/** and wiki/media/** — lint and image artifacts.
       - stems starting with '_' (system/audit files)
       - aggregate anchor files (index, log, overview, schema)
     """
     if not config.wiki_dir.exists():
         return []
+    # Derived/artifact dirs — mirrors graph.py GRAPH_SKIP_DIRS so graph output,
+    # review items, lint, and media are never treated as knowledge pages.
+    artifact_dirs = {"REVIEW", "clusters", "lint", "media"}
     anchors = {"index", "log", "overview", "schema"}
     slugs: list[str] = []
     for f in config.wiki_dir.rglob("*.md"):
-        if "REVIEW" in f.parts:
-            continue
-        if "lint" in f.parts:
+        if artifact_dirs.intersection(f.parts):
             continue
         stem = f.stem
         if stem.startswith("_") or stem in anchors:
