@@ -462,22 +462,20 @@ You are analyzing content from: **{heading_path}**
 
     language_directive = build_language_directive(chunk_text)
 
-    # Extraction-density guideline (2026-06-30): scale the expected concept count
-    # with chunk size so multi-chapter chunks (e.g. ~256K chars under the 64K-token
-    # default ceiling) are not under-extracted at the same ~12-concept rate as a
-    # small chunk. Heuristic ~1 page-worthy concept per 20K chars of substantive
-    # text, floored at 8. This is a NON-BINDING target with an explicit anti-
-    # padding guard — quality over count.
-    _approx_concepts = max(8, round(len(chunk_text) / 20000))
+    # Extraction-completeness guideline (2026-07-02): keep the behavioral
+    # anti-under-extraction nudge but DROP the former per-char concept-COUNT target
+    # (~1 concept/20K chars). Concept density is a property of content, not char
+    # count, and a numeric target invited padding / concept-splitting. NashSU gives
+    # no count target at all; this is the closest content-driven form — quality over
+    # count. The chunk-size mention stays only to anchor "read all of it, section by
+    # section", not to imply a quota.
     density_hint = (
         f"This chunk is ~{len(chunk_text):,} characters"
         + (f" spanning **{heading_path}**" if heading_path else "")
-        + f". A chunk this size typically yields on the order of **{_approx_concepts} "
-        "distinct page-worthy concepts** — enumerate section by section so a large, "
-        "multi-chapter chunk is not under-extracted. Treat this as a guideline, not a "
-        "quota: list every genuine concept the source defines or materially uses, and "
-        "do NOT pad with trivial mentions or split one concept into several to hit a "
-        "number."
+        + ". Enumerate it **section by section** so no part is under-extracted: list "
+        "every genuine page-worthy concept the source defines or materially uses. "
+        "Quality over count — do NOT pad with trivial mentions, do NOT split one "
+        "concept into several, and do NOT skip a real concept to keep the list short."
     )
 
     return f"""{language_directive}

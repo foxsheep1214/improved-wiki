@@ -55,13 +55,15 @@ At the **64K default ceiling** a large book splits into several ~256K-char chunk
 (~2–3 chapters each), each analyzed and generated in ONE inline pass. Two practices
 keep each chunk well-extracted and formula-faithful:
 
-1. **Scale extraction density with chunk size.** The Stage 2.2 prompt embeds a
-   size-proportional guideline computed from the actual chunk length (~1 page-worthy
-   concept per ~20K chars; a ~256K chunk ≈ **~13 concepts**). Honour it: enumerate
-   the chunk **section by section**, don't under-extract mid-chunk material. It is a
-   guideline, not a quota — list every genuine concept, never pad. Select only the
-   most significant named systems/people as entity pages — do not make a page for
-   every model number a survey handbook mentions (over-extraction).
+1. **Enumerate section by section — completeness, not a count.** The Stage 2.2
+   prompt nudges you to read the WHOLE chunk section by section and list every
+   genuine page-worthy concept the source defines or uses. It does **not** set a
+   per-char concept quota (the old ~1-per-20K-chars target was dropped 2026-07-02:
+   density is a property of content, not char count, and a number invited
+   padding/splitting). Quality over count — never pad, never split one concept into
+   several, never skip a real one to keep the list short. Select only the most
+   significant named systems/people as entity pages — do not make a page for every
+   model number a survey handbook mentions (over-extraction).
 
 2. **Ground every formula by targeted grep back to source.** Don't transcribe
    formulas from memory. For each formula you cite, locate it in the chunk text or
