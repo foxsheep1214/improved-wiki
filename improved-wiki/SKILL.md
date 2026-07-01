@@ -83,6 +83,7 @@ Two other external-API dependencies (not text generation):
 **Conventions**:
 - `references/naming-conventions.md` — file naming, frontmatter, wikilink, directory conventions (NashSU-aligned)
 - `references/raw-layout-compat.md` — raw/ layout convention (type subdirs, nested, template mapping)
+- `references/language-directive.md` — output-language policy (NashSU `outputLanguage` parity): auto-detect per source vs lock the whole KB, injection sites, proper-noun preservation
 
 **Operations**:
 - `references/kb-retrieval.md` — 4-step knowledge retrieval (search → read → cite → declare)

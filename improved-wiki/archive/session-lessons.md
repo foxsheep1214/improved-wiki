@@ -56,7 +56,18 @@ backed by a data distribution, a documented standard, or an empirical benchmark.
 If you can't justify it, it's a guess — mark it as such and validate it. Applies
 to skill defaults too.
 
-## 7. Route knowledge by KIND, not keyword match
+## 7. Watch for skill bugs while a long ingest is running, not just at the end
+
+Check for skill-level bugs (validator false positives, missing END FILE markers,
+uncaught exceptions, silent no-ops like the Stage 3.7 path bug) continuously during
+a run — not only after the whole batch finishes. Each time a background ingest is
+checked, or each time a handoff is re-invoked, read the relevant log once (task
+`.output` files, `/tmp/ingest-*.log`) for tracebacks or validator errors. Fix the
+script immediately if found, then resume — don't let a skill bug silently pollute
+an entire batch. Pairs with lesson 2 (check once per handoff, don't tail
+continuously).
+
+## 8. Route knowledge by KIND, not keyword match
 
 The wiki holds the user's **domain** knowledge (datasheets, designs, analyses).
 Agent runtime metadata (model context limits, API retry behavior, prompt-cache

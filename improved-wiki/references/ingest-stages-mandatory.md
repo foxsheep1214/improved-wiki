@@ -165,6 +165,14 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - 3.4 在已写盘文件上运行；3.5 在所有页面写盘后
 - 3.7 强制（缺 stack 暂停），是**最后一个 stage**；之后 `_finalize_book` 置完成标记
 
+## Resume marker 粒度 ≠ stage 编号
+
+上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_1_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点）、`stage_2_3_done`（覆盖 2.3+2.4）、`stage_2_9_done`（覆盖 2.5/2.6/2.7/2.8/2.9 整段）、`write_loop_done`、`write_phase`、`stage_4_1`（`ingest.py::_finalize_book` 所置，非某个 stage 模块自己的标记）。崩溃恢复是从**段边界**重启，不是逐 stage、逐 chunk。
+
+**对未来"合并/拆分 stage"讨论的含义**：任何编号调整默认只是文档层 renumber-only，代码与 marker 不动；但有两条**载荷性边界**碰了就坏，不能移动：
+1. `stage_2_2_done | stage_2_3_done` —— wiki-独立/依赖分界；批量 prefetch 靠在这里精确停住（`raise PrepareStopAfter("1.5")`）才能让下一本书的 prefetch 并行跑。
+2. `write_loop_done | write_phase` —— 中间夹着 3.3 enrich 的非幂等 handoff；合并会让 resume 重跑非幂等的 Stage 3.1 写盘，重复 merge 每一页。同时要保持 artifact-before-marker 的写序（防 2026-06-25 的静默丢失 bug），碰这段边界时不要打乱写序。
+
 ## 自动验证（ingest.py 内置）
 
 每个 Stage 完成后有实时验证门禁（`_verify_stage_N()`），失败直接 `RuntimeError`：

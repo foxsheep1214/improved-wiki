@@ -48,3 +48,7 @@ NashSU `dedup.ts` parity：纯 LLM 语义检测，无确定性预筛。三阶段
   python3 scripts/cross_source_dedup.py --project /path/to/wiki            # LLM 语义去重
   python3 scripts/cross_source_dedup.py --dry-run                          # preview only
   ```
+
+## 已知遗留：跨书历史重复 slug 变体
+
+Stage 2.3 的标题 Jaccard 匹配曾漏判重音/标点变体（如 "Thévenin's" vs "Thevenin's"），已修（见 `known-issues.md`）——但只防未来新重复。已存在的跨书历史重复（同一概念的多个 slug 变体）是更大的内容去重课题，**不会**被这次修复回溯清理，需要靠上面的跨源去重手动扫一遍。

@@ -40,6 +40,14 @@ wiki/
 
 **来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页，均在 wiki/ 下）；`ingest.ts:1830/1839/1840`（schema-defined typed pages 路由）；`create-project-dialog.tsx`（schema.md 写入项目根 `${pp}/schema.md`）。
 
+**entity `role:` 字段——已删除，无替代轴**：NashSU 没有 entity `role:` frontmatter 字段（`wiki-schema.ts` 的 frontmatter 是开放的 `Record<string,unknown>`）。improved-wiki 曾自造一个封闭集 `role:` 轴（person/organization/system/standard/model/device），已从生成提示词、Stage 2.2 analyze YAML、`graph.py` 的 by-role 配色模式、以及 invalid-role lint 检查里全部移除。人物/机构/系统的区分**只**靠 schema.md 声明的 typed 文件夹，没有其它机制（封闭集或开放集都没有）。
+
+**Schema 路由——两层机制，同时生效（不是新旧替换关系）**：
+1. **Accept-list 门禁**（上面已述的机制）：`_core.py` 的 `BASE_PAGE_DIRS` + `load_schema_md()` + `schema_folders()`（对全文做宽松正则扫描）喂给 `_ingest_write.py` 的 `_VALID_SUBDIRS`——写盘时第一道过滤，判断 FILE block 目标目录是否可接受（非 schema 文件夹仍走拼写纠错兜底）。
+2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `validate_wiki_page_routing()` + `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_1_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
+
+两层在同一次写盘中都跑：第 1 层管"这个目录能不能收"，第 2 层管"具体该放哪个目录"。**与 NashSU 的刻意分歧**：NashSU 路由不上就丢弃该页；improved-wiki 自动纠正、把页面挪到正确目录（不丢数据，符合 no-silent-fallback 策略）。
+
 ### 1.2 raw/ 子目录（improved-wiki 布局）
 
 ```

@@ -3,6 +3,19 @@
 When you need to re-ingest a book that's already been digested (e.g., to compare
 old vs new pipeline results, or to fix a broken ingest):
 
+## Rule: never read prior digest output as source material
+
+Do not reuse the previously ingested artifacts (old source page, old concept/entity
+pages, old digest) as reference material while re-ingesting. Read entirely fresh
+from `raw/` originals + `.llm-wiki/extract-tmp/` extracted text — do not open the
+book's existing `wiki/sources/`, `wiki/concepts/`, `wiki/entities/` pages for
+guidance during re-analysis.
+
+**Why:** an old digest can carry forward a bias or error from the original ingest;
+reusing it as a reference defeats the point of re-ingesting from a clean source. This
+applies even though Step 1 below backs up the old pages — the backup is for
+comparison in Step 4, not for reading during re-generation.
+
 ## Step 1: Backup old results
 
 ```bash

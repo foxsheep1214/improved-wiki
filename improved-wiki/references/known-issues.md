@@ -34,6 +34,32 @@ minerU 50 页/chunk 串行。272 页书（6 chunks）可能超 600s 终端超时
 ### `--delete` for re-ingest
 `ingest.py --delete "raw/Book/<file>.pdf"` 删 source 页 + 孤儿 concepts/entities + media + cache，再重跑即可干净重摄。
 
+### Bash 工具 cwd 不在调用间持久
+`ingest.py` 靠 `Config.from_env`（`IMPROVED_WIKI_ROOT` env 或 `os.getcwd()`）解析项目根；没有 `--project` 参数。每次调用前必须显式 `cd <project> && ...`——不能指望上一次 `cd` 还生效。cwd 错了会直接 file-not-found（2026-06-28 起：先校验 raw 文件存在再进 context probe，报错更直白，但 cwd 问题本身不会自动修）。
+
+## Fixed bugs（回归意识——已修但值得记录症状）
+
+### Stage 2.2 prompt 的 YAML/LaTeX 转义坑（已修，2026-06-27）
+`_stage_2_analyze.py` 曾教 LLM 用双引号包 `formula: "LaTeX"`，未强制 YAML 单引号规则。双引号 YAML 字符串里 `\t`/`\f`/`\n`/`\b`/`\r` 是合法转义（静默改写公式），`\p`/`\$`/`\x` 等非法转义则让 `yaml.safe_load` 抛错，回退的简易 parser 拿不到按名字索引的 `concepts_found` dict → Stage 2.4 生成提示词看到"（无）"→ 该 chunk **静默生成 0 个页面**（无报错，看起来像正常完成）。修复：prompt 现在要求含 `\` 或 `$` 的字段用单引号（因 prompt 本身是 Python f-string，字面反斜杠要写 `\\`，改 prompt 模板后务必 `inspect` 验证）。**操作陷阱**：中途改这个 prompt 模板会变更每个 chunk 的 prompt hash，所有在飞 chunk 结果变成孤儿（文件名不匹配），需要全部重新分析；若旧结果内容本身没变，`cp old-hash.txt new-hash.txt` 可免重跑（pipeline 只按 hash 文件名匹配，不校验内容）。
+
+### Stage 3.7 embedding 因路径双重前缀被静默跳过（已修，2026-06-30）
+`files_written` 条目是相对 wiki_root **且带 `wiki/` 前缀**（如 `wiki/concepts/foo.md`），旧代码却拼到 `config.wiki_dir`（已是 `wiki_root/wiki`），产出 `.../wiki/wiki/concepts/foo.md`，永不存在 → `new_files` 恒为空 → Stage 3.7 无日志无报错地直接返回，`_finalize_book` 却照常打完成标记——**新页面从未被 embed，书标"完成"，lancedb 停留旧状态**。修复：改为先按 `config.wiki_root` 解析（回退 `wiki_dir`）。**诊断信号**：每次 ingest 应能看到 `[stage 3.7] Embedding N new pages...` 日志，缺失即说明 3.7 被跳过。此修复前摄入的项目需手动 `build_embeddings.py --project <root> embed` 补嵌入。
+
+### 大型 wiki 首次批量补嵌入：超时 + 缓存不收敛（已修，2026-06-30）
+上一条修好后首次真实批量嵌入暴露两个叠加 bug：(1) `build_embeddings.py embed` 是全量增量扫描（非只扫 new_files），`_stage_3_7_embed.py` 硬编码 `timeout=300`，6301 个未缓存 chunk 实测耗时 368.1s 超时被 no-fallback 策略中断——已改按页数缩放 `max(600, page_count*2)`；(2) 更严重：缓存只在整批结束后写一次，超时/kill 会丢光本次已算的全部向量，叠加 (1) 的 300s 上限意味着**永远无法收敛**（反复重做同一段又反复丢失）——已改每 `SAVE_EVERY=512` chunk 增量存盘。**操作恢复法**：大型 wiki 首次批量嵌入，先直接跑 `build_embeddings.py --project <root> embed` 清空积压（无超时上限），再跑 `ingest.py`，Stage 3.7 命中热缓存秒级完成。
+
+### snap_out 在表格密集书上曾产出异常极小 chunk（已修，2026-06-30）
+`_stage_2_analyze.py::_stage_2_1_snap_out` 在窗口末端落在受保护 block（表格/代码块）内部时，把 chunk 结束点回退到该 block 起点。表格密集书（如控制系统教材的大 Laplace/Routh 表）中，一张早早开始的巨表会把 chunk 收缩成表格前的极小片段——**不丢数据**（下一 chunk 靠 overlap 重新覆盖该表格），但浪费一次 LLM 往返分析一个近空 chunk。修复：只有回退后仍留下有意义的 chunk（`r[0]-start >= attempted//2`）才回退，否则改为向前跳过整个 block。**操作纪律：chunker 边界逻辑只能在书与书之间改，绝不能在书摄入中途改**——chunk 分析按内容 hash 缓存，改边界会废掉当前在飞书的已完成 Stage 2.2/2.4 缓存。
+
+### Stage 2.3 标题 Jaccard 去重漏判重音/标点变体（已修，2026-06-30）
+Stage 2.3 的既有页关联/去重（`_stage_2_base.py::_stage_2_title_words`）只按 `[\s/]+` 切分+小写+去停用词，不折叠重音、不去标点。已存在页 "Thévenin's Theorem"（slug `Thevenins-Theorem`）因此漏配新生成的 "Thevenin's Theorem"：词集合 `{thévenin's, theorem}` vs `{thevenin's, theorem}` 交集只有 `{theorem}`（Jaccard 0.33，< 0.5 阈值），精确 slug 匹配也因撇号差异失败——**结果是生成了一个重复页**（该 wiki 此前已有 3 个历史重复变体，这次变成第 4 个）。修复：每个 token 先过 `unicodedata.normalize("NFKD", ...)` 折叠重音再去标点，才做 Jaccard 比较。**范围提醒**：此修复只防止未来的新重复；已存在的跨书历史重复 slug 变体是更大的、独立的内容去重课题，此修复不回溯清理。
+
+### Stage 2.4 生成概念数上限按行数算，曾静默丢尾部概念（已修，2026-06-30）
+`_stage_2_4_generation.py` 原按**行数**截断 GENERATE 列表（`concept_lines[:100]` 分chunk / `[:200]` 单发），但每个概念占约 4 行（标题+最多3条 key_detail），实际只放得下约 25-34 个概念；而可链接 slug 列表本身不受限。chunk 分析密度提升后（见 `conversation-mode-agent-workflow.md` 的 density_hint 技巧），密集 chunk 的尾部概念被静默从生成列表剔除、但仍留在可链接列表里——产生指向"从未生成"页面的死链。修复：上限大幅提高到远超密度目标（分chunk 480/160，单发 800/200）。**未来调密度的教训**：这类上限必须按概念数算（或留出 ≫ 密度×4 的余量），绝不能是纯行数截断。
+
+### Stage 2.6 源页偶发缺失 authors/year/url/venue（已缓解，非彻底修复）
+Stage 2.6 提示词预填了 NashSU parity 模板（frontmatter authors/year/url/venue + `## Book Summary`），但生成 agent 有时会自由发挥自己的格式（如加粗行内署名、metadata 表格）而非照抄模板，pipeline 又原样写盘不校验 source 页 frontmatter，字段就此缺失——**这是 agent 未遵循问题，不是代码 bug**。缓解：`_stage_2_6_source_page.py::_normalize_source_frontmatter()` 在 agent 响应之后、返回之前跑一遍：从已算出的 `*_meta` YAML 回填缺失的 authors/year/url/venue，并从该 chunk 刚生成的 concept/entity slug（取前 5 个）回填空的 `related: []`；源页已完整则空操作。**排查同类问题的手法**：对比归档的 `Stage-2-6-SourcePage-*.md`（提示词）与对应 `.txt`（响应），能区分"模板本身缺字段"（真 bug）还是"agent 没照做"（此类问题）。
+
 ## Legacy artifacts
 
 ### `.digested` files in `raw/` subdirectories
