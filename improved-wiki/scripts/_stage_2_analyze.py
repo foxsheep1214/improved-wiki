@@ -262,7 +262,7 @@ You are performing **Stage 1: Global Digest** of a book ingest pipeline.
 {summary_text}
 </extracted_text>
 
-- Existing wiki pages: {', '.join(existing_slugs[:300])}
+- Existing wiki pages: {', '.join(existing_slugs)}
 
 # Task
 Read the extracted text and produce a **high-level structural summary** of this book.
@@ -506,7 +506,7 @@ downstream (Stage 2.3/2.4), not here. When in doubt, LIST the concept.
 {chunk_text}
 </extracted_text>
 
-- Existing wiki pages: {', '.join(existing_slugs[:200])}
+- Existing wiki pages: {', '.join(existing_slugs)}
 
 # Task
 {density_hint}
