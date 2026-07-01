@@ -252,18 +252,20 @@ _TARGET_CHARS_FRAC = 0.55
 # *ceiling*, sized so even token-sparse Latin text can reach the token budget.
 _TARGET_TOKENS_MIN = 12_000
 _TARGET_TOKENS_CEIL_FRAC = 0.33     # (A) chunk size scales with the probed context window...
-_TARGET_TOKENS_HARD_CEIL = 192_000  # (B) ...but never exceeds this. Raised from 64K (2026-06-27):
-                                    # with live context probing, large-context models now get
-                                    # proportionally larger chunks (ceil = context × 0.33), cutting
-                                    # chunk count / round-trips. Small-context models are unaffected
-                                    # — the 0.33 scaling + 12K floor still govern below the cap.
+_TARGET_TOKENS_HARD_CEIL = 64_000   # (B) ...but never exceeds this. Set to 64K (2026-07-01) after an
+                                    # A/B ingest (Barton, 448pp, 1M ctx): 64K (4 chunks) gave +27%
+                                    # concept coverage, finer granularity, and CLEANER driving (10
+                                    # native round-trips, no fan-out) vs a 192K whole-book single chunk
+                                    # — which was too large to analyze/generate in one call and had to
+                                    # fan out anyway, erasing its "fewer round-trips" rationale. Small
+                                    # books stay 1 chunk (0.33×context + 12K floor govern below the cap;
+                                    # the cap only binds for context > ~194K). Override per-run with
+                                    # IMPROVED_WIKI_TARGET_TOKENS_CEIL.
 _MAX_CHARS_PER_TOKEN = 4            # char ceiling = target_tokens × this (Latin ≈ 4 chars/token)
-# Raised 320K→768K (2026-06-27, P2): at the 192K-token ceiling, Latin text
-# (~4 chars/token) needs ~768K chars to actually spend its full token budget;
-# the old 320K cap bound first and throttled English books to ~80K-token chunks
-# (Hennessy: 12 chunks instead of ~5-6). 768K ≈ 192K×4 keeps char and token
-# ceilings consistent. Small-context models are unaffected: their target_tokens
-# (context×0.33) keeps target_tokens×4 well under 768K.
+# A high char bound so token-sparse Latin text can spend its full token budget.
+# It does NOT bind at the 64K default (64K×4 = 256K < 768K); kept at 768K so an
+# env-override up to a ~192K-token ceiling stays effective for Latin text. CJK
+# text (denser tokens) is governed by the token ceiling well before this binds.
 _TARGET_CHARS_HARD_CEIL = 768_000
 
 
@@ -279,9 +281,9 @@ def _compute_chunk_targets(source_budget: int, context_size: int) -> tuple[int, 
     ``target_chars`` — hard per-chunk char ceiling, large enough that even
     token-sparse text can spend its full token budget.
 
-    ``IMPROVED_WIKI_TARGET_TOKENS_CEIL`` env overrides the 192K hard ceiling
-    (e.g. 64000 for smaller, more granular chunks). Unset → default 192K. This
-    is the ② knob for A/B testing chunk granularity vs digest quality.
+    ``IMPROVED_WIKI_TARGET_TOKENS_CEIL`` env overrides the 64K default hard
+    ceiling (e.g. 192000 to revert to whole-book single chunks, or 96000 for a
+    middle ground). Unset → default 64K.
     """
     _ceil_env = os.environ.get("IMPROVED_WIKI_TARGET_TOKENS_CEIL", "").strip()
     hard_ceil = int(_ceil_env) if _ceil_env.isdigit() else _TARGET_TOKENS_HARD_CEIL
