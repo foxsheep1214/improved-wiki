@@ -4,7 +4,7 @@ At ingest start the pipeline probes the **live conversation model's** context wi
 
 ## Why
 
-improved-wiki runs in conversation mode: the calling agent answers each prompt with whatever model the current session uses (GLM-5.2 today, DeepSeek V4 Pro next session, …). Chunk size is `context × 0.33` (capped at 192K tokens), so it must track the *actual* model context — a static env value is either wrong (over-estimates → overflow; under-estimates → wasted capacity and 2× the round-trips) or stale the moment the agent switches models.
+improved-wiki runs in conversation mode: the calling agent answers each prompt with whatever model the current session uses (GLM-5.2 today, DeepSeek V4 Pro next session, …). Chunk size is `context × 0.33` (capped at 64K tokens), so it must track the *actual* model context — a static env value is either wrong (over-estimates → overflow; under-estimates → wasted capacity and 2× the round-trips) or stale the moment the agent switches models.
 
 The probe makes the pipeline **model-portable**: no registry to maintain, no env to set, no re-deriving when the model changes.
 
@@ -33,15 +33,15 @@ The probe value is used **as-is** — no 0.85 safety margin. Headroom comes from
 
 ## Chunk sizing by context
 
-`target_tokens = min(192_000, max(12_000, context × 0.33))` — decoupled from `source_budget` (2026-06-27). Each chunk is one analysis round-trip; its safe size is bounded by the context window, not the per-source digest budget.
+`target_tokens = min(64_000, max(12_000, context × 0.33))` — decoupled from `source_budget` (2026-06-27). Each chunk is one analysis round-trip; its safe size is bounded by the context window, not the per-source digest budget.
 
-| Probed context | target_tokens | Skolnik (3M chars) est. chunks |
+| Probed context | target_tokens | Skolnik (3M chars ≈ 750K tok) est. chunks |
 |---|---|---|
-| 128K | 42K | ~30 (safe; old 64K would overflow) |
-| 200K | 66K | ~17 (≈ old 64K, no regression) |
-| 1M (GLM-5.2) | 192K | ~8–10 (was 17 under the 200K placeholder) |
+| 128K | 42K | ~18 (cap doesn't bind; 0.33×ctx governs) |
+| 200K | 64K | ~12 |
+| 1M | 64K | ~12 |
 
-The 192K cap (`_TARGET_TOKENS_HARD_CEIL`, raised from 64K) is a quality guard against attention dilution in very-large-context models, not a context limit.
+The 64K cap (`_TARGET_TOKENS_HARD_CEIL`, set 2026-07-01; was briefly 192K) is a hard UPPER ceiling. An A/B ingest (Barton, 448pp, 1M ctx) showed 64K (finer 4-chunk splitting) gives +27% concept coverage and cleaner driving than a 192K whole-book single chunk — which was too large to analyze/generate in one call and had to fan out anyway. The cap only binds for context > ~194K; small books stay 1 chunk. Override per-run with `IMPROVED_WIKI_TARGET_TOKENS_CEIL` (e.g. 192000 to restore whole-book chunks).
 
 ## No-silent-fallback
 
@@ -62,5 +62,5 @@ EOF
 ## Touch points
 
 - `scripts/_context_probe.py` — probe prompt, parse, sanity gate, cache, `resolve_context`.
-- `scripts/_core.py` — `Config.apply_context`, `_compute_chunk_targets` (decoupled, 192K cap), `from_env` (placeholder only, no env read).
+- `scripts/_core.py` — `Config.apply_context`, `_compute_chunk_targets` (decoupled, 64K cap, `IMPROVED_WIKI_TARGET_TOKENS_CEIL` override), `from_env` (placeholder only, no env read).
 - `scripts/ingest.py` — `_probe_and_apply_context` called in watch + normal ingest paths (delete path skips).
