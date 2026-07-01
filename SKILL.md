@@ -90,6 +90,7 @@ Two other external-API dependencies (not text generation):
 - `references/image-caption-strategy.md` — unified caption pipeline (minerU images, one VLM call per image with NashSU-style context-aware prompt), parallel dispatch, no-fallback (2026-06-24)
 - `references/multimodal-vlm-pitfalls.md` — VLM pitfalls (caption collapse, OCR brittleness)
 - `references/known-issues.md` — current bugs and workarounds
+- `references/roadmap.md` — planned enhancements not yet built (e.g. cross-source Synthesize command)
 - `references/initial-setup.md` — first-time project bootstrap
 - `references/batch-digest-loop.md` — batch ingest with resume
 - `references/batch-digest-patterns.md` — batch ingest pitfalls: why `claude -p` cannot drive the 17-stage pipeline, Python-loop + `wiki/sources/<stem>.md` dedup pattern
