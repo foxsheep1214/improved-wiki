@@ -64,6 +64,35 @@ def _preserve_stage_counters(prev_stages: dict, new_stages: dict) -> dict:
     return out
 
 
+def reconstruct_enrich_candidates(
+    files_written_paths: list[str], wiki_dir: Path, listing_pages: set[str]
+) -> list[tuple[str, "Path"]]:
+    """Rebuild the (rel_path, full_path) enrich list from a persisted file list.
+
+    On a ``write_loop_done`` resume the write loop is skipped, so enrich
+    candidates must be reconstructed from ``files_written_paths``. Those are
+    stored relative to wiki_root and therefore carry a leading ``wiki/`` segment
+    (e.g. ``wiki/concepts/foo.md``). The fresh write loop, by contrast, feeds
+    the enricher wiki_dir-relative paths (``_stage_3_write`` strips ``wiki/`` →
+    ``concepts/foo.md``).
+
+    The enrichment prompt is keyed by these rel_paths, so the two conventions
+    must match EXACTLY — otherwise a resume produces a different prompt hash than
+    the fresh run and the conversation router fires a spurious SECOND enrichment
+    handoff for the same ingest (bug 2026-07-01). This helper strips the
+    ``wiki/`` prefix so resume matches the fresh convention, and builds
+    full_path from wiki_dir/rel (== wiki_root/p) so the on-disk target is
+    unchanged. Listing pages (index/log/overview/schema) are excluded.
+    """
+    out: list[tuple[str, Path]] = []
+    for p in files_written_paths:
+        rel = p[len("wiki/"):] if p.startswith("wiki/") else p
+        if Path(rel).name in listing_pages:
+            continue
+        out.append((rel, wiki_dir / rel))
+    return out
+
+
 def _reconstruct_blocks_from_disk(
     config: Config, files_written_paths: list[str]
 ) -> list[tuple[str, str]]:
@@ -194,16 +223,12 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         _src_rel = str(source_path.relative_to(config.wiki_root))
         source_block = ("source", "") if _src_rel in files_written_paths else None
         # Reconstruct enrich_candidates from the persisted file list so the
-        # enrich batch (below) still runs over the already-written pages.
-        # files_written_paths are stored relative to wiki_root (see
-        # full_path.relative_to(config.wiki_root) below), i.e. they include the
-        # leading "wiki/" segment. Reconstruct from wiki_root (NOT wiki_dir) to
-        # avoid doubling the "wiki/" prefix (wiki_dir is already wiki_root/wiki).
-        enrich_candidates = [
-            (p, config.wiki_root / p)
-            for p in files_written_paths
-            if Path(p).name not in _LISTING_PAGES
-        ]
+        # enrich batch (below) still runs over the already-written pages. The
+        # helper strips the leading "wiki/" so the rel_path matches the fresh
+        # write-loop convention exactly (else a resume re-keys the enrichment
+        # prompt and fires a spurious SECOND handoff — bug 2026-07-01).
+        enrich_candidates = reconstruct_enrich_candidates(
+            files_written_paths, config.wiki_dir, _LISTING_PAGES)
     _write_blocks = [] if (write_phase_done or write_loop_done) else file_blocks
 
     for rel_path, content in _write_blocks:
