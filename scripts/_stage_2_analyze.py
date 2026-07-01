@@ -150,6 +150,13 @@ def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int,
     window = min(int(target_tokens * chars_per_token), target_chars)
     window = max(window, 2000)  # never absurdly small
 
+    # Overlap scales with the ACTUAL chunk size (NashSU parity: overlapChars =
+    # clamp(chunk * 0.08, 800, 3000)). The passed ``overlap_chars`` (config, =3000)
+    # is the upper cap; small chunks get proportionally less. At large-context
+    # chunk sizes 8% far exceeds the cap, so this stays at 3000 there — it only
+    # shrinks once chunks fall below ~37.5K chars (small books / small context).
+    overlap_chars = max(800, min(overlap_chars, int(window * 0.08)))
+
     print(f"[chunk] Splitting {len(text)} chars (~{_estimate_tokens(text)} tok) into "
           f"~{target_tokens}-tok chunks (~{window} chars/chunk)...", flush=True)
 
@@ -310,7 +317,8 @@ def stage_2_1_global_digest(
     """Stage 1: One LLM call for book-level structural summary."""
     print(f"[stage 2.1] Global Digest — sending {min(len(extracted_text), config.source_budget):,} chars to LLM...")
     prompt = _stage_2_1_build_prompt(extracted_text, file_path, config, template)
-    response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192, label="global digest")
+    response, stop_reason = call_anthropic_protocol(
+        prompt, config, max_tokens=config.compute_max_tokens(8192), label="global digest")
     if verbose:
         print(f"[stage 2.1] Raw response ({len(response)} chars, stop={stop_reason}):\n{response[:3000]}...\n")
     digest = parse_yaml_block(response)
@@ -653,7 +661,8 @@ def _stage_2_2_analyze_chunk(
             if attempt == 0:
                 print(f"  [chunk {chunk_idx+1}/{chunk_total}] analyzing ({len(chunk):,} chars)...",
                       flush=True)
-            response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192)
+            response, stop_reason = call_anthropic_protocol(
+                prompt, config, max_tokens=config.compute_max_tokens(8192))
             analysis = parse_yaml_block(response)
             analysis["_chunk_index"] = chunk_idx + 1
             analysis["_chunk_size"] = len(chunk)
