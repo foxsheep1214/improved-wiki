@@ -49,17 +49,19 @@ done
 ls "$EXTRACT_DIR"/p*.txt | wc -l
 ```
 
-## Large-chunk Stage 2.2/2.4: scale extraction density + ground formulas (2026-06-30)
+## Stage 2.2/2.4: scale extraction density + ground formulas (updated 2026-07-01)
 
-Under a large-context model the chunker emits a few very large chunks (e.g. ~768K
-chars ≈ a 1M-context model's 192K-token cap, spanning several book chapters). Two
-practices keep these from being under-extracted or formula-drifted:
+At the **64K default ceiling** a large book splits into several ~256K-char chunks
+(~2–3 chapters each), each analyzed and generated in ONE inline pass. Two practices
+keep each chunk well-extracted and formula-faithful:
 
-1. **Scale extraction density with chunk size.** The Stage 2.2 prompt now embeds a
-   size-proportional guideline (~1 page-worthy concept per ~20K chars; 768K ≈ 38,
-   264K ≈ 13). Honour it: enumerate the chunk **section by section** and produce
-   ~30–40 concepts for a multi-chapter chunk, not the ~12 a small chunk warrants.
-   It is a guideline, not a quota — list every genuine concept, never pad.
+1. **Scale extraction density with chunk size.** The Stage 2.2 prompt embeds a
+   size-proportional guideline computed from the actual chunk length (~1 page-worthy
+   concept per ~20K chars; a ~256K chunk ≈ **~13 concepts**). Honour it: enumerate
+   the chunk **section by section**, don't under-extract mid-chunk material. It is a
+   guideline, not a quota — list every genuine concept, never pad. Select only the
+   most significant named systems/people as entity pages — do not make a page for
+   every model number a survey handbook mentions (over-extraction).
 
 2. **Ground every formula by targeted grep back to source.** Don't transcribe
    formulas from memory. For each formula you cite, locate it in the chunk text or
@@ -69,18 +71,17 @@ practices keep these from being under-extracted or formula-drifted:
    grep -n "frac\|tag{2-\|sigma\|lambda" "$EXTRACT_DIR"/p0NNN.txt   # find the eqn
    ```
 
-**Parallel per-chapter extraction (recommended for big chunks).** Because the
-conversation handoff is serial (one prompt at a time) but a single chunk spans
-several chapters, dispatch one read-only sub-agent per chapter range to deep-read
-its pages and return a structured concept inventory (name / importance / definition
-/ key_details with verbatim LaTeX / entities), then synthesize the chunk's Stage
-2.2 YAML yourself (you control format + dedup vs prior chunks). This both raises
-density and keeps formula transcription faithful. Select only the most significant
-named systems as entity pages — do not make a page for every model number a survey
-handbook mentions (over-extraction). Stage 2.4 generation of the (often 30–40)
-pages can likewise be delegated to one sub-agent per chunk, given the chunk's exact
-slug list + FILE-block format; verify block-count == requested slugs (minus the
-`foo-bar` placeholder) before advancing.
+**Answer each chunk DIRECTLY yourself — do NOT fan out to per-chapter sub-agents.**
+A ~256K-char chunk (~2–3 chapters) is directly manageable in a single analyze pass
+and a single generate pass. A 2026-07-01 A/B ingest confirmed this: the 64K arm ran
+the whole book in **10 native round-trips with no fan-out**, cleaner than a 192K
+whole-book single chunk that had to be fanned out into per-chapter helpers +
+split-generation groups (which stalled repeatedly on orchestration for no quality
+gain). Sub-agent fan-out is only worth considering if you deliberately override the
+ceiling far up (`IMPROVED_WIKI_TARGET_TOKENS_CEIL=192000`) so one chunk spans the
+whole book — which is not the default and not recommended for dense references.
+For Stage 2.4, generate the chunk's exact slug list inline; verify block-count ==
+requested slugs (minus the `foo-bar` placeholder) before advancing.
 
 ## Re-ingest (comparison or correction)
 

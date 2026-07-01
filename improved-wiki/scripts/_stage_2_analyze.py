@@ -463,8 +463,8 @@ You are analyzing content from: **{heading_path}**
     language_directive = build_language_directive(chunk_text)
 
     # Extraction-density guideline (2026-06-30): scale the expected concept count
-    # with chunk size so large, multi-chapter chunks (e.g. ~768K chars under a
-    # 1M-context model) are not under-extracted at the same ~12-concept rate as a
+    # with chunk size so multi-chapter chunks (e.g. ~256K chars under the 64K-token
+    # default ceiling) are not under-extracted at the same ~12-concept rate as a
     # small chunk. Heuristic ~1 page-worthy concept per 20K chars of substantive
     # text, floored at 8. This is a NON-BINDING target with an explicit anti-
     # padding guard — quality over count.
