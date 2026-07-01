@@ -108,6 +108,109 @@ def _clean_mineru_latex(text: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# minerU HTML table → Markdown (NashSU mineru.ts convertHtmlTablesToMarkdown parity)
+# ══════════════════════════════════════════════════════════════════════════════
+# minerU emits tables as raw HTML (<table>…</table>) inside md_content. NashSU
+# normalizes these to Markdown tables at extraction time so the generation LLM
+# and wiki pages never carry raw HTML. Faithful port of mineru.ts
+# convertHtmlTablesToMarkdown / convertHtmlTablesInSegment / htmlCellToMarkdown
+# (rowspan/colspan are NOT reconstructed — cells are flattened in order, matching
+# NashSU's lossy behavior; images inside cells become ![alt](src) refs).
+
+_HTMLTAB_TABLE_RE = re.compile(r"<table\b.*?</table>", re.I | re.S)
+_HTMLTAB_TR_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.I | re.S)
+_HTMLTAB_CELL_RE = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.I | re.S)
+_HTMLTAB_IMG_RE = re.compile(r"<img\b[^>]*\bsrc=([\"'])([^\"']+)\1[^>]*>", re.I)
+_HTMLTAB_ALT_RE = re.compile(r"\balt=([\"'])([^\"']*)\1", re.I)
+_HTMLTAB_FENCE_RE = re.compile(r"(```.*?```|~~~.*?~~~)", re.S)
+
+
+def _decode_html_entities(text: str) -> str:
+    """Port of NashSU decodeHtmlEntities: decode common named entities plus
+    numeric/hex refs, leaving out-of-range refs untouched."""
+    def _safe_codepoint(raw: str, radix: int) -> str:
+        fallback = f"&#x{raw};" if radix == 16 else f"&#{raw};"
+        try:
+            n = int(raw, radix)
+        except ValueError:
+            return fallback
+        if n < 0 or n > 0x10FFFF:
+            return fallback
+        try:
+            return chr(n)
+        except (ValueError, OverflowError):
+            return fallback
+
+    text = re.sub(r"&nbsp;", " ", text, flags=re.I)
+    text = re.sub(r"&amp;", "&", text, flags=re.I)
+    text = re.sub(r"&lt;", "<", text, flags=re.I)
+    text = re.sub(r"&gt;", ">", text, flags=re.I)
+    text = re.sub(r"&quot;", '"', text, flags=re.I)
+    text = text.replace("&#39;", "'")
+    text = re.sub(r"&#(\d+);", lambda m: _safe_codepoint(m.group(1), 10), text)
+    text = re.sub(r"&#x([0-9a-f]+);", lambda m: _safe_codepoint(m.group(1), 16),
+                  text, flags=re.I)
+    return text
+
+
+def _html_img_tags_to_markdown(html: str) -> str:
+    """Port of NashSU htmlImgTagsToMarkdown: <img src=… alt=…> → ![alt](src)."""
+    def _repl(m: "re.Match") -> str:
+        full = m.group(0)
+        src = m.group(2)
+        alt_m = _HTMLTAB_ALT_RE.search(full)
+        alt = alt_m.group(2) if alt_m else ""
+        return f"![{alt}]({src})"
+    return _HTMLTAB_IMG_RE.sub(_repl, html)
+
+
+def _html_cell_to_markdown(cell: str) -> str:
+    """Port of NashSU htmlCellToMarkdown: flatten one <td>/<th> to inline text."""
+    s = _html_img_tags_to_markdown(cell)
+    s = re.sub(r"<br\s*/?>", "<br>", s, flags=re.I)
+    s = re.sub(r"</p\s*>", "<br>", s, flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"\s*<br>\s*", "<br>", s, flags=re.I)
+    s = re.sub(r"\s+", " ", s).strip()
+    return _decode_html_entities(s).replace("|", "\\|")
+
+
+def _convert_html_tables_in_segment(segment: str) -> str:
+    def _repl(m: "re.Match") -> str:
+        table_html = m.group(0)
+        rows: list[list[str]] = []
+        for row_m in _HTMLTAB_TR_RE.finditer(table_html):
+            cells = [_html_cell_to_markdown(c.group(1))
+                     for c in _HTMLTAB_CELL_RE.finditer(row_m.group(1))]
+            if cells:
+                rows.append(cells)
+        if not rows:
+            return table_html
+        width = max(len(r) for r in rows)
+        padded = [r + [""] * (width - len(r)) for r in rows]
+        header = padded[0]
+        separator = ["---"] * width
+        body = padded[1:]
+        lines = ["", "| " + " | ".join(header) + " |",
+                 "| " + " | ".join(separator) + " |"]
+        lines += ["| " + " | ".join(r) + " |" for r in body]
+        lines.append("")
+        return "\n".join(lines)
+    return _HTMLTAB_TABLE_RE.sub(_repl, segment)
+
+
+def _convert_html_tables_to_markdown(markdown: str) -> str:
+    """Port of NashSU convertHtmlTablesToMarkdown: convert minerU HTML tables to
+    Markdown tables, skipping fenced code blocks so raw-HTML examples survive."""
+    parts = _HTMLTAB_FENCE_RE.split(markdown)
+    return "".join(
+        p if (p.startswith("```") or p.startswith("~~~"))
+        else _convert_html_tables_in_segment(p)
+        for p in parts
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # minerU file lock
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -177,7 +280,8 @@ def _stage_1_1_extract_text_scanned_locked(file_path: Path, config: Config) -> s
     lock_fd = _stage_1_1_acquire_mineru_lock()
     try:
         text = _stage_1_1_extract_text_scanned_impl(file_path, config)
-        return _clean_mineru_latex(text)
+        text = _clean_mineru_latex(text)
+        return _convert_html_tables_to_markdown(text)
     finally:
         _stage_1_1_release_mineru_lock(lock_fd)
 
@@ -326,25 +430,14 @@ def _stage_1_1_scanned_build_parse_body(
         parts.append(b'Content-Disposition: form-data; name="parse_method"')
         parts.append(b"")
         parts.append(_PARSE_METHOD_OVERRIDE.encode())
-    # minerU Image Analysis gate (opt-in, env-controlled). The hybrid-engine
-    # backend disables image/chart analysis on the default effort="medium" and
-    # only runs it on effort="high" (per-image class/sub_class/content: charts →
-    # markdown tables, formula-images → LaTeX, flowcharts → mermaid, text-images
-    # → OCR). Sending NO effort field preserves the server default (medium) and
-    # the current behavior exactly. Set IMPROVED_WIKI_MINERU_EFFORT=high to turn
-    # it on. effort is validated server-side to {medium,high}; ignore anything
-    # else so a typo can't break extraction.
-    _effort = os.environ.get("IMPROVED_WIKI_MINERU_EFFORT", "").strip().lower()
-    if _effort in ("medium", "high"):
-        parts.append(f"--{boundary}".encode())
-        parts.append(b'Content-Disposition: form-data; name="effort"')
-        parts.append(b"")
-        parts.append(_effort.encode())
-        if _effort == "high":
-            parts.append(f"--{boundary}".encode())
-            parts.append(b'Content-Disposition: form-data; name="image_analysis"')
-            parts.append(b"")
-            parts.append(b"true")
+    # No `effort` field is sent: minerU runs at its server default (medium),
+    # which OCRs text/tables/formulas but does NOT run per-figure image/chart
+    # analysis. The opt-in effort=high path (which fed minerU's structured
+    # per-figure extraction into the Stage 1.3 caption as grounding) was removed
+    # 2026-07-01: its curve-figure gain was redundant with the VLM's own pixel
+    # reading and it injected structurally-plausible-but-wrong grounding on
+    # block/geometry diagrams. Figure understanding is the MiniMax VLM's job
+    # (Stage 1.3), grounded only on the actual image + surrounding text.
     if with_images:
         for field in ("return_images", "return_content_list"):
             parts.append(f"--{boundary}".encode())

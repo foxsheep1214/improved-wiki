@@ -400,7 +400,6 @@ def _stage_1_2_recover_from_api_out(
                 "path": str(dest.relative_to(config.wiki_root)),
                 "page": e["page"],
                 "caption": meta.get("caption", ""),
-                "sub_type": meta.get("sub_type", ""),
                 "width": e["width"],
                 "height": e["height"],
             })
@@ -416,8 +415,7 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
     minerU writes images to <out_dir>/<stem>/<method>/images/ where <method>
     is txt (pipeline -m txt), vlm (vlm-engine), or auto. Also reads
     content_list.json to harvest minerU's own image_caption (the PDF figure
-    caption) and sub_type (flowchart/curve/text_image) so downstream Stage 1.3
-    can skip re-captioning figures minerU already described.
+    caption) so downstream Stage 1.3 can use it as anchoring context.
     """
     media_dir = config.wiki_dir / "media" / media_slug(raw_file, config)
     media_dir.mkdir(parents=True, exist_ok=True)
@@ -439,7 +437,7 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
                 img_source_dir = cand
                 break
 
-    # Harvest minerU image_caption + sub_type from content_list.json.
+    # Harvest minerU image_caption from content_list.json.
     # Keyed by image basename so we can attach during copy.
     caption_map: dict[str, dict] = {}
     cl_files = sorted(out_dir.rglob("*content_list.json"))
@@ -456,7 +454,6 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
                     caps = b.get("image_caption", [])
                     caption_map[bn] = {
                         "caption": caps[0] if caps else "",
-                        "sub_type": b.get("sub_type", ""),
                         "page": b.get("page_idx", 0),
                     }
         if caption_map:
@@ -480,7 +477,6 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
                 "path": str(dest.relative_to(config.wiki_root)),
                 "page": meta.get("page", 0),
                 "caption": meta.get("caption", ""),
-                "sub_type": meta.get("sub_type", ""),
                 "width": 0,
                 "height": 0,
             })
@@ -504,7 +500,6 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
                 "path": str(img_path.relative_to(config.wiki_root)),
                 "page": page,
                 "caption": meta.get("caption", ""),
-                "sub_type": meta.get("sub_type", ""),
                 "width": 0,
                 "height": 0,
             })
