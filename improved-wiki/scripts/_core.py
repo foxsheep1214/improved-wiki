@@ -278,8 +278,14 @@ def _compute_chunk_targets(source_budget: int, context_size: int) -> tuple[int, 
     call-site compatibility and still governs the Stage 2.1 digest size.
     ``target_chars`` — hard per-chunk char ceiling, large enough that even
     token-sparse text can spend its full token budget.
+
+    ``IMPROVED_WIKI_TARGET_TOKENS_CEIL`` env overrides the 192K hard ceiling
+    (e.g. 64000 for smaller, more granular chunks). Unset → default 192K. This
+    is the ② knob for A/B testing chunk granularity vs digest quality.
     """
-    tokens_ceil = min(_TARGET_TOKENS_HARD_CEIL,
+    _ceil_env = os.environ.get("IMPROVED_WIKI_TARGET_TOKENS_CEIL", "").strip()
+    hard_ceil = int(_ceil_env) if _ceil_env.isdigit() else _TARGET_TOKENS_HARD_CEIL
+    tokens_ceil = min(hard_ceil,
                       max(_TARGET_TOKENS_MIN, int(context_size * _TARGET_TOKENS_CEIL_FRAC)))
     target_tokens = tokens_ceil
     target_chars = min(_TARGET_CHARS_HARD_CEIL, target_tokens * _MAX_CHARS_PER_TOKEN)
