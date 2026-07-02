@@ -61,6 +61,8 @@ updated: {today}
 ---END FILE---
 ```
 
+**小节标题语言（2026-07-02 用户裁决，D6）**：四个小节标题随内容语言走，两套**固定词表**（机器可解析，`_stage_2_9_headings()`）——中文源用 `为何对比 / 对比表 / 选型指南 / 参见`，英文源保持 `Why Compare / Comparison Table / Selection Guide / See Also`。任何 grep 这些标题的下游解析必须同时接受两套词表。
+
 无合适对比对时输出：`---COMPARISONS_IN_SOURCE: 0---`。
 
 ---
@@ -79,10 +81,10 @@ updated: {today}
 # 本次 ingest 生成的 comparison 页
 ls wiki/comparisons/*.md 2>/dev/null
 
-# comparison 页面结构完整性
+# comparison 页面结构完整性（标题两套词表都算合法：英文 / 中文，D6 裁决）
 for f in wiki/comparisons/*.md; do
   grep -q "type: comparison" "$f" || echo "MISSING TYPE: $f"
-  grep -q "## Comparison Table" "$f" && grep -q "## Selection Guide" "$f" && continue
+  grep -Eq "## (Comparison Table|对比表)" "$f" && grep -Eq "## (Selection Guide|选型指南)" "$f" && continue
   echo "MISSING STRUCTURE: $f"
 done
 ```

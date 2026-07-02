@@ -182,7 +182,9 @@ If no worthwhile query exists, output exactly:
 ---END QUERIES---
 
 # Constraints
-- slug: English kebab-case, 3-6 words
+- slug: SOURCE-language slug, 3-6 words (中文书→中文slug, English book→English
+  kebab); English terms belong in title, not slug, EXCEPT established acronyms
+  (mti, cfar, dds) which may stay; never mixed 中英双拼 slugs
 - title: complete question ending with ? or ？
 - related: ONLY wikilink stems from THIS ingest (see Generated Concepts/Entities above)
 - sources: ONLY this book
