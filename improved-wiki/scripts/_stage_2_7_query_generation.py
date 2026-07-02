@@ -2,6 +2,39 @@
 from _stage_2_base import *
 from _language import build_language_directive
 
+# Digest packing (fix 2026-07-02): the old `digest_str[:12000] + truncated`
+# cut mid-JSON (observed truncating mid-claim). Pack whole keys by priority
+# instead — never cut mid-structure.
+_STAGE_2_7_DIGEST_KEY_PRIORITY = ("book_meta", "outline", "key_claims", "key_entities", "key_concepts")
+_STAGE_2_7_DIGEST_CHAR_BUDGET = 24000
+
+
+def _stage_2_7_pack_digest(global_digest: dict, budget: int = _STAGE_2_7_DIGEST_CHAR_BUDGET) -> str:
+    """Serialize the global digest for the prompt, whole keys only.
+
+    Keys are considered in priority order (then any remaining keys in digest
+    order); each key is included WHOLE while the running total stays within
+    ``budget`` chars, otherwise skipped and listed in a one-line trailing
+    note. A key is never cut mid-structure.
+    """
+    keys = [k for k in _STAGE_2_7_DIGEST_KEY_PRIORITY if k in global_digest]
+    keys += [k for k in global_digest if k not in _STAGE_2_7_DIGEST_KEY_PRIORITY]
+    included, omitted, total = {}, [], 2  # 2 = outer braces
+    for key in keys:
+        piece_len = len(json.dumps({key: global_digest[key]}, ensure_ascii=False, indent=2))
+        if total + piece_len > budget:
+            value = global_digest[key]
+            n_items = len(value) if isinstance(value, (list, dict, str)) else 1
+            omitted.append(f"{key} ({n_items} items)")
+            continue
+        included[key] = global_digest[key]
+        total += piece_len
+    digest_str = json.dumps(included, ensure_ascii=False, indent=2)
+    if omitted:
+        digest_str += "\n...(omitted keys: " + ", ".join(omitted) + ")"
+    return digest_str
+
+
 def _stage_2_7_build_prompt(
     global_digest: dict,
     concept_titles: list[str],
@@ -12,9 +45,7 @@ def _stage_2_7_build_prompt(
     source_context: str = "",
 ) -> str:
     """Build prompt for Stage 2.7: generate open questions from single-source analysis."""
-    digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
-    if len(digest_str) > 12000:
-        digest_str = digest_str[:12000] + "\n... (truncated)"
+    digest_str = _stage_2_7_pack_digest(global_digest)
 
     # P1 parity with Stage 2.4 (2026-06-27): ground questions in the raw source so
     # the LLM raises the questions the SOURCE actually leaves open, instead of
