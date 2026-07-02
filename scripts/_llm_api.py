@@ -128,7 +128,15 @@ def conversation_handoff(
             print(f"[conv:{tag}] Result appears stale — regenerating", flush=True)
             result_file.unlink(missing_ok=True)
         else:
-            print(f"[conv:{tag}] Read response ({len(response)} chars)", flush=True)
+            # Handoff latency = answer mtime − prompt mtime. The ingest process
+            # exits during a handoff, so this is the only place wall-clock per
+            # LLM step is visible (timing instrumentation, 2026-07-02).
+            try:
+                _lat = result_file.stat().st_mtime - prompt_file.stat().st_mtime
+                _lat_s = f", handoff {_lat/60:.1f}m" if _lat > 0 else ""
+            except OSError:
+                _lat_s = ""
+            print(f"[conv:{tag}] Read response ({len(response)} chars{_lat_s})", flush=True)
             if on_cached is not None:
                 on_cached(response)
             return response
