@@ -148,13 +148,19 @@ def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
 
 
 
-def _stage_2_5_rewrite_wikilinks(content, slug_map):
+def _stage_2_5_rewrite_wikilinks(content, slug_map, current_slug=""):
     """Redirect [[target]] / [[target|text]] wikilinks pointing at a merged
     duplicate slug to the merge's primary slug instead. Handles both the bare
     stem and the `concepts/<slug>` path form (case-insensitive per
     naming-conventions.md), since merging deletes the duplicate's FILE block
     and any sibling block still pointing at it would otherwise become a
     permanently broken link the moment Stage 3.1 writes to disk.
+
+    When the redirect target IS the current page (``current_slug``, i.e. the
+    PRIMARY page linked to its own merged-away duplicate), the link is
+    de-linked to plain text (display text if present, else the bare stem —
+    same convention as _frontmatter's wikilink strip) instead of becoming a
+    self-link (fix 2026-07-02).
     """
     def _sub(m):
         target = m.group(1)
@@ -163,9 +169,49 @@ def _stage_2_5_rewrite_wikilinks(content, slug_map):
         new_slug = slug_map.get(bare.lower())
         if new_slug is None:
             return m.group(0)
+        if current_slug and new_slug.lower() == current_slug.lower():
+            return m.group(2) or bare
         new_target = target.rsplit("/", 1)[0] + "/" + new_slug if "/" in target else new_slug
         return f"[[{new_target}{pipe}]]"
     return _WIKILINK_RE.sub(_sub, content)
+
+
+_STAGE_2_5_RELATED_LINE_RE = re.compile(r"^(related:[ \t]*\[)([^\]\r\n]*)(\][ \t]*)$", re.MULTILINE)
+
+
+def _stage_2_5_rewrite_related(content, slug_map, current_slug=""):
+    """Rewrite frontmatter ``related:`` inline-array entries pointing at a
+    merged duplicate slug to the primary slug. Entries are bare stems
+    (optionally quoted and/or `concepts/`-prefixed) — the wikilink rewrite
+    above never sees them, so without this the merged page's siblings keep a
+    dangling related entry on disk (observed live 2026-07-02: 9+ broken links
+    after 2.4-dedup merges). Entries that would now reference the page itself
+    (on the PRIMARY page) are dropped; the rewritten list is de-duplicated.
+    Lines with no rewritten entry are left byte-identical.
+    """
+    m = _STAGE_2_5_RELATED_LINE_RE.search(content)
+    if not m or not m.group(2).strip():
+        return content
+    items, seen, changed = [], set(), False
+    for raw in m.group(2).split(","):
+        item = raw.strip().strip("'\"")
+        if not item:
+            continue
+        bare = item.rsplit("/", 1)[-1]
+        new_slug = slug_map.get(bare.lower())
+        if new_slug is not None:
+            changed = True
+            if current_slug and new_slug.lower() == current_slug.lower():
+                continue
+            item = item.rsplit("/", 1)[0] + "/" + new_slug if "/" in item else new_slug
+        if item.lower() in seen:
+            continue
+        seen.add(item.lower())
+        items.append(item)
+    if not changed:
+        return content
+    inner = ", ".join('"{}"'.format(i.replace('"', '\\"')) for i in items)
+    return content[:m.start(2)] + inner + content[m.end(2):]
 
 
 def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
@@ -183,7 +229,8 @@ def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
         if ("/concepts/" in path or path.startswith("concepts/")) and slug in slugs_to_delete:
             continue
         if slug_map:
-            content = _stage_2_5_rewrite_wikilinks(content, slug_map)
+            content = _stage_2_5_rewrite_wikilinks(content, slug_map, current_slug=slug)
+            content = _stage_2_5_rewrite_related(content, slug_map, current_slug=slug)
         result.append((path, content))
     return result
 

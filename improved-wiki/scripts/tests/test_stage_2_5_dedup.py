@@ -127,9 +127,13 @@ class TestLlmConfirmGate(unittest.TestCase):
 
 class TestApplyMergeRewritesWikilinks(unittest.TestCase):
     def test_drops_duplicate_block_and_redirects_links(self):
+        # Sibling links are redirected to the primary; the primary's own link
+        # to its merged-away duplicate is de-linked (not a self-link) — the
+        # self-link case is covered in test_dedup_link_rewrite.py.
         file_blocks = [
-            ("concepts/pao.md", "---\ntitle: PAO\n---\nSee [[julinjun]] for detail."),
+            ("concepts/pao.md", "---\ntitle: PAO\n---\nprimary body"),
             ("concepts/julinjun.md", "---\ntitle: 聚磷菌\n---\nduplicate body"),
+            ("concepts/sibling.md", "---\ntitle: Sibling\n---\nSee [[julinjun]] for detail."),
         ]
         rules = [{
             "primary_slug": "pao", "primary_title": "PAO",
@@ -138,9 +142,10 @@ class TestApplyMergeRewritesWikilinks(unittest.TestCase):
         }]
         result = d._stage_2_5_apply_merge_rules(file_blocks, rules)
         paths = [p for p, _ in result]
-        self.assertEqual(paths, ["concepts/pao.md"])
-        self.assertIn("[[pao]]", result[0][1])
-        self.assertNotIn("[[julinjun]]", result[0][1])
+        self.assertEqual(paths, ["concepts/pao.md", "concepts/sibling.md"])
+        sibling = dict(result)["concepts/sibling.md"]
+        self.assertIn("[[pao]]", sibling)
+        self.assertNotIn("[[julinjun]]", sibling)
 
 
 if __name__ == "__main__":
