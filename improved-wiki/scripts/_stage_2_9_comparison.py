@@ -13,6 +13,30 @@ def _stage_2_9_comparison_cap(chapter_count: int) -> int:
     return min(8, 3 + chapter_count // 8)
 
 
+def _existing_comparisons(config: Config) -> list[tuple[str, str]]:
+    """(slug, title) pairs for existing wiki/comparisons/ pages (B4, audit H1).
+
+    2.9 never saw the wiki's existing comparisons, so cross-book/cross-language
+    twins accumulated nightly (mti-vs-pulse-doppler vs mti-vs-脉冲多普勒, 4 live
+    duplicate groups). Injecting slug+title lets the prompt forbid same-topic
+    re-creation. Sorted glob → deterministic prompt (stable handoff cache key).
+    """
+    comp_dir = config.wiki_dir / "comparisons"
+    if not comp_dir.is_dir():
+        return []
+    out: list[tuple[str, str]] = []
+    for f in sorted(comp_dir.glob("*.md")):
+        if f.stem == "index" or f.stem.startswith("_"):
+            continue
+        try:
+            content = f.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        title = _stage_2_frontmatter_title(content)
+        out.append((f.stem, title or f.stem))
+    return out
+
+
 def _stage_2_9_build_prompt_in_source(
     concept_titles: list[str],
     file_path: Path,
@@ -46,6 +70,21 @@ def _stage_2_9_build_prompt_in_source(
     else:
         source_section = ""
 
+    # B4 (audit H1): show existing comparisons so same-topic twins are refused.
+    existing_comps = _existing_comparisons(config)
+    if existing_comps:
+        comp_lines = "\n".join(f"  - comparisons/{s} — {t}" for s, t in existing_comps[:100])
+        existing_comps_section = (
+            "\n# Existing comparison pages already in the wiki (do NOT create twins)\n"
+            f"{comp_lines}\n"
+            "If a comparison you would build ALREADY exists above (same items, even in\n"
+            "another language), output 0 for it — or emit it ONLY to add genuinely\n"
+            "missing dimensions. If a generated concept page above already IS a full\n"
+            "comparison page, reference that page instead of creating a twin.\n"
+        )
+    else:
+        existing_comps_section = ""
+
     language_directive = build_language_directive(source_context or concepts_with_desc)
     return f"""{language_directive}
 
@@ -57,7 +96,7 @@ You are maintaining a wiki knowledge base. Review the concepts just generated fo
 
 # Generated Concepts
 {concepts_with_desc}
-{source_section}
+{source_section}{existing_comps_section}
 # Task
 Identify **comparison groups** — two OR MORE concepts that the source sets
 side-by-side, where understanding them together illuminates each one.
@@ -77,6 +116,10 @@ Bad candidates:
 - An arbitrary list of unrelated concepts that the source never actually contrasts
 
 Generate at most {comp_cap} comparison pages. Output 0 if no genuine comparison exists.
+
+Evidence anchors: every number/figure in the comparison table cites its chapter/
+section/equation/figure number (式(5-10), 图2.6, Table 8.1); a value read off a
+figure's curve must be marked "据图X.X".
 
 # Output Format
 # (For a 3+ way comparison, just add more columns to the table and more

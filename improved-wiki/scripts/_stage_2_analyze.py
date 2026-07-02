@@ -564,6 +564,10 @@ Analyze THIS CHUNK of the book. Extract:
    collapse several distinct concepts into one page, and do NOT skip a concept merely
    because it is "well known" or already named in the digest — downstream dedup
    (Stage 2.3/2.4) will link it to an existing page if one already exists.
+   Granularity gate: a CONCEPT must be reusable beyond this single device/product.
+   Chip-level or board-level implementation details (connector pinouts, board
+   designators, one unit's internal signals) are NOT concepts — record them as
+   entities or fold them into the system-level concept page.
 2. All **entities** — specific *named* things identified by their name, not by a
    definition: people, organizations, products/systems, standards. (Tie-breaker:
    a named *theoretical or statistical model*, *method*, or *technique* — e.g. the

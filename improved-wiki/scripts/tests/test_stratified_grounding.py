@@ -111,7 +111,10 @@ class TestComparisonCap(unittest.TestCase):
         self.assertEqual(c29._stage_2_9_comparison_cap(200), 8)  # hard ceiling
 
     def test_cap_lands_in_prompt(self):
-        config = SimpleNamespace(raw_root=Path("/tmp/raw"))
+        # wiki_dir: required since B4 (existing-comparisons injection);
+        # nonexistent dir → helper yields no section.
+        config = SimpleNamespace(raw_root=Path("/tmp/raw"),
+                                 wiki_dir=Path("/tmp/nonexistent-wiki-b4"))
         prompt = c29._stage_2_9_build_prompt_in_source(
             ["a", "b"], Path("/tmp/raw/book.pdf"), config, comp_cap=6)
         self.assertIn("Generate at most 6 comparison pages.", prompt)
@@ -131,6 +134,7 @@ class TestTruncationRetry(unittest.TestCase):
             return self._RESP, stops[min(len(calls) - 1, len(stops) - 1)]
 
         config = SimpleNamespace(raw_root=Path("/tmp/raw"),
+                                 wiki_dir=Path("/tmp/nonexistent-wiki-b4"),
                                  compute_max_tokens=lambda n: n)
         orig = c29.call_anthropic_protocol
         c29.call_anthropic_protocol = _spy

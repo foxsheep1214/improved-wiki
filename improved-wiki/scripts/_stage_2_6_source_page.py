@@ -493,6 +493,7 @@ venue: {venue_yaml}
 - tags: 3-8 relevant tags (do NOT leave empty)
 - related: 2-5 related wiki page slugs
 - authors/year/url/venue: bibliographic fields for this source (NashSU source-page parity). The template is pre-filled from the digest where available — verify against the "{info_header}" block above and complete any left empty; use `[]` for authors and `""` for url/venue if genuinely unknown. authors is a list, year a number, url/venue strings.
+- Evidence anchors: every claim's **Evidence** cites chapter/section/equation/figure numbers (式(5-10), 图2.6, Table 8.1); a value read off a figure's curve must be marked "据图X.X".
 - Math: $inline$ $$display$$
 """
 
