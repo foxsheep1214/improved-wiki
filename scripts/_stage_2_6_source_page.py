@@ -166,9 +166,11 @@ Wikilink each entity to its slug.
 ## Main Arguments & Findings
 
 The paper's core claims — the wiki's claim ledger for this source (feeds
-overview Strong/Weak claims, contradiction review, query grounding). Density
-norm: **3-8 claims** covering the paper's problem, method, main results and
-limits; every entry a real, evidenced assertion — no padding. For EACH:
+overview Strong/Weak claims, contradiction review, query grounding). Include
+**EVERY substantive claim** (falsifiable/actionable: quantitative result,
+design rule, comparative verdict, limit, mechanism — not scope descriptions or
+bare definitions), covering problem, method, main results and limits; YOU
+judge substantiveness — no numeric quota, no padding. For EACH:
 - **Claim:** the assertion (one sentence).
 - **Evidence:** which figure / table / section supports it.
 - **Strength:** high / medium / low.
@@ -218,13 +220,17 @@ Wikilink each entity to its slug.
 
 The book's core claims, results, or design rules — this section is the wiki's
 claim ledger (it feeds overview Strong/Weak claims, contradiction review, and
-query grounding), so coverage is MANDATORY, density is bounded:
-- **≥1 claim per chapter** that carries a substantive assertion (skip only
-  genuinely claim-free chapters like pure front matter — never skip a technical
-  chapter silently);
-- **≤3 claims per chapter**; **15-35 total** for a typical book;
-- draw primarily from the full-book per-chunk claims above; NO padding — every
-  entry must be a real, evidenced assertion from the source.
+query grounding), so it must be COMPLETE, not sampled:
+- Include **EVERY substantive claim** from the full-book per-chunk claims list
+  above, deduplicating near-identical claims repeated across chunk overlaps
+  (keep the best-evidenced version).
+- **Substantive** = a falsifiable or actionable assertion: a quantitative
+  result, design rule, comparative verdict, limit, or mechanism explanation.
+  NOT substantive: chapter-scope descriptions, bare definitions, restatements.
+  YOU judge each claim against this test — no numeric quota either way.
+- Coverage check: every technical chapter should surface ≥1 claim; if a
+  chapter yields none, that must be because it genuinely asserts nothing
+  (e.g. pure front matter), never because it was skipped.
 For EACH:
 - **Claim:** the assertion (one sentence).
 - **Evidence:** which chapter / case / equation supports it.
@@ -353,7 +359,7 @@ Which wiki pages should be created or updated based on this source? What should 
     chunk_claims_section = ""
     if chunk_claims:
         _cc_lines = []
-        for c in chunk_claims[:60]:
+        for c in chunk_claims[:400]:
             if isinstance(c, dict):
                 _claim = c.get("claim", "")
                 _ev = c.get("evidence", "")
