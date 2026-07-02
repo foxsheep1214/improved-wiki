@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from _stage_2_base import *
 from _language import build_language_directive
+from _frontmatter_array import parse_frontmatter_array
+from _paths import iter_wiki_pages
 
 # NashSU parity: the accumulating "already generated" context fed into each
 # chunk's prompt is BOUNDED, mirroring NashSU's trimLongText(globalDigest). The
@@ -15,6 +17,73 @@ GENERATED_DISPLAY_MAX = 50
 # slugs, prior-chunk pages, Stage 2.3 existing_refs, related pages) are always
 # kept; only the background fill of other existing wiki pages is bounded by this.
 _LINKABLE_TOTAL_CAP = 400
+
+# ── Audit 2026-07-02 三/B prompt-text additions (injected into BOTH the
+# per-chunk and single-shot generation prompts) ─────────────────────────────
+
+# B1 (H4): the Stage 2.2 entity tie-breaker was never restated at generation
+# time, so drifted candidates (named methods, multi-author strings, ISBNs)
+# became entity pages with no downstream correction.
+_ENTITY_RULES_SECTION = """
+# Entity Rules (restated from Stage 2.2 — enforce at generation time)
+- Tie-breaker: a named *model/method/technique* (Swerling model, matched filter,
+  JPDA…) is a CONCEPT, not an entity — if mislisted above, emit it under concepts/.
+- ONE page per entity: a multi-person candidate ("A, B and C") must be SPLIT into
+  individual person pages — never one merged page.
+- Bibliography entries, citation strings, and ISBNs are NOT entities — skip them.
+"""
+
+# B6 (M6/M11): 30-64% of concept pages had no ## structure at all.
+_CONCEPT_SKELETON_SECTION = """
+# Concept Page Skeleton (recommended — trim sections the source doesn't support)
+Structure each concept page as `##` sections in the source language:
+定义 (definition) → 原理/公式 (principle & formulas) → 要点 (key points) → 参见 (see also).
+Short pages may merge or drop sections, but never emit one undifferentiated paragraph.
+"""
+
+# B5+B6 (M9/M6): appended to the numbered Rules list of both prompts.
+_EXTRA_RULES = """7. related frontmatter — EXACT format: prefixed bare slugs, comma-separated,
+   NO [[ ]] and NO .md — e.g. related: [concepts/matched-filter, entities/bell-labs].
+8. Evidence anchors: formulas/data cite the source's chapter/section/equation/
+   figure number (式(5-10), 图2.6, Table 8.1); a value read off a figure's curve
+   must be marked "据图X.X"."""
+
+
+def _top_wiki_tags(config: Config, top_n: int = 30) -> list[str]:
+    """Most-used frontmatter tags across existing wiki pages (B3, audit M10).
+
+    Injected into the generation prompts so the model can REUSE the wiki's tag
+    vocabulary instead of inventing near-synonyms — singleton-tag rate ran
+    69-80% because generation never saw a single existing tag. A live top-N
+    list was chosen over a static "reuse tags" instruction because the model
+    cannot reuse a vocabulary it never sees; the cost is one frontmatter scan
+    per prompt build, the same order as the list_existing_slugs() rglob these
+    builders already perform. Only tags used ≥2 times qualify (a singleton is
+    not a vocabulary); "stub"/"lint" artifact tags are excluded. Deterministic
+    ordering (count desc, then name) keeps the prompt cache-key stable.
+    """
+    counts: dict[str, int] = {}
+    for _rel, content in iter_wiki_pages(config.wiki_dir):
+        for tag in parse_frontmatter_array(content, "tags"):
+            tag = tag.strip()
+            if tag and tag not in ("stub", "lint"):
+                counts[tag] = counts.get(tag, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [t for t, c in ranked[:top_n] if c >= 2]
+
+
+def _tags_reuse_section(config: Config) -> str:
+    """Prompt block listing the wiki's current top tags (B3, audit M10)."""
+    tags = _top_wiki_tags(config)
+    if not tags:
+        return ""
+    return (
+        "\n# Tags — reuse before inventing\n"
+        "Prefer frontmatter tags already used in this wiki (below); avoid inventing\n"
+        "near-synonyms (e.g. do NOT add \"雷达数据处理\" when \"数据处理\" exists).\n"
+        "Invent a new tag only when nothing below fits.\n"
+        f"Top existing tags: {', '.join(tags)}\n"
+    )
 
 
 def _collect_formulas_block(analyses: list[dict], cap: int = 60) -> str:
@@ -335,6 +404,7 @@ def _stage_2_4_build_prompt(
 
     formulas_section = _collect_formulas_block([chunk_analysis])
     schema_section = _schema_routing_block(config)
+    tags_section = _tags_reuse_section(config)
 
     language_directive = build_language_directive(chunk_text)
     return f"""{language_directive}
@@ -362,7 +432,7 @@ Chunk: {chunk_index + 1}
 
 # Entities found in this chunk (generate a page for key ones — skip ALREADY COVERED):
 {entity_str}
-
+{_ENTITY_RULES_SECTION}
 # Schema-typed pages found in this chunk (NashSU parity — generate at wiki/<folder>/<slug>.md when NOT already covered; skip ALREADY COVERED):
 {schema_candidates_str}
 
@@ -405,7 +475,8 @@ Rules:
 6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-
+{_EXTRA_RULES}
+{_CONCEPT_SKELETON_SECTION}{tags_section}
 # Output Format — EXACT
 ---FILE:wiki/concepts/<slug>.md---
 ---
@@ -924,6 +995,7 @@ def _stage_2_4_build_all_prompt(
 
     formulas_section = _collect_formulas_block(chunk_analyses)
     schema_section = _schema_routing_block(config)
+    tags_section = _tags_reuse_section(config)
 
     language_sample = source_context or json.dumps(chunk_analyses, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
@@ -949,7 +1021,7 @@ Chunks: {len(chunk_analyses)}
 
 # Entities found across ALL chunks (generate a page for key ones — skip ALREADY COVERED / DUPLICATE):
 {entity_str}
-
+{_ENTITY_RULES_SECTION}
 # Supplementary foundational pages (use sparingly)
 If the source clearly defines a foundational concept NOT in the lists above AND NOT
 in the Linkable pages list below, you MAY generate a page for it at a new
@@ -980,7 +1052,8 @@ Rules:
 6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-
+{_EXTRA_RULES}
+{_CONCEPT_SKELETON_SECTION}{tags_section}
 # Output Format — EXACT
 ---FILE:wiki/concepts/<slug>.md---
 ---
