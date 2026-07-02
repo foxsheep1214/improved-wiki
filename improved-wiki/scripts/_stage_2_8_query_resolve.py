@@ -18,11 +18,18 @@ Refactored 2026-06-21 for explicit stage naming; embedding prefilter 2026-06-29
 """
 from pathlib import Path
 import re
+from _frontmatter_array import write_frontmatter_array
 from _llm_api import call_anthropic_protocol
 from _stage_2_base import _stage_2_frontmatter_title
 from _dedup_embedding import cosine_similarity, embed_pages, DuplicatePrefilterError
 
-RESOLVE_COSINE_THRESHOLD = 0.82
+# Audit A3 (2026-07-02): 0.82 was borrowed from symmetric page-page dedup;
+# question-phrased query titles vs noun-phrased concept titles cap cosine
+# around 0.75-0.79 in production (bge-m3), so the LLM judge historically NEVER
+# fired. 0.70 admits real matches; candidates are no longer gated by this
+# threshold at all (top-k all go to the judge, default kept) — it now only
+# marks which candidates are recorded as resolve conclusions (cross_refs).
+RESOLVE_COSINE_THRESHOLD = 0.70
 
 
 def _stage_2_8_extract_query_blocks(file_blocks):
@@ -89,24 +96,25 @@ def _stage_2_8_embed_existing_and_queries(existing_pages, queries, *, min_succes
     return embeddings
 
 
-def _stage_2_8_find_related_wiki_pages(query, existing_pages, embeddings,
-                                       threshold=RESOLVE_COSINE_THRESHOLD, top_k=8):
-    """Cosine-rank existing pages against one query; return the top_k above
-    threshold as (stem, title). Empty when the query failed to embed."""
+def _stage_2_8_find_related_wiki_pages(query, existing_pages, embeddings, top_k=8):
+    """Cosine-rank existing pages against one query; return the top_k as
+    (page_id, title, similarity) triples — NO threshold gate (audit A3: the
+    old >=0.82 gate filtered out even the best real matches, so the judge
+    never fired). The judge sees every top-k candidate and decides, defaulting
+    to kept. Empty when the query failed to embed."""
     qvec = embeddings.get(_stage_2_8_query_id(query))
     if not qvec:
         return []
     scored = []
     for page in existing_pages:
         sim = cosine_similarity(qvec, embeddings.get(page["id"]))
-        if sim >= threshold:
-            scored.append((sim, page["stem"], page["title"]))
+        scored.append((sim, page["id"], page["title"]))
     scored.sort(key=lambda t: t[0], reverse=True)
-    return [(stem, title) for _, stem, title in scored[:top_k]]
+    return [(pid, title, sim) for sim, pid, title in scored[:top_k]]
 
 
 def _stage_2_8_judge_prompt(query, related):
-    pages = "\n".join("- [[{}]]: {}".format(slug, title) for slug, title in related[:8])
+    pages = "\n".join("- [[{}]]: {}".format(pid, title) for pid, title, _sim in related[:8])
     if not pages:
         pages = "(none found)"
     return """You are judging whether an open question from a newly-ingested source is already answered by existing wiki pages.
@@ -173,7 +181,10 @@ def stage_2_8_resolve_queries(file_blocks, wiki_root, config, *, embeddings=None
         status, reason = _stage_2_8_judge_query_resolution(query, related, config)
         resolutions[query["slug"]] = {
             "status": status,
-            "resolution_pages": [s for s, _ in related],
+            # Top-k candidates ALL go to the judge; only >=threshold ones are
+            # recorded as resolve conclusions (and written back as cross_refs).
+            "resolution_pages": [pid for pid, _t, sim in related
+                                 if sim >= RESOLVE_COSINE_THRESHOLD],
             "reason": reason,
         }
         print("  [stage 2.7] query '{}' -> {} ({})".format(query["slug"], status, reason))
@@ -187,5 +198,25 @@ def _stage_2_8_update_file_blocks_after_resolution(file_blocks, resolutions):
         slug = Path(path).stem
         if ("/queries/" in path or path.startswith("queries/")) and slug in closed_slugs:
             continue
+        result.append((path, content))
+    return result
+
+
+def _stage_2_8_apply_cross_refs(file_blocks, resolutions):
+    """Write resolve conclusions back into kept query pages' frontmatter as a
+    `cross_refs:` list (audit A3/H3: resolution_pages previously lived only in
+    the progress cache — the on-disk query page carried no trace of the
+    resolve step). Closed queries are already dropped by
+    _stage_2_8_update_file_blocks_after_resolution; queries with no
+    above-threshold pages are left untouched (no empty cross_refs field).
+    Returns a new list — never mutates the input blocks."""
+    result = []
+    for path, content in file_blocks:
+        slug = Path(path).stem
+        res = resolutions.get(slug)
+        if (("/queries/" in path or path.startswith("queries/"))
+                and res and res.get("status") == "kept"
+                and res.get("resolution_pages")):
+            content = write_frontmatter_array(content, "cross_refs", res["resolution_pages"])
         result.append((path, content))
     return result

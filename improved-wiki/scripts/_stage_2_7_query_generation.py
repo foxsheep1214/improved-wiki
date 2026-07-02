@@ -7,6 +7,36 @@ from _language import build_language_directive
 # instead — never cut mid-structure.
 _STAGE_2_7_DIGEST_KEY_PRIORITY = ("book_meta", "outline", "key_claims", "key_entities", "key_concepts")
 _STAGE_2_7_DIGEST_CHAR_BUDGET = 24000
+_STAGE_2_7_CLAIMS_LIMIT = 30
+
+
+def _stage_2_7_sample_claims(chunk_analyses: list[dict], limit: int = _STAGE_2_7_CLAIMS_LIMIT) -> list:
+    """Uniform per-chunk claim quota (A6 fix 2026-07-02).
+
+    The old flat extend + prompt-side ``[:30]`` kept only the FIRST chunks'
+    claims — front-of-book bias for any book with >30 claims (audit H2).
+    Round-robin one claim per chunk instead, preserving within-chunk order,
+    so every chapter's claims reach the prompt before any chapter's second.
+    """
+    per_chunk = []
+    for ca in chunk_analyses or []:
+        claims = ca.get("claims", []) if isinstance(ca, dict) else []
+        if isinstance(claims, list) and claims:
+            per_chunk.append(claims)
+    sampled: list = []
+    round_i = 0
+    while len(sampled) < limit:
+        took = False
+        for claims in per_chunk:
+            if round_i < len(claims):
+                sampled.append(claims[round_i])
+                took = True
+                if len(sampled) >= limit:
+                    break
+        if not took:
+            break
+        round_i += 1
+    return sampled
 
 
 def _stage_2_7_pack_digest(global_digest: dict, budget: int = _STAGE_2_7_DIGEST_CHAR_BUDGET) -> str:
@@ -186,12 +216,9 @@ def stage_2_7_query_generation(
             print(f"[stage 2.7] Skipped — {src_type} source type (no meaningful open questions)")
         return [], ""
 
-    # Collect key claims from chunk analyses
-    key_claims = []
-    for ca in chunk_analyses:
-        claims = ca.get("claims", [])
-        if isinstance(claims, list):
-            key_claims.extend(claims)
+    # Collect key claims from chunk analyses — per-chunk uniform quota (A6),
+    # not a flat extend that the prompt-side [:30] would cut to the front chunks.
+    key_claims = _stage_2_7_sample_claims(chunk_analyses)
 
     # Get concept/entity titles from generated file blocks
     concept_titles = []

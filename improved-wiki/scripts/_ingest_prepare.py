@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -28,11 +29,16 @@ from _stage_1_extract import (
     stage_1_3_caption_images,
     _stage_1_1_check_text_quality,
 )
+from _frontmatter import extract_frontmatter_title
+from _frontmatter_array import parse_frontmatter_array
 from _stage_1_3_caption import _stage_1_3_inline_captions
 from _stage_2_analyze import stage_2_1_global_digest
 from _stage_2_6_source_page import stage_2_6_source_page
 from _stage_2_7_query_generation import stage_2_7_query_generation
-from _stage_2_9_comparison import stage_2_9_comparison_generation
+from _stage_2_9_comparison import (
+    stage_2_9_comparison_generation,
+    stage_2_9_append_source_backlinks,
+)
 from _stage_validators import (
     verify_stage_0,
     StageValidationError,
@@ -42,6 +48,87 @@ from _stage_validators import (
 )
 from _ingest_skip import _stage_0_2_should_skip, _stop_after_stage
 from _ingest_chunks import _run_chunk_pipeline
+
+# ── A6 (audit H2): big-book grounding de-bias ──
+# 2.7/2.9 grounding was `extracted_text[:source_budget]` — a pure front
+# prefix, so a 1.55M-char book fed only its first ~19% and every query /
+# comparison skewed to the early chapters. Sample per-chapter heads instead.
+try:
+    from _stage_2_analyze import _CHAPTER_ANCHOR_RE
+except ImportError:  # keep prepare importable if analyze internals move
+    _CHAPTER_ANCHOR_RE = re.compile(
+        r"^#{1,3}\s*(第[一二三四五六七八九十百0-9]+章[^\n]*|Chapter\s+\d+[^\n]*)",
+        re.MULTILINE | re.IGNORECASE)
+
+_CHAPTER_SAMPLE_SEP = "\n\n[…]\n\n"
+
+
+def _split_source_chapters(text: str) -> list[str]:
+    """Split text at chapter anchors (第N章 / Chapter N headings). Front matter
+    before the first anchor is its own segment; [text] when no anchor found."""
+    starts = [m.start() for m in _CHAPTER_ANCHOR_RE.finditer(text)]
+    if not starts:
+        return [text] if text else []
+    bounds = ([0] if starts[0] > 0 else []) + starts + [len(text)]
+    return [seg for seg in (text[s:e] for s, e in zip(bounds, bounds[1:]))
+            if seg.strip()]
+
+
+def _stratified_source_sample(text: str, budget: int) -> str:
+    """Concatenate equal per-chapter head slices up to ``budget`` chars.
+
+    Texts within budget pass through whole; texts without chapter anchors
+    keep the old prefix behavior (nothing to stratify on)."""
+    if len(text) <= budget:
+        return text
+    chapters = _split_source_chapters(text)
+    if len(chapters) <= 1:
+        return text[:budget]
+    sep_total = len(_CHAPTER_SAMPLE_SEP) * (len(chapters) - 1)
+    per_chapter = (budget - sep_total) // len(chapters)
+    if per_chapter <= 0:
+        return text[:budget]
+    sample = _CHAPTER_SAMPLE_SEP.join(ch[:per_chapter] for ch in chapters)
+    return sample[:budget]
+
+
+def _stage_2_7_queries_index_block(file_blocks: list, config: Config) -> tuple[str, str] | None:
+    """A7 (audit H5): queries/ had no real index — lint left a `tags: [stub]`
+    placeholder and no page linked the query pages. Build a queries/index.md
+    listing block (Stage 3.1 overwrites listing pages, no merge) appending
+    this ingest's surviving query slugs to the on-disk index, creating it
+    when missing or still a lint stub. Returns None when nothing to add."""
+    entries = []
+    for path, content in file_blocks:
+        norm = path[len("wiki/"):] if path.startswith("wiki/") else path
+        if not norm.startswith("queries/"):
+            continue
+        stem = Path(norm).stem
+        if stem == "index":
+            continue
+        entries.append((stem, extract_frontmatter_title(content) or stem))
+    if not entries:
+        return None
+
+    index_path = config.wiki_dir / "queries" / "index.md"
+    existing = ""
+    if index_path.is_file():
+        try:
+            existing = index_path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            existing = ""
+    is_stub = bool(existing) and "stub" in parse_frontmatter_array(existing, "tags")
+    if not existing or is_stub:
+        # No frontmatter — matches the root index.md listing-page convention.
+        existing = "# Queries Index\n\nOpen questions raised by ingested sources.\n"
+    new_lines = [f"- [[queries/{stem}]] — {title}"
+                 for stem, title in entries
+                 if f"[[queries/{stem}]]" not in existing]
+    if not new_lines:
+        return None
+    return ("queries/index.md",
+            existing.rstrip("\n") + "\n\n" + "\n".join(new_lines) + "\n")
+
 
 def _prepare_source_page(
     global_digest: dict, raw_file: Path, config: Config,
@@ -438,7 +525,12 @@ def _do_prepare(
                               for c in (ca.get("claims") or [])])
             _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
 
-            _q29_source = _src_grounding  # same budgeted excerpt as 2.6
+            # A6 (audit H2): 2.7/2.9 use a stratified per-chapter sample, not
+            # the front prefix — 2.6 keeps the prefix (the audit targets
+            # query/comparison covering, not the source page digest).
+            _q29_source = _stratified_source_sample(
+                extracted_text or "", config.source_budget)
+            _chapter_count = len(_CHAPTER_ANCHOR_RE.findall(extracted_text or ""))
 
             # ── Stage 2.7: Query generation ──
             query_blocks, _ = stage_2_7_query_generation(
@@ -455,12 +547,16 @@ def _do_prepare(
             if query_blocks:
                 file_blocks = list(file_blocks) + query_blocks
                 from _stage_2_8_query_resolve import (stage_2_8_resolve_queries,
-                                                       _stage_2_8_update_file_blocks_after_resolution)
+                                                       _stage_2_8_update_file_blocks_after_resolution,
+                                                       _stage_2_8_apply_cross_refs)
                 query_resolutions = stage_2_8_resolve_queries(file_blocks, config.wiki_dir, config)
                 if any(r["status"] == "closed" for r in query_resolutions.values()):
                     before_q = len(file_blocks)
                     file_blocks = _stage_2_8_update_file_blocks_after_resolution(file_blocks, query_resolutions)
                     print(f"  [stage 2.7] Removed {before_q - len(file_blocks)} closed query block(s)")
+                # A3: write resolve conclusions into kept query frontmatter
+                # (cross_refs) instead of leaving them only in the progress cache.
+                file_blocks = _stage_2_8_apply_cross_refs(file_blocks, query_resolutions)
             else:
                 query_resolutions = {}
 
@@ -469,9 +565,20 @@ def _do_prepare(
                 global_digest, chunk_analyses, file_blocks, raw_file, config,
                 template=template_content, verbose=verbose,
                 source_context=_q29_source,
+                chapter_count=_chapter_count,
             )
             if comp_blocks:
                 file_blocks = list(file_blocks) + comp_blocks
+                # A7: backlink the new comparisons from the source page block
+                # (2.9 runs after 2.6 — without this they stay an inlink island).
+                file_blocks = stage_2_9_append_source_backlinks(file_blocks, comp_blocks)
+
+            # A7: refresh the real queries/index.md with this ingest's kept
+            # queries, while the blocks are still in memory.
+            _qidx_block = _stage_2_7_queries_index_block(file_blocks, config)
+            if _qidx_block:
+                file_blocks = list(file_blocks) + [_qidx_block]
+                print("  [stage 2.7] queries/index.md listing block appended")
 
             query_count = len(query_blocks)
             comp_count = len(comp_blocks)

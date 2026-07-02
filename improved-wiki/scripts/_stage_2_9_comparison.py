@@ -5,11 +5,20 @@ from _language import build_language_directive
 # Stage 2.9: in-source concept comparison pages.
 
 
+def _stage_2_9_comparison_cap(chapter_count: int) -> int:
+    """Per-book comparison-page cap, scaled with chapter count (A6, audit H2).
+
+    The flat "at most 3" cap starved big books — a 26-chapter handbook got the
+    same budget as a 5-chapter booklet (13 calls hit the cap 7 times)."""
+    return min(8, 3 + chapter_count // 8)
+
+
 def _stage_2_9_build_prompt_in_source(
     concept_titles: list[str],
     file_path: Path,
     config: Config,
     source_context: str = "",
+    comp_cap: int = 3,
 ) -> str:
     """Build prompt for Stage 2.9: in-source concept comparisons."""
     # [:60] hid most of a large book's concepts from comparison candidates
@@ -67,7 +76,7 @@ Bad candidates:
 - Parent/child relationships (DC-DC Converter → Buck Converter)
 - An arbitrary list of unrelated concepts that the source never actually contrasts
 
-Generate at most 3 comparison pages. Output 0 if no genuine comparison exists.
+Generate at most {comp_cap} comparison pages. Output 0 if no genuine comparison exists.
 
 # Output Format
 # (For a 3+ way comparison, just add more columns to the table and more
@@ -121,6 +130,7 @@ def stage_2_9_comparison_generation(
     template: str = "",
     verbose: bool = False,
     source_context: str = "",
+    chapter_count: int = 0,
 ) -> tuple[list[tuple[str, str]], str]:
     """Stage 2.9: Generate in-source concept comparison pages.
 
@@ -147,17 +157,30 @@ def stage_2_9_comparison_generation(
     # In-source concept comparison
     response = ""
     if len(concept_titles) >= 2:
+        comp_cap = _stage_2_9_comparison_cap(chapter_count)
         if verbose:
-            print(f"[stage 2.9] In-source comparison — {len(concept_titles)} concepts...")
+            print(f"[stage 2.9] In-source comparison — {len(concept_titles)} concepts, "
+                  f"cap {comp_cap} ({chapter_count} chapters)...")
         prompt = _stage_2_9_build_prompt_in_source(
             concept_titles, file_path, config,
-            source_context=source_context,
+            source_context=source_context, comp_cap=comp_cap,
         )
+        _stop = ""
         try:
             response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)
         except Exception as e:
             print(f"[stage 2.9] LLM call failed: {e}")
             response = ""
+        # A6: a max_tokens stop means the tail comparison block was cut and
+        # would be silently dropped by parse_file_blocks — warn and retry once.
+        if response and _stop == "max_tokens":
+            print("[stage 2.9] ⚠️  response truncated (stop=max_tokens) — retrying once")
+            try:
+                response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)
+            except Exception as e:
+                print(f"[stage 2.9] retry failed: {e} — keeping truncated response")
+            if _stop == "max_tokens":
+                print("[stage 2.9] ⚠️  still truncated — keeping complete blocks only")
         if response:
             blocks = parse_file_blocks(response)
             if blocks:
@@ -177,3 +200,33 @@ def stage_2_9_comparison_generation(
         print("[stage 2.9] No comparisons generated")
 
     return all_blocks, response
+
+
+def stage_2_9_append_source_backlinks(
+    file_blocks: list[tuple[str, str]],
+    comp_blocks: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """A7 (audit H5): comparisons were a zero-inlink island — 2.9 runs after
+    the 2.6 source page has been generated, so no page ever linked to them.
+    Append a `## Comparisons` section (prefixed wikilinks) to the source page
+    block while it is still in memory. Returns a new list (no mutation);
+    no-op without comp_blocks; warns when no source block is present."""
+    if not comp_blocks:
+        return list(file_blocks)
+    links = []
+    for path, content in comp_blocks:
+        stem = Path(path).stem
+        title = _stage_2_frontmatter_title(content) or stem
+        links.append(f"- [[comparisons/{stem}]] — {title}")
+    section = "\n\n## Comparisons\n\n" + "\n".join(links) + "\n"
+    result: list[tuple[str, str]] = []
+    appended = False
+    for path, content in file_blocks:
+        norm = path[len("wiki/"):] if path.startswith("wiki/") else path
+        if not appended and norm.startswith("sources/"):
+            content = content.rstrip("\n") + section
+            appended = True
+        result.append((path, content))
+    if not appended:
+        print("[stage 2.9] ⚠️  no source page block found — Comparisons backlink skipped")
+    return result
