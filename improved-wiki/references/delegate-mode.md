@@ -171,3 +171,15 @@ The pipeline can generate 2-3 redundant source-page merge `LLM-task` prompts dur
 a single ingest (Stage 2.6 writes it, then enrichment re-merges it). If you see the
 same source page appearing in multiple merge tasks, reuse your first merge result —
 the content doesn't change between merges.
+
+## 链式作答（L4，2026-07-02）：压缩交接死区
+
+实测交接死区（通知→主对话→re-invoke→派新 agent）≈ 墙钟的 ~30%。串行链
+（2.2 逐 chunk / 2.4 逐 chunk）可用**链式 subagent** 压缩：
+
+- 作答 agent 写完 `.txt` 后**自己 re-invoke ingest.py**；若新 handoff 与本次
+  **同 stage 同类型**（如 2.2 的下一个 chunk），直接连答，**每个 agent 上限 2 个
+  handoff**（防上下文膨胀），然后退出并报告推进到哪一步。
+- 不同 stage 类型的 handoff 一律留给主对话重新派发（保证 prompt 规则正确）。
+- 仅限单书串行链内；跨书 2.3+ 并行仍然禁止（不变量不变）。
+- 效果：链上死区约减半，叠加 1.5 预取后 Skolnik 级单书墙钟 ≈ -15%。
