@@ -10,6 +10,33 @@ import re
 
 from _stage_2_base import _stage_2_frontmatter_title, _stage_2_title_words
 
+# Cross-domain acronym guard: shared tokens no longer than this are treated as
+# bare acronyms ("ram", "mti") rather than full words.
+_STAGE_2_3_ACRONYM_MAX_LEN = 4
+_STAGE_2_3_CJK_RE = re.compile("[\\u3400-\\u4dbf\\u4e00-\\u9fff]")
+
+
+def _stage_2_3_acronym_only_mismatch(name: str, slug: str, shared_tokens: set) -> bool:
+    """True when a title-Jaccard match rests solely on short ASCII tokens
+    (<=4 chars, i.e. bare acronyms) while the two names carry disjoint CJK
+    parts — a cross-domain acronym collision, not a real association.
+
+    Live failure (2026-07-02, 《直升机多普勒导航雷达原理》): _stage_2_title_words
+    strips CJK characters entirely, so "RAM 片选信号软件控制" (computer memory)
+    and the existing page 雷达吸波材料-ram (radar absorbing material) both
+    tokenized to {"ram"} → Jaccard 1.0 → the new concept was flagged ALREADY
+    COVERED and generation linked memory pages to the radar page. Exact
+    slug-form matches, matches carrying at least one longer shared token, and
+    names without CJK on both sides are unaffected.
+    """
+    if not shared_tokens:
+        return False
+    if any(len(tok) > _STAGE_2_3_ACRONYM_MAX_LEN for tok in shared_tokens):
+        return False
+    name_cjk = set(_STAGE_2_3_CJK_RE.findall(name))
+    slug_cjk = set(_STAGE_2_3_CJK_RE.findall(slug))
+    return bool(name_cjk) and bool(slug_cjk) and not (name_cjk & slug_cjk)
+
 
 def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: list[dict]) -> dict:
     associations = {}
@@ -51,7 +78,9 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
                 continue
             if slug_form == slug.lower():
                 matches.append(slug)
-            elif name_words and len(name_words & words) / len(name_words | words) > 0.5:
+            elif (name_words
+                  and len(name_words & words) / len(name_words | words) > 0.5
+                  and not _stage_2_3_acronym_only_mismatch(name, slug, name_words & words)):
                 matches.append(slug)
         if matches:
             associations[name] = matches
@@ -105,6 +134,8 @@ def stage_2_3_resolve_proposed_connections(wiki_root: Path, chunk_analyses: list
             best_ratio, best_slug = 0.0, None
             for stem, (_, words) in existing.items():
                 if not words or not page_words:
+                    continue
+                if _stage_2_3_acronym_only_mismatch(page, stem, page_words & words):
                     continue
                 ratio = len(page_words & words) / len(page_words | words)
                 if ratio > best_ratio:
