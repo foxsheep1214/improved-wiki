@@ -198,13 +198,51 @@ def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int,
     return chunks
 
 
-def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> str:
-    """Find the heading hierarchy that a chunk falls under (NashSU parity).
+# ── Stage 2.2 chapter anchors ──
+# OCR'd books promote front-matter titles ("出版说明", "目录") and figure
+# captions to markdown headings, so the generic nearest-heading ancestor stack
+# mislabeled nearly every chunk. Explicit chapter markers are far more reliable
+# anchors; numeric section headings are the fallback tier when a book has none.
+_CHAPTER_ANCHOR_RE = re.compile(
+    r"^#{1,3}\s*(第[一二三四五六七八九十百0-9]+章[^\n]*|Chapter\s+\d+[^\n]*)",
+    re.MULTILINE | re.IGNORECASE)
+_NUMERIC_HEADING_RE = re.compile(r"^#{1,3}\s*(\d+(?:\.\d+)*[ \t][^\n]*)", re.MULTILINE)
+_FRONT_MATTER_LABEL = "前置材料（前言/目录）"
 
-    Scans backwards from chunk_start to find the nearest H1-H6 heading, then
-    walks further back to build the full ancestor path. Returns a string like
-    "Chapter 3 > Section 3.2 > Subsection 3.2.1" or "" if no heading found.
+
+def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> str:
+    """Resolve the heading label for a chunk's span, chapter-markers first.
+
+    Chapter anchors (第N章 / Chapter N, else numeric section headings) are
+    scanned and the label reflects the chunk's SPAN: the chapter most recently
+    opened at chunk_start plus, if different, the last chapter opened before
+    chunk_end — "第2章 MTI雷达 → 第3章 AMTI". A chunk starting before chapter 1
+    gets the front-matter label, so OCR pseudo-headings (出版说明/目录/figure
+    captions) can no longer leak into the path.
+
+    Texts without any chapter anchor fall back to the original behavior
+    (NashSU parity): nearest H1-H6 heading before chunk_start plus its ancestor
+    stack, e.g. "Chapter 3 > Section 3.2", or "" if no heading found.
     """
+    anchors = [(m.start(), m.group(1).strip())
+               for m in _CHAPTER_ANCHOR_RE.finditer(text)]
+    if not anchors:
+        anchors = [(m.start(), m.group(1).strip())
+                   for m in _NUMERIC_HEADING_RE.finditer(text)]
+    if anchors:
+        start_idx = end_idx = -1  # -1 → before the first chapter (front matter)
+        for i, (pos, _title) in enumerate(anchors):
+            if pos <= chunk_start:
+                start_idx = i
+            if pos < chunk_end:
+                end_idx = i
+            else:
+                break
+        start_label = anchors[start_idx][1] if start_idx >= 0 else _FRONT_MATTER_LABEL
+        if end_idx > start_idx:
+            return f"{start_label} → {anchors[end_idx][1]}"
+        return start_label
+
     _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
     _heading_stack: list[tuple[int, str]] = []  # (level, title)
 
