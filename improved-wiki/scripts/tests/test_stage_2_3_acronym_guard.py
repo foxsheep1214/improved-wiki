@@ -71,8 +71,8 @@ class Stage23AcronymGuardDetect(unittest.TestCase):
     def test_cjk_exact_slug_still_matched(self):
         """CJK exact slug-form equality is unaffected by the guard.
 
-        (Title carries ASCII tokens because detect skips pages whose title
-        word set is empty — pre-existing semantics, unchanged here.)
+        (Title carries ASCII tokens; the pure-CJK-title case is covered by
+        Stage23PureCjkExactMatch below — fix 2026-07-02.)
         """
         with tempfile.TemporaryDirectory() as d:
             wiki = Path(d)
@@ -93,6 +93,34 @@ class Stage23AcronymGuardDetect(unittest.TestCase):
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("RAM 吸波材料", assoc)
             self.assertIn("雷达吸波材料-ram", assoc["RAM 吸波材料"])
+
+
+class Stage23PureCjkExactMatch(unittest.TestCase):
+    """Fix 2026-07-02: `if not words: continue` ran BEFORE the exact
+    slug-form comparison, so a page whose title tokenizes to an empty ASCII
+    word set (pure-CJK title) could never be detected as ALREADY COVERED —
+    even on an exact name↔slug match. Exact matches must not depend on
+    tokenization; only the Jaccard branch needs non-empty words.
+    """
+
+    def test_pure_cjk_exact_slug_match_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            wiki = Path(d)
+            _write_page(wiki, "concepts", "多普勒频移", "多普勒频移")
+            chunks = [{"concepts_found": [{"name": "多普勒频移"}],
+                       "entities_found": []}]
+            assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
+            self.assertIn("多普勒频移", assoc)
+            self.assertIn("多普勒频移", assoc["多普勒频移"])
+
+    def test_pure_cjk_non_match_still_not_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            wiki = Path(d)
+            _write_page(wiki, "concepts", "多普勒频移", "多普勒频移")
+            chunks = [{"concepts_found": [{"name": "变频器控制"}],
+                       "entities_found": []}]
+            assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
+            self.assertNotIn("变频器控制", assoc)
 
 
 class Stage23AcronymGuardResolve(unittest.TestCase):
