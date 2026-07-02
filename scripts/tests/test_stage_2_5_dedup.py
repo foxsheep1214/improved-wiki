@@ -125,6 +125,111 @@ class TestLlmConfirmGate(unittest.TestCase):
         self.assertEqual(rules, [])
 
 
+class TestEntityDedup(unittest.TestCase):
+    """A1 (audit 2026-07-02, H1 layer 1): entity blocks join intra-ingest
+    dedup. Pools stay separate (entity merges never delete concept blocks),
+    merge semantics unchanged."""
+
+    def test_extract_entities_pool(self):
+        file_blocks = [
+            ("wiki/concepts/pao.md", "---\ntitle: PAO\n---\nbody"),
+            ("wiki/entities/billingsley.md", "---\ntitle: Billingsley\n---\nbody"),
+            ("entities/j-b-billingsley.md", "---\ntitle: J. B. Billingsley\n---\nbody"),
+        ]
+        entities = d._stage_2_5_extract_concept_blocks(file_blocks, folder="entities")
+        self.assertEqual([e["slug"] for e in entities],
+                         ["billingsley", "j-b-billingsley"])
+        self.assertTrue(all(e["folder"] == "entities" for e in entities))
+        # default folder still extracts concepts only
+        concepts = d._stage_2_5_extract_concept_blocks(file_blocks)
+        self.assertEqual([c["slug"] for c in concepts], ["pao"])
+
+    def test_merge_rule_carries_pool_folder(self):
+        entities = [
+            dict(_concept("billingsley", "Billingsley", "longer definition wins"),
+                 folder="entities"),
+            dict(_concept("j-b-billingsley", "J. B. Billingsley", "x"),
+                 folder="entities"),
+        ]
+        orig = d.call_anthropic_protocol
+        d.call_anthropic_protocol = lambda *a, **k: (
+            "GROUP 1: MERGE yes | PRIMARY: billingsley", None)
+        try:
+            rules = d._stage_2_5_generate_merge_rules(entities, [[0, 1]], config=object())
+        finally:
+            d.call_anthropic_protocol = orig
+        self.assertEqual(len(rules), 1)
+        self.assertEqual(rules[0]["folder"], "entities")
+        self.assertEqual(rules[0]["duplicate_slugs"], ["j-b-billingsley"])
+
+    def test_apply_drops_entity_duplicate_and_redirects_links(self):
+        file_blocks = [
+            ("entities/billingsley.md", "---\ntitle: Billingsley\n---\nprimary"),
+            ("entities/j-b-billingsley.md", "---\ntitle: J. B. Billingsley\n---\ndup"),
+            ("concepts/clutter.md",
+             "---\ntitle: Clutter\n---\nSee [[j-b-billingsley]] for data."),
+        ]
+        rules = [{
+            "primary_slug": "billingsley", "primary_title": "Billingsley",
+            "duplicate_slugs": ["j-b-billingsley"], "merge_strategy": "union",
+            "merge_reason": "test", "folder": "entities",
+        }]
+        result = d._stage_2_5_apply_merge_rules(file_blocks, rules)
+        paths = [p for p, _ in result]
+        self.assertEqual(paths, ["entities/billingsley.md", "concepts/clutter.md"])
+        self.assertIn("[[billingsley]]", dict(result)["concepts/clutter.md"])
+
+    def test_entity_merge_never_deletes_same_stem_concept(self):
+        file_blocks = [
+            ("entities/j-i-marcum.md", "---\ntitle: J. I. Marcum\n---\nprimary"),
+            ("entities/marcum.md", "---\ntitle: Marcum\n---\ndup"),
+            ("concepts/marcum.md", "---\ntitle: Marcum Q Function\n---\nconcept"),
+        ]
+        rules = [{
+            "primary_slug": "j-i-marcum", "primary_title": "J. I. Marcum",
+            "duplicate_slugs": ["marcum"], "merge_strategy": "union",
+            "merge_reason": "test", "folder": "entities",
+        }]
+        result = d._stage_2_5_apply_merge_rules(file_blocks, rules)
+        paths = [p for p, _ in result]
+        self.assertIn("concepts/marcum.md", paths)      # concept survives
+        self.assertNotIn("entities/marcum.md", paths)   # entity dup removed
+
+    def test_stage_runs_entity_pool_with_one_batched_confirm(self):
+        file_blocks = [
+            ("wiki/concepts/mti.md", "---\ntitle: MTI\n---\nbody"),
+            ("wiki/entities/billingsley.md", "---\ntitle: Billingsley\n---\nlonger body"),
+            ("wiki/entities/j-b-billingsley.md", "---\ntitle: J. B. Billingsley\n---\nb"),
+        ]
+
+        def fake_find(concepts, *, embeddings=None):
+            if concepts and concepts[0].get("folder") == "entities":
+                return [[0, 1]]
+            return []
+
+        calls = {"n": 0}
+
+        def fake_llm(*a, **k):
+            calls["n"] += 1
+            return ("GROUP 1: MERGE yes | PRIMARY: billingsley", None)
+
+        orig_find = d._stage_2_5_find_duplicate_concepts
+        orig_llm = d.call_anthropic_protocol
+        d._stage_2_5_find_duplicate_concepts = fake_find
+        d.call_anthropic_protocol = fake_llm
+        try:
+            result = d.stage_2_5_dedup(
+                file_blocks, [{"chunk": 1}, {"chunk": 2}], config=object())
+        finally:
+            d._stage_2_5_find_duplicate_concepts = orig_find
+            d.call_anthropic_protocol = orig_llm
+        paths = [p for p, _ in result["file_blocks"]]
+        self.assertNotIn("wiki/entities/j-b-billingsley.md", paths)
+        self.assertIn("wiki/entities/billingsley.md", paths)
+        self.assertIn("wiki/concepts/mti.md", paths)
+        self.assertEqual(calls["n"], 1)  # both pools, ONE batched confirm
+
+
 class TestApplyMergeRewritesWikilinks(unittest.TestCase):
     def test_drops_duplicate_block_and_redirects_links(self):
         # Sibling links are redirected to the primary; the primary's own link

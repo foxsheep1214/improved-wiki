@@ -58,6 +58,79 @@ def _normalize_source_frontmatter(
     return "\n".join(lines)
 
 
+# ── A9 (audit 2026-07-02): Main-Arguments coverage validator ────────────────
+# The Main Arguments section is the wiki's claim ledger; H2 showed front-prefix
+# truncation historically produced ledgers covering only the opening chapters
+# (何友 baseline: 13 claims for a 19+-chapter book). Non-fatal: warn loudly
+# when the entry count falls below one per technical chapter of the outline.
+
+_STAGE_2_6_NON_TECH_CHAPTER_RE = re.compile(
+    r"前言|序言|序章|绪言|目录|致谢|附录|参考文献|索引|符号表|缩略语|"
+    r"preface|foreword|contents|acknowledg|appendix|references|bibliography|"
+    r"glossary|about the author",
+    re.IGNORECASE,
+)
+_STAGE_2_6_MAIN_ARGS_HEADING_RE = re.compile(
+    r"^#{2,3}\s*.*(?:Main Arguments|主要论[点断]|核心论[点断]|主要观点)",
+    re.MULTILINE | re.IGNORECASE,
+)
+_STAGE_2_6_CLAIM_LABEL_RE = re.compile(
+    r"\*\*\s*(?:Claim|论点|主张|断言)\s*(?:[:：]\s*\*\*|\*\*\s*[:：])",
+    re.IGNORECASE,
+)
+
+
+def _stage_2_6_technical_chapter_count(outline) -> int:
+    """Chapters in the 2.1 outline minus obvious non-technical front/back
+    matter (前言/目录/附录/references …). Tolerates dict or plain-string
+    outline entries; unparseable outlines count as 0 (validator stays quiet)."""
+    if not isinstance(outline, list):
+        return 0
+    count = 0
+    for ch in outline:
+        title = ch.get("title", "") if isinstance(ch, dict) else str(ch)
+        title = str(title).strip()
+        if not title or _STAGE_2_6_NON_TECH_CHAPTER_RE.search(title):
+            continue
+        count += 1
+    return count
+
+
+def _stage_2_6_main_arguments_count(response: str) -> int:
+    """Count claim entries in the response's Main Arguments section.
+
+    Primary signal: `**Claim:**` / `**论点：**`-style labels (the template's
+    per-claim shape). Fallback when the model skipped labels: top-level list
+    items (column-0 `-`/`1.` lines — indented Evidence/Strength sub-bullets
+    are excluded). Section ends at the next `## ` heading."""
+    m = _STAGE_2_6_MAIN_ARGS_HEADING_RE.search(response)
+    if not m:
+        return 0
+    section = response[m.end():]
+    nxt = re.search(r"^##\s", section, re.MULTILINE)
+    if nxt:
+        section = section[:nxt.start()]
+    labels = len(_STAGE_2_6_CLAIM_LABEL_RE.findall(section))
+    if labels:
+        return labels
+    return len(re.findall(r"^(?:-|\*|\d+\.)\s+\S", section, re.MULTILINE))
+
+
+def _stage_2_6_validate_main_arguments(response: str, outline) -> None:
+    """Post-generation stage validator (A9): warn — never raise — when the
+    claim ledger has fewer entries than technical chapters (coverage target:
+    every technical chapter surfaces ≥1 claim, per the prompt's own rule)."""
+    chapters = _stage_2_6_technical_chapter_count(outline)
+    if chapters <= 0:
+        return
+    entries = _stage_2_6_main_arguments_count(response)
+    if entries < chapters:
+        print(f"  [stage 2.6][WARN] Main Arguments coverage LOW: {entries} "
+              f"claim entr{'y' if entries == 1 else 'ies'} < {chapters} "
+              f"technical chapter(s) — claim ledger may be under-sampled "
+              f"(check chunk-claims injection / source front-truncation)")
+
+
 def stage_2_6_source_page(
     global_digest: dict,
     file_path: Path,
@@ -429,6 +502,7 @@ venue: {venue_yaml}
         response, authors_yaml, year_yaml, url_yaml, venue_yaml,
         related_fallback=(_gen_c + _gen_e),
     )
+    _stage_2_6_validate_main_arguments(response, outline)
     if verbose:
         print(f"[stage 2.6] Source page generated ({len(response):,} chars, stop={stop_reason})")
     else:

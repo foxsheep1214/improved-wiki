@@ -100,6 +100,31 @@ def _stage_2_title_words(title: str) -> set:
             words.add(tok)
     return words
 
+
+_TITLE_CJK_RUN_RE = re.compile("[\\u3400-\\u4dbf\\u4e00-\\u9fff]+")
+
+
+def _stage_2_title_cjk_bigrams(title: str) -> set:
+    """CJK character-bigram token set for title-overlap Jaccard matching.
+
+    A4 (audit 2026-07-02, H1 layer 2): `_stage_2_title_words` keeps only
+    `[a-z0-9]`, so a pure-CJK title tokenizes to the EMPTY set and Stage 2.3's
+    Jaccard branch (both sides must be non-empty) never fires — Chinese
+    concepts fell back to exact slug match only (匹配滤波 ×5 pages coexisting).
+    Character bigrams over each maximal CJK run give CJK titles a usable token
+    set: "匹配滤波器理论" → {匹配, 配滤, 滤波, 波器, 器理, 理论}. A length-1
+    run contributes its single character. Kept SEPARATE from the ASCII word
+    set (own Jaccard branch in Stage 2.3) so mixed CJK+Latin titles don't
+    dilute existing ASCII-token matches.
+    """
+    tokens = set()
+    for run in _TITLE_CJK_RUN_RE.findall(title):
+        if len(run) == 1:
+            tokens.add(run)
+        else:
+            tokens.update(run[i:i + 2] for i in range(len(run) - 1))
+    return tokens
+
 # Explicitly re-export underscore-prefixed helpers. Without __all__, the
 # `from _stage_2_base import *` used by every Stage 2.x module EXCLUDES
 # _-prefixed names (Python default), so _retry_jitter / _is_retryable_exception

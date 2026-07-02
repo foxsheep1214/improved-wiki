@@ -1,5 +1,7 @@
-"""Stage 2.4 closing sub-step: 源内去重 (intra-source dedup) — concept collapse
-within ONE source.
+"""Stage 2.4 closing sub-step: 源内去重 (intra-source dedup) — concept AND
+entity collapse within ONE source (entities added 2026-07-02, audit A1: entity
+duplicates like `billingsley`×3 previously bypassed dedup entirely; the two
+pools are deduped separately, never merged across the folder boundary).
 
 Runs during ingest, BEFORE write, as a filter on the LLM's just-generated
 file_blocks for this one book. Catches the case where the LLM names the same
@@ -28,10 +30,21 @@ from _dedup_embedding import candidate_pairs, cluster_by_pairs
 DEDUP_COSINE_THRESHOLD = 0.82
 
 
-def _stage_2_5_extract_concept_blocks(file_blocks):
+def _stage_2_5_extract_concept_blocks(file_blocks, folder="concepts"):
+    """Extract this ingest's just-generated page blocks for one folder.
+
+    ``folder`` selects the pool ("concepts" or "entities"). A1 (audit
+    2026-07-02, H1 layer 1): entities were never extracted, so same-ingest
+    entity duplicates (`billingsley` / `j-b-billingsley` /
+    `billingsley-j-b-billingsley`, Skolnik same night) sailed past dedup
+    entirely. Each item carries its ``folder`` so merge rules stay
+    pool-scoped (a concept never merges into an entity or vice versa).
+    """
+    prefix = f"{folder}/"
+    marker = f"/{prefix}"
     concepts = []
     for idx, (path, content) in enumerate(file_blocks):
-        if "/concepts/" in path or path.startswith("concepts/"):
+        if marker in path or path.startswith(prefix):
             title = _stage_2_frontmatter_title(content) or path.split("/")[-1]
             body_match = re.search(r"---\s*\n(.*?)\n---\s*\n(.*)", content, re.DOTALL)
             definition = (body_match.group(2) if body_match else content)[:300].lower()
@@ -41,6 +54,7 @@ def _stage_2_5_extract_concept_blocks(file_blocks):
                 "definition_snippet": definition,
                 "block_index": idx,
                 "full_content": content,
+                "folder": folder,
             })
     return concepts
 
@@ -142,6 +156,9 @@ def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
             "duplicate_slugs": duplicate_slugs,
             "merge_strategy": "union",
             "merge_reason": "LLM-confirmed duplicate ({} merged)".format(len(duplicate_slugs)),
+            # Pool the group came from (groups never span pools) — apply uses
+            # it so deleting an entity dup can't shadow a same-stem concept.
+            "folder": group_concepts[0].get("folder", "concepts"),
         })
     return rules
 
@@ -217,16 +234,24 @@ def _stage_2_5_rewrite_related(content, slug_map, current_slug=""):
 def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
     if not merge_rules:
         return file_blocks
+    # Deletions are (folder, slug)-keyed so an entity merge can never delete a
+    # same-stem concept block (A1: entities now participate in dedup too).
     slugs_to_delete = set()
     slug_map = {}
     for rule in merge_rules:
-        slugs_to_delete.update(rule["duplicate_slugs"])
+        folder = rule.get("folder", "concepts")
         for dup_slug in rule["duplicate_slugs"]:
+            slugs_to_delete.add((folder, dup_slug))
             slug_map[dup_slug.lower()] = rule["primary_slug"]
     result = []
     for path, content in file_blocks:
         slug = Path(path).stem
-        if ("/concepts/" in path or path.startswith("concepts/")) and slug in slugs_to_delete:
+        block_folder = next(
+            (f for f in ("concepts", "entities")
+             if f"/{f}/" in path or path.startswith(f"{f}/")),
+            None,
+        )
+        if block_folder and (block_folder, slug) in slugs_to_delete:
             continue
         if slug_map:
             content = _stage_2_5_rewrite_wikilinks(content, slug_map, current_slug=slug)
@@ -243,6 +268,7 @@ def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = Fals
     dedup_was_run flag, and before/after concept counts.
     """
     concept_count_before = sum(1 for p, _ in file_blocks if "/concepts/" in p)
+    entity_count_before = sum(1 for p, _ in file_blocks if "/entities/" in p)
     dedup_was_run = len(chunk_analyses) > 1
     if not dedup_was_run:
         print(f"  [stage 2.4] Skipped (single chunk; {concept_count_before} concepts)")
@@ -253,16 +279,27 @@ def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = Fals
             "concept_count_after": concept_count_before,
         }
 
+    # A1 (audit 2026-07-02): entities join the dedup — separate candidate pool
+    # (never merged across the concepts/entities boundary), but ONE batched
+    # confirm call for both pools (conversation-mode handoffs are expensive).
     concepts = _stage_2_5_extract_concept_blocks(file_blocks)
-    merge_rules = _stage_2_5_generate_merge_rules(
-        concepts, _stage_2_5_find_duplicate_concepts(concepts), config=config)
+    entities = _stage_2_5_extract_concept_blocks(file_blocks, folder="entities")
+    concept_groups = _stage_2_5_find_duplicate_concepts(concepts)
+    entity_groups = _stage_2_5_find_duplicate_concepts(entities)
+    items = concepts + entities
+    offset = len(concepts)
+    groups = concept_groups + [[i + offset for i in g] for g in entity_groups]
+    merge_rules = _stage_2_5_generate_merge_rules(items, groups, config=config)
     file_blocks = _stage_2_5_apply_merge_rules(file_blocks, merge_rules)
     concept_count_after = sum(1 for p, _ in file_blocks if "/concepts/" in p)
+    entity_count_after = sum(1 for p, _ in file_blocks if "/entities/" in p)
     if merge_rules:
         print(f"  [stage 2.4] Dedup: {concept_count_before} → {concept_count_after} "
-              f"concepts ({len(merge_rules)} merge rule(s))")
+              f"concepts, {entity_count_before} → {entity_count_after} entities "
+              f"({len(merge_rules)} merge rule(s))")
     else:
-        print(f"  [stage 2.4] No duplicate concepts ({concept_count_after} concepts)")
+        print(f"  [stage 2.4] No duplicate concepts/entities "
+              f"({concept_count_after} concepts, {entity_count_after} entities)")
     return {
         "file_blocks": file_blocks,
         "dedup_was_run": True,

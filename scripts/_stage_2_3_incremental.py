@@ -8,7 +8,11 @@ match is a future enhancement.)
 from pathlib import Path
 import re
 
-from _stage_2_base import _stage_2_frontmatter_title, _stage_2_title_words
+from _stage_2_base import (
+    _stage_2_frontmatter_title,
+    _stage_2_title_words,
+    _stage_2_title_cjk_bigrams,
+)
 
 # Cross-domain acronym guard: shared tokens no longer than this are treated as
 # bare acronyms ("ram", "mti") rather than full words.
@@ -57,6 +61,7 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
                 found.add(name)
 
     existing = {}
+    existing_cjk = {}
     for page_dir in [concepts_dir, entities_dir]:
         if not page_dir.is_dir():
             continue
@@ -66,11 +71,13 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
                 title = _stage_2_frontmatter_title(content)
                 if title:
                     existing[f.stem] = _stage_2_title_words(title)
+                    existing_cjk[f.stem] = _stage_2_title_cjk_bigrams(title)
             except Exception:
                 pass
 
     for name in found:
         name_words = _stage_2_title_words(name)
+        name_cjk = _stage_2_title_cjk_bigrams(name)
         matches = []
         slug_form = name.lower().replace(" ", "-")
         for slug, words in existing.items():
@@ -78,11 +85,22 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
             # empty ASCII word set, and skipping on empty words BEFORE this
             # check made exact CJK name↔slug matches undetectable (fix
             # 2026-07-02). Only the Jaccard branch needs non-empty words.
+            cjk = existing_cjk.get(slug, set())
             if slug_form == slug.lower():
                 matches.append(slug)
             elif (words and name_words
                   and len(name_words & words) / len(name_words | words) > 0.5
                   and not _stage_2_3_acronym_only_mismatch(name, slug, name_words & words)):
+                matches.append(slug)
+            # CJK bigram Jaccard branch (A4, audit 2026-07-02): pure/mostly-CJK
+            # titles previously had no non-exact match path at all. Separate
+            # from the ASCII branch so mixed titles don't dilute either side.
+            # A shared CJK bigram implies shared CJK characters between the
+            # TITLES; the acronym guard (name-vs-slug CJK disjointness) is
+            # still applied for symmetry with the ASCII branch.
+            elif (cjk and name_cjk
+                  and len(name_cjk & cjk) / len(name_cjk | cjk) > 0.5
+                  and not _stage_2_3_acronym_only_mismatch(name, slug, name_cjk & cjk)):
                 matches.append(slug)
         if matches:
             associations[name] = matches

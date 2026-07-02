@@ -69,6 +69,39 @@ class TestListExistingSlugsArtifacts(unittest.TestCase):
             self.assertNotIn("index", slugs)
             self.assertNotIn("_audit_thing", slugs)
 
+    def test_lint_stubs_and_garbage_query_slugs_excluded(self):
+        """A2 (audit 2026-07-02, M7): lint stub placeholder pages and
+        date-prefixed garbage query slugs must not enter the linkable list."""
+        stub = ("---\ntype: query\ntitle: \"匹配滤波器 Matched Filter\"\n"
+                "created: 2026-06-16\nupdated: 2026-06-16\n"
+                "tags: [stub, lint]\nrelated: []\nsources: []\n---\n\n"
+                "# 匹配滤波器\n\nCreated by Wiki Lint as a placeholder.\n")
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            w = cfg.wiki_dir
+            # lint stubs (queries/ and a concepts/-parked one) — excluded
+            _write(w / "queries" / "some-lint-stub.md", stub)
+            _write(w / "concepts" / "匹配滤波器-matched-filter.md", stub)
+            # legacy date-prefixed garbage query slug — excluded
+            _write(w / "queries" / "2026-06-16-低空目标检测-001.md",
+                   "---\ntype: query\ntitle: \"低空目标检测\"\ntags: [radar]\n---\nbody\n")
+            # REAL query page — included (type query alone is not a stub)
+            _write(w / "queries" / "real-question.md",
+                   "---\ntype: query\ntitle: \"Real Question\"\ntags: [radar, mti]\n---\nbody\n")
+            # date-prefixed SOURCE stem — included (filter is queries/-scoped)
+            _write(w / "sources" / "2026-05-31-news-clip.md",
+                   "---\ntype: source\ntitle: \"News\"\ntags: [news]\n---\nbody\n")
+            _write(w / "concepts" / "real-concept.md")
+
+            slugs = _core.list_existing_slugs(cfg)
+
+            self.assertNotIn("some-lint-stub", slugs)
+            self.assertNotIn("匹配滤波器-matched-filter", slugs)
+            self.assertNotIn("2026-06-16-低空目标检测-001", slugs)
+            self.assertIn("real-question", slugs)
+            self.assertIn("2026-05-31-news-clip", slugs)
+            self.assertIn("real-concept", slugs)
+
 
 if __name__ == "__main__":
     unittest.main()

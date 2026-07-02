@@ -702,6 +702,41 @@ class ProjectLock:
         self.__exit__(None, None, None)
 
 
+# A2 (audit 2026-07-02, M7): lint-generated placeholder pages must not enter
+# the linkable/existing-pages lists — they occupy high-value slugs, soak up
+# real links, and get narrated as knowledge pages. Two signals:
+#   - queries/ stems with the legacy date-prefixed garbage pattern
+#     (`2026-06-16-…-001`), a 2026-06 lint-stub残留;
+#   - frontmatter `type: query` + a tags list containing `stub` or `lint`
+#     (the exact shape _lint_fixes.ensure_broken_link_stub writes, wherever
+#     the stub lands — queries/ or a nested concepts/ path).
+_LINT_STUB_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+_LINT_STUB_TYPE_RE = re.compile(r"^type:\s*['\"]?query['\"]?\s*$", re.MULTILINE)
+_LINT_STUB_TAGS_RE = re.compile(r"^tags:\s*\[([^\]\n]*)\]", re.MULTILINE)
+
+
+def _is_lint_stub_page(f: Path) -> bool:
+    """Cheap head-only check for a lint stub (`type: query` + stub/lint tag).
+
+    Reads at most 512 bytes; any read error → NOT a stub (conservative:
+    never drop a real page on I/O trouble).
+    """
+    try:
+        with f.open("r", encoding="utf-8", errors="ignore") as fh:
+            head = fh.read(512)
+    except OSError:
+        return False
+    if not head.startswith("---"):
+        return False
+    if not _LINT_STUB_TYPE_RE.search(head):
+        return False
+    m = _LINT_STUB_TAGS_RE.search(head)
+    if not m:
+        return False
+    tags = {t.strip().strip("'\"").lower() for t in m.group(1).split(",")}
+    return bool({"stub", "lint"} & tags)
+
+
 def list_existing_slugs(config: Config) -> list[str]:
     """Stems of existing knowledge pages under wiki/, for the digest's
     existing-pages context and incremental-association detection.
@@ -718,6 +753,8 @@ def list_existing_slugs(config: Config) -> list[str]:
       - wiki/lint/** and wiki/media/** — lint and image artifacts.
       - stems starting with '_' (system/audit files)
       - aggregate anchor files (index, log, overview, schema)
+      - lint stub placeholder pages (type: query + stub/lint tags) and
+        date-prefixed garbage query slugs (audit M7, 2026-07-02)
     """
     if not config.wiki_dir.exists():
         return []
@@ -732,6 +769,13 @@ def list_existing_slugs(config: Config) -> list[str]:
             continue
         stem = f.stem
         if stem.startswith("_") or stem in anchors:
+            continue
+        # A2/M7: lint stubs pollute the linkable list — filter them out.
+        # Date-garbage pattern applies to queries/ only (news-clip sources may
+        # legitimately carry date-prefixed stems).
+        if f.parent.name == "queries" and _LINT_STUB_DATE_RE.match(stem):
+            continue
+        if _is_lint_stub_page(f):
             continue
         slugs.append(stem)
     # Sort so downstream `[:N]` truncation is deterministic. Without sorting,
