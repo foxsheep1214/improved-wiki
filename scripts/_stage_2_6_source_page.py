@@ -69,6 +69,7 @@ def stage_2_6_source_page(
     associations: dict | None = None,
     generated_concepts: list[str] | None = None,
     generated_entities: list[str] | None = None,
+    chunk_claims: list | None = None,
 ) -> tuple[str, str]:
     """Stage 2.6: Dedicated source page generation.
 
@@ -327,6 +328,31 @@ Which wiki pages should be created or updated based on this source? What should 
 
     language_sample = source_context or json.dumps(global_digest, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
+    # Full-book claims from the per-chunk analyses (fix 2026-07-02): the 2.1
+    # digest is built from a front-weighted sample, so its key_claims skew to
+    # the opening chapters (observed live: a 9-chapter book's Main Arguments
+    # covered only ch.1-2). The 2.2 chunk claims cover the whole book by
+    # construction — feed them as the authoritative claim source.
+    chunk_claims_section = ""
+    if chunk_claims:
+        _cc_lines = []
+        for c in chunk_claims[:60]:
+            if isinstance(c, dict):
+                _claim = c.get("claim", "")
+                _ev = c.get("evidence", "")
+                _conf = c.get("confidence", "")
+                _cc_lines.append(f"- {_claim}" + (f" (evidence: {_ev})" if _ev else "") + (f" [{_conf}]" if _conf else ""))
+            else:
+                _cc_lines.append(f"- {c}")
+        chunk_claims_section = (
+            "\n# Claims from per-chunk analysis (FULL-BOOK coverage)\n"
+            "Base **Main Arguments & Findings** primarily on THESE — they span every\n"
+            "chapter, unlike the digest above (built from a front-weighted sample).\n"
+            "Select the most important across ALL chapters; do not limit to the\n"
+            "opening chapters.\n"
+            + "\n".join(_cc_lines) + "\n"
+        )
+
     prompt = f"""{language_directive}
 
 # Role
@@ -337,6 +363,7 @@ This page will be the authoritative entry for a {source_kind} in the wiki.
 ```yaml
 {digest_str}
 ```
+{chunk_claims_section}
 
 # Task
 Write a comprehensive source page. Wrap it in FILE block format.

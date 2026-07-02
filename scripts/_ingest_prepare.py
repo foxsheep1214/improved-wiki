@@ -48,6 +48,7 @@ def _prepare_source_page(
     template_content: str, progress: dict | None, file_blocks: list,
     verbose: bool, source_context: str = "",
     associations: dict | None = None,
+    chunk_claims: list | None = None,
 ) -> list:
     """Stage 2.6: generate the source page (dedicated LLM call) and merge into file_blocks."""
     if progress and "source_page_response" in progress:
@@ -78,6 +79,7 @@ def _prepare_source_page(
             linkable_slugs=_linkable, source_context=source_context,
             associations=associations,
             generated_concepts=_gen_concepts, generated_entities=_gen_entities,
+            chunk_claims=chunk_claims,
         )
 
     if not source_page_response:
@@ -427,7 +429,13 @@ def _do_prepare(
             file_blocks = _prepare_source_page(
                 global_digest, raw_file, config, template_content, progress,
                 file_blocks, verbose, source_context=_src_grounding,
-                associations=incremental_associations)
+                associations=incremental_associations,
+                # Full-book claim coverage for Main Arguments (2026-07-02):
+                # the digest's key_claims skew to the front sample; the 2.2
+                # chunk claims span every chapter by construction.
+                chunk_claims=[c for ca in (chunk_analyses or [])
+                              if isinstance(ca, dict)
+                              for c in (ca.get("claims") or [])])
             _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
 
             _q29_source = _src_grounding  # same budgeted excerpt as 2.6
