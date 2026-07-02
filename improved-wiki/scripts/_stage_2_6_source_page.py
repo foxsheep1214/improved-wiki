@@ -116,8 +116,11 @@ def stage_2_6_source_page(
     venue_yaml = f'"{bib_venue}"' if bib_venue else '""'
 
     digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
-    if len(digest_str) > 8000:
-        digest_str = digest_str[:8000] + "\n... (truncated)"
+    # 8000 silently cut the outline of large books (observed live 2026-07-02:
+    # a 26-chapter handbook's source-page prompt lost chapters 24-26 and the
+    # agent had to reconstruct them from the raw TOC). 24K chars is still lean.
+    if len(digest_str) > 24000:
+        digest_str = digest_str[:24000] + "\n... (truncated)"
 
     outline = global_digest.get("outline", [])
     key_claims = global_digest.get("key_claims", [])

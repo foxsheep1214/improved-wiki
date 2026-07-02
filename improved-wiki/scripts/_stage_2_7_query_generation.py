@@ -13,8 +13,8 @@ def _stage_2_7_build_prompt(
 ) -> str:
     """Build prompt for Stage 2.7: generate open questions from single-source analysis."""
     digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
-    if len(digest_str) > 3000:
-        digest_str = digest_str[:3000] + "\n... (truncated)"
+    if len(digest_str) > 12000:
+        digest_str = digest_str[:12000] + "\n... (truncated)"
 
     # P1 parity with Stage 2.4 (2026-06-27): ground questions in the raw source so
     # the LLM raises the questions the SOURCE actually leaves open, instead of

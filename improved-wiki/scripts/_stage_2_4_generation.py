@@ -586,7 +586,7 @@ Generate a source page for this document from the global digest.
 
 # Global Digest
 ```yaml
-{digest_json[:4000]}
+{digest_json[:12000]}
 ```
 
 # Concepts generated ({len(all_file_blocks)} pages)

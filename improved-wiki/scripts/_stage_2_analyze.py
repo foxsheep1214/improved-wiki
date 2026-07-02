@@ -440,9 +440,15 @@ def _stage_2_2_build_prompt(
             if key in global_digest:
                 digest_compact[key] = global_digest[key]
         digest_str = json.dumps(digest_compact, ensure_ascii=False, indent=2)
-    # cap to keep prompts lean
-    if len(digest_str) > 6000:
-        digest_str = digest_str[:6000] + "\n... (truncated)"
+    # Cap to keep prompts lean — but generously: this digest is the 2.2 chain's
+    # ONLY continuity channel (chunk N+1 sees earlier coverage solely through
+    # it). The old 6000-char cap silently truncated it from ~chunk 2 on for
+    # CJK books at 64K-token chunking (observed live 2026-07-02: '...
+    # (truncated)' inside the chunk-3 prompt of a 3-chunk book), degrading
+    # continuity and inviting cross-chunk duplicate concepts. 24K chars is
+    # still <3% of a 256K-char chunk prompt.
+    if len(digest_str) > 24000:
+        digest_str = digest_str[:24000] + "\n... (truncated)"
     existing_slugs = list_existing_slugs(config)
 
     template_section = _stage_2_2_build_template_section(template, file_path, max_chars=2000)
