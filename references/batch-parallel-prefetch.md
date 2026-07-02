@@ -47,6 +47,30 @@ batch 自动：启动 bg extract（B、C）→ 处理 A（2.1/2.2 + spine，LLM 
 
 **注意（与 SKILL.md 规则的关系）**：可**并行**作答的只有 wiki-independent 的预取 handoff（Phase 0/1 + 2.1/2.2，SKILL.md 规则）。串行 spine（2.3+）的 handoff 一次只有一个 pending——把它交给一个 fresh subagent 作答只是 context 隔离（省 token），**不是并行**，不违反串行不变量；spine 的协调（重跑 batch）必须留在主对话，保证一本一本串行。任何时刻都不允许两本书的 2.3+ handoff 同时在处理。
 
+## 进阶：`--stop-after-stage 1.5` 预取（隐藏下一本的 2.1/2.2，实测 2026-07-02）
+
+进程级 bg 预取只能到 Phase 0/1（bg 进程无法作答 LLM handoff）。但 2.1/2.2 是
+wiki-independent（SKILL.md 规则 ②），操作者可以**手动开第二条 conversation 流水线**
+把下一本书的 digest+chunk 分析也提前做掉：
+
+```
+# book N 的 spine 正常推进的同时，另开一条：
+python3 ingest.py --stop-after-stage 1.5 --no-project-lock "raw/Book/<book N+1>.pdf"
+# 每次 exit 101 → 派一个 fresh subagent 作答该 handoff → re-invoke（与 spine 的
+# subagent 并行，互不等待）。到 2.2 全部完成时干净退出（PrepareStopAfter("1.5")，
+# stage_2_2_done 缓存）。book N 写完后直接跑 spine，2.1/2.2 全部 cache 命中，
+# 从 2.3 起步。
+```
+
+**实测**（RadarWiki，2026-07-02，64K chunk）：book4（3 chunks，spine 全程 125 min
+LLM 延迟）期间并行预取 book5（Barton 系统分析与建模，6 chunks）的 digest + 3 个
+chunk 分析共 **86 min LLM 延迟，全部隐藏、零墙钟成本**。按今晚三本书统计，
+2.1+2.2 占单书总 LLM 延迟的 40-56%——即该模式能把整批消化墙钟压掉约四成。
+
+**注意**：预取时 2.2 的 existing-wiki 快照早于前一本书落盘，book N+1 对 book N
+新页的连接提案会缺失（SKILL.md 设计上接受的折衷）；主题强相关的相邻两本书若在意
+交链密度，可放弃预取回退纯串行。
+
 ## 关键不变量
 
 - **spine 串行**：一次只有一本书在 2.3+。bg 只做 Phase 0/1（不碰 wiki/），所以并行安全。
