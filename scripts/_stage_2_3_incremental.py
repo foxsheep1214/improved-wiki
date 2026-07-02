@@ -74,11 +74,13 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
         matches = []
         slug_form = name.lower().replace(" ", "-")
         for slug, words in existing.items():
-            if not words:
-                continue
+            # Exact slug-form match first: a pure-CJK title tokenizes to an
+            # empty ASCII word set, and skipping on empty words BEFORE this
+            # check made exact CJK name↔slug matches undetectable (fix
+            # 2026-07-02). Only the Jaccard branch needs non-empty words.
             if slug_form == slug.lower():
                 matches.append(slug)
-            elif (name_words
+            elif (words and name_words
                   and len(name_words & words) / len(name_words | words) > 0.5
                   and not _stage_2_3_acronym_only_mismatch(name, slug, name_words & words)):
                 matches.append(slug)
