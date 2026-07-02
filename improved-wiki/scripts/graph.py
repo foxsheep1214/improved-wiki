@@ -60,7 +60,7 @@ from networkx.algorithms.community import louvain_communities
 
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
-from _paths import detect_runtime_dir  # noqa: E402
+from _paths import detect_runtime_dir, WIKI_ARTIFACT_DIRS  # noqa: E402
 
 # --- Signal weights (NashSU graph-relevance.ts WEIGHTS) ---------------------
 W_DIRECT_LINK = 3.0
@@ -84,8 +84,8 @@ HIDDEN_TYPES = frozenset({"query"})
 
 # Top-level wiki/ subdirs that hold DERIVED artifacts, not content pages — the
 # graph must not ingest its OWN output (REVIEW/knowledge-gaps.md, clusters/*) or
-# lint/media. Mirrors the lint engine's SKIP_DIRS.
-GRAPH_SKIP_DIRS = frozenset({"REVIEW", "clusters", "media", "lint"})
+# lint/media. Shared constant (_paths.WIKI_ARTIFACT_DIRS).
+GRAPH_SKIP_DIRS = WIKI_ARTIFACT_DIRS
 
 # Structural pages (NashSU graph-filters.ts STRUCTURAL_IDS).
 STRUCTURAL_IDS = frozenset({"index", "overview", "log", "schema", "purpose"})

@@ -36,7 +36,7 @@ wiki/
 <project>/schema.md  # page type → directory 映射；放在根目录，不进 wiki/ 扫描
 ```
 
-**Schema 驱动路由（NashSU parity, 2026-06-28）**：上面 9 种是**基础** page type，始终可用。`schema.md` 还可以声明**额外的 typed 文件夹**（如 `wiki/people/`、`wiki/methods/`、`wiki/decisions/`）。这些额外文件夹会：(1) 被注入 Stage 2.4 生成提示词，告诉 LLM "一个人物 → people/、一个方法 → methods/，否则用 concepts/entities"（`_schema_routing_block`）；(2) 被写盘阶段接受而非丢弃（`_VALID_SUBDIRS = BASE_PAGE_DIRS ∪ schema_folders(schema.md)`）。非 schema 声明的文件夹仍走 auto-correct/drop（拼写错误兜底）。基础 8 种之外无额外文件夹时，提示词不注入（默认项目无噪音）。
+**Schema 驱动路由（NashSU parity, 2026-06-28）**：上面 9 种是**基础** page type，始终可用。`schema.md` 还可以声明**额外的 typed 文件夹**（如 `wiki/people/`、`wiki/methods/`、`wiki/decisions/`）。这些额外文件夹会：(1) 被注入 Stage 2.4 生成提示词，告诉 LLM "一个人物 → people/、一个方法 → methods/，否则用 concepts/entities"（`_schema_routing_block`）；(2) 被写盘阶段接受而非丢弃（`_VALID_SUBDIRS = BASE_PAGE_DIRS ∪ schema_folders(schema.md)`）。非 schema 声明的文件夹仍走 auto-correct/drop（拼写错误兜底）。基础 9 种之外无额外文件夹时，提示词不注入（默认项目无噪音）。
 
 **来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页，均在 wiki/ 下）；`ingest.ts:1830/1839/1840`（schema-defined typed pages 路由）；`create-project-dialog.tsx`（schema.md 写入项目根 `${pp}/schema.md`）。
 
@@ -113,9 +113,9 @@ wiki/queries/<slug>.md
 ...
 ```
 
-**规则**：`slug` 由 LLM 在 Stage 2.3 生成，**必须用 kebab-case**（`ingest.ts` prompt 指令）。CJK 标题保留可读字符，不强制转拼音。
+**规则**：`slug` 由 LLM 在 Stage 2.4 生成，**必须用 kebab-case**（`ingest.ts` prompt 指令）。CJK 标题保留可读字符，不强制转拼音。
 
-**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.3 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
+**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.4 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
 
 **冲突处理**：同名 slug 加数字后缀，如 `impedance-matching-2.md`。
 
@@ -183,7 +183,7 @@ updated: 2026-06-14
 ---
 ```
 
-**来源**：`ingest.ts:634-648`（prompt 指令）；`parse_and_write.py:104-111`（improved-wiki 校验）。
+**来源**：`ingest.ts:634-648`（prompt 指令）；`_ingest_write.py`（improved-wiki 写盘校验）。
 
 **格式约束**：
 - 文件第一行必须是 `---`，前置 matter 后紧跟 `---`
@@ -240,21 +240,21 @@ wiki/media/<raw_subpath>/<source_stem>/
 ### 5.2 图片文件
 
 ```
-p<page_number>-fig<figure_index>.<ext>
+p<NNNN>-mineru_<md5前8>.<ext>
 ```
 
-- `page_number`：PDF 页码（0-based）
-- `figure_index`：该页内图片序号（0-based）
-- 示例：`p0-fig1.png`、`p123-fig4.jpeg`
+- `NNNN`：PDF 页码（zero-padded，4 位）
+- `mineru_<md5前8>`：minerU 提取，图片内容 md5 前 8 位
+- 示例：`p0007-mineru_a1b2c3d4.png`
 
-**去重**：sha256 相同只存一份。**过滤**：< 100×100px 的装饰/logo 剔除。
+**去重**：按 `page+md5前8` 命名，**不做跨页 sha256 全局去重**（同一图重复出现在不同页会各存一份）。**过滤**：`MINERU_IMG_MIN_WIDTH/HEIGHT` 默认 20px（故意设低，只过滤 1×1/2×2 噪声，保留公式截图）。
 
-**来源**：`ingest.py:975`；`ingest-stages-mandatory.md:62-65`。
+**来源**：`_stage_1_2_images.py`；`ingest-stages-mandatory.md` Stage 1.2；`image-caption-strategy.md`。
 
 ### 5.3 Caption 文件
 
 ```
-p123-fig4.png.caption.txt
+p0007-mineru_a1b2c3d4.png.caption.txt
 ```
 
 每图一个 `.caption.txt`，长度 ≥ 20 字符。VLM 生成，中文优先。
@@ -281,8 +281,8 @@ wiki/media/<slug>/_manifest.json
 ├── ingest-queue.json           # 待处理队列
 ├── ingest-progress/            # <hash[:16]>.json 检查点
 ├── extract-tmp/<slug>/         # 文本抽取临时文件
-├── review-suggestions.json     # Stage 3.4 产物
-├── review.json                 # Stage 3.4 产物（run_review_suggestions.py）
+├── review-suggestions.json     # Stage 3.4 产物（`_stage_3_4_review.py`）
+├── review.json                 # review store（LLM Wiki app 维护，NashSU review-store.ts）
 ├── lint-cache.json             # lint 结果缓存
 ├── lint-semantic.json          # 语义 lint 结果
 ├── ingest-lock                 # 并发锁
@@ -377,8 +377,8 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | 文件 | 来源 |
 |------|------|
 | `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 3.4 每项一个 md |
-| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON |
-| `<runtime>/review.json` | `run_review_suggestions.py` Stage 3.4 产物 |
+| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON（`_stage_3_4_review.py`） |
+| `<runtime>/review.json` | review store（LLM Wiki app 维护，NashSU review-store.ts；review 状态维护见 `sweep_reviews.py`） |
 | `wiki/REVIEW/_summaries/_audit_<scope>.md` | LLM 审计汇总报告（meta，非 review item） |
 
 **`_summaries/` 约定**：
@@ -393,10 +393,6 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 (removed — validate_ingest.py covers stage compliance)
 
-记录每个 source 的 15 阶段完成状态（Markdown 表格）。每行含 Stage 编号、状态（✅/❌/⚪）、详情。
-
-**来源**：`ingest.py:1436-1528`。
-
 ---
 
 ## 10. 日期格式
@@ -407,7 +403,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | Log 条目标题 | `## [YYYY-MM-DD] ingest \| <Title>` | `## [2026-06-14] ingest \| ADL8113` |
 | Review 文件名 | `<date>-<stem>-<NNN>.md` | `2026-06-14-ADL8113-001.md` |
 
-**来源**：`ingest.ts:302-307`（log 格式）；`parse_and_write.py`（frontmatter 校验）。
+**来源**：`ingest.ts:302-307`（log 格式）；`_ingest_write.py`（frontmatter 校验）。
 
 ---
 

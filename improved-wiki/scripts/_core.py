@@ -22,6 +22,10 @@ _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir  # noqa: E402
+# atomic_write moved to _paths.py (canonical, so light tools can import it
+# without pulling in the full core); re-exported here for back compat.
+from _paths import atomic_write  # noqa: E402,F401
+from _paths import WIKI_ARTIFACT_DIRS as _WIKI_ARTIFACT_DIRS  # noqa: E402
 
 # Maximum concurrency for parallel LLM phases (Stage 1/1.5/2 are
 # read-only LLM calls — no shared wiki/ state mutation — so they can
@@ -717,9 +721,10 @@ def list_existing_slugs(config: Config) -> list[str]:
     """
     if not config.wiki_dir.exists():
         return []
-    # Derived/artifact dirs — mirrors graph.py GRAPH_SKIP_DIRS so graph output,
-    # review items, lint, and media are never treated as knowledge pages.
-    artifact_dirs = {"REVIEW", "clusters", "lint", "media"}
+    # Derived/artifact dirs — shared constant (_paths.WIKI_ARTIFACT_DIRS) so
+    # graph output, review items, lint, and media are never treated as
+    # knowledge pages. Note: checks ALL path parts (not just parts[0]).
+    artifact_dirs = _WIKI_ARTIFACT_DIRS
     anchors = {"index", "log", "overview", "schema"}
     slugs: list[str] = []
     for f in config.wiki_dir.rglob("*.md"):
@@ -1355,14 +1360,7 @@ def slugify(text: str) -> str:
     return slug
 
 
-def atomic_write(path, content: str, encoding: str = "utf-8") -> None:
-    """Write file atomically via tmp + rename. Prevents partial writes."""
-    import os
-    p = str(path)
-    tmp = p + ".tmp"
-    with open(tmp, "w", encoding=encoding) as f:
-        f.write(content)
-    os.replace(tmp, p)
+# (atomic_write lives in _paths.py; re-exported near the top of this module.)
 
 
 def call_with_retry(fn, max_retries: int = 3, base_wait: float = 1.0, label: str = ""):

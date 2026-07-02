@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+from _paths import atomic_write
 from typing import List
 
 WHITELIST_FILE = "dedup-whitelist.json"
@@ -53,14 +55,17 @@ def save_not_duplicates(runtime_dir: Path, groups: List[List[str]]) -> None:
     path = whitelist_path(runtime_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"not_duplicates": groups}
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
 
 
-def _canonical_key(slugs: List[str]) -> str:
-    """Order-independent, case-insensitive key. Mirrors NashSU canonicalKey."""
+def canonical_key(slugs: List[str]) -> str:
+    """Order-independent, case-insensitive group key. Mirrors NashSU
+    canonicalKey / normalizeSlugGroupKey / normalizeGroupKey — one shared
+    implementation (the three per-module copies had drifted on separator)."""
     return ",".join(sorted(s.lower() for s in slugs))
+
+
+_canonical_key = canonical_key  # back-compat alias
 
 
 def add_not_duplicate(runtime_dir: Path, slugs: List[str]) -> bool:

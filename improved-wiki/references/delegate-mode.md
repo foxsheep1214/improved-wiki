@@ -160,23 +160,10 @@ done
 
 ### Re-ingest pattern: `--delete` first
 
-To re-ingest a book (e.g., comparing old vs new pipeline results):
-
-```bash
-# 1. Backup old results
-cp "wiki/sources/Book/Book.md" /tmp/backup-source-old.md
-find wiki/concepts -name "*.md" -exec grep -l "Book Title" {} \; | while read f; do cp "$f" /tmp/backup-concepts/; done
-
-# 2. Delete old ingest (removes source page + orphan concepts/entities + media)
-~/.venv/bin/python3 scripts/ingest.py --delete "raw/Book/Book.pdf"
-
-# 3. Re-ingest
-~/.venv/bin/python3 scripts/ingest.py "raw/Book/Book.pdf"
-```
-
-`--delete` removes the source page, orphaned concept/entity pages (those whose only
-source was the deleted book), media directory, and cache entry. It prints a summary
-of all removed files.
+`--delete` removes the source page, orphaned concept/entity pages (those whose
+only source was the deleted book), media directory, and cache entry, then a
+fresh run re-ingests cleanly. **Authoritative flow (backup → delete → re-ingest
+→ compare): `references/re-ingest-comparison.md`.**
 
 ### Source page may be merged multiple times
 

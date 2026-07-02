@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from _core import Config
-from _paths import media_slug
+from _paths import media_slug, atomic_write
 
 
 def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
@@ -70,9 +70,7 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
                     section += f"![{cap}]({rel})\n\n"
             section += f"\n> 图片由 {'minerU VLM' if is_mineru else 'PyMuPDF'} 提取，caption 由 {config.caption_model} 生成。详细 manifest 见 `wiki/media/{slug}/`\n"
             content += section
-            tmp = source_path.with_suffix(source_path.suffix + ".tmp")
-            tmp.write_text(content, encoding="utf-8")
-            tmp.rename(source_path)
+            atomic_write(source_path, content)
             print(f"[stage 3.2] Injected {len(images)} images into {source_path.name}")
             return {"injected": len(images)}
 
@@ -107,9 +105,7 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
             section += f"| ... | ({len(images_in_media) - 200} more) |\n"
         section += f"\n> Caption 由 {config.caption_model} 生成。图片文件见 `wiki/media/{slug}/`\n"
         content += section
-        tmp = source_path.with_suffix(source_path.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.rename(source_path)
+        atomic_write(source_path, content)
         print(f"[stage 3.2] Injected {len(images_in_media)} images into {source_path.name}")
         return {"injected": len(images_in_media)}
 

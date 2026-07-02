@@ -22,7 +22,7 @@ The script:
 - For each new file, adds it to `.llm-wiki/ingest-queue.json`
 - Then exits
 
-`wiki-monitor.sh` does NOT itself run the queue. To process the queue, you need a separate cron entry for `run-queue.sh`. The reason for the split: the monitor is fast (just a hash diff) and can run frequently; the queue worker is slow (LLM API calls) and runs on its own schedule.
+`wiki-monitor.sh` does NOT itself run the queue. To process the queue, you need a separate cron entry for `run-queue.sh`. The reason for the split: the monitor is fast (just a hash diff) and can run frequently; the queue worker is slow (conversation-mode LLM handoffs) and runs on its own schedule.
 
 Standard 2-cron setup:
 

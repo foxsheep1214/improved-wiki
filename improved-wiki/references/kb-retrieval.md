@@ -15,7 +15,7 @@ ls ~/Documents/知识库/
 # 每个项目有 wiki/ 子目录（markdown 页面）和 .llm-wiki/（运行时状态）
 ```
 
-当前可用项目：`HardwareWiki`、`硬件设计知识库`、`RadarWiki`、`雷达系统知识库`、`自然科学知识库`
+当前可用项目：`HardwareWiki`、`RadarWiki`、`自然科学知识库`（与 SKILL.md 一致）
 
 ## 2. 强制 4 步工作流
 
@@ -23,12 +23,12 @@ ls ~/Documents/知识库/
 步骤 ①  关键词搜索
         方式 A: 用 search_wiki.py 脚本
             search_wiki.py "查询关键词" --project <项目路径>
-        方式 B: 直接用 search_files 工具
-            search_files target=content pattern=<关键词> path=<项目路径>/wiki/
+        方式 B: 直接用文件内容搜索工具（如 Grep）
+            Grep pattern=<关键词> path=<项目路径>/wiki/
         至少试 2-3 个同义词（中文 + 英文 + 别名）
 
 步骤 ②  命中处理
-        命中 ≥ 1 → read_file 读具体段（按行号定位）
+        命中 ≥ 1 → 用文件读取工具（Read）读具体段（按行号定位）
         命中 = 0 → 进入步骤 ③
 
 步骤 ③  知识库无内容（明示）
@@ -91,7 +91,7 @@ python3 scripts/search_wiki.py "LC谐振" \
 
 # 更多结果
 python3 scripts/search_wiki.py "LC谐振导致振铃" \
-  --project ~/Documents/知识库/硬件设计知识库 --top 10 --json
+  --project ~/Documents/知识库/HardwareWiki --top 10 --json
 ```
 
 `--json` 返回格式（每条结果）：
@@ -109,11 +109,11 @@ python3 scripts/search_wiki.py "LC谐振导致振铃" \
 python3 scripts/build_embeddings.py --project ~/Documents/知识库/HardwareWiki embed
 ```
 
-### 5.2 补充：read_file 精读
+### 5.2 补充：Read 精读
 
-搜索结果给出文件路径后，用 `read_file` 按行号读具体段落：
+搜索结果给出文件路径后，用文件读取工具（Read）按行号读具体段落：
 ```
-read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
+Read wiki/concepts/buck-降压变换器.md offset=20 limit=50
 ```
 
 ## 6. 引用规范
@@ -122,7 +122,7 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 
 ```
 ✓ [HardwareWiki:wiki/concepts/buck-converter.md L1403-1424 §4.1 瞬态响应]
-✓ [硬件设计知识库:wiki/02_器件与选型/MOSFET开关特性.md §SOA]
+✓ [RadarWiki:wiki/concepts/脉冲压缩.md §匹配滤波]
 ✓ [TI LM5069 datasheet §7.5 Electrical Characteristics]
 ✗ 知识库无相关内容，以下为 LLM 通用知识
 ```
@@ -132,7 +132,7 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 1. **必须标具体项目名、段/章节/行号**，不能只标文件名
 2. **多来源时分别标注**，不要合并
 3. **LLM 通用知识必须标 ✗**，不可冒充知识库引用
-4. **跨项目引用**：标两个项目时用 `HardwareWiki:wiki/XX + 硬件设计知识库:wiki/YY` 格式
+4. **跨项目引用**：标两个项目时用 `HardwareWiki:wiki/XX + RadarWiki:wiki/YY` 格式
 
 ## 7. 边界情况处理
 
@@ -155,7 +155,7 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 ❌ 反模式 2: 用"应用场景"词（电路/示波器/PCB）而非"理论方法"词
 ❌ 反模式 3: 引用时不标具体项目名和段落（只标文件名）
 ❌ 反模式 4: 知识库无相关内容时含糊带过
-❌ 反模式 5: 凭印象编造 wiki 文件路径（应该 read_file 验证）
+❌ 反模式 5: 凭印象编造 wiki 文件路径（应该用 Read 验证）
 ❌ 反模式 6: 一次 grep 命中 0 就放弃（应该换关键词 2-3 次）
 ```
 
@@ -164,9 +164,9 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 回复技术问题前，自检：
 
 ```
-[ ] 1. 指定了正确的知识库项目（HardwareWiki / 硬件设计知识库 / ...）
-[ ] 2. search_files target=content 或 search_wiki.py 执行了吗（≥2 个同义词）
-[ ] 3. 命中 ≥ 1 → read_file 读具体段 → 行号记录了吗
+[ ] 1. 指定了正确的知识库项目（HardwareWiki / RadarWiki / ...）
+[ ] 2. Grep 内容搜索 或 search_wiki.py 执行了吗（≥2 个同义词）
+[ ] 3. 命中 ≥ 1 → 用 Read 读具体段 → 行号记录了吗
 [ ] 4. 命中 = 0 → 明确标"知识库无"了吗
 [ ] 5. 引用是否标了项目名 + 具体段（不是只标文件名）
 [ ] 6. LLM 通用知识是否标了 ✗

@@ -21,6 +21,11 @@ from __future__ import annotations
 
 import math
 import re
+
+from _frontmatter import (
+    TITLE_LINE_RE as _TITLE_LINE_RE,
+    WIKILINK_RE as _WIKILINK_RE_SHARED,
+)
 import unicodedata
 from dataclasses import dataclass, field
 
@@ -59,7 +64,7 @@ SUGGESTION_TOKEN_WINDOW = 4000
 SAME_BASENAME_SCORE = 0.96
 CONTAINS_TARGET_SCORE = 0.82
 
-_WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
+_WIKILINK_RE = _WIKILINK_RE_SHARED
 _CJK_RE = re.compile(r"[㐀-鿿]")
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
@@ -88,7 +93,7 @@ def normalize_link_target(target: str) -> str:
 def _extract_title(content: str, fallback_path: str) -> str:
     fm = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
     if fm:
-        title = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', fm.group(1), re.MULTILINE)
+        title = _TITLE_LINE_RE.search(fm.group(1))
         if title and title.group(1).strip():
             return title.group(1).strip()
     heading = re.search(r"^#\s+(.+)$", content, re.MULTILINE)

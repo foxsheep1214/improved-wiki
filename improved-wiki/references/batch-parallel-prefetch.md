@@ -1,7 +1,10 @@
 # Batch Pipeline Ingest — 多书流水线（minerU[N+1] ∥ spine[N]）
 
 > **归属**：`batch_ingest`（ingest.py）的内部设计。多书 batch 时自动启用，**不需要操作者手动编排**。
-> **边界**：只并行 wiki-independent 的 Phase 0/1（minerU + caption）；2.1/2.2 + 2.3+ spine 必须串行一本一本（见 [[batch-digest-patterns]]、[[delegate-mode]]）。
+> **边界（三个层次，勿混淆）**：
+> ① **进程级后台预取**（bg OS 子进程）只跑 Phase 0/1（minerU + caption，非 LLM——bg 进程无法作答 conversation handoff）；
+> ② **可并行作答的 conversation prompt** = wiki-independent 段（Phase 0/1 + Stage 2.1/2.2）——与 SKILL.md 的批量规则一致：出现多个同时 pending 的预取 prompt 时，可每个派一个 sub-agent 并行作答；
+> ③ **wiki-dependent spine（2.3+）严格一本一本串行**，其 handoff 一次只有一个 pending（见 [[batch-digest-loop]]、[[delegate-mode]]）。
 
 ## 设计：流水线，不是 barrier
 
@@ -42,7 +45,7 @@ batch 自动：启动 bg extract（B、C）→ 处理 A（2.1/2.2 + spine，LLM 
 
 主对话累积历史会让每个 handoff 作答越来越贵。可选：每个 handoff 派一个 fresh subagent 作答（读 prompt、写 .txt、返回），主对话只协调。subagent 不继承主对话上下文，省 ~150k input token/handoff。
 
-**注意**：subagent 只能作答 wiki-independent 的 2.1/2.2 handoff；**2.4+ spine handoff 也可以交给 subagent 作答**（每个 handoff 独立：读 prompt、写 .txt），但 spine 的协调（重跑 batch）留在主对话，保证一本一本串行。
+**注意（与 SKILL.md 规则的关系）**：可**并行**作答的只有 wiki-independent 的预取 handoff（Phase 0/1 + 2.1/2.2，SKILL.md 规则）。串行 spine（2.3+）的 handoff 一次只有一个 pending——把它交给一个 fresh subagent 作答只是 context 隔离（省 token），**不是并行**，不违反串行不变量；spine 的协调（重跑 batch）必须留在主对话，保证一本一本串行。任何时刻都不允许两本书的 2.3+ handoff 同时在处理。
 
 ## 关键不变量
 
@@ -52,6 +55,6 @@ batch 自动：启动 bg extract（B、C）→ 处理 A（2.1/2.2 + spine，LLM 
 
 ## 相关
 
-- [[batch-digest-patterns]] — batch 串行主干规则与坑
+- [[batch-digest-loop]] — batch 驱动循环、串行主干规则与坑
 - [[delegate-mode]] — conversation mode 的 agent 作答机制
 - [[conversation-mode-agent-workflow]] — 单书 ingest 的逐 stage 作答 cheat sheet

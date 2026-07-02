@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from _core import BATCH_MAX_CONCURRENT, Config, ConversationPending, ProjectLock
+from _paths import atomic_write
 
 
 def _read_queue(config: Config) -> list[dict]:
@@ -37,9 +38,7 @@ def _write_queue(config: Config, queue: list[dict]) -> None:
     """Atomically write ingest-queue.json."""
     qpath = config.runtime_dir / "ingest-queue.json"
     qpath.parent.mkdir(parents=True, exist_ok=True)
-    tmp = qpath.with_suffix(".tmp")
-    tmp.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.rename(qpath)
+    atomic_write(qpath, json.dumps(queue, ensure_ascii=False, indent=2))
 
 
 def _queue_entry_to_file(entry: dict, config: Config) -> Path | None:

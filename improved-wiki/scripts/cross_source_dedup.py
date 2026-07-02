@@ -49,7 +49,7 @@ import _dedup  # noqa: E402
 # Cross-source dedup is pure LLM semantic (no deterministic prefilter) — NashSU
 # dedup.ts parity.
 from _core import ConversationPending  # noqa: E402
-from _paths import detect_runtime_dir  # noqa: E402
+from _paths import detect_runtime_dir, iter_wiki_pages, atomic_write  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
 from _dedup_embedding import (  # noqa: E402
     candidate_pairs,
@@ -80,7 +80,9 @@ STATE_FILES = {
     "dedup-whitelist.json", "review.json", "review-suggestions.json",
     "embed-cache.json",
 }
-SKIP_DIRS = {"lint", "REVIEW", "media"}
+# Artifact dirs (lint/REVIEW/clusters/media) come from the shared
+# _paths.WIKI_ARTIFACT_DIRS via iter_wiki_pages — the local copy here had
+# drifted (missing `clusters`, so graph-generated hub pages leaked into dedup).
 
 
 # ── LLM call: conversation-mode only ───────────────────────────────────────
@@ -97,21 +99,12 @@ def make_llm_call(project_root: Path):
 # ── LLM semantic dedup (existing _dedup engine) ───────────────────
 
 def collect_wiki_pages(wiki_dir: Path) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    if not wiki_dir.is_dir():
-        return out
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        if rel.name in ANCHOR_FILES or rel.name in STATE_FILES:
-            continue
-        if rel.parts and rel.parts[0] in SKIP_DIRS:
-            continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        out.append((f"wiki/{rel}", content))
-    return out
+    return [
+        (f"wiki/{rel}", content)
+        for rel, content in iter_wiki_pages(
+            wiki_dir, anchor_files=ANCHOR_FILES, state_files=STATE_FILES,
+        )
+    ]
 
 
 def load_whitelist(*paths: Path) -> list[list[str]]:
@@ -132,8 +125,7 @@ def load_whitelist(*paths: Path) -> list[list[str]]:
     return pairs
 
 
-def _slug_from_path(project_relative: str) -> str:
-    return os.path.splitext(project_relative.split("/")[-1])[0]
+_slug_from_path = _dedup._slug_from_path
 
 
 def _is_embedding_coverage_error(ex: Exception) -> bool:
@@ -144,9 +136,11 @@ def _is_embedding_coverage_error(ex: Exception) -> bool:
             or "embedded only" in msg)
 
 
-def _normalize_slug_group_key(slugs) -> str:
-    """Order-independent, case-insensitive key. Mirrors NashSU normalizeSlugGroupKey."""
-    return "\t".join(sorted(s.lower() for s in slugs))
+# Order-independent, case-insensitive key — shared with the whitelist storage
+# layer (was a local copy with a "\t" separator; keys are only ever compared
+# against keys built by the same function, so unifying on "," is safe and
+# removes the cross-module drift risk).
+from _dedup_storage import canonical_key as _normalize_slug_group_key  # noqa: E402
 
 
 def _filter_whitelisted_pairs(pairs, not_duplicates):
@@ -398,18 +392,13 @@ def _persist_merge(project_root, result, backup_dir) -> None:
         idx = index_path.read_text(encoding="utf-8")
         pruned = _dedup.rewrite_index_md(idx, removed_slugs)
         if pruned != idx:
-            # Atomic write (tmp + rename) so a crash mid-write can't corrupt
-            # index.md — matches _write_report and the Stage 3.5 writer.
-            tmp = index_path.with_suffix(index_path.suffix + ".tmp")
-            tmp.write_text(pruned, encoding="utf-8")
-            tmp.replace(index_path)
+            # Atomic write so a crash mid-write can't corrupt index.md.
+            atomic_write(index_path, pruned)
 
 
 def _write_report(path: Path, report: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write(path, json.dumps(report, ensure_ascii=False, indent=2))
 
 
 # ── main ───────────────────────────────────────────────────────────────────

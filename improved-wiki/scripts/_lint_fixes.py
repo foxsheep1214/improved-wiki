@@ -22,6 +22,8 @@ from __future__ import annotations
 import os
 import re
 import unicodedata
+
+from _frontmatter import TITLE_LINE_RE as _TITLE_RE
 from pathlib import Path
 
 __all__ = [
@@ -200,7 +202,6 @@ def ensure_broken_link_stub(
 #   normalizeWikiRefKey, buildDeletedKeys, extractFrontmatterTitle,
 #   cleanIndexListing, stripDeletedWikilinks.
 
-_TITLE_RE = re.compile(r"^title:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
 # `- [[Target]] description` / `* [[T|D]]` — the primary wikilink of a list item.
 _INDEX_ENTRY_RE = re.compile(r"^\s*[-*]\s*\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]")
 # [[target]] or [[target|display]] anywhere in body prose.

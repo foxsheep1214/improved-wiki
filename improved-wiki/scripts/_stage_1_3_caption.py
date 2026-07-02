@@ -36,6 +36,7 @@ _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 from _core import Config  # noqa: E402
+from _paths import atomic_write  # noqa: E402
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Constants
@@ -147,9 +148,7 @@ cache and only captions pending images.
 ## Resolution
 _配置 caption provider API key 后重跑 ingest 即可补齐；处理完成后将 `resolved: false` 改为 `resolved: true`。_
 """
-    tmp = page_path.with_suffix(page_path.suffix + ".tmp")
-    tmp.write_text(md, encoding="utf-8")
-    tmp.rename(page_path)
+    atomic_write(page_path, md)
 
 
 def _caption_no_key_pause(config, source_label: str, media_dir: Path,

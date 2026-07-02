@@ -70,16 +70,9 @@ STATE_FILES = {
     "lint-lock", "lint.lock",
     "lint-semantic.json",  # don't lint our own output
 }
-# Derived-artifact directories that are NOT source knowledge and must never be
-# fed to the semantic-lint LLM. The literal NashSU port (`f.name !== "log.md"`)
-# is faithless in THIS port's environment: unlike NashSU (which routes review to
-# a Zustand store and has no clusters/), this port WRITES ingest review items to
-# wiki/REVIEW/ and graph cluster-hub pages to wiki/clusters/. Without this guard
-# those diagnostics leak into the LLM analysis as if they were wiki content,
-# risking self-referential findings and an ingest feedback loop. Mirrors the
-# structural lint (wiki-lint.sh) + graph.py + _core.py, the other sibling
-# consumers, all of which already skip these dirs.
-SKIP_DIRS = {"lint", "REVIEW", "clusters", "media"}
+# Derived-artifact dirs (lint/REVIEW/clusters/media) must never be fed to the
+# semantic-lint LLM — shared guard; see _paths.WIKI_ARTIFACT_DIRS for the
+# rationale (the literal NashSU port `f.name !== "log.md"` is faithless here).
 
 # Per-page summary size (NashSU: 500 chars)
 SUMMARY_CHARS = 500
@@ -100,6 +93,7 @@ if _script_dir not in sys.path:
 from _language import build_language_directive  # noqa: E402 (titles, descriptions, PAGES list) MUST be in English."
 from _core import ConversationPending  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
+from _paths import iter_wiki_pages, atomic_write  # noqa: E402
 
 
 # ── core scan ────────────────────────────────────────────────────────────────
@@ -107,18 +101,11 @@ def collect_summaries(wiki_dir: Path, limit: Optional[int] = None) -> list[tuple
     """Returns [(short_path, summary_text), ...]. Excludes anchors + state files.
     Sorts by relative path for determinism (NashSU parity)."""
     out: list[tuple[str, str]] = []
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        if rel.name in STATE_FILES or rel.name in ANCHOR_FILES:
-            continue
-        if rel.parts and rel.parts[0] in SKIP_DIRS:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            continue
+    for rel_str, text in iter_wiki_pages(
+        wiki_dir, anchor_files=ANCHOR_FILES, state_files=STATE_FILES,
+    ):
         preview = text[:SUMMARY_CHARS] + ("..." if len(text) > SUMMARY_CHARS else "")
-        out.append((str(rel), preview))
+        out.append((rel_str, preview))
         if limit and len(out) >= limit:
             break
     return out
@@ -320,12 +307,7 @@ def main() -> int:
           f"({len(batches)} batch(es), after dedup)")
 
     # Atomic write
-    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(findings, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    tmp.replace(out_path)
+    atomic_write(out_path, json.dumps(findings, ensure_ascii=False, indent=2))
     print(f"[semantic-lint] Wrote {out_path}")
 
     # Summary
@@ -386,9 +368,7 @@ created: {date_str}
 {affected_links}
 """
         page_path = lint_dir / filename
-        tmp = page_path.with_suffix(page_path.suffix + ".tmp")
-        tmp.write_text(md, encoding="utf-8")
-        tmp.rename(page_path)
+        atomic_write(page_path, md)
         written += 1
 
     if written > 0:

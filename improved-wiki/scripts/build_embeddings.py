@@ -26,6 +26,9 @@ Usage:
 """
 import os, sys, json, urllib.request, urllib.error, time, argparse, re, hashlib
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _frontmatter import TITLE_LINE_RE  # noqa: E402
 import lancedb
 
 
@@ -159,7 +162,7 @@ def collect_pages():
                 else:
                     body = content
                 title = ""
-                m = re.search(r"^title:\s*[\"']?([^\"'\n]+)[\"']?", content, re.MULTILINE)
+                m = TITLE_LINE_RE.search(content)
                 if m:
                     title = m.group(1).strip()
                 heading_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)

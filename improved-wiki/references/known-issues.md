@@ -66,4 +66,4 @@ Stage 2.6 提示词预填了 NashSU parity 模板（frontmatter authors/year/url
 旧 pipeline 标记。当前 pipeline（Stage 0.2）用 `wiki/sources/` 作唯一去重信号。清理见 `maintenance-cleanup.md`。
 
 ## Batch digest patterns
-批量摄入 pitfalls 见 `batch-digest-patterns.md`。一句话：直接从 Python 循环调 `ingest.py`（不走 `claude -p`），按 `wiki/sources/<stem>.md` 存在性去重，串行跑。
+批量摄入 pitfalls 见 `batch-digest-loop.md`。一句话：直接从 Python 循环调 `ingest.py`（不走 `claude -p`），按 `wiki/sources/<stem>.md` 存在性去重，串行跑。

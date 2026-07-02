@@ -1,5 +1,9 @@
 # MinerU Version Tracking
 
+## 当前状态（2026-06-24 起）
+
+现行**唯一** OCR 路径：**hybrid-engine via local API server**（`mineru.cli.fast_api` 启动本地服务，管线调 `/file_parse` 接口）。`mineru -b pipeline` CLI 路径已废弃移除——3.4.0 的 pipeline CLI 存在 502 bug。下文"Backend selection"及推荐命令段落为历史记录，仅供追溯。
+
 ## Current (2026-06-23)
 
 | Component | Version | Notes |
@@ -9,7 +13,9 @@
 | Pipeline model repo | `opendatalab/PDF-Extract-Kit-1.0` | 3.4.0 changelog: OCR upgraded to **PP-OCRv6** (~11% accuracy improvement on Omni). Last repo update 2026-06-15. |
 | Config version | 1.3.2 | Auto-migrates from older `mineru.json`. |
 
-## Backend selection (revisited 2026-06-23)
+## Backend selection (revisited 2026-06-23) ⚠️ 历史记录，已废弃
+
+> ⚠️ 本节及下方推荐命令为历史记录。`mineru -b pipeline` CLI 已于 2026-06-24 移除（3.4.0 502 bug），现行唯一路径见文首"当前状态"。
 
 Investigated CLI help for a working `mineru` invocation and confirmed the
 distinction between the two backends:

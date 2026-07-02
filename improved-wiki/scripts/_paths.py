@@ -19,7 +19,7 @@ Usage:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable, Iterator
 
 if TYPE_CHECKING:
     # Avoid a runtime cycle: _core imports _paths (detect_runtime_dir), so _paths
@@ -133,6 +133,62 @@ def _migrate_lint_cache_out_of_wiki(wiki_root: Path) -> None:
     if migrated:
         import sys
         print(f"[_paths] Migrated {migrated} lint state file(s) from wiki/ → .llm-wiki/", file=sys.stderr)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Wiki page traversal (shared by lint / semantic lint / dedup / validate / graph).
+#
+# WIKI_ARTIFACT_DIRS: top-level wiki/ subdirs holding DERIVED artifacts, never
+# knowledge pages. This port WRITES ingest review items to wiki/REVIEW/ and
+# graph cluster-hub pages to wiki/clusters/ (NashSU has neither); without this
+# guard those diagnostics leak back into lint/dedup/graph input as if they were
+# wiki content, risking self-referential findings and an ingest feedback loop.
+# Single source of truth — do not redeclare per tool (the per-tool copies
+# drifted: cross_source_dedup and validate_ingest were missing `clusters`).
+# ══════════════════════════════════════════════════════════════════════════════
+
+WIKI_ARTIFACT_DIRS = frozenset({"lint", "REVIEW", "clusters", "media"})
+
+
+def atomic_write(path, content: str, encoding: str = "utf-8") -> None:
+    """Write file atomically via tmp + rename. Prevents partial writes.
+
+    Canonical implementation (moved from _core so light tools don't need to
+    import the full core module; _core re-exports it for back compat).
+    """
+    import os
+    p = str(path)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding=encoding) as f:
+        f.write(content)
+    os.replace(tmp, p)
+
+
+def iter_wiki_pages(
+    wiki_dir: Path,
+    *,
+    anchor_files: Iterable[str] = frozenset(),
+    state_files: Iterable[str] = frozenset(),
+    skip_dirs: Iterable[str] = WIKI_ARTIFACT_DIRS,
+) -> Iterator[tuple[str, str]]:
+    """Yield (rel_path_str, content) for knowledge pages under wiki_dir.
+
+    anchor_files / state_files stay per-tool (each tool's scan universe is a
+    deliberate semantic choice); the walk itself and the artifact-dir guard are
+    shared. Unreadable files are skipped. Sorted for determinism.
+    """
+    if not wiki_dir.is_dir():
+        return
+    for path in sorted(wiki_dir.rglob("*.md")):
+        rel = path.relative_to(wiki_dir)
+        if rel.name in anchor_files or rel.name in state_files:
+            continue
+        if rel.parts and rel.parts[0] in skip_dirs:
+            continue
+        try:
+            yield str(rel), path.read_text(encoding="utf-8")
+        except OSError:
+            continue
 
 
 # ══════════════════════════════════════════════════════════════════════════════

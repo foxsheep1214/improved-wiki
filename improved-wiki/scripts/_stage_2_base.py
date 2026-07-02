@@ -47,6 +47,7 @@ from _llm_api import (
     call_anthropic_protocol,
 )
 from _paths import media_slug as _stage_1_2_media_slug
+from _frontmatter import extract_frontmatter_title as _extract_fm_title
 
 # Folders that may appear in schema.md but are not LLM-generated page types.
 # Shared by Stage 2.2 (analysis) and 2.4 (generation) schema routing
@@ -62,10 +63,7 @@ def _stage_2_frontmatter_title(content: str) -> str:
     a word-split silently weakens every match by one token on each end (the
     first/last word carries a stray `"`).
     """
-    m = re.search(r"title:\s*([^\n]+)", content)
-    if not m:
-        return ""
-    return m.group(1).strip().strip("\"'")
+    return _extract_fm_title(content)
 
 
 _TITLE_STOPWORDS = {

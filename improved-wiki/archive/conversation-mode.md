@@ -1,3 +1,10 @@
+> **⚠️ ARCHIVED 2026-07-02** — 本文是早期 conversation-mode 教程，含大量过时内容
+> （旧 stage 编号 2.3=生成、~60K 字符 chunk、7 字段 frontmatter、已删除的
+> `run_review_suggestions.py` 等）。现行权威：机制见
+> `references/delegate-mode.md`，逐 stage 作答见
+> `references/conversation-mode-agent-workflow.md`，stage 清单见
+> `references/ingest-stages-mandatory.md`。仅供历史参考，勿按本文操作。
+
 # Conversation Mode — Direct LLM Execution
 
 本模式描述如何在当前对话中直接执行 improved-wiki 的消化流程，**无需脚本、无需 API key、无需 delegate 往环**。

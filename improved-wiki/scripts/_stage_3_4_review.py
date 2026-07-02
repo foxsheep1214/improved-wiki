@@ -1,5 +1,6 @@
 
 from _stage_2_base import *
+from _paths import atomic_write
 from _review_utils import review_id_for
 
 
@@ -239,9 +240,7 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
 
         md = _render_review_page(rtype, title, desc, affected, queries,
                                  severity, date_str, raw_file.stem)
-        tmp = page_path.with_suffix(page_path.suffix + ".tmp")
-        tmp.write_text(md, encoding="utf-8")
-        tmp.rename(page_path)
+        atomic_write(page_path, md)
         written += 1
 
     print(f"[stage 3.4] {written} review pages -> wiki/REVIEW/")
@@ -256,8 +255,6 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
         "stop_reason": stop_reason,
         "items": items,
     }
-    tmp = sugg_path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(sugg_data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.rename(sugg_path)
+    atomic_write(sugg_path, json.dumps(sugg_data, ensure_ascii=False, indent=2))
 
     return {"items": written, "stop_reason": stop_reason}

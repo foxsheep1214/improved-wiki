@@ -21,7 +21,7 @@ Detailed source-level comparison of NashSU's actual lint implementation
 
 **Repo URL**: <https://github.com/nashsu/llm_wiki> (track the latest release; analysis verified against v0.5.2)
 
-This file is the **why** behind SKILL.md §2.3's lint design. Read it when
+This file is the **why** behind the skill's lint design（SKILL.md 的 Lint 命令部分）. Read it when
 adding lint features, debugging parity issues, or porting the lint to a new
 implementation.
 

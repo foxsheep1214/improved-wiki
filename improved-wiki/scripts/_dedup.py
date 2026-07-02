@@ -267,8 +267,10 @@ def _extract_first_json_object(text: str) -> str | None:
     return None
 
 
-def _normalize_group_key(slugs: list[str]) -> str:
-    return ",".join(sorted(s.lower() for s in slugs))
+# Group-key normalization is shared with the whitelist storage layer
+# (_dedup_storage.canonical_key) so persisted keys and in-memory keys can
+# never drift apart.
+from _dedup_storage import canonical_key as _normalize_group_key  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────

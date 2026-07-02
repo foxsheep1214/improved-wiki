@@ -1,7 +1,7 @@
 ---
 description: "Image captioning — one VLM call per image with NashSU-style context-aware prompt, parallel dispatch, MiniMax VLM. No fallback: missing key or consecutive batch failure pauses the ingest."
 tags: [vlm, captioning, minimax, strategy]
-related: [ingest-stages-mandatory, multimodal-vlm-pitfalls, known-issues]
+related: [ingest-stages-mandatory, known-issues]
 ---
 
 # Image Captioning 策略
@@ -116,6 +116,24 @@ images = [{"filename": f.name, "page": 0, "width": 0, "height": 0}
           if f.suffix.lower() in ('.png', '.jpg', '.jpeg')]
 captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_label="repair")
 ```
+
+## MiniMax endpoint matrix（勿混用，2026-06-11 教训）
+
+| endpoint | 多图支持 | auth header | 适用 |
+|---|---|---|---|
+| `https://api.minimaxi.com/anthropic/v1/messages` | ✅ content blocks 数组（Anthropic 协议原生） | `Authorization: Bearer <key>` 或 `x-api-key: <key>`（均可） | **caption 调用（现行管线用此 endpoint，一图一调用）** |
+| `https://api.minimaxi.com/v1/coding_plan/vlm` | ❌ 单图（`image_url` 必须是单字符串） | `Authorization: Bearer <key>` | mmx CLI 内部用 |
+
+常见错配：`v1/coding_plan/vlm` + `image_url=[多图数组]` → 2013 invalid_params；
+`anthropic/v1/messages` 缺 auth → 1004 "carry the API secret key"。调任何
+MiniMax endpoint 前先对照本表，别在误导性错误信息上试错。
+
+## 历史 caption「解析失败」可重试修复
+
+旧 ingest 里 `（图N，解析失败）` 类 caption 大多不是图片问题（A/B 验证灰度图
+不被拒），而是早期 VLM 版本/旧 prompt 缺上下文所致——直接重试通常就成功。
+现行管线已内置：缓存过滤检测失败 caption 并重试（`_stage_1_3_is_caption_failed`），
+预处理做 RGB 归一化 + 超大图缩放。批量补录用上面 Usage 一节的直接调用方式。
 
 ## Open issues
 

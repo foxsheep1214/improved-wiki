@@ -37,28 +37,29 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 
+from _frontmatter import WIKILINK_RE as _WIKILINK_RE  # noqa: E402
+from _frontmatter_array import parse_frontmatter_array  # noqa: E402
+from _paths import iter_wiki_pages, WIKI_ARTIFACT_DIRS  # noqa: E402
+from pathlib import PurePosixPath  # noqa: E402
+
+
 def source_slug_from_raw(raw_path: str) -> str:
-    """raw/Datasheet/.../X.pdf → sources/Datasheet/.../X  (mirrors raw/ layout)."""
+    """raw/Datasheet/.../X.pdf → sources/Datasheet/.../X  (mirrors raw/ layout).
+
+    Extension handling matches the canonical mapping
+    (_core.source_slug_from_raw_path / NashSU source-identity.ts): the LAST
+    extension is stripped whatever it is. The old local copy only recognized
+    .pdf/.pptx/.docx, so any other extension produced a slug that diverged
+    from the canonical source-page path.
+    """
     p = raw_path.strip().strip('"').strip("'")
     if p.startswith("raw/"):
         p = p[4:]
-    for ext in (".pdf", ".pptx", ".docx"):
-        if p.lower().endswith(ext):
-            p = p[: -len(ext)]
-            break
+    try:
+        p = str(PurePosixPath(p).with_suffix(""))
+    except ValueError:
+        pass
     return f"sources/{p}"
-
-
-def parse_sources_field(fm: str) -> list[str]:
-    """Extract raw paths from a `sources: [...]` frontmatter line."""
-    m = re.search(r"^sources:\s*\[(.*)\]\s*$", fm, re.MULTILINE)
-    if not m:
-        return []
-    raw = m.group(1)
-    return [s.strip().strip('"').strip("'") for s in raw.split(",") if s.strip()]
-
-
-_WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]")
 
 
 def backfill_source_links(content: str) -> tuple[str, int]:
@@ -72,7 +73,9 @@ def backfill_source_links(content: str) -> tuple[str, int]:
     if not m:
         return content, 0
     fm, body = m.group(1), content[m.end():]
-    raw_paths = parse_sources_field(fm)
+    # Shared parser — handles BOTH inline [a, b] and block-style arrays (the
+    # old local regex only understood the inline form).
+    raw_paths = parse_frontmatter_array(content, "sources")
     if not raw_paths:
         return content, 0
 
@@ -102,20 +105,15 @@ def backfill_source_links(content: str) -> tuple[str, int]:
 
 
 def scan_wiki(wiki_dir: Path):
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        # Write-guard: never backfill source links INTO an aggregate file.
-        if rel.name in ("index.md", "log.md", "overview.md", "schema.md"):
-            continue
-        if rel.parts and rel.parts[0] in ("lint", "REVIEW", "media"):
-            continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except Exception:
-            continue
+    # Write-guard: never backfill source links INTO an aggregate file.
+    # Artifact dirs come from the shared _paths.WIKI_ARTIFACT_DIRS.
+    for rel, content in iter_wiki_pages(
+        wiki_dir,
+        anchor_files=("index.md", "log.md", "overview.md", "schema.md"),
+    ):
         new_content, n = backfill_source_links(content)
         if n:
-            yield path, new_content, n
+            yield wiki_dir / rel, new_content, n
 
 
 def fix_broken_links(wiki_dir: Path, apply: bool):
@@ -124,21 +122,11 @@ def fix_broken_links(wiki_dir: Path, apply: bool):
     O(n²) — slow on large wikis. Returns (n_fixed_pages, n_fixed_links).
     """
     from _lint_suggest import run_structural_lint
-    pages = []
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        # Scan universe = NashSU {index, log}: overview/schema stay valid link
-        # targets so real [[overview]] links aren't mis-flagged as broken. The
-        # engine exempts aggregates from findings, so overview/schema source
-        # pages never get rewritten here.
-        if rel.name in ("index.md", "log.md"):
-            continue
-        if rel.parts and rel.parts[0] in ("lint", "REVIEW", "media"):
-            continue
-        try:
-            pages.append((str(rel), path.read_text(encoding="utf-8")))
-        except Exception:
-            continue
+    # Scan universe = NashSU {index, log}: overview/schema stay valid link
+    # targets so real [[overview]] links aren't mis-flagged as broken. The
+    # engine exempts aggregates from findings, so overview/schema source
+    # pages never get rewritten here.
+    pages = list(iter_wiki_pages(wiki_dir, anchor_files=("index.md", "log.md")))
     findings = run_structural_lint(pages, with_suggestions=True)
     broken = [f for f in findings if f["type"] == "broken-link" and f.get("suggested_target")]
     pages_by_rel = {p[0]: wiki_dir / p[0] for p in pages}

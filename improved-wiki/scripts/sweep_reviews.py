@@ -44,6 +44,10 @@ from _review_utils import (  # noqa: E402
     normalize_review_title,
     normalize_review_items,
 )
+from _frontmatter import (  # noqa: E402
+    parse_frontmatter as _parse_frontmatter_shared,
+    extract_frontmatter_title,
+)
 
 # ── LLM judge constants (verbatim from NashSU sweep-reviews.ts) ──────────────
 JUDGE_BATCH_SIZE = 40
@@ -52,25 +56,8 @@ MAX_PAGES_IN_PROMPT = 300
 
 
 def _parse_frontmatter(text: str) -> Dict[str, Any]:
-    """Parse YAML-like frontmatter from markdown text."""
-    if not text.startswith("---"):
-        return {}
-    end = text.find("\n---", 3)
-    if end == -1:
-        return {}
-    fm_text = text[3:end].strip()
-    result: Dict[str, Any] = {}
-    for line in fm_text.split("\n"):
-        line = line.strip()
-        if ":" in line:
-            key, _, val = line.partition(":")
-            key = key.strip()
-            val = val.strip().strip('"').strip("'")
-            # Handle lists: [a, b, c]
-            if val.startswith("[") and val.endswith("]"):
-                val = [v.strip().strip('"').strip("'") for v in val[1:-1].split(",") if v.strip()]
-            result[key] = val
-    return result
+    """Parse frontmatter dict (delegates to the shared _frontmatter parser)."""
+    return _parse_frontmatter_shared(text)[0]
 
 
 def _build_wiki_index(wiki_dir: Path) -> Dict[str, Set[str]]:
@@ -99,10 +86,10 @@ def _build_wiki_index(wiki_dir: Path) -> Dict[str, Set[str]]:
             content = f.read_text(encoding="utf-8")
         except Exception:
             continue
-        # NashSU title regex: first frontmatter `title:` value.
-        m = re.search(r"^---\n[\s\S]*?^title:\s*[\"']?(.+?)[\"']?\s*$", content, re.MULTILINE)
-        if m:
-            by_title.add(m.group(1).strip().lower())
+        # First frontmatter `title:` value (shared extractor).
+        t = extract_frontmatter_title(content)
+        if t:
+            by_title.add(t.lower())
     return {"by_id": by_id, "by_title": by_title}
 
 
@@ -116,10 +103,7 @@ def _wiki_page_summaries(wiki_dir: Path) -> List[Tuple[str, Optional[str]]]:
         title: Optional[str] = None
         try:
             content = f.read_text(encoding="utf-8")
-            m = re.search(r"^---\n[\s\S]*?^title:\s*[\"']?(.+?)[\"']?\s*$",
-                          content, re.MULTILINE)
-            if m:
-                title = m.group(1).strip()
+            title = extract_frontmatter_title(content) or None
         except Exception:
             pass
         pages.append((f.stem.lower(), title))

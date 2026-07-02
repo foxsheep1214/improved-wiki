@@ -28,6 +28,33 @@ from typing import Callable, Optional
 _FM_RE = re.compile(r"^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)")
 _LEADING_FENCE_RE = re.compile(r"^[ \t]*```(?:yaml|md|markdown)?[ \t]*\r?\n")
 
+# Canonical shared regexes — single source of truth (per-tool copies had
+# multiplied: the `title:` matcher existed in 8 files, the wikilink extractor
+# in 6, and had started to drift). Tools with NashSU-parity fallback chains
+# keep their own surrounding logic but reuse these patterns.
+#   TITLE_LINE_RE:  quote-tolerant `title:` line (MULTILINE).
+#   WIKILINK_RE:    [[target]] / [[target|display]] — group(1)=target,
+#                   group(2)=display (without the pipe) or None.
+TITLE_LINE_RE = re.compile(r"^title:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
+WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]")
+
+
+def extract_frontmatter_title(content: str) -> str:
+    """Return the frontmatter ``title:`` value ("" if absent), quotes stripped.
+
+    Parses the frontmatter block properly (a ``title:`` line in the body
+    can't false-match).
+    """
+    val = parse_frontmatter(content)[0].get("title")
+    if isinstance(val, str):
+        return val.strip()
+    return ""
+
+
+def extract_wikilinks(content: str) -> list:
+    """Return all wikilink targets from [[target]] / [[target|display]]."""
+    return [m.group(1).strip() for m in WIKILINK_RE.finditer(content)]
+
 
 def _strip_leading_code_fence(content: str) -> str:
     """Read-time fallback: if the whole doc is wrapped in a leading
@@ -258,10 +285,8 @@ def merge_page_content(
     # wikilink enrichment (which only adds [[...]] links).  Stripping wikilink
     # markup from both bodies collapses this enrichment-only difference, avoiding
     # a spurious LLM page-merge round-trip for every already-written page.
-    import re as _re
-    _wikilink_re = _re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
     def _strip_wikilinks(text: str) -> str:
-        return _wikilink_re.sub(lambda m: m.group(2) or m.group(1), text)
+        return WIKILINK_RE.sub(lambda m: m.group(2) or m.group(1), text)
     if _strip_wikilinks(old_body).strip() == _strip_wikilinks(new_body).strip():
         # Keep the existing (enriched) body; only adopt frontmatter array unions.
         return write_frontmatter(parse_frontmatter(array_merged)[0], old_body)

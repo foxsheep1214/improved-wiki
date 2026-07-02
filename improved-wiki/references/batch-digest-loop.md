@@ -6,7 +6,10 @@ manual intervention per book.
 ## Why not Claude Code?
 
 - Claude `-p` (print) mode is **single-turn** — it processes ONE request and exits.
-  It cannot run a multi-book batch in a single invocation.
+  It cannot run a multi-book batch in a single invocation, cannot handle the
+  multi-step conversation-mode handoff (exit 101 prompt-file pattern), and
+  times out before OCR completes on scanned PDFs. Batch via `claude -p "digest
+  this book"` fails (exit=1) for every book — call `ingest.py` directly instead.
 - Claude Code interactive mode works but requires a visible Terminal window.
   When the display is off/locked, you can't inject text into a running Terminal
   session (see `macos-app-automation` skill pitfall #27).
@@ -73,7 +76,7 @@ limiting and the watcher's automatic retry/queue management.
 import os, subprocess, time
 from pathlib import Path
 
-RAW_DIR = Path.home() / "Documents/知识库/HardwareWiki/raw/book"
+RAW_DIR = Path.home() / "Documents/知识库/HardwareWiki/raw/Book"
 WIKI_SRC = Path.home() / "Documents/知识库/HardwareWiki/wiki/sources"
 INGEST = Path.home() / ".agents/skills/improved-wiki/scripts/ingest.py"
 PROJECT_ROOT = RAW_DIR.parent.parent
@@ -118,11 +121,22 @@ print(f"DONE: {success} OK, {failed} failed, {total} total")
 
 - **Dedup via source page**: `ingest.py` checks `wiki/sources/<pdf-stem>.md` before
   processing. This is the authoritative "already ingested" signal (per the
-  improved-wiki skill). Do NOT use `ingest-cache.json` or memory.
-- **Serial only for minerU-intensive stages**: minerU has built-in concurrency
-  limiting (max 2 instances). Running too many books in parallel will SIGABRT on
-  16GB Macs. `--parallel 4` is a safe default — it batches Stage 1.1-2 but keeps
-  minerU instances bounded.
+  improved-wiki skill). Do NOT use `ingest-cache.json` or memory. Note: source
+  pages may live in subdirectories (`wiki/sources/Book/`,
+  `wiki/sources/Datasheet/…`) mirroring the `raw/` layout — check all subdirs.
+- **minerU is strictly serialized system-wide** — a cross-process file lock
+  (`fcntl.flock` on `~/.cache/improved-wiki/.mineru.lock`) allows at most ONE
+  minerU instance, regardless of `--parallel` (2026-06-23; replaced the old
+  process-counter approach). `--parallel 4` is safe — it batches the
+  wiki-independent prefetch while minerU work still runs one book at a time.
+- **Per-project lock**: `ingest.py` uses a file lock (`.ingest-progress/<hash>.lock`);
+  multiple processes on the same project serialize automatically, and a stale
+  lock from a crashed run is auto-recovered ("Stale lock from pid=XXX — taking over").
+- **Batch parallelism rule**: only the wiki-independent PREFETCH (Phase 0/1 +
+  Stage 2.1/2.2) runs across books in parallel; the wiki-dependent spine
+  (Stage 2.3→write) runs one book at a time (see SKILL.md "Batch ingest" and
+  `references/batch-parallel-prefetch.md`). LLM calls within a single book are
+  serial (conversation mode — one prompt at a time).
 - **Timeout**: 3600s per book (1 hour). Most books complete in 10-30 minutes.
 - **LLM model**: Text generation runs in conversation mode — the calling agent
   answers each LLM step with the current model. No `LLM_API_KEY` is needed for
@@ -144,6 +158,15 @@ nohup python3 /tmp/hw_batch.py > /tmp/hw_batch.log 2>&1 &
 # Monitor either mode
 tail -f /tmp/ingest_watch.log
 ```
+
+## Common ingest.py failure modes
+
+| Failure | Exit code | Cause | Fix |
+|---------|-----------|-------|-----|
+| Stage 2 verification | 1 | LLM didn't emit `wiki/sources/<title>.md` FILE block | Retry; check LLM model supports the prompt format |
+| minerU OCR timeout | -15 (SIGTERM) | Scanned PDF too large, OCR > 3600s | Increase timeout or skip large scanned books |
+| Stale lock | 1 (recovered) | Previous ingest crashed, `.ingest-progress/` lock file remains | `ingest.py` auto-recovers: "Stale lock from pid=XXX — taking over" |
+| minerU hybrid OCR routing | 0 (normal) | 文本层薄/图表密集的 PDF | hybrid-engine `parse_method=auto` 按页自动判 txt vs VLM OCR，所有 PDF 统一走 minerU |
 
 ## When Display is Off
 

@@ -21,7 +21,7 @@
    - 如果不符合 → **阻止 ingest，提醒用户先修正命名**
 
 3. **不要跳过检查**
-   - 即使文件已经通过 `ingest-cache.json` 去重，命名检查仍然必须在文件选择之前执行（因为不规范的文件名会在后续 Stage 产生歧义）
+   - 命名检查必须在文件选择之前执行（因为不规范的文件名会在后续 Stage 产生歧义）。注意：`ingest-cache.json` **不是**去重依据（Never rely on ingest-cache.json for dedup）——去重只看 `wiki/sources/<path>.md` 是否已存在
 
 ### 用户把新文件放入 raw/ 时
 

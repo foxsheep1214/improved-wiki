@@ -3,6 +3,16 @@
 When an agent (Hermes, Claude Code) drives the improved-wiki pipeline, it must
 answer each LLM step that `ingest.py` delegates via prompt files. This file
 documents the practical workflow for a single-book ingest.
+(机制与政策见 `references/delegate-mode.md`；本文是逐 stage 作答的 hands-on cheat sheet。)
+
+## Generation guardrails (any FILE-block prompt)
+
+- **Never generate index/log/overview pages** — Stage 3.5 handles these three
+  programmatically (index/log appended, overview LLM-rewritten). An LLM-emitted
+  full rewrite silently drops history entries (the ADL8113 incident).
+- **Frontmatter completeness**: every page needs the 6 required fields
+  (`type`/`title`/`tags`/`related`/`created`/`updated`; `sources` is an
+  additional field where applicable — see `references/naming-conventions.md`).
 
 ## Prerequisites
 
@@ -86,6 +96,8 @@ For Stage 2.4, generate the chunk's exact slug list inline; verify block-count =
 requested slugs (minus the `foo-bar` placeholder) before advancing.
 
 ## Re-ingest (comparison or correction)
+
+完整流程（backup → delete → re-ingest → compare）见 `references/re-ingest-comparison.md`；速查命令：
 
 ```bash
 # 1. Delete old ingest

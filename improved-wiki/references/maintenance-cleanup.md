@@ -61,7 +61,7 @@ rm -rf .llm-wiki/extract-tmp/ .llm-wiki/.extract-tmp/ .llm-wiki/conversation/ .l
 **Symptom**: A file literally named `.md` appears in `wiki/concepts/`.
 **Cause**: Pipeline bug where a chunk with zero concepts triggers a FILE
 block with an empty slug. The code fix exists (`is_safe_ingest_path` now
-rejects empty filenames — see known-issues.md §Cleanup batch #2), but
+rejects empty filenames — see known-issues.md), but
 residual files from older ingests persist.
 
 **Action**: Delete the file. It has no content value.

@@ -21,6 +21,8 @@ Refactored 2026-06-21 for explicit stage naming; embedding prefilter 2026-06-29
 from pathlib import Path
 import re
 from _llm_api import call_anthropic_protocol
+from _frontmatter import WIKILINK_RE as _WIKILINK_RE
+from _stage_2_base import _stage_2_frontmatter_title
 from _dedup_embedding import candidate_pairs, cluster_by_pairs
 
 DEDUP_COSINE_THRESHOLD = 0.82
@@ -30,8 +32,7 @@ def _stage_2_5_extract_concept_blocks(file_blocks):
     concepts = []
     for idx, (path, content) in enumerate(file_blocks):
         if "/concepts/" in path or path.startswith("concepts/"):
-            title_match = re.search(r"title:\s*([^\n]+)", content)
-            title = title_match.group(1).strip() if title_match else path.split("/")[-1]
+            title = _stage_2_frontmatter_title(content) or path.split("/")[-1]
             body_match = re.search(r"---\s*\n(.*?)\n---\s*\n(.*)", content, re.DOTALL)
             definition = (body_match.group(2) if body_match else content)[:300].lower()
             concepts.append({
@@ -145,7 +146,6 @@ def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
     return rules
 
 
-_WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(\|[^\]]+)?\]\]")
 
 
 def _stage_2_5_rewrite_wikilinks(content, slug_map):
@@ -157,7 +157,8 @@ def _stage_2_5_rewrite_wikilinks(content, slug_map):
     permanently broken link the moment Stage 3.1 writes to disk.
     """
     def _sub(m):
-        target, pipe = m.group(1), m.group(2) or ""
+        target = m.group(1)
+        pipe = f"|{m.group(2)}" if m.group(2) else ""
         bare = target.rsplit("/", 1)[-1]
         new_slug = slug_map.get(bare.lower())
         if new_slug is None:

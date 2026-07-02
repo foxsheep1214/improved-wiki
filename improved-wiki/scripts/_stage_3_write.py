@@ -15,6 +15,7 @@ from pathlib import Path
 _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
+from _paths import atomic_write
 from _core import (
     Config,
     heartbeat as _heartbeat, file_tag as _file_tag,
@@ -437,9 +438,7 @@ def stage_3_1_write_wiki_file(path: Path, content: str, config: Config | None = 
             existing = path.read_text(encoding="utf-8")
             content = _stage_3_1_merge_page_content(existing, content, config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.rename(path)
+    atomic_write(path, content)
 
 
 # Category subdir → bilingual index.md section header (NashSU index parity).

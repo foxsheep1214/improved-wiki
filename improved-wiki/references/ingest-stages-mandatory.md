@@ -88,7 +88,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：`stages.global_digest_keys ≥ 1`。
 
 ### Stage 2.2 · Chunk Analysis
-- **作用**：对源文本切块分析（**永远不能跳**）。短源（≤60K 字符）1 块；长源按 ~60K/块切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`formulas`/`connections_to_existing_wiki`/`digest_updates`。
+- **作用**：对源文本切块分析（**永远不能跳**）。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`formulas`/`connections_to_existing_wiki`/`digest_updates`。
 - **go/no-go**：`stages.chunks_analyzed ≥ 1`。
 
 ### Stage 2.4 · Generation（single-pass pipeline）

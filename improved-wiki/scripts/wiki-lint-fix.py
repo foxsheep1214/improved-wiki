@@ -56,6 +56,7 @@ from _frontmatter_array import (  # noqa: E402
     parse_frontmatter_array,
     write_frontmatter_array,
 )
+from _paths import iter_wiki_pages, atomic_write as _atomic_write  # noqa: E402
 
 # Scan universe = NashSU {index, log} (overview/schema stay valid link targets,
 # their outlinks count). The engine exempts aggregates from findings, so the
@@ -66,24 +67,10 @@ _STATE_FILES = {
     "review.json", "review-suggestions.json", "embed-cache.json",
     "lint-semantic.json", "dedup-report.json",
 }
-_SKIP_DIRS = {"lint", "REVIEW", "clusters", "media"}  # clusters/ = graph-generated (match semantic lint + graph.py)
-
-
 def _collect_pages(wiki_dir: Path) -> list[tuple[str, str]]:
-    pages: list[tuple[str, str]] = []
-    if not wiki_dir.is_dir():
-        return pages
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        if rel.name in _ANCHOR_FILES or rel.name in _STATE_FILES:
-            continue
-        if rel.parts and rel.parts[0] in _SKIP_DIRS:
-            continue
-        try:
-            pages.append((str(rel), path.read_text(encoding="utf-8")))
-        except OSError:
-            continue
-    return pages
+    return list(iter_wiki_pages(
+        wiki_dir, anchor_files=_ANCHOR_FILES, state_files=_STATE_FILES,
+    ))
 
 
 def _atomic_write(path: Path, content: str) -> None:

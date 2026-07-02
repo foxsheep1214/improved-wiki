@@ -1,3 +1,10 @@
+> **⚠️ ARCHIVED 2026-07-02** — 早期 MiniMax/VLM 踩坑记录，多数内容已过时：
+> Pitfall 1（本地 Qwen2-VL）与现管线无关；Pitfall 2 的批量多图 caption 与现行
+> 「一图一调用」（NashSU captionImage parity）相反；Pitfall 3（Batches API）未采用；
+> Pitfall 4 的 embo-01 端点已不存在（embeddings 现为强制 Stage 3.7，本地 Ollama
+> bge-m3）；决策树里 "Embedding 可选" 已失效。仍有效的 Pitfall 5（endpoint 矩阵）
+> 与 Pitfall 6（失败 caption 重试）已并入 `references/image-caption-strategy.md`。
+
 # Multimodal VLM pitfalls — MiniMax M3 + mmx CLI 实测踩坑
 
 HardwareWiki 电源篇图 captioning 摸出来的具体非平凡经验。每个 pitfall 都有验证记录。

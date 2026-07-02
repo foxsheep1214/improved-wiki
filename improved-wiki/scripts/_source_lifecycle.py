@@ -10,7 +10,7 @@ list_source_pages(): list all pages derived from a given source.
 import json, shutil, time
 from pathlib import Path
 
-from _paths import detect_runtime_dir
+from _paths import detect_runtime_dir, media_slug
 from _core import (
     source_slug_from_raw_path,
     load_schema_md,
@@ -92,7 +92,7 @@ def delete_source(raw_file: Path, config, dry_run: bool = False) -> int:
         print(f"{tag} {verb} {derived_count} derived pages")
 
     # 4. Remove media directory
-    slug = _derive_media_slug(raw_file, config)
+    slug = media_slug(raw_file, config)
     media_dir = wiki_root / "wiki" / "media" / slug
     if media_dir.exists():
         if not dry_run:
@@ -155,12 +155,3 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bo
     return removed
 
 
-def _derive_media_slug(raw_file: Path, config) -> str:
-    """Derive media slug from raw file path (mirrors _media_slug in ingest.py)."""
-    try:
-        rel = raw_file.relative_to(config.raw_root)
-    except ValueError:
-        return raw_file.stem
-    parent = rel.parent
-    stem = rel.stem
-    return str(parent / stem) if str(parent) != "." else stem

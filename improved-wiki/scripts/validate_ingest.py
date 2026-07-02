@@ -28,7 +28,7 @@ WIKI = PROJECT_ROOT / "wiki"
 # Use shared detection (_paths.py: .llm-wiki/ default, auto-migrates from .iwiki-runtime/)
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
-from _paths import detect_runtime_dir
+from _paths import detect_runtime_dir, iter_wiki_pages
 from _lint_suggest import run_structural_lint, ANCHOR_FILES as _LINT_ANCHOR_FILES
 RUNTIME = detect_runtime_dir(PROJECT_ROOT)
 SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "ADL8113")
@@ -104,13 +104,14 @@ def _stage_4_1_find_media_dir(slug: str) -> Optional[Path]:
 
 # ── Structural lint suggestions (wiki-wide, non-gating) ─────────────────────
 # Scan universe = NashSU {index, log} from _lint_suggest (overview/schema stay
-# valid targets; engine exempts aggregates from findings). + state + lint/REVIEW/media.
+# valid targets; engine exempts aggregates from findings). + state + artifact
+# dirs (shared _paths.WIKI_ARTIFACT_DIRS — the local copy here had drifted,
+# missing `clusters`).
 _LINT_STATE_FILES = {
     "lint-cache.json", "ingest-cache.json", "ingest-queue.json",
     "review.json", "review-suggestions.json", "embed-cache.json",
     "lint-semantic.json", "dedup-report.json",
 }
-_LINT_SKIP_DIRS = {"lint", "REVIEW", "media"}
 
 
 def _stage_4_1_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
@@ -121,19 +122,9 @@ def _stage_4_1_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
     suggested_source when a confident match exists. Non-gating: the caller
     (validate_ingest.main) surfaces these without affecting the exit code.
     """
-    pages: list[tuple[str, str]] = []
-    if not wiki_dir.is_dir():
-        return []
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        if rel.name in _LINT_ANCHOR_FILES or rel.name in _LINT_STATE_FILES:
-            continue
-        if rel.parts and rel.parts[0] in _LINT_SKIP_DIRS:
-            continue
-        try:
-            pages.append((str(rel), path.read_text(encoding="utf-8")))
-        except OSError:
-            continue
+    pages = list(iter_wiki_pages(
+        wiki_dir, anchor_files=_LINT_ANCHOR_FILES, state_files=_LINT_STATE_FILES,
+    ))
     # with_suggestions=False: detection only (O(n)). The O(n^2) suggestion
     # scan is left to wiki-lint.sh; running it here on a 7594-page wiki took
     # minutes and blew the ingest's final-validation subprocess timeout.

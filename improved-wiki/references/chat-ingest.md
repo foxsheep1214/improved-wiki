@@ -36,15 +36,11 @@ User: 在 HardwareWiki 中用 chat 模式消化 raw/papers/新论文.pdf
 Claude runs the same Stage 1.1 as auto-ingest:
 
 ```bash
-# Text extraction + PDF type detection (stops after Stage 1.2)
-python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-Stage 1.2
-
-# Image extraction (stops after Stage 1.3)
-python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-Stage 1.3
-
-# Image captioning (stops after Stage 1.3)
-python3 scripts/ingest.py raw/Book/Book.pdf --stop-after-Stage 1.3
+# Phase 1 prefetch: text extraction + image extraction + captioning (stops cleanly after Phase 1)
+python3 scripts/ingest.py "raw/Book/Book.pdf" --stop-after-stage 0
 ```
+
+（权威说明见 `delegate-mode.md`：`--stop-after-stage 0` 覆盖整个 Phase 1 预取，干净退出 exit 0。）
 
 These are I/O operations — no LLM reasoning needed, no reason to involve the user.
 
@@ -124,7 +120,7 @@ Claude: 明白了。消化策略：
   确认后我就开始生成 wiki 页面。输入"生成"继续。
 ```
 
-### Step 4: Generate Wiki Pages (Stage 2.3 with user guidance)
+### Step 4: Generate Wiki Pages (Stage 2.4 with user guidance)
 
 When the user confirms ("生成" / "generate" / "写入" / "proceed"), Claude generates wiki pages. The generation prompt **must include** the user's guidance:
 
