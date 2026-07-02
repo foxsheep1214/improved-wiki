@@ -42,11 +42,32 @@ Short pages may merge or drop sections, but never emit one undifferentiated para
 """
 
 # B5+B6 (M9/M6): appended to the numbered Rules list of both prompts.
-_EXTRA_RULES = """7. related frontmatter — EXACT format: prefixed bare slugs, comma-separated,
+# 9 = D1 slug-language ruling (2026-07-02): slug follows the SOURCE language;
+# 10 = D4 figure-reference ruling (2026-07-02): cited figure numbers link to
+#      the book's source page (needs the per-book source-page slug, hence a
+#      builder function instead of a constant).
+def _extra_rules(source_page_slug: str) -> str:
+    return f"""7. related frontmatter — EXACT format: prefixed bare slugs, comma-separated,
    NO [[ ]] and NO .md — e.g. related: [concepts/matched-filter, entities/bell-labs].
 8. Evidence anchors: formulas/data cite the source's chapter/section/equation/
    figure number (式(5-10), 图2.6, Table 8.1); a value read off a figure's curve
-   must be marked "据图X.X"."""
+   must be marked "据图X.X".
+9. slug uses the SOURCE language (中文书→中文slug, English book→English kebab);
+   English terms belong in title, not slug, EXCEPT established acronyms
+   (mti, cfar, dds) which may stay; never mixed 中英双拼 slugs.
+10. When body text cites a figure number (图2.6 / Fig. 3-1), link it to the
+    source page: [[{source_page_slug}|据图2.6]] — this source-page link is
+    always valid even though it is not in the Linkable list. Never leave a
+    bare figure number pointing nowhere; do NOT embed images."""
+
+
+def _source_page_slug(file_path: Path, config: Config) -> str:
+    """Wikilink stem of this book's source page: sources/<raw-rel-sans-ext>."""
+    try:
+        rel = file_path.relative_to(config.raw_root).with_suffix("")
+    except ValueError:
+        rel = Path(file_path.stem)
+    return f"sources/{rel}"
 
 
 def _top_wiki_tags(config: Config, top_n: int = 30) -> list[str]:
@@ -405,6 +426,7 @@ def _stage_2_4_build_prompt(
     formulas_section = _collect_formulas_block([chunk_analysis])
     schema_section = _schema_routing_block(config)
     tags_section = _tags_reuse_section(config)
+    extra_rules = _extra_rules(_source_page_slug(file_path, config))
 
     language_directive = build_language_directive(chunk_text)
     return f"""{language_directive}
@@ -475,7 +497,7 @@ Rules:
 6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-{_EXTRA_RULES}
+{extra_rules}
 {_CONCEPT_SKELETON_SECTION}{tags_section}
 # Output Format — EXACT
 ---FILE:wiki/concepts/<slug>.md---
@@ -996,6 +1018,7 @@ def _stage_2_4_build_all_prompt(
     formulas_section = _collect_formulas_block(chunk_analyses)
     schema_section = _schema_routing_block(config)
     tags_section = _tags_reuse_section(config)
+    extra_rules = _extra_rules(_source_page_slug(file_path, config))
 
     language_sample = source_context or json.dumps(chunk_analyses, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
@@ -1052,7 +1075,7 @@ Rules:
 6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-{_EXTRA_RULES}
+{extra_rules}
 {_CONCEPT_SKELETON_SECTION}{tags_section}
 # Output Format — EXACT
 ---FILE:wiki/concepts/<slug>.md---

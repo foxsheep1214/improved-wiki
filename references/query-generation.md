@@ -97,7 +97,7 @@ updated: {today}
 
 ### 约束（代码内强制）
 
-- `slug`：英文 kebab-case，3-6 个词
+- `slug`：**源文语言**（2026-07-02 裁决：中文书→中文 slug，英文书→英文 kebab-case；英文术语进 title 不进 slug，约定俗成缩写 mti/cfar/dds 例外；禁止中英双拼），3-6 个词
 - `title`：完整疑问句，以 `?` 或 `？` 结尾
 - `related`：**仅**本次 ingest 生成的 concept/entity stem
 - `sources`：仅当前这本书

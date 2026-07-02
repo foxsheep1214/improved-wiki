@@ -113,7 +113,7 @@ wiki/queries/<slug>.md
 ...
 ```
 
-**规则**：`slug` 由 LLM 在 Stage 2.4 生成，**必须用 kebab-case**（`ingest.ts` prompt 指令）。CJK 标题保留可读字符，不强制转拼音。
+**规则**（**2026-07-02 用户裁决**，取代此前任何按页型"英文 kebab-case"的表述）：**slug 语言 = 源文语言**——中文书 → 中文 slug，英文书 → 英文 kebab-case slug。英文术语放 `title`，**不进 slug**；**例外**：约定俗成的缩写（mti、cfar、dds）可留在 slug 中。**禁止中英双拼混合 slug**。英文 slug 仍用 kebab-case；CJK slug 保留可读字符，不强制转拼音。该裁决同样约束 Stage 2.7 query slug（`_stage_2_7_query_generation.py` 原 "English kebab-case" 约束曾与语言指令互搏、产出不确定，已同步改为源文语言）。
 
 **macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.4 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
 

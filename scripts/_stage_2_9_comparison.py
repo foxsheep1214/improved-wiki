@@ -1,8 +1,22 @@
 
 from _stage_2_base import *
-from _language import build_language_directive
+from _language import build_language_directive, get_output_language
 
 # Stage 2.9: in-source concept comparison pages.
+
+# D6 (user ruling 2026-07-02): section headings follow the CONTENT language.
+# Fixed vocabularies (machine-parsable) — Chinese sources use the Chinese set,
+# everything else keeps the English set. Downstream heading greps must accept
+# BOTH vocabularies (see references/comparison-generation.md 验证命令).
+_COMPARISON_HEADINGS_EN = ("Why Compare", "Comparison Table", "Selection Guide", "See Also")
+_COMPARISON_HEADINGS_ZH = ("为何对比", "对比表", "选型指南", "参见")
+
+
+def _stage_2_9_headings(language_sample: str) -> tuple[str, str, str, str]:
+    """(why, table, guide, see-also) headings for the sample's output language."""
+    if get_output_language(language_sample) == "Chinese":
+        return _COMPARISON_HEADINGS_ZH
+    return _COMPARISON_HEADINGS_EN
 
 
 def _stage_2_9_comparison_cap(chapter_count: int) -> int:
@@ -85,7 +99,9 @@ def _stage_2_9_build_prompt_in_source(
     else:
         existing_comps_section = ""
 
-    language_directive = build_language_directive(source_context or concepts_with_desc)
+    language_sample = source_context or concepts_with_desc
+    language_directive = build_language_directive(language_sample)
+    h_why, h_table, h_guide, h_see = _stage_2_9_headings(language_sample)
     return f"""{language_directive}
 
 # Role
@@ -137,10 +153,10 @@ updated: {today_str}
 
 # {{Concept A}} vs {{Concept B}}
 
-## Why Compare
+## {h_why}
 {{1-2 sentences: why these benefit from side-by-side understanding}}
 
-## Comparison Table
+## {h_table}
 | Dimension | {{Concept A}} | {{Concept B}} |
 |-----------|---------------|---------------|
 | {{dim 1: e.g. operating principle}} | | |
@@ -148,10 +164,10 @@ updated: {today_str}
 | {{dim 3: e.g. typical application}} | | |
 | {{dim 4: e.g. advantages/disadvantages}} | | |
 
-## Selection Guide
+## {h_guide}
 {{When to choose each — 2-3 specific recommendations}}
 
-## See Also
+## {h_see}
 - [[{{Concept A}}]] — {{one-line description}}
 - [[{{Concept B}}]] — {{one-line description}}
 ---END FILE---

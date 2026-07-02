@@ -315,6 +315,10 @@ book_meta:
   pages: N
   publisher: "..."
   language: "zh" | "en" | "mixed"
+  # granularity: "manual" ONLY for an implementation/maintenance monograph
+  # organized around ONE device's circuits (维修/装备手册式); general teaching
+  # or reference texts are "textbook".
+  granularity: "textbook" | "manual"
 
 outline:
   # Complete chapter tree with approximate page/char ranges
@@ -412,6 +416,30 @@ def _stage_2_2_schema_types_block(config: Config) -> str:
     )
 
 
+def _stage_2_2_granularity_block(global_digest: dict) -> str:
+    """D2 (user ruling 2026-07-02): book-level granularity switch.
+
+    Stage 2.1 classifies the book via ``book_meta.granularity``. For a
+    "manual" (implementation/maintenance monograph organized around one
+    device's circuits) inject a stronger COARSE-granularity directive on top
+    of the always-on granularity gate below. "textbook" or absent → empty
+    string (existing gate only).
+    """
+    book_meta = global_digest.get("book_meta") if isinstance(global_digest, dict) else None
+    if not isinstance(book_meta, dict):
+        return ""
+    if str(book_meta.get("granularity", "")).strip().lower() != "manual":
+        return ""
+    return (
+        "\n# Book Granularity: MANUAL — extract COARSE\n"
+        "Stage 2.1 classified this book as a device manual (implementation/"
+        "maintenance monograph organized around one device's circuits).\n"
+        "COARSE granularity: chip/board/pin-level implementation details are NOT "
+        "concepts — fold into system-level pages or entities; target "
+        "system/subsystem-level concepts only.\n"
+    )
+
+
 def _stage_2_2_build_overlap_section(overlap_before: str) -> str:
     """Format the overlap boundary text for continuity context (NashSU parity).
 
@@ -495,6 +523,8 @@ def _stage_2_2_build_prompt(
 
     schema_types_section = _stage_2_2_schema_types_block(config)
 
+    granularity_section = _stage_2_2_granularity_block(global_digest)
+
     # ── Heading path (NashSU parity: chunk.headingPath) ──
     heading_section = ""
     if heading_path:
@@ -527,7 +557,7 @@ You are analyzing content from: **{heading_path}**
 # Role
 You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
 You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
-{template_section}{schema_types_section}
+{template_section}{schema_types_section}{granularity_section}
 # Context: Accumulated Global Digest
 This digest is cumulative context from the Stage 2.1 outline and all PREVIOUS
 chunks — use it for continuity and to avoid re-writing the same *prose* twice.
