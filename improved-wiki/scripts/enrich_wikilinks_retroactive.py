@@ -15,6 +15,13 @@ sparsity), so this tool does only DETERMINISTIC, CORRECT link backfills:
   2. Broken-link auto-fix (--fix-broken): applies the suggestion engine's
      HIGH-confidence (≥0.74) broken-link corrections (typo → closest page).
      O(n²) over the wiki — slow on large wikis; skip unless needed.
+  3. Mention backlink (--mention-orphans): the deterministic core of NashSU
+     enrich-wikilinks.ts — a page whose BODY literally mentions an orphan
+     page's title (as plain text, not already inside a [[link]]) gets a
+     [[wikilink]] to it, giving the orphan an inbound link. Unlike NashSU's
+     LLM-suggested enrich, this is exact-title matching only (no LLM), which
+     keeps it in the "deterministic, correct" tier of this tool. Scoped to
+     orphans + guarded against generic short words to avoid mislinks.
 
 No token-overlap "related" links are auto-added — those stay in wiki-lint.sh's
 --fix-links for human-reviewed runs.
@@ -23,6 +30,7 @@ Usage:
   IMPROVED_WIKI_ROOT=/path python3 enrich_wikilinks_retroactive.py            # dry-run
   IMPROVED_WIKI_ROOT=/path python3 enrich_wikilinks_retroactive.py --apply
   IMPROVED_WIKI_ROOT=/path python3 enrich_wikilinks_retroactive.py --apply --fix-broken
+  IMPROVED_WIKI_ROOT=/path python3 enrich_wikilinks_retroactive.py --apply --mention-orphans
 """
 from __future__ import annotations
 
@@ -156,12 +164,94 @@ def fix_broken_links(wiki_dir: Path, apply: bool):
     return fixed_pages, fixed_links
 
 
+# Generic short words too ambiguous to trigger a mention backlink (a body
+# mention of "ground"/"power" says nothing about relatedness to that page).
+_MENTION_STOPWORDS = {
+    "ground", "amp", "amps", "power", "current", "voltage", "noise", "gain",
+    "filter", "switch", "load", "source", "diode", "transistor", "signal",
+    "energy", "phase", "clock", "data", "logic", "pulse", "wave", "band",
+}
+
+
+def mention_backlink_orphans(wiki_dir: Path, apply: bool):
+    """Give orphan pages an inbound link from any page whose BODY literally
+    mentions their title. Deterministic core of NashSU enrich-wikilinks
+    (exact-title match, no LLM). Returns (n_pages, n_links, n_orphans_solved).
+    """
+    from _lint_suggest import run_structural_lint
+    from _lint_fixes import append_wikilink
+
+    pages = list(iter_wiki_pages(wiki_dir, anchor_files=("index.md", "log.md")))
+    content_map = {rel: content for rel, content in pages}
+    # with_suggestions=False → O(n) orphan detection, skips the O(n²) suggester.
+    findings = run_structural_lint(pages, with_suggestions=False)
+    orphan_rels = [
+        f["page"] for f in findings
+        if f["type"] == "orphan" and f["page"].split("/")[0] in ("concepts", "entities")
+    ]
+
+    def title_of(text: str, stem: str) -> str:
+        m = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', text, re.M)
+        return (m.group(1).strip() if m and m.group(1).strip()
+                else re.sub(r"[-_]+", " ", stem))
+
+    # Eligible orphans → (slug, stem, compiled word-boundary pattern).
+    targets = []
+    for rel in orphan_rels:
+        slug = rel[:-3] if rel.endswith(".md") else rel
+        stem = slug.split("/")[-1]
+        name = title_of(content_map.get(rel, ""), stem).strip()
+        if len(name) < 6 or name.lower() in _MENTION_STOPWORDS:
+            continue
+        if " " not in name and len(name) < 8:   # skip bare short single words
+            continue
+        pat = re.compile(r"(?<![\w\[])" + re.escape(name) + r"(?![\w\]])", re.I)
+        targets.append((slug, stem, pat))
+
+    plan: dict[str, set] = {}
+    for src_rel, src_text in content_map.items():
+        # never append a link INTO an aggregate page (iter_wiki_pages already
+        # drops index/log; guard overview/schema too).
+        if src_rel.split("/")[-1] in ("overview.md", "schema.md"):
+            continue
+        src_slug = src_rel[:-3] if src_rel.endswith(".md") else src_rel
+        body = src_text.split("\n---\n", 1)[-1] if src_text.startswith("---") else src_text
+        for slug, stem, pat in targets:
+            if src_slug == slug:
+                continue
+            if re.search(r"\[\[[^\]]*" + re.escape(stem) + r"[^\]]*\]\]", src_text, re.I):
+                continue  # already links to this orphan
+            if pat.search(body):
+                plan.setdefault(src_rel, set()).add(slug)
+
+    n_pages = n_links = 0
+    for src_rel, slugs in sorted(plan.items()):
+        content = content_map[src_rel]
+        new = content
+        added = 0
+        for slug in sorted(slugs):
+            n2 = append_wikilink(new, slug)
+            if n2 != new:
+                new = n2
+                added += 1
+        if new != content:
+            n_pages += 1
+            n_links += added
+            if apply:
+                (wiki_dir / src_rel).write_text(new, encoding="utf-8")
+    solved = len({s for slugs in plan.values() for s in slugs})
+    return n_pages, n_links, solved
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--project", default=None)
     ap.add_argument("--apply", action="store_true", help="write changes (default: dry-run)")
     ap.add_argument("--fix-broken", action="store_true",
                     help="also auto-fix high-confidence broken links (O(n²), slow)")
+    ap.add_argument("--mention-orphans", action="store_true",
+                    help="give orphan pages an inbound link from any page whose body "
+                         "literally mentions their title (deterministic enrich, no LLM)")
     args = ap.parse_args()
     root = Path(args.project or os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
     wiki = root / "wiki"
@@ -187,6 +277,12 @@ def main() -> int:
         print(f"\n[broken-link fix · {mode}] scanning (O(n²), may take minutes)...")
         fp, fl = fix_broken_links(wiki, apply=args.apply)
         print(f"[broken-link fix · {mode}] {fp} page(s), {fl} link(s) corrected")
+
+    if args.mention_orphans:
+        print(f"\n[mention backlink · {mode}] scanning for orphan title mentions...")
+        mp, ml, ms = mention_backlink_orphans(wiki, apply=args.apply)
+        print(f"[mention backlink · {mode}] {mp} page(s), +{ml} link(s), "
+              f"{ms} orphan(s) given an inbound link")
     return 0
 
 
