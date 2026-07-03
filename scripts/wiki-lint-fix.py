@@ -6,6 +6,8 @@ and applies the three fixes ported from NashSU ``lint-fixes.ts``:
 
   - broken-link + suggested_target   → rewrite [[broken]] → [[suggested]]
   - broken-link + no suggestion      → create a ``type: query`` stub page
+                                       (skip with --no-stub — leaves the link
+                                       broken for real-content fill later)
   - orphan + suggested_source        → append [[orphan]] to the source page
   - no-outlinks + suggested_target   → append [[suggested]] to the page
 
@@ -346,6 +348,20 @@ def main() -> int:
                              "index.md listing + body [[wikilinks]] + related: refs). "
                              "Default OFF. Honors --apply (omit for dry-run preview). "
                              "Does NOT run the link auto-fixes.")
+    parser.add_argument("--no-stub", action="store_true",
+                        help="Skip creating empty stub pages for broken links that "
+                             "have no suggested target. Only rewrite (typo→canonical) "
+                             "and append fixes run. Use when genuinely-missing concept "
+                             "pages should be filled with real content (deep-research) "
+                             "rather than batch-stubbed. NashSU builds stubs only on a "
+                             "human-clicked per-item Fix, never in bulk — this flag "
+                             "restores that spirit for the headless batch path.")
+    parser.add_argument("--no-append", action="store_true",
+                        help="Skip appending [[wikilinks]] to orphan / no-outlinks "
+                             "pages. These come from the low-threshold (0.08) related "
+                             "engine, far weaker than the 0.74 broken-link rewrite. "
+                             "Combine with --no-stub for a rewrite-only pass that "
+                             "touches only genuine typo/naming-drift links.")
     args = parser.parse_args()
 
     project_root = args.project_root or Path(
@@ -403,6 +419,20 @@ def main() -> int:
         return 0
 
     actions = plan_fixes(findings)
+    if args.no_stub:
+        _before = len(actions)
+        actions = [a for a in actions if a.get("kind") != "stub"]
+        _skipped = _before - len(actions)
+        if _skipped:
+            print(f"[lint-fix] --no-stub: skipping {_skipped} stub-creation "
+                  f"action(s) (broken links with no suggestion left as-is)")
+    if args.no_append:
+        _before = len(actions)
+        actions = [a for a in actions if a.get("kind") != "append"]
+        _skipped = _before - len(actions)
+        if _skipped:
+            print(f"[lint-fix] --no-append: skipping {_skipped} append "
+                  f"action(s) (low-threshold related-link suggestions left out)")
     mode = "DRY-RUN" if not args.apply else "APPLY"
     print(f"[lint-fix] {mode}: {len(actions)} fix action(s) planned")
     if not actions:
