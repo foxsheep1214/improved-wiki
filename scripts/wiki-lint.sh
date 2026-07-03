@@ -49,9 +49,13 @@
 #
 # Configuration via env:
 #   IMPROVED_WIKI_ROOT — path to project root (default: cwd)
-#   LLM_API_KEY        — required for --semantic
-#   LLM_BASE_URL       — default https://api.minimaxi.com
-#   LLM_MODEL          — default MiniMax-M3
+# NOTE: --semantic runs in CONVERSATION MODE (current model, NO API key needed).
+# It is driven by the calling agent via a prompt-file handoff (exit 101), so it
+# is normally run by invoking wiki-lint-semantic.py directly. When run via
+# --semantic here, a pending handoff is propagated as exit 101 for the agent to
+# answer and re-invoke. (The old LLM_API_KEY / LLM_BASE_URL / LLM_MODEL /
+# max-tokens knobs belonged to the retired direct-MiniMax path and no longer
+# apply.)
 #
 # Exit code:
 #   0 — clean (or with findings but no --strict)
@@ -389,14 +393,19 @@ if [ "$SEMANTIC" = true ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   SEM_ARGS=()
   [ -n "$SEMANTIC_LIMIT" ]  && SEM_ARGS+=(--limit "$SEMANTIC_LIMIT")
-  [ -n "$SEMANTIC_TOKENS" ] && SEM_ARGS+=(--max-tokens "$SEMANTIC_TOKENS")
-  if [ -z "${LLM_API_KEY:-}" ] && [ -z "${MINIMAX_CN_API_KEY:-}" ]; then
-    echo "[lint] --semantic: LLM_API_KEY not set, skipping (export it then re-run)" >&2
-  else
-    export LLM_API_KEY="${LLM_API_KEY:-$MINIMAX_CN_API_KEY}"
-    echo "[lint] --semantic: running LLM semantic pass ..."
-    IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/wiki-lint-semantic.py" "${SEM_ARGS[@]}" || \
-      echo "[lint] --semantic: sub-script exited non-zero, continuing" >&2
+  # Semantic lint is conversation mode (current model) — no LLM_API_KEY /
+  # base-url / model / max-tokens. --semantic-tokens is a legacy no-op here (the
+  # model's own context governs the call); warn if the caller still passes it.
+  [ -n "$SEMANTIC_TOKENS" ] && \
+    echo "[lint] --semantic: --semantic-tokens is ignored in conversation mode" >&2
+  echo "[lint] --semantic: running conversation-mode semantic pass ..."
+  IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/wiki-lint-semantic.py" "${SEM_ARGS[@]}"
+  sem_rc=$?
+  if [ "$sem_rc" -eq 101 ]; then
+    echo "[lint] --semantic: conversation handoff pending (exit 101) — the calling agent must answer the written prompt and re-invoke wiki-lint-semantic.py to finish the semantic pass." >&2
+    exit 101
+  elif [ "$sem_rc" -ne 0 ]; then
+    echo "[lint] --semantic: sub-script exited $sem_rc, continuing" >&2
   fi
 fi
 
