@@ -535,7 +535,7 @@ def _do_prepare(
             # ── Stage 2.7: Query generation ──
             query_blocks, _ = stage_2_7_query_generation(
                 global_digest, chunk_analyses, file_blocks, raw_file, config,
-                template=template_content, verbose=verbose,
+                template=template_content, template_name=template_name, verbose=verbose,
                 source_context=_q29_source,
             )
             # Stage 2.7 closing sub-step: cross-source query resolution (former

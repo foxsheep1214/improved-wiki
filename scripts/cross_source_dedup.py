@@ -50,8 +50,10 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import _dedup  # noqa: E402
-# Cross-source dedup is pure LLM semantic (no deterministic prefilter) — NashSU
-# dedup.ts parity.
+# Cross-source dedup: embedding prefilter (DEDUP_PREFILTER_THRESHOLD=0.68, ON by
+# default) clusters candidates, then an LLM semantic detector confirms merges —
+# NashSU dedup-runner.ts parity. --no-embedding-prefilter falls back to a single
+# full-wiki LLM scan; --token-only uses deterministic token/CJK-bigram matching.
 from _core import ConversationPending  # noqa: E402
 from _paths import detect_runtime_dir, iter_wiki_pages, atomic_write  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402

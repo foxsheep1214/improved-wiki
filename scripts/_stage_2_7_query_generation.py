@@ -200,6 +200,7 @@ def stage_2_7_query_generation(
     file_path: Path,
     config: Config,
     template: str = "",
+    template_name: str = "",
     verbose: bool = False,
     source_context: str = "",
 ) -> tuple[list[tuple[str, str]], str]:
@@ -208,12 +209,17 @@ def stage_2_7_query_generation(
     Returns (new_query_blocks, raw_response).
     Skips for datasheet/standard source types.
     """
-    # Skip for datasheet/standard — pure fact listing, no meaningful open questions
-    try:
-        src_type = detect_template_type(file_path, config)
-    except Exception:
-        src_type = None
-    if src_type in ("datasheet", "standard"):
+    # Skip for datasheet/standard — pure fact listing, no meaningful open questions.
+    # Prefer the already-resolved template_name (honors --type override); fall back
+    # to path-based detection. Folder detection yields a "digest-" prefixed name
+    # while --type overrides are bare ("datasheet"), so normalize before comparing.
+    src_type = template_name
+    if not src_type:
+        try:
+            src_type = detect_template_type(file_path, config.raw_root, None)
+        except Exception:
+            src_type = ""
+    if src_type.removeprefix("digest-") in ("datasheet", "standard"):
         if verbose:
             print(f"[stage 2.7] Skipped — {src_type} source type (no meaningful open questions)")
         return [], ""
