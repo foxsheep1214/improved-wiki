@@ -126,47 +126,6 @@ Files to write:
 
 ---
 
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest vendor reference designs into a structured wiki.
-
-# Input
-- Reference design ID: {ref_id}
-- Title: {title}
-- Manufacturer: {manufacturer}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-A reference design is expected to produce 1 source page + 1-5 concept pages (the topology + sub-circuits).
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<Mfr> - <Ref-Design-Name>.md
-### File 2..N: wiki/concepts/<slug>.md (1-5 files)
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per `references/naming-conventions.md`)
-- Frontmatter must follow `references/naming-conventions.md`
-- The specifications table must be accurate — these are engineering claims
-- For each key_component, cross-ref to its datasheet if the datasheet is in the wiki
-- Mark all measured_performance values as "from Fig X" or "from Section Y"
-- Include design_notes (lessons learned) verbatim from the source
-- Note any limitations or uncharacterized conditions
-```
-
----
-
 ## Type-specific guidance
 
 - **Reference designs are concrete examples** of concept pages. The highest value is: (1) the topology concept page, (2) the key_components cross-refs back to datasheets, (3) the measured_performance numbers.

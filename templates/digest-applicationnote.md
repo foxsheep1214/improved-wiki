@@ -104,47 +104,6 @@ Files to write:
 
 ---
 
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest vendor application notes (design guides) into a structured wiki.
-
-# Input
-- App note ID: {an_id}
-- Title: {title}
-- Manufacturer: {manufacturer}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-An app note is expected to produce 1 source page + 1-3 concept pages (the design knowledge).
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<Mfr> - <AN-Number> - <Topic>.md
-### File 2..N: wiki/concepts/<slug>.md (1-3 design concept pages)
-### File N+1 (optional): wiki/entities/<Mfr>.md
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per `references/naming-conventions.md`)
-- Frontmatter must follow `references/naming-conventions.md`
-- The design_procedure is the most important part. Preserve the step structure verbatim
-- Use LaTeX for all formulas. Cite the page/section for each key_equation
-- The worked_example should be reproducible — keep all input parameters
-- Cross-reference any datasheet or reference design mentioned
-```
-
----
-
 ## Type-specific guidance
 
 - **App notes are "design knowledge" not "marketing"**: extract the design procedure as the primary content, not the marketing wrap-up.

@@ -70,46 +70,6 @@ Files to write:
 
 ---
 
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest news articles and web clips into a structured wiki.
-
-# Input
-- Headline: {headline}
-- Outlet: {outlet}
-- Date: {date}
-- URL: {url}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-A news article is expected to produce 1 source page + 0-2 concept pages.
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<Outlet> - <Date> - <Headline-Slug>.md
-### File 2 (optional): wiki/concepts/<slug>.md (only if evergreen)
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per `references/naming-conventions.md`)
-- Frontmatter must follow `references/naming-conventions.md`
-- Quote the source for key_facts (use the original article's wording, not paraphrased)
-- Don't hand-set a `status: outdated` field. Auto-marking is **not yet implemented** (a planned Lint pass — see below); leave `status` unset
-- The source page should be short (1 page max). News doesn't deserve more
-```
-
----
-
 ## Type-specific guidance
 
 - **Most news is short-lived**: A product announcement from 6 months ago is history. A market trend from 2 years ago may still be relevant. The `evergreen_value` field is intended to drive a future `status: outdated` decision (**not yet consumed by any code**).

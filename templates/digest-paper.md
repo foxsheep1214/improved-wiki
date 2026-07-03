@@ -96,47 +96,6 @@ Files to write (lighter than book):
 
 ---
 
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest research / industry papers into a structured wiki.
-
-# Input
-- Paper title: {title}
-- Paper authors: {authors}
-- Year: {year}
-- Venue: {venue}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <list of slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-A paper is expected to produce 2-5 new concept pages, focused on the paper's NOVEL contribution. Don't extract textbook background as concept pages.
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<raw-rel-path>.md (with frontmatter)
-### File 2..N: wiki/concepts/<slug>.md (2-5 files)
-### File N+1..M: wiki/entities/<slug>.md (1-3 files, only if author is notable)
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per `references/naming-conventions.md`)
-- Frontmatter must follow `references/naming-conventions.md`
-- Do NOT invent content not in the source text
-- For math, use LaTeX with $...$ inline and $$...$$ display
-- Concept pages must add value beyond what existing wiki already says — don't re-derive things already in other papers
-```
-
----
-
 ## Type-specific guidance
 
 - **`paper_type: "whitepaper"`** — vendor whitepapers (TI, ADI, Maxim) often mix marketing with technical content. Treat the technical section as the "methodology", treat the marketing claims with appropriate skepticism in `key_claims`.

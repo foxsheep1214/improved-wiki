@@ -76,46 +76,6 @@ Files to write:
 
 ---
 
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest slide decks (conference talks, internal reviews) into a structured wiki.
-
-# Input
-- Title: {title}
-- Speaker: {speaker}
-- Venue: {venue}
-- Date: {date}
-- File path: {raw_path}
-- Extracted text: <per-slide text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-A presentation is expected to produce 1 source page + 1-3 concept pages (only the new concepts).
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<Speaker> - <Venue> - <Year> - <Title>.md
-### File 2..N: wiki/concepts/<slug>.md (1-3 files)
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per `references/naming-conventions.md`)
-- Frontmatter must follow `references/naming-conventions.md`
-- The per-slide summary can be a markdown table (slide | type | content)
-- The key_claims are usually on the "conclusion" or "summary" slide
-- Skip "thank you" / "Q&A" / pure title slides in the per-slide summary
-```
-
----
-
 ## Type-specific guidance
 
 - **Presentations are condensed**: don't try to extract every detail. Focus on the **take-aways** (usually the conclusion slide) and the **novel concepts** introduced.

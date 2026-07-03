@@ -102,48 +102,6 @@ Files to write:
 
 ---
 
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest industry standards (IEEE, IEC, MIL-STD, GB, etc.) into a structured wiki.
-
-# Input
-- Standard number: {std_number}
-- SDO: {sdo}
-- Title: {title}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-A standard is expected to produce 1 source page + 5-15 concept pages (the key glossary terms).
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<SDO> - <Std-Number> - <Year>.md
-### File 2..N: wiki/concepts/<term-slug>.md (5-15 glossary term pages)
-### File N+1 (optional): wiki/entities/<SDO>.md
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per `references/naming-conventions.md`)
-- Frontmatter must follow `references/naming-conventions.md`
-- Quoted definitions and requirements must be verbatim from the source
-- Use a markdown table for the clause_structure
-- Use a markdown table for key_requirements (requirement | clause | mandatory | test_method)
-- Mark which terms have a dedicated concept page vs. which are just mentioned in the source page
-- If the standard is in a language other than English, keep the original term and add an English translation in parentheses
-```
-
----
-
 ## Type-specific guidance
 
 - **Standards are usually long and dense**: don't try to extract every clause. Focus on the **definitions** (clause 3) and the **key "shall" requirements**.
