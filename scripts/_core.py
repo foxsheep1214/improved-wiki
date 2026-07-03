@@ -1030,6 +1030,10 @@ def parse_yaml_block(response: str) -> dict:
     """Extract the first YAML block from the LLM response."""
     m = re.search(r"```yaml\s*\n(.*?)\n```", response, re.DOTALL)
     yaml_text = m.group(1) if m else response
+    # Deferred import: _stage_1_1_scanned imports Config from this module,
+    # so a top-level import here would be circular.
+    from _stage_1_1_scanned import _decode_html_entities
+    yaml_text = _decode_html_entities(yaml_text)
     try:
         import yaml
         return yaml.safe_load(yaml_text) or {}
