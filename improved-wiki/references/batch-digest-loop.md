@@ -5,18 +5,12 @@ manual intervention per book.
 
 ## Why not Claude Code?
 
-- Claude `-p` (print) mode is **single-turn** — it processes ONE request and exits.
-  It cannot run a multi-book batch in a single invocation, cannot handle the
-  multi-step conversation-mode handoff (exit 101 prompt-file pattern), and
-  times out before OCR completes on scanned PDFs. Batch via `claude -p "digest
-  this book"` fails (exit=1) for every book — call `ingest.py` directly instead.
-- Claude Code interactive mode works but requires a visible Terminal window.
-  When the display is off/locked, you can't inject text into a running Terminal
-  session (see `macos-app-automation` skill pitfall #27).
-- `ingest.py` hands each LLM step to the calling agent (current
-  model); for unattended batches you run an agent loop that answers each
-  conversation prompt (see `references/delegate-mode.md`). No external LLM API
-  key is needed for text generation — only image captioning calls MiniMax.
+`ingest.py` hands each LLM step to the calling agent (current model); for
+unattended batches you run an agent loop that answers each conversation prompt
+(see `references/delegate-mode.md`). Batch via `claude -p` is not supported —
+the pipeline requires conversation-mode handoffs (exit 101 prompt-file pattern).
+No external LLM API key is needed for text generation — only image captioning
+calls MiniMax.
 
 ## Recommended: Built-in Batch Modes
 

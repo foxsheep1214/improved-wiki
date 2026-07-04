@@ -93,16 +93,12 @@ def ingest_via_conversation(pdf_path, project_path):
 
 ### Must use venv Python — system Python 3.9 will crash
 
-`ingest.py` uses PEP 604 union syntax (`str | None`). macOS system `/usr/bin/python3`
-is 3.9 and will throw `TypeError: unsupported operand type(s) for |`. **Always** invoke
-with `~/.venv/bin/python3`:
+**Always** invoke with `~/.venv/bin/python3` — system `/usr/bin/python3` (3.9)
+fails on PEP 604 union syntax. Full explanation: `references/scripting-pitfalls.md` Pitfall 4.
 
 ```bash
 IMPROVED_WIKI_ROOT="$(pwd)" ~/.venv/bin/python3 ~/.agents/skills/improved-wiki/scripts/ingest.py "raw/Book/Book.pdf"
 ```
-
-This is also documented as Pitfall 4 in `references/scripting-pitfalls.md` but remains
-the #1 first-run failure.
 
 ### minerU OCR can take 10+ minutes — use `--stop-after-stage 0`
 

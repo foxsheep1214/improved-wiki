@@ -16,7 +16,7 @@ documents the practical workflow for a single-book ingest.
 
 ## Prerequisites
 
-- **Python**: `~/.venv/bin/python3` (3.11+). System python3 (3.9) fails on PEP 604 type hints.
+- **Python**: `~/.venv/bin/python3` (3.10+). System python3 (3.9) fails on PEP 604 — see `scripting-pitfalls.md` Pitfall 4.
 - **Environment**: `IMPROVED_WIKI_ROOT=<project-path>` exported or prefixed.
 - **minerU**: Local API server on port 19999 must be running (auto-started by pipeline).
 

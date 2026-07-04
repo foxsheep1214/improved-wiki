@@ -11,7 +11,7 @@ improved-wiki 流水线 = **17 个 active Stage（含 Phase 0 前置门，跨 4 
 
 **跳过的代价**：raw 是 sacred（图也是 raw 的一部分）；缺 stage 产物则审计无法回溯；不写 cache 下次重跑；跳过的 stage 永远不会被补做，错误留在 wiki 里。
 
-> **无静默回退策略**：ingest 路径禁止任何静默回退。主路径不能用（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、`~/.agents/config.json` 解析失败）一律 `raise RuntimeError` 告警暂停，不降级。所有阶段产物已缓存，修好依赖后重跑从断点恢复。唯一例外：`load_cache`/`load_stages` 状态文件损坏 → 告警+重置（重摄是正确恢复，非质量降级）。详见 SKILL.md。
+> **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。完整政策见 SKILL.md「No-silent-fallback policy」段。唯一例外：cache/stage-progress 状态文件损坏 → 告警+重置。
 
 ## 阶段编号 → 代码函数
 

@@ -11,13 +11,16 @@
 ### minerU 偶尔把公式区域分类为 `image` 而非 `equation`
 ~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。
 
+### Review sweep 规则阶段 partial-match 假阳性
+`sweep_reviews.py` 规则阶段的 title/path 匹配用子串（partial）匹配，短词（`to`/`ul`/`none`/`DC` 等 2-3 字符片段）会误命中无关页面 slug。实测 ~15/197 review items 被误 auto-resolve。**缓解**：先 dry-run（不加 `--apply`），检查可疑 auto-resolve；规则阶段应要求最小匹配长度 ≥4 字符或全 slug 等值。LLM judge 阶段不受影响。详见 `references/review-sweep.md`。
+
 ## Design decisions (not bugs)
 
 ### `ingest.py` 用 `urllib.request` 不用 `httpx`/`requests`
 刻意避免 cron 语境下 `pip install`。
 
 ### 必须用 venv Python（系统 Python 缺 fitz + 版本太旧）
-用 `~/.venv/bin/python3`。fitz（PyMuPDF）仍用于 Stage 1.1 的 garbled 检测采样。**且** stage 模块用 PEP 604 union 语法（`str | None`），需 Python 3.10+；macOS 系统 `/usr/bin/python3` 是 3.9，会抛 `TypeError: unsupported operand type(s) for |`——这是 #1 首次运行失败原因。
+用 `~/.venv/bin/python3`（需 3.10+，系统 3.9 不支持 PEP 604）。完整说明见 `references/scripting-pitfalls.md` Pitfall 4——这是 #1 首次运行失败原因。
 
 ### 删除页面后 LanceDB 留残留向量，需重 embed
 `build_embeddings.py embed` 是 `mode="overwrite"` 全量重建，全 skill 无增量删向量的 API。任何删除——`--delete`（源生命周期）和 lint `--delete-orphans`——都不清向量块，被删页可能在向量搜索里短暂命中（链接已失效），直到下次 `build_embeddings.py embed` 重建即清除。NashSU 用增量 `removePageEmbedding`；CLI 用整表重建达成同一端状态（无残留向量），刻意不移植增量删（YAGNI，且与重建式索引不符）。删除后想立即干净就重跑 embed。

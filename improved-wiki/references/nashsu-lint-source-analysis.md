@@ -1,12 +1,5 @@
 # NashSU llm_wiki lint source analysis（re-verified against v0.5.3, 2026-06-29）
 
-> **2026-06-29 correction**: this doc was first written against v0.5.2 and §5/§6
-> below were WRONG about 0.5.3. NashSU 0.5.3 **does** persist lint to disk
-> (`.llm-wiki/lint.json` via `persist.ts` + `auto-save.ts`), and its `handleFix`
-> **does** mutate files (which the port has ported as `--fix-links` /
-> `--delete-orphans`). §5/§6 are corrected below; the structural/semantic specs
-> in §2–§4 were re-verified and remain accurate for 0.5.3.
-
 Detailed source-level comparison of NashSU's actual lint implementation
 (`src/lib/lint.ts`, `src/stores/lint-store.ts`, `src/stores/lint-store.ts`,
 `src/components/lint/lint-view.tsx`, `src/lib/ingest.ts`) vs. `improved-wiki`'s
@@ -19,7 +12,7 @@ Detailed source-level comparison of NashSU's actual lint implementation
 - `src/components/lint/lint-view.tsx` — 426 lines, the "Run Lint" UI button
 - `src/lib/ingest.ts` — 2993 lines; lint/review interaction at L888-933 (Stage 3.4) + L1097-1104 (Stage 3.4)
 
-**Repo URL**: <https://github.com/nashsu/llm_wiki> (track the latest release; analysis verified against v0.5.2)
+**Repo URL**: <https://github.com/nashsu/llm_wiki> (analysis verified against v0.5.3)
 
 This file is the **why** behind the skill's lint design（SKILL.md 的 Lint 命令部分）. Read it when
 adding lint features, debugging parity issues, or porting the lint to a new
@@ -85,9 +78,7 @@ This means:
 
 **Improved-wiki**: ports `buildSlugMap` 1:1 (`_lint_suggest.py::_build_slug_map`)
 with plain lowercase-keyed assignment — on a cross-file basename collision the
-last-scanned page wins, exactly like NashSU's `map.set` (last-write-wins). (An
-earlier draft of this doc claimed a `setdefault` relative-stem priority; the code
-does **not** do that — re-verified 2026-06-30.)
+last-scanned page wins, exactly like NashSU's `map.set` (last-write-wins).
 
 ### 2.2 In-link computation with case-insensitive lookup (lint.ts L101-112)
 
@@ -133,10 +124,8 @@ Detail strings (verbatim, used in both `lint.json` files for app-interop):
 
 **Improved-wiki**: matches all three strings exactly, and emits orphan /
 no-outlinks for **every** content page — no frontmatter filter, no stub-length
-filter — identical to the app. (An earlier draft claimed a `type:`-frontmatter
-filter; that filter is **not** in the code — re-verified against
-`_lint_suggest.run_structural_lint`, 2026-06-30. The only exclusions are
-`ANCHOR_FILES` and the `AGGREGATE_FILES` finding-exemption; see §2.4.)
+filter — identical to the app. (The only exclusions are `ANCHOR_FILES` and the
+`AGGREGATE_FILES` finding-exemption; see §2.4.)
 
 ### 2.4 Excluded from orphan check (lint.ts L80-82)
 
@@ -152,18 +141,15 @@ scan entirely. A **separate** `AGGREGATE_FILES = {"index.md", "log.md",
 "overview.md", "schema.md"}` is still *scanned* (so `overview.md`/`schema.md`
 outlinks count toward inbound, preventing false orphans on pages only the overview
 links to) but is *exempt from emitted findings*, so the headless auto-fixer never
-mutates a generated aggregate. (An earlier draft wrongly described this as a single
-4-file anchor set — re-verified 2026-06-30.)
+mutates a generated aggregate.
 
 ### 2.5 No short-stub / frontmatter filter (parity, re-verified 2026-06-30)
 
 The app emits `no-outlinks` and `orphan` for **all** content pages, including
-short stubs. Improved-wiki now matches this exactly:
+short stubs. Improved-wiki matches this exactly:
 `_lint_suggest.run_structural_lint` applies **no** `len(text) < 200` filter and
-**no** frontmatter filter. (Both filters existed in an early port and were removed
-for parity; earlier drafts of this doc still described them as present. The cost is
-that a fresh single-ingest wiki will emit many `no-outlinks`/`orphan` findings —
-that is the intended NashSU-aligned behavior.)
+**no** frontmatter filter. The cost is that a fresh single-ingest wiki will emit
+many `no-outlinks`/`orphan` findings — that is the intended NashSU-aligned behavior.
 
 ---
 
@@ -307,16 +293,6 @@ SEARCH: ADC SNR budget | radar SNR budget
 | semantic lint | On disk: same `lint.json` store (`useLintStore`) | On disk: `<state_dir>/lint-semantic.json` (kept separate — see §7.6) | Both persist |
 | `review.json` | On disk (`.llm-wiki/review.json`) | On disk (`.llm-wiki/review.json`) | Aligned |
 
-**Correction (2026-06-29)**: an earlier version claimed NashSU lint was
-"in-memory only / lost on app close" and listed a non-existent `lint-extra.json`.
-Both are false for 0.5.3: NashSU persists `useLintStore` to `.llm-wiki/lint.json`
-(`lint-store.ts` gained `setItems` + `syncCounterFromItems` precisely to reload
-from disk), and the port's real files are `lint-cache.json` + `lint-semantic.json`
-(there is no `lint-extra.json`). So persistence is **aligned in intent**, not a
-divergence. The only real differences are cosmetic: filename/shape (`lint.json`
-vs `lint-cache.json` + `lint-semantic.json`) and the port's extra per-finding
-`.md` pages under `<state_dir>/lint/`.
-
 **Human-browsable lint pages location (2026-06-21)**: NashSU has no on-disk lint
 pages at all (app UI renders findings from `useLintStore`). improved-wiki writes
 one `.md` per finding for CLI browsing — these live under `<state_dir>/lint/`
@@ -338,9 +314,6 @@ on next app launch if both wrote in the same session.
 ---
 
 ## 6. UI's "Fix" action — ported as `--fix-links` / `--delete-orphans`
-
-**Correction (2026-06-29)**: an earlier version said `handleFix` was "not ported"
-and "just a navigation aid". Both are wrong for 0.5.3.
 
 In 0.5.3 `lint-view.tsx` `handleFix(item)` actually MUTATES files via
 `lint-fixes.ts`:
