@@ -1,10 +1,10 @@
 ---
-description: "Image captioning — one VLM call per image with NashSU-style context-aware prompt, parallel dispatch, MiniMax VLM. No fallback: missing key or consecutive batch failure pauses the ingest."
-tags: [vlm, captioning, minimax, strategy]
+description: "Image captioning — one VLM call per image with NashSU-style context-aware prompt, parallel dispatch, configurable VLM provider (~/.agents/config.json). No fallback: missing provider or consecutive batch failure pauses the ingest."
+tags: [vlm, captioning, strategy]
 related: [ingest-stages-mandatory, known-issues]
 ---
 
-# Image Captioning 策略
+# Image Captioning 策略 (configurable VLM provider)
 
 Unified image captioning. Implemented as `stage_1_3_caption_images()` /
 `_stage_1_3_caption_images_batch()` / `_stage_1_3_caption_one_image()` in
@@ -71,7 +71,7 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
 
 ## Preprocessing (`_stage_1_3_preprocess_image`)
 
-- **Normalize to RGB**: palette/alpha 模式转 RGB（MiniMax M3 能处理灰度，normalization 是防御性）
+- **Normalize to RGB**: palette/alpha 模式转 RGB（VLM 能处理灰度，normalization 是防御性）
 - **Downscale**: >1568px 缩略（VLM context 限制）
 - 处理模式 L/LA/P/PA/RGB/RGBA
 
@@ -85,14 +85,14 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
 
 ## Formula transcription (LaTeX-only)
 
-MiniMax-M3 转录公式图 ~81%。`CAPTION_SYSTEM_PROMPT` 规则：
+VLM 转录公式图成功率因模型而异。`CAPTION_SYSTEM_PROMPT` 规则：
 - **公式逐符号用 LaTeX 转录**：`$x_{k+1}=Ax_k+Bu_k$`、`$\dot{T}=\frac{1}{mc_p}\dot{Q}$`
 - **不用 Unicode 下标/上标/希腊字母**：写 `x_1`/`\eta`/`\alpha`，不写 `x₁`/`η`/`α`（LaTeX 可渲染可复用，Unicode 不可解析）
 - 未知符号用 `?` 占位
 
 ## Tiny-image filter (`_is_image_too_small`)
 
-阈值 `MINERU_IMG_MIN_WIDTH/HEIGHT=20px`（故意低），只过滤真噪声（1×1/2×2 artifact）。29-70px 高的公式截图要保留——MiniMax 能转录。
+阈值 `MINERU_IMG_MIN_WIDTH/HEIGHT=20px`（故意低），只过滤真噪声（1×1/2×2 artifact）。29-70px 高的公式截图要保留——VLM 能转录。
 
 ## Caption inlining into the digest (NashSU Step 0.6 parity)
 
@@ -117,16 +117,15 @@ images = [{"filename": f.name, "page": 0, "width": 0, "height": 0}
 captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_label="repair")
 ```
 
-## MiniMax endpoint matrix（勿混用，2026-06-11 教训）
+## Provider endpoint configuration
 
 | endpoint | 多图支持 | auth header | 适用 |
 |---|---|---|---|
-| `https://api.minimaxi.com/anthropic/v1/messages` | ✅ content blocks 数组（Anthropic 协议原生） | `x-api-key: <key>`（本管线实际用此 + `anthropic-version: 2023-06-01`；endpoint 两种 header 均接受） | **caption 调用（现行管线用此 endpoint，一图一调用）** |
-| `https://api.minimaxi.com/v1/coding_plan/vlm` | ❌ 单图（`image_url` 必须是单字符串） | `Authorization: Bearer <key>` | mmx CLI 内部用 |
+| (configured via `~/.agents/config.json`) | depends on provider | depends on protocol | **caption 调用** |
 
-常见错配：`v1/coding_plan/vlm` + `image_url=[多图数组]` → 2013 invalid_params；
-`anthropic/v1/messages` 缺 auth → 1004 "carry the API secret key"。调任何
-MiniMax endpoint 前先对照本表，别在误导性错误信息上试错。
+配置 caption provider 时，确保 protocol 与 endpoint 匹配：
+- `anthropic` → `/anthropic/v1/messages`（Anthropic Messages API）
+- `openai` → `/v1/chat/completions`（OpenAI 兼容，如 Ollama）。
 
 ## 历史 caption「解析失败」可重试修复
 

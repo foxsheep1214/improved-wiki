@@ -8,7 +8,7 @@ router registered by ingest.py: the prompt is written to a file and
 current conversation's model. Serial only — there is no concurrent text-gen
 path.
 
-Image captioning (Stage 1.3, MiniMax VLM) and minerU OCR are NOT text
+Image captioning (Stage 1.3) and minerU OCR are NOT text
 generation and live elsewhere (`_stage_1_extract.py`); they are unaffected —
 vision content can't flow through the conversation-file handoff, so they
 always call their configured HTTP API directly regardless of this module.

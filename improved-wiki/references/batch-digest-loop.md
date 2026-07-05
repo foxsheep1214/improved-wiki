@@ -10,7 +10,7 @@ unattended batches you run an agent loop that answers each conversation prompt
 (see `references/delegate-mode.md`). Batch via `claude -p` is not supported —
 the pipeline requires conversation-mode handoffs (exit 101 prompt-file pattern).
 No external LLM API key is needed for text generation — only image captioning
-calls MiniMax.
+calls a configured VLM provider.
 
 ## Recommended: Built-in Batch Modes
 

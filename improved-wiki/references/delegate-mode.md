@@ -1,6 +1,6 @@
 # Delegate Mode — Agent Orchestration
 
-Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **conversation mode** — there is no flag, and no direct-API alternative. Every text-generation LLM step (including wikilink enrichment, batched once per ingest) is handled by the calling agent with the current conversation's model. Two external dependencies outside text generation: **image captioning** (Stage 1.3, MiniMax VLM — vision content can't flow through the prompt-file handoff) and **embeddings** (Stage 3.7, local Ollama bge-m3). Both are **no-fallback**: if the caption key is missing/batch fails or the Ollama stack is down, `ingest.py` raises `RuntimeError` and pauses — the calling agent must surface this to the user rather than silently continuing. Extraction/page writes are cached, so re-running after the user fixes the dependency resumes from the failed stage.
+Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **conversation mode** — there is no flag, and no direct-API alternative. Every text-generation LLM step (including wikilink enrichment, batched once per ingest) is handled by the calling agent with the current conversation's model. Two external dependencies outside text generation: **image captioning** (Stage 1.3, configurable VLM provider — vision content can't flow through the prompt-file handoff) and **embeddings** (Stage 3.7, local Ollama bge-m3). Both are **no-fallback**: if the caption key is missing/batch fails or the Ollama stack is down, `ingest.py` raises `RuntimeError` and pauses — the calling agent must surface this to the user rather than silently continuing. Extraction/page writes are cached, so re-running after the user fixes the dependency resumes from the failed stage.
 
 ---
 
@@ -8,7 +8,7 @@ Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **c
 
 | Who calls LLM? | API key needed? |
 |----------------|-----------------|
-| Calling agent, via prompt files (current model) | No for text gen (agent uses its own model). MiniMax key only for image captioning. |
+| Calling agent, via prompt files (current model) | No for text gen (agent uses its own model). Caption provider key only for image captioning. |
 
 ---
 
@@ -128,6 +128,20 @@ mid-chunk, re-running the same command resumes from the last completed chunk
 > same fix makes `1` (after global digest) and `2` (after generation) halt
 > cleanly. `1.5`/`2.3` (inside the chunk pipeline, no clean resume marker) remain
 > best-effort — they are not intercepted on a fresh run.
+
+### 🔒 项目锁冲突（看 ps 别抢锁，2026-07-04 实战修）
+
+`ingest.py:675` 抛出 `Could not acquire project lock — another ingest may be running` 时，
+**绝大多数情况下另一本书的 minerU/OCR 后台还在跑**（`start_new_session=True` 的 detached 子进程，
+batch 起来时用 `--no-project-lock` 让 minerU 持锁跑 Phase 0/1，不影响主对话但慢 10-20 分钟）。
+
+**操作纪律**：
+1. **先 `ps aux | grep ingest.py | grep -v grep`** — 看到 `Python3 ... ingest.py raw/Book/<另一本>.pdf --stop-after-stage 0` 之类的进程就是 OCR 在跑。
+2. **不要 `kill`**，等 OCR 自然完成（`stage_1_1_done` 写盘后会自动 `lock.release()`）。
+3. 重跑同一本书：`ingest.py "raw/Book/this.pdf"` — 会跳过 Stage 0/1/2.1/2.2（OCR/缓存都在），从 Stage 2.4 续上。
+4. 等不下去或确认是真死锁（`ps` 看不到任何 ingest.py）→ 参考 `maintenance-cleanup.md` "🔒 项目锁冲突诊断" 段。
+
+**为什么不能抢锁**：improved-wiki 的 minerU 的锁是 `fcntl.flock`，后台 OCR 进程在另一端持着，你抢走会逼它退出、丢失正在跑的 chunk 结果，下次跑要重头 OCR（书越大越痛，500 页可能要 30 分钟）。
 
 ### Wikilink enrichment generates many merge tasks
 

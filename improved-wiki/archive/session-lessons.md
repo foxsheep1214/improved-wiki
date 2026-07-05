@@ -12,7 +12,7 @@ Only the timeless, still-accurate principles are kept below.
 
 `ingest.py`, `wiki-lint.sh`, `graph.py`, `validate_ingest.py`, etc. ship with
 this skill. Wiki projects **invoke** them via
-`~/.claude/skills/improved-wiki/scripts/<name>` — they do **not** copy scripts
+`~/.agents/skills/improved-wiki/scripts/<name>` — they do **not** copy scripts
 into their own tree. A project lacking a `scripts/` dir is expected, not
 "missing infrastructure." Per-project choices (VLM backend, batch size) belong in
 the project's `wiki/methodology/`, as decisions — not forked code.

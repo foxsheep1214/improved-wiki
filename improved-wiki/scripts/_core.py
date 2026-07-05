@@ -206,14 +206,14 @@ def load_caption_provider() -> dict:
     if config_path.exists():
         try:
             cfg = json.loads(config_path.read_text(encoding="utf-8"))
-            caption_name = cfg.get("caption_provider") or cfg.get("default", "minimax")
+            caption_name = cfg.get("caption_provider") or cfg.get("default", "")
             provider = cfg.get("providers", {}).get(caption_name)
             if provider:
                 models = provider.get("models", {})
                 return {
                     "api_key": provider.get("api_key", ""),
-                    "base_url": provider.get("base_url", "https://api.minimaxi.com"),
-                    "model": models.get("caption") or models.get("vision") or provider.get("model", "MiniMax-M3"),
+                    "base_url": provider.get("base_url", ""),
+                    "model": models.get("caption") or models.get("vision") or provider.get("model", ""),
                     "protocol": provider.get("protocol", "anthropic"),
                     "provider": caption_name,
                 }
@@ -223,12 +223,14 @@ def load_caption_provider() -> dict:
                 f"~/.agents/config.json exists but failed to parse "
                 f"({type(e).__name__}: {e}) — fix or remove it. No silent fallback."
             ) from e
+    # No caption provider configured — ingest will pause at Stage 1.3.
+    # Configure ~/.agents/config.json with a caption_provider entry to enable.
     return {
         "api_key": os.environ.get("CAPTION_API_KEY") or os.environ.get("LLM_API_KEY", ""),
-        "base_url": "https://api.minimaxi.com",
-        "model": "MiniMax-M3",
-        "protocol": "anthropic",
-        "provider": "minimax",
+        "base_url": "",
+        "model": "",
+        "protocol": "",
+        "provider": "",
     }
 
 

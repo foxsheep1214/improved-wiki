@@ -1,9 +1,13 @@
-"""Stage 1.3 unified image captioning (MiniMax VLM via Anthropic protocol).
+"""Stage 1.3 unified image captioning (configurable VLM provider).
 
 Extracted from _stage_1_extract.py on 2026-06-24. Owns the per-image caption
 dispatch, VLM-failure detection, image preprocessing, the no-API-key hard-stop
 (no silent fallback per the 2026-06-24 policy), and the NashSU-style
 context-aware prompt (one image per call, 2026-06-24 port).
+
+Provider is configured via ~/.agents/config.json caption_provider entry.
+Supported protocols: anthropic (Anthropic Messages API), openai (OpenAI
+chat/completions compatible — e.g. Ollama / local models).
 
 Design (NashSU parity, 2026-06-24):
   - One image per LLM call (was: 8-image batches). Each figure gets the full
@@ -44,7 +48,7 @@ from _paths import atomic_write  # noqa: E402
 
 # Default 12 parallel VLM calls — captioning is pure I/O-bound (one HTTP call
 # per image), so threads give real speedup and 12 fits comfortably under the
-# MiniMax caption API rate limit for typical book figure counts. Override per
+# Caption API rate limit for typical book figure counts. Override per
 # run with the CAPTION_MAX_WORKERS env var.
 CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "12"))
 
@@ -131,7 +135,7 @@ source_ingest: "{source_label or media_dir.parent.name}"
 
 # [suggestion] VLM image captioning skipped — no caption provider API key
 
-Stage 1.3 (MiniMax VLM captioning) was **entirely skipped** because
+Stage 1.3 (VLM image captioning) was **entirely skipped** because
 `caption_api_key` is empty: `~/.agents/config.json` is absent and neither
 `CAPTION_API_KEY` nor `LLM_API_KEY` is set in the environment.
 
@@ -140,8 +144,8 @@ Stage 1.3 (MiniMax VLM captioning) was **entirely skipped** because
 VLM description** and remain uncaptioned. Image search/retrieval quality is
 degraded.
 
-**Fix:** configure the MiniMax caption provider — create `~/.agents/config.json`
-with a `providers.minimax` entry (`api_key` + `base_url`), or
+**Fix:** configure a caption provider — create `~/.agents/config.json`
+with a `providers.<name>` entry (`api_key` + `base_url` + `protocol` + `model`), or
 `export CAPTION_API_KEY=...`, then re-run ingest. Stage 1.3 resumes from
 cache and only captions pending images.
 
@@ -167,12 +171,12 @@ def _caption_no_key_pause(config, source_label: str, media_dir: Path,
           f"{already_captioned}/{total_images} images have prior captions, "
           f"{pending} will get NO VLM description.")
     print(f"⚠️  [caption] PAUSING ingest — no silent fallback. Configure "
-          f"~/.agents/config.json (providers.minimax.api_key) or export "
+          f"~/.agents/config.json (providers.<name>.api_key) or export "
           f"CAPTION_API_KEY, then re-run (cached, resumes here).\n")
     _emit_caption_skip_review(config, source_label, media_dir, total_images, already_captioned)
     raise RuntimeError(
         "Caption provider API key missing — VLM captioning (Stage 1.3) cannot run. "
-        "No fallback: configure ~/.agents/config.json (providers.minimax.api_key) or "
+        "No fallback: configure ~/.agents/config.json with a caption_provider entry or "
         "export CAPTION_API_KEY, then re-run (extraction is cached, resumes from "
         "Stage 1.3)."
     )

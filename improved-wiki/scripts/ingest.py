@@ -21,14 +21,14 @@ Usage:
   ingest.py --watch --poll-interval 60     # re-scan queue every 60s
 
 Configuration:
-  ~/.agents/config.json   provider config (default: deepseek, caption: minimax)
+  ~/.agents/config.json   provider and caption config
   LLM_PROVIDER            override provider name (env var)
   LLM_API_KEY             override API key (env var)
   LLM_BASE_URL            override base URL (env var)
   LLM_MODEL               override model name (env var)
   LLM_CHUNK_RETRIES       extra attempts per failed chunk (default 2 → 3 total)
   Text LLM:               config.json default provider (DeepSeek V4 Pro via OpenAI protocol)
-  Image caption:          config.json caption_provider (MiniMax via Anthropic protocol)
+  Image caption:          config.json caption_provider
                             one VLM call per image (NashSU parity)
                             CAPTION_MAX_WORKERS=12 parallel caption concurrency
   Embeddings:             local Ollama (EMBEDDING_BASE_URL / EMBEDDING_MODEL)

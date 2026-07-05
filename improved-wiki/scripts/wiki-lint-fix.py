@@ -333,6 +333,78 @@ def cascade_delete_orphans(
     return summary
 
 
+def _emit_review_for_broken(
+    project_root: Path,
+    wiki_dir: Path,
+    stub_actions: list[dict],
+    *,
+    dry_run: bool,
+) -> None:
+    """Write missing-page review items for broken links that have no suggestion.
+
+    NashSU parity: when handleFix encounters a broken-link with no
+    suggested_target, it falls back to the Review store instead of silently
+    creating a stub. This function emits one review .md per unique broken
+    target into ``wiki/REVIEW/missing-page/`` so the human can decide whether
+    to create a real page, deep-research the concept, or ignore it.
+    """
+    if not stub_actions:
+        return
+    review_dir = wiki_dir / "REVIEW" / "missing-page"
+    seen: set[str] = set()
+    count = 0
+    for act in stub_actions:
+        broken = act.get("broken", "")
+        if not broken or broken in seen:
+            continue
+        seen.add(broken)
+        # Collect which pages reference this broken link
+        ref_pages: list[str] = []
+        for a in stub_actions:
+            if a.get("broken") == broken and a.get("page"):
+                ref_pages.append(a["page"])
+        # Build review item
+        slug = broken.replace("/", "-").replace("\\", "-")[:60]
+        date_str = "2026-07-05"  # stable date for lint-generated items
+        fname = f"{date_str}-lint-{slug}.md"
+        fpath = review_dir / fname
+        if dry_run:
+            print(f"  [review]    would create {fpath.relative_to(wiki_dir)}")
+            count += 1
+            continue
+        review_dir.mkdir(parents=True, exist_ok=True)
+        ref_list = "\n".join(f"  - {p}" for p in ref_pages[:10])
+        content = f"""---
+type: review
+review_type: missing-page
+title: "Missing page: [[{broken}]]"
+created: {date_str}
+resolved: false
+resolved_at: null
+resolved_reason: null
+affected_pages:
+{ref_list}
+search_queries:
+  - "{broken}"
+---
+
+# Missing page: [[{broken}]]
+
+This wikilink target does not exist in the wiki. It was detected by structural
+lint during ``--fix-links`` (no-suggestion mode) and routed to review instead of
+creating an empty stub page.
+
+**Referenced by:**
+{ref_list}
+
+**Options:** Create Page | Deep Research | Skip
+"""
+        _atomic_write(fpath, content)
+        print(f"  [review]    created {fpath.relative_to(wiki_dir)}")
+        count += 1
+    print(f"[lint-fix] emitted {count} missing-page review item(s)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--apply", action="store_true",
@@ -421,11 +493,15 @@ def main() -> int:
     actions = plan_fixes(findings)
     if args.no_stub:
         _before = len(actions)
+        stub_actions = [a for a in actions if a.get("kind") == "stub"]
         actions = [a for a in actions if a.get("kind") != "stub"]
         _skipped = _before - len(actions)
         if _skipped:
             print(f"[lint-fix] --no-stub: skipping {_skipped} stub-creation "
-                  f"action(s) (broken links with no suggestion left as-is)")
+                  f"action(s) — broken links with no suggestion → review items")
+            # Generate review items for unsuggestable broken links (NashSU parity:
+            # handleFix falls back to Review store when no suggestion exists).
+            _emit_review_for_broken(project_root, wiki_dir, stub_actions, dry_run=not args.apply)
     if args.no_append:
         _before = len(actions)
         actions = [a for a in actions if a.get("kind") != "append"]

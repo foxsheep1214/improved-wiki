@@ -76,4 +76,4 @@ this book) + media directory + cache entry. Prints a summary of all removed file
 - Source page is more structured but smaller (43KB vs 76KB) — less narrative
   detail, more concise structure
 - Main quality bottleneck: image captions (202 of 528 images missing captions
-  → Stage 1.3 needs more MiniMax VLM calls)
+  → Stage 1.3 needs more VLM calls)

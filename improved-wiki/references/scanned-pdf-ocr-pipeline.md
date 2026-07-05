@@ -35,7 +35,7 @@
 
 - **零成本**：本地跑，无 API 调用费。
 - **自动提取图片**：响应自带 base64 图 + content_list，不用额外一轮提取。
-- **无需 API key**（caption 阶段才需要 MiniMax key）。
+- **无需 API key**（caption 阶段才需要 VLM provider）。
 - **隐私**：数据本地处理。
 
 **权衡**：模型常驻内存，系统级只允许 1 本书同时跑（见下）。

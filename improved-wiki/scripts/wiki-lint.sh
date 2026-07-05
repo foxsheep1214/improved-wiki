@@ -11,7 +11,8 @@
 #                            checks, NOT the LLM "semantic" phase (Phase 2).
 #   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic); the ONLY LLM phase
 #   Phase 3 · 写入         — write lint-cache.json + .llm-wiki/lint/*.md + summary
-#   Phase 4 · 自动修复     — optional --fix / --fix-links
+#   Phase 4 · 自动修复     — auto-fix + fix-links + sweep + dedup + delete-orphans
+#                            (all defaults; disable with --no-* flags)
 #
 # Execution order (phases do NOT run in numeric order):
 #   0 lock → 1 structural → 3 write cache + lint pages → 2 semantic (--semantic)
@@ -36,13 +37,15 @@
 #   - stdout: summary line
 #
 # Usage:
-#   $ ./wiki-lint.sh                            # scan + write .llm-wiki/lint/ pages
-#   $ ./wiki-lint.sh --verbose                  # show every finding
+#   $ ./wiki-lint.sh                            # structural + semantic + fix + fix-links + sweep + dedup + delete-orphans
+#   $ ./wiki-lint.sh --no-semantic               # structural only (skip LLM semantic)
+#   $ ./wiki-lint.sh --no-fix-links              # skip auto link-fix pass
+#   $ ./wiki-lint.sh --verbose                   # show every finding
 #   $ ./wiki-lint.sh --summary                  # one-line summary only
 #   $ ./wiki-lint.sh --strict                   # exit 1 for critical issues
 #   $ ./wiki-lint.sh --semantic                 # also run LLM semantic lint
 #   $ ./wiki-lint.sh --fix                      # auto-fix: missing-frontmatter
-#   $ ./wiki-lint.sh --fix-links                # apply suggested_target/source wikilink fixes
+#   $ ./wiki-lint.sh --fix-links                # auto-fix: rewrite typos + append links; broken-link-no-suggestion → review (no stubs)
 #   $ ./wiki-lint.sh --json-only                # old behavior: JSON only, no .llm-wiki/lint/ pages
 #   $ ./wiki-lint.sh --sweep                    # also report auto-resolvable review items (read-only, rule-based)
 #   $ ./wiki-lint.sh --delete-orphans           # PREVIEW orphan cascade delete (dry-run; apply via wiki-lint-fix.py --apply)
@@ -106,13 +109,13 @@ SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
 VERBOSE=false
 SUMMARY=false
 STRICT=false
-SEMANTIC=false
-AUTO_FIX=false
-FIX_LINKS=false
+SEMANTIC=true
+AUTO_FIX=true
+FIX_LINKS=true
 JSON_ONLY=false
-SWEEP=false
-DEDUP=false
-DELETE_ORPHANS=false
+SWEEP=true
+DEDUP=true
+DELETE_ORPHANS=true
 SEMANTIC_LIMIT=""
 SEMANTIC_TOKENS=""
 for arg in "$@"; do
@@ -121,12 +124,18 @@ for arg in "$@"; do
     --summary)    SUMMARY=true ;;
     --strict)     STRICT=true ;;
     --semantic)   SEMANTIC=true ;;
+    --no-semantic) SEMANTIC=false ;;
     --fix)        AUTO_FIX=true ;;
+    --no-fix)     AUTO_FIX=false ;;
     --fix-links)  FIX_LINKS=true ;;
+    --no-fix-links) FIX_LINKS=false ;;
     --json-only)  JSON_ONLY=true ;;
     --sweep)       SWEEP=true ;;
+    --no-sweep)    SWEEP=false ;;
     --dedup)       DEDUP=true ;;
+    --no-dedup)    DEDUP=false ;;
     --delete-orphans) DELETE_ORPHANS=true ;;
+    --no-delete-orphans) DELETE_ORPHANS=false ;;
     --dry-run)     ;;  # consumed; forwarded to dedup_sweep by the --dedup branch
     --semantic-limit=*) SEMANTIC_LIMIT="${arg#*=}" ;;
     --semantic-tokens=*) SEMANTIC_TOKENS="${arg#*=}" ;;
@@ -137,18 +146,6 @@ for arg in "$@"; do
     *) echo "Unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
-
-# --dedup: run LLM semantic dedup (NashSU dedup.ts parity).
-# Standalone action — NOT run after ingest, only on explicit request.
-# Auto-applies (deletes files); --dry-run previews without writes.
-if [ "$DEDUP" = true ]; then
-  DEDUP_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/cross_source_dedup.py"
-  DEDUP_ARGS=("$DEDUP_SCRIPT")
-  for a in "$@"; do
-    case "$a" in --dry-run) DEDUP_ARGS+=(--dry-run) ;; esac
-  done
-  exec python3 "${DEDUP_ARGS[@]}" --project "$WIKI_ROOT"
-fi
 
 if [ ! -d "$WIKI_DIR" ]; then
   echo "ERROR: wiki/ does not exist under $WIKI_ROOT" >&2
@@ -530,13 +527,13 @@ fi
 # orphan      → append [[orphan]] in the suggested source page
 # Reads suggestions from $LINT_CACHE — no rescan, no O(n²) overhead.
 if [ "$FIX_LINKS" = true ]; then
-  echo "[lint] Auto-fix-links: applying suggestion-engine wikilink fixes..."
-  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply \
+  echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
+  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply --no-stub \
     --from-cache "$LINT_CACHE" \
     --project-root "$WIKI_ROOT"
 fi
 
-# ── Orphan cascade delete (--delete-orphans; DESTRUCTIVE, preview-only here) ──
+
 # Deleting an orphan cascades (page file + index.md entry + inbound [[links]] +
 # related: refs), so the lint command only PREVIEWS it (dry-run, no writes). To
 # actually delete, run the standalone applier with --apply:
@@ -547,6 +544,17 @@ if [ "$DELETE_ORPHANS" = true ]; then
     --from-cache "$LINT_CACHE" \
     --project-root "$WIKI_ROOT"
   echo "[lint] --delete-orphans: preview only — re-run wiki-lint-fix.py with --apply to delete"
+  echo "[lint] --delete-orphans: preview only — re-run wiki-lint-fix.py with --apply to delete"
+fi
+
+# ── Cross-source dedup (NashSU dedup.ts parity; runs after fix phases) ──
+# Dry-run by default — reports near-duplicate concepts without mutating files.
+# Re-run cross_source_dedup.py without --dry-run to apply merges.
+if [ "$DEDUP" = true ]; then
+  echo "[lint] Cross-source dedup: scanning for near-duplicate concepts..."
+  DEDUP_SCRIPT="$SCRIPT_DIR/cross_source_dedup.py"
+  python3 "$DEDUP_SCRIPT" --project "$WIKI_ROOT" --dry-run 2>&1 | tail -5
+  echo "[lint] --dedup: dry-run only — re-run cross_source_dedup.py without --dry-run to apply"
 fi
 
 exit 0

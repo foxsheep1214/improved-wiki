@@ -515,7 +515,7 @@ def _stage_1_1_scanned_build_parse_body(
     # per-figure extraction into the Stage 1.3 caption as grounding) was removed
     # 2026-07-01: its curve-figure gain was redundant with the VLM's own pixel
     # reading and it injected structurally-plausible-but-wrong grounding on
-    # block/geometry diagrams. Figure understanding is the MiniMax VLM's job
+    # block/geometry diagrams. Figure understanding is the VLM's job
     # (Stage 1.3), grounded only on the actual image + surrounding text.
     if with_images:
         for field in ("return_images", "return_content_list"):

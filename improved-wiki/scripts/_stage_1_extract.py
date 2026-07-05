@@ -7,7 +7,7 @@ unchanged:
 
   - _stage_1_1_scanned.py  — minerU API OCR pipeline (text/scanned/mixed PDFs)
   - _stage_1_2_images.py   — PPTX/DOCX image extraction + minerU figure harvest
-  - _stage_1_3_caption.py  — MiniMax VLM image captioning
+  - _stage_1_3_caption.py  — VLM image captioning
 
 Pipeline stages:
   Phase 1 Stage 1.1: Extract text from PDF/PPTX/DOCX (minerU pipeline for text PDFs, minerU VLM for scanned)

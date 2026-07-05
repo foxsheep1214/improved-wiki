@@ -33,9 +33,9 @@ cp $SKILL_DIR/templates/overview.md  ./wiki/overview.md
 
 # 5. Set the project root env var. Text-generation LLM work runs in
 #    conversation mode (the calling agent's current model) — no LLM API
-#    key needed. The only external key is for image captioning (MiniMax VLM):
+#    key needed. The only external key is for image captioning (VLM provider):
 export IMPROVED_WIKI_ROOT=$(pwd)
-export CAPTION_API_KEY=***   # only needed if your source has images to caption (MiniMax VLM)
+export CAPTION_API_KEY=***   # only needed if your source has images to caption (VLM)
 # Optional: force the wiki's output language (NashSU outputLanguage parity).
 # 'auto' (default / unset) detects per source; set to e.g. Chinese or English
 # to force every generated page + lint directive into that language.
@@ -147,7 +147,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 |---|---|---|
 | `ValueError: Unknown raw folder 'X'` | File is in a folder the script doesn't recognize | Either move the file to a recognized first-level folder (Book/Paper/Datasheet/... — Titlecase) or pass `--type X` |
 | `LLM_API_KEY not set` / caption step fails | Image-caption key not exported (text gen needs no key — it runs in conversation mode) | `export CAPTION_API_KEY=***` (or set `providers.minimax.api_key` in `~/.agents/config.json`; only the Stage 1.3 caption step calls MiniMax VLM) |
-| `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the MiniMax caption key/endpoint used by Stage 1.3 |
+| `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the caption provider key/endpoint used by Stage 1.3 |
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
 | Scanned PDF detected | Normal — type detection (still PyMuPDF-based sampling) routes it to minerU VLM OCR | Check the script logs for "[extract] PDF type: scanned (avg N chars/page from 10-page sample)" |

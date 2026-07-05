@@ -27,7 +27,7 @@ from _paths import media_slug  # noqa: E402
 
 # Images below this are treated as noise (1x1/2x2 artifacts, stray pixels) and
 # dropped. Threshold is deliberately very conservative: tiny formula strips
-# (29-70px tall) are valuable because MiniMax-M3 transcribes them to
+# (29-70px tall) are valuable because the VLM transcribes them to
 # LaTeX/Unicode ~81% of the time, so we must NOT filter them out. See
 # image-caption-strategy.md.
 MINERU_IMG_MIN_WIDTH = int(os.environ.get("MINERU_IMG_MIN_WIDTH", "20"))
@@ -39,7 +39,7 @@ def _is_image_too_small(width: int, height: int) -> bool:
 
     Filters only true noise (stray 1x1/2x2 pixel artifacts). Does NOT filter
     formula strips — tiny formula images (29-70px tall) are valuable because
-    MiniMax-M3 transcribes them to LaTeX/Unicode ~81% of the time. The
+    the VLM transcribes them to LaTeX/Unicode ~81% of the time. The
     threshold is intentionally very low (default 20px) to avoid throwing away
     recoverable formula content.
     """

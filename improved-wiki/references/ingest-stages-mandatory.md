@@ -21,7 +21,7 @@ improved-wiki 流水线 = **17 个 active Stage（含 Phase 0 前置门，跨 4 
 | 0.2 | 源页存在性检查 | 源页去重（`wiki/sources/<rel>.md`） |
 | 1.1 | `stage_1_1_extract_text` | 文本提取（minerU hybrid-engine，所有 PDF 统一） |
 | 1.2 | `stage_1_2_extract_images` | 图片提取（融进 1.1 chunk 处理） |
-| 1.3 | `stage_1_3_caption_images` | 图片 caption（MiniMax VLM） |
+| 1.3 | `stage_1_3_caption_images` | 图片 caption（VLM，configurable provider） |
 | 2.1 | `stage_2_1_global_digest` | 全局摘要 |
 | 2.2 | `_stage_2_2_analyze_chunk` | 逐 chunk 分析（**全部 chunk 分析完**再进入 2.3） |
 | 2.3 | `stage_2_3_*`（`_stage_2_3_incremental.py`） | 已存在 wiki 关联检测（在 2.2 与 2.4 之间，读 wiki） |
@@ -72,8 +72,8 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **注意**：API 路径按 `page+md5前8` 命名，不做跨页 sha256 全局去重（同一图重复出现在不同页会各存一份）。
 
 ### Stage 1.3 · 图片 captioning ⭐ 永远不能跳
-- **作用**：对每张图用 MiniMax VLM 生成 2-4 句描述（与源文本同语言，NashSU `captionImage` parity）。**一图一调用** + 上下文感知 prompt（前后正文作 anchoring context，NashSU `buildCaptionPromptWithContext` parity；`CONTEXT_CHARS=150`）。
-- **依赖**：`~/.agents/config.json` 的 `providers.minimax.api_key`，或 `CAPTION_API_KEY`/`LLM_API_KEY` env。
+- **作用**：对每张图用 VLM 生成 2-4 句描述（与源文本同语言，NashSU `captionImage` parity）。**一图一调用** + 上下文感知 prompt（前后正文作 anchoring context，NashSU `buildCaptionPromptWithContext` parity；`CONTEXT_CHARS=150`）。
+- **依赖**：`~/.agents/config.json` 配置 caption_provider，或 `CAPTION_API_KEY`/`LLM_API_KEY` env。
 - **产物**：每图一个 `.caption.txt`。
 - **go/no-go**：每张图有 caption 文件且长度 ≥20 字符。
 - **无回退**：key 缺失 → `raise RuntimeError` 暂停；孤立单图重试 3 次仍失败 → 写 `[待重试]` 占位符（下次运行重试，非质量降级）；连续 3 次失败 → 判定 VLM 主路径宕机 `raise RuntimeError` 暂停。
