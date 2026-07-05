@@ -97,6 +97,13 @@ EMBED_HEARTBEAT_BATCHES = 8     # heartbeat line every N batches (N*16 pages)
 EMBED_MAX_CONSECUTIVE_FAILURES = 3  # abort embed phase after N failed batches in a row
 # --token-only candidate threshold: same 0.5 title-Jaccard Stage 2.3 uses with
 # the _stage_2_base ASCII-word / CJK-bigram matchers (separate branches).
+
+# ── Embedding cache (2026-07-05): avoid re-embedding 2771 pages across
+# conversation handoffs. The detector batches are serial (one batch per
+# invoke), but embeddings are reuseable across the whole run. Keyed by
+# a sha256 hash of sorted page IDs + count, so the cache auto-invalidates
+# when the wiki changes. Stored under .llm-wiki/dedup-embed-cache.json.
+DEDUP_EMBED_CACHE = "dedup-embed-cache.json"  # relative to runtime dir
 TOKEN_ONLY_JACCARD = 0.5
 
 # Aggregate files excluded from dedup candidates (NashSU embedding/graph parity:
@@ -331,8 +338,45 @@ def _unique_duplicate_groups(groups):
     return out
 
 
+def _make_embed_cache_key(emb_pages: list[dict]) -> str:
+    """Stable key from sorted page IDs + count. Invalidate when wiki changes."""
+    import hashlib
+    ids = sorted(pg["id"] for pg in emb_pages)
+    payload = f"{len(ids)}:{'|'.join(ids)}"
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _load_dedup_embed_cache(runtime: Path, cache_key: str) -> dict[str, list[float]] | None:
+    """Load cached embedding vectors. Returns None on miss/corrupt/stale."""
+    cache_path = runtime / DEDUP_EMBED_CACHE
+    if not cache_path.exists():
+        return None
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        if data.get("key") != cache_key:
+            return None
+        vecs_raw = data.get("vectors", {})
+        if not vecs_raw or len(vecs_raw) != data.get("count", 0):
+            return None
+        return {k: [float(x) for x in v] for k, v in vecs_raw.items()}
+    except Exception:
+        return None
+
+
+def _save_dedup_embed_cache(runtime: Path, cache_key: str,
+                            embeddings: dict[str, list[float] | None],
+                            total_pages: int) -> None:
+    """Persist embedding vectors for re-invoke reuse."""
+    cache_path = runtime / DEDUP_EMBED_CACHE
+    vecs = {k: v for k, v in embeddings.items() if v is not None}
+    data = {"key": cache_key, "count": total_pages, "vectors": vecs}
+    tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(cache_path)
+
+
 def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilter,
-                   *, token_only=False, no_llm=False):
+                   *, token_only=False, no_llm=False, runtime: Path | None = None):
     """Run the LLM duplicate detector, optionally pre-clustered by embeddings.
 
     With ``embedding_prefilter`` (GAP-3): embed every page's short description,
@@ -373,13 +417,30 @@ def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilt
         page_ids = [pg["id"] for pg in emb_pages]
 
         try:
-            # NashSU dedup-runner overrides the module default (0.82, the
-            # intra-source value) with DEDUP_PREFILTER_THRESHOLD=0.68 so
-            # cross-language/abbrev aliases aren't missed. (NashSU dedup-runner.ts)
-            # Embeddings come from the bounded embedder (Fix 4) — hard timeouts,
-            # heartbeat, per-batch skip — not the unbounded embed_pages path.
-            pairs = candidate_pairs(emb_pages, threshold=DEDUP_PREFILTER_THRESHOLD,
-                                    embeddings=_embed_pages_bounded(emb_pages))
+            # Check embedding cache first — avoids re-embedding 2771 pages
+            # across conversation handoffs (detector batches are serial, one
+            # per invoke, but embeddings are reuseable). Cache keyed by sorted
+            # page IDs + count; auto-invalidates when wiki changes.
+            cache_key = _make_embed_cache_key(emb_pages)
+            embed_cache = None
+            if runtime is not None:
+                embed_cache = _load_dedup_embed_cache(runtime, cache_key)
+            if embed_cache is not None:
+                print(f"[dedup] embedding cache hit ({len(embed_cache)} vectors), "
+                      f"skipping re-embed.", flush=True)
+                pairs = candidate_pairs(emb_pages, threshold=DEDUP_PREFILTER_THRESHOLD,
+                                        embeddings=lambda pgs: embed_cache)
+            else:
+                # NashSU dedup-runner overrides the module default (0.82, the
+                # intra-source value) with DEDUP_PREFILTER_THRESHOLD=0.68 so
+                # cross-language/abbrev aliases aren't missed. (NashSU dedup-runner.ts)
+                # Embeddings come from the bounded embedder (Fix 4) — hard timeouts,
+                # heartbeat, per-batch skip — not the unbounded embed_pages path.
+                embeddings = _embed_pages_bounded(emb_pages)
+                if runtime is not None:
+                    _save_dedup_embed_cache(runtime, cache_key, embeddings, len(emb_pages))
+                pairs = candidate_pairs(emb_pages, threshold=DEDUP_PREFILTER_THRESHOLD,
+                                        embeddings=embeddings)
         except DuplicatePrefilterError as ex:
             if no_llm or (len(summaries) > DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT
                           and _is_embedding_coverage_error(ex)):
@@ -460,7 +521,7 @@ def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
           f"for semantic duplicates ...", flush=True)
     groups = _detect_groups(summaries, pages, llm_call, not_duplicates,
                             embedding_prefilter, token_only=token_only,
-                            no_llm=no_llm)
+                            no_llm=no_llm, runtime=runtime)
     print(f"[dedup] detected {len(groups)} duplicate group(s).")
     for i, g in enumerate(groups, 1):
         print(f"  group {i}: {g['slugs']}  ({g['confidence']}) — {g['reason']}")

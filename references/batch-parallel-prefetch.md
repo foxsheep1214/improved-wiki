@@ -1,10 +1,13 @@
 # Batch Pipeline Ingest — 多书流水线（minerU[N+1] ∥ spine[N]）
 
 > **归属**：`batch_ingest`（ingest.py）的内部设计。多书 batch 时自动启用，**不需要操作者手动编排**。
-> **边界（三个层次，勿混淆）**：
-> ① **进程级后台预取**（bg OS 子进程）只跑 Phase 0/1（minerU + caption，非 LLM——bg 进程无法作答 conversation handoff）；
-> ② **可并行作答的 conversation prompt** = wiki-independent 段（Phase 0/1 + Stage 2.1/2.2）——与 SKILL.md 的批量规则一致：出现多个同时 pending 的预取 prompt 时，可每个派一个 sub-agent 并行作答；
-> ③ **wiki-dependent spine（2.3+）严格一本一本串行**，其 handoff 一次只有一个 pending（见 [[batch-digest-loop]]、[[delegate-mode]]）。
+>
+> **核心设计：流水线并行，不是 barrier。** 一条命令传所有书 → 系统自动把下一本的 OCR 预取和当前书的 LLM 工作重叠。**不要手动分书分步跑**（会丧失并行能力，OCR 被串行到 LLM 后面）。
+>
+> **并行边界（三层）**：
+> ① **进程级后台预取**（bg OS 子进程）：Phase 0/1（minerU + caption，非 LLM）——自动与主对话 LLM 并行；
+> ② **可并行作答的 conversation prompt** = wiki-independent 段（Phase 0/1 + Stage 2.1/2.2）——多个同时 pending 时可每个派一个 sub-agent 并行作答；
+> ③ **wiki-dependent spine（2.3+）**：串行，一次只有一本书在 2.3+，其 handoff 一次只有一个 pending（见 [[batch-digest-loop]]、[[delegate-mode]]）。
 
 ## 设计：流水线，不是 barrier
 
