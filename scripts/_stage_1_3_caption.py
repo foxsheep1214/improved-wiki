@@ -536,6 +536,52 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         ctx = None
     prompt_text = _stage_1_3_build_user_prompt(img, ctx)
 
+    # ── Protocol dispatch: anthropic vs openai (e.g. Ollama) ──
+    protocol = (config.caption_protocol or "anthropic").lower()
+
+    if protocol == "openai":
+        # OpenAI chat/completions format (Ollama, vLLM, etc.)
+        data_url = f"data:{media_type};base64,{img_data}"
+        content = [
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]
+        url = f"{config.caption_base_url.rstrip('/')}/v1/chat/completions"
+        body = json.dumps({
+            "model": config.caption_model,
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "system", "content": CAPTION_SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ],
+            "temperature": 0,
+        }).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if config.caption_api_key:
+            headers["Authorization"] = f"Bearer {config.caption_api_key}"
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+                with urllib.request.urlopen(req, timeout=180) as resp:
+                    data = json.loads(resp.read())
+                choices = data.get("choices", [])
+                if choices:
+                    msg = choices[0].get("message", {})
+                    text = (msg.get("content") or "").strip()
+                    if text:
+                        return text, None
+                last_err = "empty VLM response"
+            except Exception as e:
+                last_err = f"{type(e).__name__}: {e}"
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+        return None, last_err
+
+    # Default: Anthropic Messages API
     content = [
         {"type": "text", "text": prompt_text},
         {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}},

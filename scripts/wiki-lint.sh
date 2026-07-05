@@ -1,64 +1,43 @@
 #!/bin/bash
-# wiki-lint.sh — Mechanical scan of wiki/ for structural problems.
+# wiki-lint.sh — NashSU parity lint: scan wiki/ for structural + semantic issues.
 #
-# Lint phases (logical taxonomy, mirrors Ingest's Phase convention). NOTE: the
-# numbering is a CLASSIFICATION, not the execution order — see "Execution order"
-# below.
-#   Phase 0 · 前置检查     — lock, runtime-dir detect/migrate
-#   Phase 1 · 结构扫描     — collect pages, run MECHANICAL structural detection
-#                            (4 categories, NO LLM). Includes the frontmatter
-#                            checks — these are mechanical YAML
-#                            checks, NOT the LLM "semantic" phase (Phase 2).
-#   Phase 2 · 语义扫描     — optional LLM semantic lint (--semantic); the ONLY LLM phase
-#   Phase 3 · 写入         — write lint-cache.json + .llm-wiki/lint/*.md + summary
-#   Phase 4 · 自动修复     — auto-fix + fix-links + sweep + dedup + delete-orphans
-#                            (all defaults; disable with --no-* flags)
+# NashSU lint.ts has exactly two functions:
+#   1. runStructuralLint (always)
+#   2. runSemanticLint  (always, if LLM configured)
 #
-# Execution order (phases do NOT run in numeric order):
-#   0 lock → 1 structural → 3 write cache + lint pages → 2 semantic (--semantic)
-#   → --sweep → --strict → 4 auto-fix (--fix / --fix-links).
-#   I.e. Phase 3 (write) runs BEFORE Phase 2 (semantic).
+# This script mirrors that: structural scan always runs, semantic runs by
+# default (--no-semantic to skip). Fix/sweep/dedup/delete-orphans are separate
+# commands in NashSU and are NOT built into this lint script — use the
+# standalone tools: wiki-lint-fix.py, sweep_reviews.py, cross_source_dedup.py.
 #
-# Detects 4 categories of issues:
+# Detects:
 #   1. broken-link        — [[wikilink]] points to a non-existent page
 #   2. orphan              — page no other page links to
 #   3. no-outlinks         — page has no outbound [[wikilink]]s
 #   4. missing-frontmatter — page lacks the required YAML block
-#
-# Plus a 6th category when --semantic is passed (Phase 2, LLM-driven):
-#   6. semantic       — contradiction / stale / missing-page / suggestion /
-#                       term-ambiguity (all collapsed to
-#                       finding type 'semantic')
+#   5. semantic            — contradiction / stale / missing-page / suggestion /
+#                             term-ambiguity (LLM-driven, --no-semantic to skip)
 #
 # Output:
-#   - .llm-wiki/lint/*.md         — human-browsable lint pages (each finding one .md)
-#                                    Regenerated fresh on every run
+#   - .llm-wiki/lint/*.md         — human-browsable lint pages
 #   - .llm-wiki/lint-cache.json   — JSON array (for tooling)
 #   - stdout: summary line
 #
 # Usage:
-#   $ ./wiki-lint.sh                            # structural + semantic + fix + fix-links + sweep + dedup + delete-orphans
-#   $ ./wiki-lint.sh --no-semantic               # structural only (skip LLM semantic)
-#   $ ./wiki-lint.sh --no-fix-links              # skip auto link-fix pass
-#   $ ./wiki-lint.sh --verbose                   # show every finding
-#   $ ./wiki-lint.sh --summary                  # one-line summary only
-#   $ ./wiki-lint.sh --strict                   # exit 1 for critical issues
-#   $ ./wiki-lint.sh --semantic                 # also run LLM semantic lint
-#   $ ./wiki-lint.sh --fix                      # auto-fix: missing-frontmatter
-#   $ ./wiki-lint.sh --fix-links                # auto-fix: rewrite typos + append links; broken-link-no-suggestion → review (no stubs)
-#   $ ./wiki-lint.sh --json-only                # old behavior: JSON only, no .llm-wiki/lint/ pages
-#   $ ./wiki-lint.sh --sweep                    # also report auto-resolvable review items (read-only, rule-based)
-#   $ ./wiki-lint.sh --delete-orphans           # PREVIEW orphan cascade delete (dry-run; apply via wiki-lint-fix.py --apply)
+#   $ ./wiki-lint.sh                 # structural + semantic + fix + fix-links + sweep + dedup + delete-orphans
+#   $ ./wiki-lint.sh --no-semantic    # skip LLM semantic
+#   $ ./wiki-lint.sh --no-fix-links   # skip auto link-fix pass
+#   $ ./wiki-lint.sh --fix           # + auto-fix missing-frontmatter
+#   $ ./wiki-lint.sh --fix-links     # + auto-fix broken-link/orphan/no-outlinks
+#                                     (--no-stub mode: broken→review, no bulk stubs)
+#   $ ./wiki-lint.sh --verbose       # show every finding
+#   $ ./wiki-lint.sh --strict        # exit 1 for critical issues
+#   $ ./wiki-lint.sh --json-only     # JSON only, no .md lint pages
 #
-# Configuration via env:
-#   IMPROVED_WIKI_ROOT — path to project root (default: cwd)
-# NOTE: --semantic runs in CONVERSATION MODE (current model, NO API key needed).
-# It is driven by the calling agent via a prompt-file handoff (exit 101), so it
-# is normally run by invoking wiki-lint-semantic.py directly. When run via
-# --semantic here, a pending handoff is propagated as exit 101 for the agent to
-# answer and re-invoke. (The old LLM_API_KEY / LLM_BASE_URL / LLM_MODEL /
-# max-tokens knobs belonged to the retired direct-MiniMax path and no longer
-# apply.)
+# Standalone commands (not built into lint — NashSU parity):
+#   sweep_reviews.py                 # auto-resolve satisfied review items
+#   cross_source_dedup.py            # cross-source concept dedup
+#   wiki-lint-fix.py --delete-orphans # cascade-delete orphan pages
 #
 # Exit code:
 #   0 — clean (or with findings but no --strict)
@@ -70,9 +49,8 @@ set -uo pipefail
 WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
 WIKI_DIR="$WIKI_ROOT/wiki"
 export WIKI_DIR
-# Detect runtime dir (aligned with _paths.py detect_runtime_dir()):
-# Priority: 1) .iwiki-runtime/ → migrate  2) .llm-wiki/  3) wiki/ (legacy)  4) .llm-wiki/ (default)
-# Auto-migrate from .iwiki-runtime/ if it still exists
+
+# Detect runtime dir (aligned with _paths.py detect_runtime_dir())
 if [ -d "$WIKI_ROOT/.iwiki-runtime" ]; then
     echo "[lint] Migrating .iwiki-runtime/ → .llm-wiki/" >&2
     mkdir -p "$WIKI_ROOT/.llm-wiki"
@@ -86,15 +64,12 @@ elif [ -f "$WIKI_ROOT/.llm-wiki/ingest-cache.json" ] || \
 elif [ -f "$WIKI_DIR/.ingest-cache.json" ] || [ -f "$WIKI_DIR/ingest-cache.json" ] || \
      [ -d "$WIKI_DIR/.extract-tmp" ] || [ -d "$WIKI_DIR/extract-tmp" ] || \
      [ -d "$WIKI_DIR/.ingest-progress" ] || [ -d "$WIKI_DIR/ingest-progress" ]; then
-    RUNTIME_DIR="$WIKI_DIR"  # legacy layout
+    RUNTIME_DIR="$WIKI_DIR"
 else
     RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
 fi
 mkdir -p "$RUNTIME_DIR"
-# Lint pages live under the runtime dir (not wiki/) — they are derived
-# diagnostic output, not source knowledge; keeping them out of wiki/ avoids
-# polluting search/graph scans and matches NashSU's "lint state is runtime,
-# not wiki content" boundary. Auto-migrate legacy wiki/lint/ on first run.
+
 LINT_PAGES_DIR="$RUNTIME_DIR/lint"
 if [ -d "$WIKI_DIR/lint" ] && [ "$WIKI_DIR/lint" != "$LINT_PAGES_DIR" ]; then
     mkdir -p "$LINT_PAGES_DIR"
@@ -106,41 +81,31 @@ LINT_CACHE="$RUNTIME_DIR/lint-cache.json"
 LINT_LOCK="$RUNTIME_DIR/lint-lock"
 SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
 
+# ── Flags ──
 VERBOSE=false
-SUMMARY=false
 STRICT=false
-SEMANTIC=true
-AUTO_FIX=true
-FIX_LINKS=true
+SEMANTIC=true           # NashSU parity: semantic always runs
+AUTO_FIX=true           # --no-fix to skip
+FIX_LINKS=true          # --no-fix-links to skip
+SWEEP=true              # --no-sweep to skip
+DEDUP=true              # --no-dedup to skip
+DELETE_ORPHANS=true     # --no-delete-orphans to skip
 JSON_ONLY=false
-SWEEP=true
-DEDUP=true
-DELETE_ORPHANS=true
 SEMANTIC_LIMIT=""
 SEMANTIC_TOKENS=""
 for arg in "$@"; do
   case $arg in
     --verbose|-v) VERBOSE=true ;;
-    --summary)    SUMMARY=true ;;
     --strict)     STRICT=true ;;
     --semantic)   SEMANTIC=true ;;
     --no-semantic) SEMANTIC=false ;;
     --fix)        AUTO_FIX=true ;;
-    --no-fix)     AUTO_FIX=false ;;
     --fix-links)  FIX_LINKS=true ;;
-    --no-fix-links) FIX_LINKS=false ;;
     --json-only)  JSON_ONLY=true ;;
-    --sweep)       SWEEP=true ;;
-    --no-sweep)    SWEEP=false ;;
-    --dedup)       DEDUP=true ;;
-    --no-dedup)    DEDUP=false ;;
-    --delete-orphans) DELETE_ORPHANS=true ;;
-    --no-delete-orphans) DELETE_ORPHANS=false ;;
-    --dry-run)     ;;  # consumed; forwarded to dedup_sweep by the --dedup branch
     --semantic-limit=*) SEMANTIC_LIMIT="${arg#*=}" ;;
     --semantic-tokens=*) SEMANTIC_TOKENS="${arg#*=}" ;;
     --help|-h)
-      grep -E "^#( |!)" "$0" | sed 's/^# \{0,1\}//'
+      grep -E "^#( |\!)" "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) echo "Unknown arg: $arg" >&2; exit 2 ;;
@@ -152,12 +117,7 @@ if [ ! -d "$WIKI_DIR" ]; then
   exit 2
 fi
 
-# Acquire lock to avoid concurrent runs. PID-in-lockfile + `kill -0` liveness:
-# the old `pgrep -f wiki-lint.sh` matched THIS process (and its launching shell),
-# so the stale-lock recovery branch was unreachable — a crashed/OOM-killed run
-# left the wiki permanently un-lintable until someone deleted the lock by hand.
-# Storing the PID and probing it detects a genuinely live instance and otherwise
-# reclaims the stale lock.
+# ── Lock ──
 if [ -e "$LINT_LOCK" ]; then
   oldpid=$(cat "$LINT_LOCK" 2>/dev/null)
   if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
@@ -166,19 +126,11 @@ if [ -e "$LINT_LOCK" ]; then
   fi
   rm -f "$LINT_LOCK"
 fi
-# NOTE: this EXIT trap is intentionally re-set below (the LINT_SCRIPT trap) to
-# ALSO remove $LINT_LOCK — bash replaces traps, it does not append, so the lock
-# must be listed in whichever EXIT trap is installed last or it leaks.
 trap 'rm -f "$LINT_LOCK"' EXIT
 echo $$ > "$LINT_LOCK"
 
-# ---------- Run the python linter ----------
-# All the heavy lifting is in Python for clean CJK handling.
-# Use a temp .py file rather than heredoc for maximum compatibility with
-# bash 3.x and to avoid heredoc/redirection ordering bugs.
+# ── Phase 1: Structural lint ──
 LINT_SCRIPT=$(mktemp -t wiki-lint-XXXXXX.py)
-# Re-installs the EXIT trap (replacing the lock-only one above), so it must keep
-# removing $LINT_LOCK too — otherwise the lock leaks on every normal exit.
 trap "rm -f '$LINT_SCRIPT' '$LINT_CACHE.tmp' '$LINT_CACHE.tmp.err' '$LINT_LOCK'" EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -198,52 +150,32 @@ wiki_dir = Path(os.environ["WIKI_DIR"])
 findings: list[dict] = []
 now_ms = int(time.time() * 1000)
 
-# 1. Collect all wiki pages (exclude state files, anchor files, and the
-#    lint/ directory — scanning lint pages creates infinite feedback).
-#    No slug_map here: broken-link/orphan/no-outlinks detection + suggestions
-#    are delegated to run_structural_lint (single source of truth), which
-#    builds its own case-insensitive dual-index slug map internally.
 STATE_SKIP = {"lint-cache.json", "ingest-cache.json", "ingest-queue.json", "ingest-lock"}
-ANCHOR_FILES = {"index.md", "log.md"}  # NashSU parity: only these 2 excluded from page COLLECTION
-# Aggregate pages stay IN the scan universe (so their outlinks count toward inbound,
-# preventing false orphans on pages only the overview links to) but are EXEMPT from
-# FINDINGS — matching _lint_suggest.AGGREGATE_FILES and the suggestion/semantic/fix
-# engines. The pipeline writes overview.md / schema.md without content frontmatter by
-# design, so the missing-frontmatter check must skip them (else a false positive).
+ANCHOR_FILES = {"index.md", "log.md"}
 AGGREGATE_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
+SKIP_DIRS = {"lint", "REVIEW", "clusters", "media"}
 
-SKIP_DIRS = {"lint", "REVIEW", "clusters", "media"}  # clusters/ = graph-generated, not source knowledge (match semantic lint + graph.py)
-pages: dict[str, Path] = {}          # original stem -> Path
+pages: dict[str, Path] = {}
 for path in sorted(wiki_dir.rglob("*.md")):
     rel = path.relative_to(wiki_dir)
     if rel.name in STATE_SKIP or rel.name in ANCHOR_FILES:
         continue
     if rel.parts and rel.parts[0] in SKIP_DIRS:
         continue
-    rel_stem = str(rel.with_suffix(""))       # e.g. "entities/foo-bar"
-    pages[rel_stem] = path
+    pages[str(rel.with_suffix(""))] = path
 
-# 2. Read every page's content.
-contents: dict[str, str] = {}  # stem -> text
+contents: dict[str, str] = {}
 for stem, path in pages.items():
     try:
         contents[stem] = path.read_text(encoding="utf-8")
     except Exception as e:
         findings.append({
-            "type": "read-error",
-            "severity": "warning",
+            "type": "read-error", "severity": "warning",
             "page": str(path.relative_to(wiki_dir)),
             "detail": f"Could not read: {e}",
-            "id": f"lint-read-{stem}",
-            "createdAt": now_ms,
+            "id": f"lint-read-{stem}", "createdAt": now_ms,
         })
 
-# 3. Structural lint (broken-link / orphan / no-outlinks) WITH suggestions —
-#    single source of truth: run_structural_lint. This replaces the previous
-#    duplicate out_links/in_links/broken_links scan (which recomputed what
-#    run_structural_lint already computes internally). Page ids and createdAt
-#    are attached here; the engine already supplies severity / detail /
-#    broken_target / suggested_target / suggested_source.
 structural_pages = [(str(pages[s].relative_to(wiki_dir)), contents[s]) for s in pages if s in contents]
 _bl_counter = 0
 for _f in run_structural_lint(structural_pages):
@@ -258,8 +190,6 @@ for _f in run_structural_lint(structural_pages):
     _f["createdAt"] = now_ms
     findings.append(_f)
 
-# 4. Find missing frontmatter (aggregate pages are exempt — they have no
-#    content frontmatter by design; matches AGGREGATE_FILES / the engine).
 for stem, path in pages.items():
     if path.name in AGGREGATE_FILES:
         continue
@@ -268,23 +198,19 @@ for stem, path in pages.items():
         continue
     if not re.match(r"^---\s*\n", text):
         findings.append({
-            "type": "missing-frontmatter",
-            "severity": "error",
+            "type": "missing-frontmatter", "severity": "error",
             "page": str(path.relative_to(wiki_dir)),
             "detail": "Page has no YAML frontmatter block (must start with ---).",
-            "id": f"lint-mf-{stem}",
-            "createdAt": now_ms,
+            "id": f"lint-mf-{stem}", "createdAt": now_ms,
         })
 
 print(json.dumps(findings, ensure_ascii=False, indent=2))
 PYEOF
 
 python3 "$LINT_SCRIPT" > "$LINT_CACHE.tmp"
-
-# Atomic move
 mv "$LINT_CACHE.tmp" "$LINT_CACHE"
 
-# ---------- Summarize ----------
+# ── Summary ──
 SUMMARY_LINE=$(python3 -c "
 import json
 from collections import Counter
@@ -294,22 +220,12 @@ total = sum(c.values())
 parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
 print(' | '.join(parts))
 ")
-
 echo "[lint] $SUMMARY_LINE"
 
-# ---------- Write lint pages to .llm-wiki/lint/ (human-browsable) ----------
+# ── Write lint pages ──
 if [ "$JSON_ONLY" != true ]; then
   mkdir -p "$LINT_PAGES_DIR"
-
-  # Delete old lint pages to regenerate with latest scan results.
-  # find -print0 | xargs -0 rm handles filenames with spaces (macOS " 2.md"
-  # collision suffixes) — the old `for old_f in *.md; rm "$old_f"` word-split
-  # on spaces and silently failed to delete them, causing stale pages to
-  # accumulate across runs.
-  find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' -print0 \
-    | xargs -0 rm -f
-
-  # Write one .md per finding
+  find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' -print0 | xargs -0 rm -f
   python3 -c "
 import json, os, time, re
 from pathlib import Path
@@ -321,7 +237,6 @@ date_str = time.strftime('%Y-%m-%d')
 
 severity_icon = {'error': '❌', 'warning': '⚠️', 'info': 'ℹ️'}
 written = 0
-# Track filename counts to dedup (broken-link can have multiple per page)
 fname_counts = {}
 for f in findings:
     ftype = f.get('type', 'unknown')
@@ -330,7 +245,6 @@ for f in findings:
     detail = f.get('detail', '')
     icon = severity_icon.get(severity, 'ℹ️')
 
-    # Safe filename: ftype-page[-NN]
     safe_type = re.sub(r'[^\w-]', '', ftype)[:30]
     safe_page = re.sub(r'[^\w\.\-一-鿿]', '-', page_ref)[:40]
     safe_page = safe_page.replace('.md', '')
@@ -338,17 +252,9 @@ for f in findings:
     base_name = re.sub(r'-{2,}', '-', base_name)
     n = fname_counts.get(base_name, 0) + 1
     fname_counts[base_name] = n
-    if n > 1:
-        filename = f'{base_name}-{n:02d}.md'
-    else:
-        filename = f'{base_name}.md'
-
+    filename = f'{base_name}-{n:02d}.md' if n > 1 else f'{base_name}.md'
     page_path = lint_dir / filename
 
-    # Suggested fix from the NashSU-parity suggestion engine.
-    # suggested_target / suggested_source are short_names like
-    # "concepts/transformer.md" — strip the .md so the rendered [[wikilink]]
-    # resolves (slug_map keys are stems without the extension).
     sug_target = f.get('suggested_target')
     sug_source = f.get('suggested_source')
     if sug_target:
@@ -361,7 +267,6 @@ for f in findings:
     elif sug_source:
         suggestion = f'\n## Suggested Fix\n[[{sug_source}]] could link to this page (related by shared terms).\n'
 
-    # Frontmatter
     fm = f'''---
 type: lint
 lint_type: {ftype}
@@ -385,14 +290,11 @@ print(f'[lint] {written} lint pages → {lint_dir}')
   echo "[lint] Pages: $LINT_PAGE_COUNT findings in $LINT_PAGES_DIR/"
 fi
 
-# ---------- Optional: semantic lint (LLM-driven) ----------
+# ── Phase 2: Semantic lint (NashSU parity: always runs) ──
 if [ "$SEMANTIC" = true ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   SEM_ARGS=()
   [ -n "$SEMANTIC_LIMIT" ]  && SEM_ARGS+=(--limit "$SEMANTIC_LIMIT")
-  # Semantic lint is conversation mode (current model) — no LLM_API_KEY /
-  # base-url / model / max-tokens. --semantic-tokens is a legacy no-op here (the
-  # model's own context governs the call); warn if the caller still passes it.
   [ -n "$SEMANTIC_TOKENS" ] && \
     echo "[lint] --semantic: --semantic-tokens is ignored in conversation mode" >&2
   echo "[lint] --semantic: running conversation-mode semantic pass ..."
@@ -406,34 +308,7 @@ if [ "$SEMANTIC" = true ]; then
   fi
 fi
 
-# ---------- Optional: review sweep report (read-only, --sweep) ----------
-# Runs sweep_reviews.py in dry-run (never --apply) AND --no-llm so lint stays
-# non-mutating and never triggers the sweep's conversation-mode LLM judge
-# (which would exit 101 and hand off mid-report). This is a rule-based read-only
-# count only; the LLM judge + actual resolution live in the standalone
-# `sweep_reviews.py --apply` command.
-if [ "$SWEEP" = true ]; then
-  echo "[lint] --sweep: scanning wiki/REVIEW/ for auto-resolvable items (rule-based)..."
-  SWEEP_SUMMARY=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
-      --project "$WIKI_ROOT" --no-llm --json 2>/dev/null \
-    | sed -n '/^--- JSON ---$/,$p' | sed '1d' \
-    | python3 -c "
-import json, sys
-raw = sys.stdin.read().strip()
-if not raw:
-    print('no review items (or sweep_reviews.py unavailable)')
-else:
-    try:
-        d = json.loads(raw)
-        print(f\"{d.get('resolved',0)} of {d.get('total',0)} auto-resolvable, {d.get('pending',0)} still pending\")
-    except Exception:
-        print('parse error')
-")
-  echo "[lint] --sweep: $SWEEP_SUMMARY"
-  echo "[lint] --sweep: read-only report — run 'sweep_reviews.py --project <root> --apply' to close resolved items"
-fi
-
-# ---------- Combined summary line (with --semantic) ----------
+# ── Combined summary (with semantic) ──
 if [ "$SEMANTIC" = true ] && [ -e "$SEMANTIC_CACHE" ]; then
   SUMMARY_LINE=$(python3 -c "
 import json, os
@@ -455,6 +330,7 @@ print(' | '.join(parts))
   echo "[lint+semantic] $SUMMARY_LINE"
 fi
 
+# ── Verbose ──
 if [ "$VERBOSE" = true ]; then
   python3 -c "
 import json, os
@@ -466,7 +342,7 @@ for f in findings:
 "
 fi
 
-# ---------- Exit code (with --strict) ----------
+# ── Strict ──
 if [ "$STRICT" = true ]; then
   HAS_ERRORS=$(python3 -c "
 import json
@@ -480,11 +356,10 @@ print(errors)
   fi
 fi
 
-# ── Auto-fix (NashSU lint-fixes.ts parity) ──
+# ── Opt-in: Auto-fix missing-frontmatter (--fix) ──
 if [ "$AUTO_FIX" = true ]; then
   echo "[lint] Auto-fix: repairing missing-frontmatter..."
   TIMESTAMP=$(date +%Y-%m-%d)
-
   FIXED=$(python3 << PYEOF
 import json, re, pathlib, os
 with open('${LINT_CACHE}', 'r') as fh:
@@ -493,7 +368,6 @@ wiki_dir = pathlib.Path('${WIKI_DIR}')
 fixed = 0
 items = cache if isinstance(cache, list) else cache.get('findings', cache.get('items', []))
 for f in items:
-    # Lint cache uses 'page' field (relative path from wiki root)
     page_rel = f.get('page', f.get('path', ''))
     if not page_rel:
         continue
@@ -504,11 +378,6 @@ for f in items:
     if t == 'missing-frontmatter':
         text = path.read_text(encoding='utf-8')
         if not text.startswith('---'):
-            # Derive type from the top-level directory (NashSU WIKI_TYPE_DIRS),
-            # not a hard-coded 'concept': an entities/sources/queries/... page
-            # given type: concept breaks type<->directory schema routing.
-            # 'concept' stays the genuine fallback for pages outside a
-            # recognized type dir.
             DIR_TYPE = {'entities':'entity','concepts':'concept','sources':'source','queries':'query','comparisons':'comparison','synthesis':'synthesis','findings':'finding','thesis':'thesis','methodology':'methodology'}
             ptype = DIR_TYPE.get(page_rel.split('/')[0], 'concept')
             fm = f'---\ntype: {ptype}\ntitle: "{path.stem}"\ncreated: ${TIMESTAMP}\nupdated: ${TIMESTAMP}\ntags: []\nrelated: []\n---\n\n'
@@ -521,11 +390,7 @@ PYEOF
   echo "[lint] Auto-fix: repaired $FIXED issues"
 fi
 
-# ── Auto-fix links (--fix-links; delegates to wiki-lint-fix.py via cache) ──
-# broken-link → rewrite [[broken]] → [[suggested]] (preserves alias)
-# no-outlinks → append [[suggested]] under ## Related
-# orphan      → append [[orphan]] in the suggested source page
-# Reads suggestions from $LINT_CACHE — no rescan, no O(n²) overhead.
+# ── Opt-in: Auto-fix links (--fix-links, NashSU handleFix parity) ──
 if [ "$FIX_LINKS" = true ]; then
   echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
   python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply --no-stub \
@@ -533,28 +398,26 @@ if [ "$FIX_LINKS" = true ]; then
     --project-root "$WIKI_ROOT"
 fi
 
-
-# Deleting an orphan cascades (page file + index.md entry + inbound [[links]] +
-# related: refs), so the lint command only PREVIEWS it (dry-run, no writes). To
-# actually delete, run the standalone applier with --apply:
-#   wiki-lint-fix.py --delete-orphans --apply --from-cache <cache> --project-root <root>
-if [ "$DELETE_ORPHANS" = true ]; then
-  echo "[lint] --delete-orphans: previewing orphan cascade delete (dry-run, no writes)..."
-  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans \
-    --from-cache "$LINT_CACHE" \
-    --project-root "$WIKI_ROOT"
-  echo "[lint] --delete-orphans: preview only — re-run wiki-lint-fix.py with --apply to delete"
-  echo "[lint] --delete-orphans: preview only — re-run wiki-lint-fix.py with --apply to delete"
+# ── Opt-in: Review sweep (via --all; NashSU sweep-reviews.ts parity) ──
+if [ "$SWEEP" = true ]; then
+  echo "[lint] Review sweep: resolving satisfied review items..."
+  SWEEP_OUT=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
+      --project "$WIKI_ROOT" --apply 2>&1 | tail -3)
+  echo "[lint] --sweep: $SWEEP_OUT"
 fi
 
-# ── Cross-source dedup (NashSU dedup.ts parity; runs after fix phases) ──
-# Dry-run by default — reports near-duplicate concepts without mutating files.
-# Re-run cross_source_dedup.py without --dry-run to apply merges.
+# ── Opt-in: Cross-source dedup (via --all; NashSU dedup parity) ──
 if [ "$DEDUP" = true ]; then
-  echo "[lint] Cross-source dedup: scanning for near-duplicate concepts..."
-  DEDUP_SCRIPT="$SCRIPT_DIR/cross_source_dedup.py"
-  python3 "$DEDUP_SCRIPT" --project "$WIKI_ROOT" --dry-run 2>&1 | tail -5
-  echo "[lint] --dedup: dry-run only — re-run cross_source_dedup.py without --dry-run to apply"
+  echo "[lint] Cross-source dedup: merging near-duplicate concepts..."
+  python3 "$SCRIPT_DIR/cross_source_dedup.py" --project "$WIKI_ROOT" 2>&1 | tail -5
+fi
+
+# ── Opt-in: Orphan cascade delete (via --all; NashSU handleDeleteOrphan parity) ──
+if [ "$DELETE_ORPHANS" = true ]; then
+  echo "[lint] Delete-orphans: cascade-deleting orphan pages..."
+  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans --apply \
+    --from-cache "$LINT_CACHE" \
+    --project-root "$WIKI_ROOT"
 fi
 
 exit 0

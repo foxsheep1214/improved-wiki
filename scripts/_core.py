@@ -324,6 +324,7 @@ class Config:
     max_tokens: int
     context_size: int | None = None
     conversation_prefix: str = ""
+    caption_protocol: str = "anthropic"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -356,6 +357,7 @@ class Config:
             caption_api_key=caption["api_key"],
             caption_base_url=caption["base_url"],
             caption_model=caption["model"],
+            caption_protocol=caption.get("protocol", "anthropic"),
             chunk_size=300_000,
             chunk_overlap=3_000,
             source_budget=source_budget,
