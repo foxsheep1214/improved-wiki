@@ -541,20 +541,72 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
 
     if protocol == "openai":
         # OpenAI chat/completions format (Ollama, vLLM, etc.)
+        # For Ollama, prefer the native /api/chat endpoint which reliably
+        # returns content even when the model has a thinking/reasoning mode
+        # (the OpenAI-compatible /v1/chat/completions sometimes returns
+        # content=null with the answer only in "reasoning").
+        is_ollama = "127.0.0.1:11434" in config.caption_base_url or "localhost:11434" in config.caption_base_url
         data_url = f"data:{media_type};base64,{img_data}"
-        content = [
+        content_parts = [
             {"type": "text", "text": prompt_text},
             {"type": "image_url", "image_url": {"url": data_url}},
         ]
+
+        if is_ollama:
+            # Ollama native /api/chat — images go as base64 strings in the
+            # "images" array, not as OpenAI image_url content parts.
+            # Smaller local models (e.g. qwen3-vl:8b) need the LaTeX rule
+            # reinforced at the end of the system prompt to actually comply.
+            url = f"{config.caption_base_url.rstrip('/')}/api/chat"
+            ollama_system = CAPTION_SYSTEM_PROMPT + (
+                "\n\n⚠️ IMPORTANT: ALL mathematical symbols, parameters, "
+                "numbers, and expressions in your caption MUST be wrapped in "
+                "LaTeX ($...$). For example: write $T=30$, $B=4$, $f_0=0$, "
+                "$t=0$, $-20$ — NOT T=30, f₀, t=0, -20. This is mandatory."
+            )
+            body = json.dumps({
+                "model": config.caption_model,
+                "stream": False,
+                "think": False,
+                "options": {"temperature": 0},
+                "messages": [
+                    {"role": "system", "content": ollama_system},
+                    {"role": "user", "content": prompt_text, "images": [img_data]},
+                ],
+            }).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+
+            last_err = None
+            for attempt in range(3):
+                try:
+                    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+                    with urllib.request.urlopen(req, timeout=180) as resp:
+                        data = json.loads(resp.read())
+                    msg = data.get("message", {})
+                    text = (msg.get("content") or "").strip()
+                    if text:
+                        return text, None
+                    last_err = "empty VLM response (content)"
+                except Exception as e:
+                    last_err = f"{type(e).__name__}: {e}"
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+            return None, last_err
+
+        # Standard OpenAI-compatible endpoint (non-Ollama)
         url = f"{config.caption_base_url.rstrip('/')}/v1/chat/completions"
         body = json.dumps({
             "model": config.caption_model,
             "max_tokens": 1024,
             "messages": [
                 {"role": "system", "content": CAPTION_SYSTEM_PROMPT},
-                {"role": "user", "content": content},
+                {"role": "user", "content": content_parts},
             ],
             "temperature": 0,
+            # Ollama extension: disable thinking mode so the model returns
+            # its final answer in "content" (not only in "reasoning").
+            # Non-Ollama OpenAI servers ignore this unknown field.
+            "think": False,
         }).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -572,6 +624,10 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
                 if choices:
                     msg = choices[0].get("message", {})
                     text = (msg.get("content") or "").strip()
+                    # Fallback: some Ollama models (e.g. qwen3-vl) put the
+                    # answer in a "reasoning" field when content is null.
+                    if not text:
+                        text = (msg.get("reasoning") or "").strip()
                     if text:
                         return text, None
                 last_err = "empty VLM response"
