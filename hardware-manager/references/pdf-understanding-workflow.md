@@ -42,16 +42,16 @@ done
 ls /tmp/pdf_pages/*.png | wc -l  # 确认转换数量
 ```
 
-### Step 6：mmx vision describe 分析图片
+### Step 6：图片分析
 ```bash
-mmx vision describe /tmp/pdf_pages/page-XX.png 2>&1
-# mmx 对中文理解和专业术语更好（优于 vision_analyze）
+tesseract /tmp/pdf_pages/page-XX.png stdout -l chi_sim 2>&1
+# 或用 browser_vision 分析图片内容
 ```
 
 ### Step 7：写理解文档
 - 路径规范：`~/Documents/{项目名}/{文件名}-理解.md`
 - 结构：产品定位 → 系统架构 → 核心指标 → 功能要求 → 软件/硬件设计 → 存疑点
-- 有图时：引用 mmx 分析结果，标注图片来源页码
+- 有图时：引用 OCR/vision 分析结果，标注图片来源页码
 
 ### Step 8：清理临时文件
 ```bash
@@ -72,17 +72,17 @@ rm -rf /tmp/pdf_pages
 - pdfimages 列出的页码是准确的
 - 但同一页可能有多张图（表格/截图混排），挨个分析时注意
 
-### mmx vision describe vs vision_analyze
-- `mmx vision describe` 对中文文档理解更好（实测）
-- `vision_analyze`（或 browser_vision）在当前会话中无效，需用 terminal 调用 mmx
-- 格式：`mmx vision describe {图片路径}`
+### 图片分析工具选择
+- `tesseract` 对中文文档 OCR 基础识别（需安装 chi_sim 语言包）
+- `browser_vision` 可直接在会话中分析图片内容
+- 格式：`tesseract {图片路径} stdout -l chi_sim`
 
 ### HEIC 图片处理（macOS 照片）
-- mmx vision 不支持 `.heic` 格式，报 `"Unsupported image format \\".heic\\""`
+- OCR 工具不直接支持 `.heic` 格式，需先用 `sips` 转换
 - **解法**：用 `sips` 先转 JPEG/PNG 再分析：
   ```bash
   sips -s format jpeg "输入.heic" --out /tmp/输出.jpg
-  mmx vision describe /tmp/输出.jpg
+  tesseract /tmp/输出.jpg stdout -l chi_sim
   ```
 - sips 是 macOS 内置工具，无需额外安装
 - 转换后质量足够 AI 分析使用

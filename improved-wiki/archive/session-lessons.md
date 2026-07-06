@@ -3,7 +3,7 @@
 Pruned 2026-06-29: the original was a 2026-06-11/12 debug log (~20 entries) that
 has gone stale — `~/.hermes/` paths, `--delegate` mode (now conversation mode),
 `validate-ingest.sh`/15-stage (now `validate_ingest.py`, 17 stages), the
-mmx-CLI/MiniMax OCR path (now local minerU), and point-in-time project snapshots.
+legacy OCR path (now local minerU), and point-in-time project snapshots.
 Only the timeless, still-accurate principles are kept below.
 
 ---

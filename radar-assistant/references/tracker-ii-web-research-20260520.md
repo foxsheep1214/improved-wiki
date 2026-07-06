@@ -1,38 +1,38 @@
 # Tracker II 网络调研工作流（2026-05-20确立）
 
-## mmx search — web search 不可用时的首选
+## web_search — 搜索首选
 
-**触发条件**：web_search 失败（返回 432 错误）时，立即切换 mmx search query。
+**触发条件**：web_search 失败（返回 432 错误）时，切换 zai backend 或用浏览器搜索。
 
 ```bash
-mmx search query "查询内容" --region cn 2>&1
+web_search "查询内容" | python3 -c \
 ```
 
 **输出格式**：JSON，包含 `organic[]` 数组，每项含 `title/link/snippet/date`。
 
 **数据提取**：
 ```bash
-mmx search query "查询内容" --region cn 2>&1 | python3 -c \
+web_search "查询内容" | python3 -c \
   "import sys,json; d=json.load(sys.stdin); [print(r['title'],'|',r['snippet']) for r in d.get('organic',[])]"
 ```
 
 **关键发现**：
-- mmx search 返回的结果经过排序，前几条通常是官网/权威来源
+- web_search 返回的结果经过排序，前几条通常是官网/权威来源
 - snippet 包含关键参数（探测距离/波段/功耗等），比 browser 更快
 - 需注意：snippet 是摘要，可能截断；重要参数需访问官网或产品页验证
 
 ## 竞品调研标准工作流
 
-> 已在 SKILL.md 中确立，本次补充 mmx search 使用方法。
+> 已在 SKILL.md 中确立，本次补充 web_search 使用方法。
 
 1. **识别目标公司**：从新闻报道/用户提示获取公司名
-2. **mmx search 初步摸底**：查公司官网产品页/参数
-   ```bash
-   mmx search query "公司名 产品名 探测距离 波段 功耗" --region cn
+2. **web_search 初步摸底**：查公司官网产品页/参数
+
+   web_search "公司名 产品名 探测距离 波段 功耗"
    ```
 3. **二次深挖**：针对具体产品型号查详细参数
    ```bash
-   mmx search query "产品型号 具体参数" --region cn
+   web_search "产品型号 具体参数"
    ```
 4. **验证官网**：访问官网产品页（browser_navigate 或 web_extract）
 5. **整理写入**：竞品分析报告写入 `~/Documents/Tracker II/01_论证/竞品分析/产品名_分析报告.md`

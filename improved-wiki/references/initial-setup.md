@@ -146,7 +146,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | Symptom | Cause | Fix |
 |---|---|---|
 | `ValueError: Unknown raw folder 'X'` | File is in a folder the script doesn't recognize | Either move the file to a recognized first-level folder (Book/Paper/Datasheet/... — Titlecase) or pass `--type X` |
-| `LLM_API_KEY not set` / caption step fails | Image-caption key not exported (text gen needs no key — it runs in conversation mode) | `export CAPTION_API_KEY=***` (or set `providers.minimax.api_key` in `~/.agents/config.json`; only the Stage 1.3 caption step calls MiniMax VLM) |
+| `LLM_API_KEY not set` / caption step fails | Image-caption key not exported (text gen needs no key — it runs in conversation mode) | `export CAPTION_API_KEY=***` (or set `providers.caption.api_key` in `~/.agents/config.json`; only the Stage 1.3 caption step calls the VLM) |
 | `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the caption provider key/endpoint used by Stage 1.3 |
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |

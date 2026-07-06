@@ -286,7 +286,7 @@ When the user asks whether LLM Wiki is "stuck" or "processing" or "digesting boo
 
 6. **Diagnosing streaming timeout ("Chunk analysis stream failed")**: The root cause is LLM Wiki's reasoning-mode prompt causing long `<think>...</think>` phases where the stream produces **zero bytes** for 30–120 seconds while the model reasons server-side. LLM Wiki's HTTP stream reader has a ~60s timeout, so complex chunks trigger it. Image captions use non-streaming mode and are unaffected. Fix: switch to a non-reasoning model or disable reasoning in `app-state.json` (`llmConfig.reasoning.mode` → `"off"`). **Important:** v0.4.23 already auto-forces reasoning off on the ingest path, so if you're still hitting this on ingest, maxContextSize mismatch is the more likely culprit (see "Common failure" section below). The reasoning fix here is mainly useful for chat/Q&A paths where the user has set a high mode and is hitting timeouts on long contexts.
 
-7. **Switching LLM providers**: Edit `~/Library/Application Support/com.llmwiki.app/app-state.json` → `llmConfig`. Change `model`, `customEndpoint`, and `apiKey`. LLM Wiki reads this on startup, so a restart is required for the change to take effect. **Do not restart while a task is actively processing** (check `ingest-progress/` for recent `updatedAt`) — let it finish first to avoid losing progress. The file also contains `providerConfigs` with pre-configured alternate providers (e.g. `deepseek`, `minimax-cn`).
+7. **Switching LLM providers**: Edit `~/Library/Application Support/com.llmwiki.app/app-state.json` → `llmConfig`. Change `model`, `customEndpoint`, and `apiKey`. LLM Wiki reads this on startup, so a restart is required for the change to take effect. **Do not restart while a task is actively processing** (check `ingest-progress/` for recent `updatedAt`) — let it finish first to avoid losing progress. The file also contains `providerConfigs` with pre-configured alternate providers (e.g. `deepseek`, `zai`).
 
 8. **`image-caption-cache.json` as a secondary liveness signal**: When chunk analysis is stuck, check the count of entries in `{project}/.llm-wiki/image-caption-cache.json`. If this is growing, LLM Wiki is still actively processing images even if chunk analysis has stalled. This confirms the app is alive and the API is reachable.
 
@@ -416,7 +416,7 @@ If after ~30 min of no `updatedAt` advance in `ingest-progress/`, then the worke
 
 **诊断优先级**（按顺序）：
 1. **maxContextSize 超限（最常见）**：LLM Wiki 的 `maxContextSize` 可能超出模型实际 context。
-   MiniMax-M3 CN 端真实值 524,288 tokens（512K），误设为 1M 时 API 拒收 → stream 断。
+   模型真实 context window 误设过大时 API 拒收 → stream 断。
    LLM Wiki 会在失败后**自动修正**此值（实测 1M → 524,288）。
    验证：读 `app-state.json` → `llmConfig.maxContextSize`，与模型实际值比对。
 2. **reasoning/thinking 超时**：如果 maxContextSize 已修正但仍失败，检查 `reasoning: {mode: 'auto'}`。
@@ -454,11 +454,11 @@ This error means the LLM API streaming call was interrupted mid-response. Not an
 
 **Diagnosis checklist** (check in this order):
 
-1. **`maxContextSize` mismatch FIRST.** LLM Wiki's `maxContextSize` may exceed the model's actual context window. MiniMax-M3 (CN endpoint `api.minimaxi.com`) serves **524,288 tokens (512K)**, not 1,000,000. When LLM Wiki's `maxContextSize` is set to 1M, the API rejects requests exceeding 512K (prompt + thinking tokens) → stream broken → error. LLM Wiki empirically self-corrects from 1M → 524,288 after failed attempts, so check whether the correction has already occurred.
+1. **`maxContextSize` mismatch FIRST.** LLM Wiki's `maxContextSize` may exceed the model's actual context window. When `maxContextSize` exceeds the model's real limit, the API rejects requests → stream broken → error. LLM Wiki empirically self-corrects after failed attempts, so check whether the correction has already occurred.
 
-   To verify: read `app-state.json` → `llmConfig.maxContextSize` and cross-check against the model's actual context (see `hermes-model-metadata` skill for MiniMax-M3 CN = 524,288).
+   To verify: read `app-state.json` → `llmConfig.maxContextSize` and cross-check against the model's actual context.
 
-2. **Reasoning/thinking timeout.** If `maxContextSize` is correct, check `app-state.json` → `llmConfig.reasoning`. v0.4.23 Settings UI exposes 7 options (`auto` / `off` / `low` / `medium` / `high` / `max` / `custom`); they're stored verbatim as `llmConfig.reasoning.mode`. On MiniMax-M3 with `mode` other than `off`, the thinking phase runs server-side with **zero data on the stream** for 30–120 seconds. LLM Wiki's stream reader has a ~60s timeout. Large prompts (sourceBudget=300k chars) extend thinking time past the timeout. Shorter prompts (first chunk = preface/TOC) succeed; denser body chapters fail.
+2. **Reasoning/thinking timeout.** If `maxContextSize` is correct, check `app-state.json` → `llmConfig.reasoning`. v0.4.23 Settings UI exposes 7 options (`auto` / `off` / `low` / `medium` / `high` / `max` / `custom`); they're stored verbatim as `llmConfig.reasoning.mode`. With `mode` other than `off`, the thinking phase runs server-side with **zero data on the stream** for 30–120 seconds. LLM Wiki's stream reader has a ~60s timeout. Large prompts (sourceBudget=300k chars) extend thinking time past the timeout. Shorter prompts (first chunk = preface/TOC) succeed; denser body chapters fail.
 
    **Critical override (v0.4.23+):** LLM Wiki **automatically forces reasoning off on structured paths** (ingest chunk analysis, image captioning, review-item generation) regardless of what `llmConfig.reasoning.mode` is set to. This is to prevent the model from spending the entire output budget on `<think>...</think>` with no actual content. The Settings page displays this caveat verbatim: "结构化任务（如 ingest）可能会自动关闭 reasoning，避免模型只输出思考过程而没有正文." So changing UI reasoning to "low" will **not** speed up ingest — only chat/Q&A actually honors the chosen mode. Do not be misled by the active ingest failures into thinking the mode setting is broken; it just doesn't apply on the ingest path.
 
@@ -472,7 +472,7 @@ This error means the LLM API streaming call was interrupted mid-response. Not an
 
 **Reasoning-mode persistence (v0.4.23):** The Settings page writes the chosen reasoning mode to BOTH `llmConfig.reasoning.mode` and `providerConfigs.<activeProvider>.reasoning.mode` immediately on UI change (no restart needed for the new mode to apply to subsequent requests). However, switching `model` / `customEndpoint` / `apiKey` still requires a restart — those fields are read at launch.
 
-### Common failure: "HTTP 529 — overloaded_error" (MiniMax CN cluster saturated)
+### Common failure: "HTTP 529 — overloaded_error" (provider cluster saturated)
 
 When ingest (or chat) surfaces an error like:
 
@@ -480,17 +480,17 @@ When ingest (or chat) surfaces an error like:
 Chunk analysis failed: HTTP 529: — {"type":"error","error":{"type":"overloaded_error","message":"当前服务集群负载较高，请稍后重试，感谢您的耐心等待。 (2064) (529)"},"request_id":"0677fbea..."}
 ```
 
-…this is **NOT** a configuration problem with LLM Wiki. It's an upstream cluster capacity issue from MiniMax (`api.minimaxi.com/anthropic` endpoint).
+…this is **NOT** a configuration problem with LLM Wiki. It's an upstream cluster capacity issue from the provider.
 
 **Diagnostic markers:**
-- HTTP status `529` — Anthropic-protocol "Overloaded" (not a standard HTTP 5xx; MiniMax returns this under cluster pressure).
-- `error.type` = `"overloaded_error"`; nested `code` field = `"2064"` (MiniMax's internal code for cluster saturation).
+- HTTP status `529` — Anthropic-protocol "Overloaded" (not a standard HTTP 5xx; provider returns this under cluster pressure).
+- `error.type` = `"overloaded_error"`; nested `code` field = provider's internal code for cluster saturation.
 - `message` is in Chinese: "当前服务集群负载较高，请稍后重试，感谢您的耐心等待" (translated: "Current service cluster is under high load, please retry later, thank you for your patience").
-- `request_id` is MiniMax's tracking ID — hand it to MiniMax support if the issue persists, they'll trace which cluster node was saturated.
+- `request_id` is the provider's tracking ID — hand it to their support if the issue persists.
 
 **Why it happens (and why reasoning.mode change doesn't fix ingest):**
-- MiniMax-M3 runs server-side thinking for 30–120s before any byte hits the stream. Each in-flight request holds a cluster slot the whole time.
-- When many users hit MiniMax concurrently, the cluster fills up; new requests get rejected with 529.
+- Reasoning models run server-side thinking for 30–120s before any byte hits the stream. Each in-flight request holds a cluster slot the whole time.
+- When many users hit the provider concurrently, the cluster fills up; new requests get rejected with 529.
 - Changing `reasoning.mode` to `low`/`off` would normally shorten each request — **but ingest path is already auto-forced off**, so reasoning mode change has zero effect on ingest.
 - Effective levers when 529 clusters: (a) wait, (b) reduce `sourceBudget` so prompts are smaller → faster generation even without thinking, (c) switch provider to DeepSeek temporarily, (d) avoid peak hours.
 
@@ -539,7 +539,7 @@ LLM Wiki stores its active model config in `app-state.json` under `llmConfig`. P
 **⚠️ Pitfall: LLM Wiki auto-reverts manual app-state.json edits.** If LLM Wiki is running during the edit, the app may overwrite `app-state.json` with its in-memory state at shutdown, silently reverting `model`/`endpoint`/`apiKey`. To prevent this:
 - Quit LLM Wiki before editing `app-state.json`
 - Or verify the edit survived by reading the file back after ~30 seconds (if it reverted, the app was running)
-- Symptom: `model` field changes to `MiniMax-M3` even though you wrote `deepseek-v4-pro`
+- Symptom: `model` field changes to a different model even though you wrote `deepseek-v4-pro`
 
 ### Monitoring ingest progress (headless)
 

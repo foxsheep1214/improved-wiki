@@ -16,8 +16,8 @@
 # Configuration via env vars:
 #   IMPROVED_WIKI_ROOT       — path to project root (default: cwd)
 #   LLM_API_KEY              — required for LLM calls
-#   LLM_BASE_URL             — default: https://api.minimaxi.com
-#   LLM_MODEL                — default: MiniMax-M3
+#   LLM_BASE_URL             — default: https://api.deepseek.com
+#   LLM_MODEL                — default: deepseek-chat
 
 set -euo pipefail
 

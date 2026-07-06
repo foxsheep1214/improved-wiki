@@ -50,8 +50,8 @@ LLM Wiki desktop app state. Contains:
   "apiConfig": { "token": "sk-...", "enabled": true, "allowUnauthenticated": true },
   "llmConfig": {
     "provider": "custom",
-    "model": "MiniMax-M3",
-    "customEndpoint": "https://api.minimaxi.com/v1",
+    "model": "deepseek-chat",
+    "customEndpoint": "https://api.deepseek.com/v1",
     "apiKey": "sk-...",
     "apiMode": "chat_completions",
     "maxContextSize": 1000000,
@@ -72,7 +72,7 @@ LLM Wiki desktop app state. Contains:
 
 ## Common error: "Chunk analysis stream failed"
 
-**Root cause**: MiniMax-M3 (and other reasoning models) enter a `<think>...</think>` phase that produces zero stream bytes for 30–120 seconds while reasoning server-side. LLM Wiki's HTTP stream reader has a ~60s timeout. Large/complex chunks trigger this.
+**Root cause**: Reasoning models (e.g. DeepSeek R1) enter a `<think>...</think>` phase that produces zero stream bytes for 30–120 seconds while reasoning server-side. LLM Wiki's HTTP stream reader has a ~60s timeout. Large/complex chunks trigger this.
 
 **Fix options** (pick one):
 1. Switch to a non-reasoning model (e.g. DeepSeek without thinking)
