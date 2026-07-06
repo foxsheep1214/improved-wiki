@@ -106,6 +106,31 @@ CAPTION_SYSTEM_PROMPT = (
 # VLM failure detection + no-API-key hard stop
 # ══════════════════════════════════════════════════════════════════════════════
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _stage_1_3_strip_thinking(text: str) -> str | None:
+    """Strip a closed <think>...</think> reasoning block, returning whatever
+    real answer follows it. Returns None if <think> is OPENED but never
+    closed — that's a truncated reasoning dump with no real answer in it,
+    not a caption.
+
+    Bug 2026-07-06: qwen3-vl's "think": false does not reliably suppress
+    reasoning for this model. Under context pressure it burns its entire
+    output budget writing free-form reasoning directly into "content" (not
+    Ollama's separate "thinking" field, so the existing content/thinking
+    fallback doesn't catch it) and never reaches a final answer — observed
+    on ~3/5 of a fresh sample even with concurrency already fixed to 1.
+    That raw dump is well over the 15-char/keyword failure thresholds, so
+    without this check it silently became the "caption"."""
+    if not text:
+        return text
+    lower = text.lower()
+    if "<think>" in lower and "</think>" not in lower:
+        return None
+    return _THINK_BLOCK_RE.sub("", text).strip()
+
+
 def _stage_1_3_is_caption_failed(text: str) -> bool:
     """Detect VLM failure responses that shouldn't be treated as valid captions."""
     if not text or len(text) < 15:
@@ -117,6 +142,11 @@ def _stage_1_3_is_caption_failed(text: str) -> bool:
     # _stage_1_3_pending_images silently treated the placeholder as a
     # permanent cached caption and never retried it.
     if text.startswith("[待重试]"):
+        return True
+    # Already-on-disk <think> dumps from before _stage_1_3_strip_thinking()
+    # existed (bug 2026-07-06) — an unclosed <think> means no real answer was
+    # ever produced, regardless of how long the garbage text is.
+    if _stage_1_3_strip_thinking(text) is None:
         return True
     failure_markers = ["解析失败", "无法识别", "unable to", "cannot describe",
                        "抱歉", "sorry", "I can't", "not clear", "无法描述"]
@@ -578,25 +608,36 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         if is_ollama:
             # Ollama native /api/chat — images go as base64 strings in the
             # "images" array, not as OpenAI image_url content parts.
-            # Smaller local models (e.g. qwen3-vl:8b) need the LaTeX rule
-            # reinforced at the end of the system prompt to actually comply.
             url = f"{config.caption_base_url.rstrip('/')}/api/chat"
-            ollama_system = CAPTION_SYSTEM_PROMPT + (
-                "\n\n⚠️ IMPORTANT: ALL mathematical symbols, parameters, "
-                "numbers, and expressions in your caption MUST be wrapped in "
-                "LaTeX ($...$). For example: write $T=30$, $B=4$, $f_0=0$, "
-                "$t=0$, $-20$ — NOT T=30, f₀, t=0, -20. This is mandatory."
-            )
-            body = json.dumps({
+            ollama_system = CAPTION_SYSTEM_PROMPT
+            # Instruct variants (qwen3-vl:*-instruct) don't run a thinking
+            # phase, so the num_ctx=8192 / "think":false workarounds are
+            # unnecessary — a minimal request (temperature 0, num_predict
+            # 1024, default ctx) matches the community caption recipe and
+            # avoids carrying thinking-model baggage. The thinking-model path
+            # keeps the workarounds (bug 2026-07-06: Ollama's default 4096
+            # ctx is the root cause of empty-content failures — the caption
+            # prompt ≈1800 tokens plus qwen3-vl's unsuppressible thinking
+            # phase ~2200 tokens exceeds 4096, truncating generation
+            # mid-<think before any answer is written; verified fixed at
+            # 8192 ctx in ~120s).
+            is_instruct = "instruct" in (config.caption_model or "").lower()
+            if is_instruct:
+                options = {"temperature": 0, "num_predict": 1024}
+            else:
+                options = {"temperature": 0, "num_predict": 3072, "num_ctx": 8192}
+            request_body = {
                 "model": config.caption_model,
                 "stream": False,
-                "think": False,
-                "options": {"temperature": 0},
+                "options": options,
                 "messages": [
                     {"role": "system", "content": ollama_system},
                     {"role": "user", "content": prompt_text, "images": [img_data]},
                 ],
-            }).encode("utf-8")
+            }
+            if not is_instruct:
+                request_body["think"] = False
+            body = json.dumps(request_body).encode("utf-8")
             headers = {"Content-Type": "application/json"}
 
             last_err = None
@@ -622,6 +663,8 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
                     # rather than discard a real (if unstructured) response.
                     if not text:
                         text = (msg.get("thinking") or "").strip()
+                    if text:
+                        text = _stage_1_3_strip_thinking(text)
                     if text:
                         return text, None
                     last_err = "empty VLM response (content)"
@@ -666,6 +709,8 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
                     # answer in a "reasoning" field when content is null.
                     if not text:
                         text = (msg.get("reasoning") or "").strip()
+                    if text:
+                        text = _stage_1_3_strip_thinking(text)
                     if text:
                         return text, None
                 last_err = "empty VLM response"

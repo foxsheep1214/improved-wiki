@@ -34,6 +34,20 @@ MINERU_IMG_MIN_WIDTH = int(os.environ.get("MINERU_IMG_MIN_WIDTH", "20"))
 MINERU_IMG_MIN_HEIGHT = int(os.environ.get("MINERU_IMG_MIN_HEIGHT", "20"))
 
 
+def _stage_1_2_image_size(path: Path) -> tuple[int, int]:
+    """Read (width, height) via PIL; (0, 0) if the file can't be opened
+    (matches _stage_1_2_harvest_images()'s defensive "unknown dims" fallback
+    rather than hardcoding 0,0 unconditionally — see bug 2026-07-06)."""
+    try:
+        from PIL import Image
+        im = Image.open(path)
+        w, h = im.size
+        im.close()
+        return w, h
+    except Exception:
+        return 0, 0
+
+
 def _is_image_too_small(width: int, height: int) -> bool:
     """Check if image is too small to keep.
 
@@ -472,13 +486,20 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
             # using it as the final caption caused lazy label-only captions
             # (bug 2026-06-24). Stage 1.3 VLM-captions every image, using
             # minerU's caption as context (see _stage_1_3_caption.py).
+            # BUGFIX 2026-07-06: this branch hardcoded width/height to 0
+            # instead of reading the actual copied image (the sibling
+            # _stage_1_2_harvest_images() computes real dims) — every book
+            # extracted via this path got a manifest of all-zero dims, which
+            # then showed up as "尺寸 0×0" in every retry-placeholder caption
+            # regardless of the image's real size.
+            w, h = _stage_1_2_image_size(dest)
             images.append({
                 "filename": img_path.name,
                 "path": str(dest.relative_to(config.wiki_root)),
                 "page": meta.get("page", 0),
                 "caption": meta.get("caption", ""),
-                "width": 0,
-                "height": 0,
+                "width": w,
+                "height": h,
             })
     else:
         # BUGFIX 2026-06-24: on OCR cache-resume the minerU API output dir is
@@ -495,13 +516,14 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
             except (ValueError, IndexError):
                 page = 0
             meta = caption_map.get(bn, {})
+            w, h = _stage_1_2_image_size(img_path)
             images.append({
                 "filename": bn,
                 "path": str(img_path.relative_to(config.wiki_root)),
                 "page": page,
                 "caption": meta.get("caption", ""),
-                "width": 0,
-                "height": 0,
+                "width": w,
+                "height": h,
             })
 
     # BUGFIX 2026-06-25: --delete wipes media_dir, and Stage 1.1 chunk cache
