@@ -48,19 +48,10 @@ from _paths import atomic_write  # noqa: E402
 
 # Default 12 parallel VLM calls — captioning is pure I/O-bound (one HTTP call
 # per image), so threads give real speedup and 12 fits comfortably under a
-# remote multi-tenant API's rate limit for typical book figure counts. This
-# default does NOT fit a local Ollama instance (single model, effectively
-# serial inference) — see OLLAMA_CAPTION_MAX_WORKERS below. Override per
-# run with the CAPTION_MAX_WORKERS env var (an explicit override always wins,
-# including for Ollama).
+# remote multi-tenant API's rate limit for typical book figure counts. Override
+# per run with the CAPTION_MAX_WORKERS env var (e.g. set to 1 for a local
+# single-instance server that serializes vision inference).
 CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "12"))
-
-# Local Ollama serves vision requests with very limited real parallelism
-# (default OLLAMA_NUM_PARALLEL is 1-4 depending on available memory, one
-# model instance). Capping concurrency to 1 (serial) for local Ollama ensures
-# no client-side timeouts from server-side queueing. Each image waits its turn,
-# but gets full time to complete.
-OLLAMA_CAPTION_MAX_WORKERS = 1
 
 # How many chars of before/after body text to pass as anchoring context.
 # NashSU parity (image-caption-pipeline.ts CONTEXT_CHARS): NashSU tuned this
@@ -227,12 +218,6 @@ def _caption_no_key_pause(config, source_label: str, media_dir: Path,
         "No fallback: configure ~/.agents/config.json with a caption_provider entry, "
         "then re-run (extraction is cached, resumes from Stage 1.3)."
     )
-
-
-def _stage_1_3_is_ollama(config: Config) -> bool:
-    """True if the caption provider's base_url points at a local Ollama instance."""
-    base_url = config.caption_base_url or ""
-    return "127.0.0.1:11434" in base_url or "localhost:11434" in base_url
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -589,92 +574,16 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         ctx = None
     prompt_text = _stage_1_3_build_user_prompt(img, ctx)
 
-    # ── Protocol dispatch: anthropic vs openai (e.g. Ollama) ──
+    # ── Protocol dispatch: anthropic vs openai ──
     protocol = (config.caption_protocol or "anthropic").lower()
 
     if protocol == "openai":
-        # OpenAI chat/completions format (Ollama, vLLM, etc.)
-        # For Ollama, prefer the native /api/chat endpoint which reliably
-        # returns content even when the model has a thinking/reasoning mode
-        # (the OpenAI-compatible /v1/chat/completions sometimes returns
-        # content=null with the answer only in "reasoning").
-        is_ollama = _stage_1_3_is_ollama(config)
+        # OpenAI chat/completions format (Ollama /v1, vLLM, etc.)
         data_url = f"data:{media_type};base64,{img_data}"
         content_parts = [
             {"type": "text", "text": prompt_text},
             {"type": "image_url", "image_url": {"url": data_url}},
         ]
-
-        if is_ollama:
-            # Ollama native /api/chat — images go as base64 strings in the
-            # "images" array, not as OpenAI image_url content parts.
-            url = f"{config.caption_base_url.rstrip('/')}/api/chat"
-            ollama_system = CAPTION_SYSTEM_PROMPT
-            # Instruct variants (qwen3-vl:*-instruct) don't run a thinking
-            # phase, so the num_ctx=8192 / "think":false workarounds are
-            # unnecessary — a minimal request (temperature 0, num_predict
-            # 1024, default ctx) matches the community caption recipe and
-            # avoids carrying thinking-model baggage. The thinking-model path
-            # keeps the workarounds (bug 2026-07-06: Ollama's default 4096
-            # ctx is the root cause of empty-content failures — the caption
-            # prompt ≈1800 tokens plus qwen3-vl's unsuppressible thinking
-            # phase ~2200 tokens exceeds 4096, truncating generation
-            # mid-<think before any answer is written; verified fixed at
-            # 8192 ctx in ~120s).
-            is_instruct = "instruct" in (config.caption_model or "").lower()
-            if is_instruct:
-                options = {"temperature": 0, "num_predict": 1024}
-            else:
-                options = {"temperature": 0, "num_predict": 3072, "num_ctx": 8192}
-            request_body = {
-                "model": config.caption_model,
-                "stream": False,
-                "options": options,
-                "messages": [
-                    {"role": "system", "content": ollama_system},
-                    {"role": "user", "content": prompt_text, "images": [img_data]},
-                ],
-            }
-            if not is_instruct:
-                request_body["think"] = False
-            body = json.dumps(request_body).encode("utf-8")
-            headers = {"Content-Type": "application/json"}
-
-            last_err = None
-            for attempt in range(3):
-                try:
-                    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-                    # 300s (not the 180s used for remote providers below): local
-                    # Ollama vision inference is slower and, even with capped
-                    # concurrency (OLLAMA_CAPTION_MAX_WORKERS), a request can
-                    # still queue briefly behind another in-flight caption call.
-                    with urllib.request.urlopen(req, timeout=300) as resp:
-                        data = json.loads(resp.read())
-                    msg = data.get("message", {})
-                    text = (msg.get("content") or "").strip()
-                    # Fallback: qwen3-vl (and other thinking-capable models)
-                    # can burn the whole context/token budget on the
-                    # "thinking" field before ever writing to "content" —
-                    # observed under memory pressure, where Ollama's
-                    # VRAM-based context auto-sizing shrinks the effective
-                    # context window (see /api/ps "context_length"). "think":
-                    # false does not reliably suppress the thinking phase for
-                    # this model family, so recover the answer from there
-                    # rather than discard a real (if unstructured) response.
-                    if not text:
-                        text = (msg.get("thinking") or "").strip()
-                    if text:
-                        text = _stage_1_3_strip_thinking(text)
-                    if text:
-                        return text, None
-                    last_err = "empty VLM response (content)"
-                except Exception as e:
-                    last_err = f"{type(e).__name__}: {e}"
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
-            return None, last_err
-
-        # Standard OpenAI-compatible endpoint (non-Ollama)
         url = f"{config.caption_base_url.rstrip('/')}/v1/chat/completions"
         body = json.dumps({
             "model": config.caption_model,
@@ -684,10 +593,6 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
                 {"role": "user", "content": content_parts},
             ],
             "temperature": 0,
-            # Ollama extension: disable thinking mode so the model returns
-            # its final answer in "content" (not only in "reasoning").
-            # Non-Ollama OpenAI servers ignore this unknown field.
-            "think": False,
         }).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
@@ -705,10 +610,6 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
                 if choices:
                     msg = choices[0].get("message", {})
                     text = (msg.get("content") or "").strip()
-                    # Fallback: some Ollama models (e.g. qwen3-vl) put the
-                    # answer in a "reasoning" field when content is null.
-                    if not text:
-                        text = (msg.get("reasoning") or "").strip()
                     if text:
                         text = _stage_1_3_strip_thinking(text)
                     if text:
@@ -814,18 +715,6 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
 
     ctx_map = _stage_1_3_build_context_map(config)
     label = f" [{source_label}]" if source_label else ""
-
-    # Local Ollama can't actually serve `max_workers` vision calls in
-    # parallel (see OLLAMA_CAPTION_MAX_WORKERS above) — cap unless the user
-    # explicitly set CAPTION_MAX_WORKERS, in which case honor their choice.
-    if _stage_1_3_is_ollama(config) and "CAPTION_MAX_WORKERS" not in os.environ \
-            and max_workers > OLLAMA_CAPTION_MAX_WORKERS:
-        print(f"[caption]{label} Local Ollama detected — capping parallel "
-              f"workers {max_workers} → {OLLAMA_CAPTION_MAX_WORKERS} (a single "
-              f"Ollama instance serializes most concurrent vision calls; "
-              f"higher concurrency just queues requests until they exceed the "
-              f"per-request timeout). Set CAPTION_MAX_WORKERS to override.")
-        max_workers = OLLAMA_CAPTION_MAX_WORKERS
 
     print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
           f"→ one VLM call each (parallel, max {max_workers} workers, "
