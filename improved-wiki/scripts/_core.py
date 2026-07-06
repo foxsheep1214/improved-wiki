@@ -225,8 +225,11 @@ def load_caption_provider() -> dict:
             ) from e
     # No caption provider configured — ingest will pause at Stage 1.3.
     # Configure ~/.agents/config.json with a caption_provider entry to enable.
+    # (No env-var fallback: base_url/model/protocol can't come from a single
+    # key, so a key-only env would silently produce broken HTTP calls instead
+    # of the clean no-key pause below — removed 2026-07-06.)
     return {
-        "api_key": os.environ.get("CAPTION_API_KEY") or os.environ.get("LLM_API_KEY", ""),
+        "api_key": "",
         "base_url": "",
         "model": "",
         "protocol": "",

@@ -49,10 +49,33 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
 
 | Parameter | Default | Env var | Description |
 |-----------|---------|---------|-------------|
-| Max workers | 12 | `CAPTION_MAX_WORKERS` | Per-image parallel concurrency |
+| Max workers | 12 (auto-capped to 3 for local Ollama) | `CAPTION_MAX_WORKERS` | Per-image parallel concurrency. Explicit env var always overrides the auto-cap. |
 | Image max dim | 1568 | — | Downscale threshold (vision limit) |
 | Context window | 150 chars/side | — | before/after body text fed as anchoring context (NashSU `CONTEXT_CHARS`, matched) |
 | Tiny-image min | 20px | `MINERU_IMG_MIN_WIDTH/HEIGHT` | 过滤噪声（故意低，保留公式截图） |
+
+## Local Ollama concurrency cap (bug 2026-07-06)
+
+`CAPTION_MAX_WORKERS=12` was tuned for a remote multi-tenant API (MiniMax):
+12 concurrent HTTP calls comfortably fit its rate limit. It does **not** fit
+a local Ollama instance — Ollama serves vision requests with very limited
+real parallelism (`OLLAMA_NUM_PARALLEL` defaults to 1–4 depending on
+available memory; effectively one model instance). Firing 12 concurrent
+requests at it just queues most of them server-side.
+
+**Symptom observed**: captions failed with `[待重试] 图片 ...，尺寸 W×H —
+TimeoutError: timed out` even though nothing was actually wrong with the
+image or the model — the request was still queued (not yet started) when
+the client-side per-request timeout fired. All 3 internal retries hit the
+same queue, so the image never got a real shot at captioning.
+
+**Fix**: `_stage_1_3_caption_images_batch()` now auto-detects a local Ollama
+`base_url` (`_stage_1_3_is_ollama()`) and caps `max_workers` down to
+`OLLAMA_CAPTION_MAX_WORKERS = 3` unless the user explicitly set
+`CAPTION_MAX_WORKERS` in the environment (an explicit override always wins).
+The Ollama-native `/api/chat` request timeout was also raised 180s → 300s
+as extra headroom, since local vision inference is slower than a remote API
+even without queuing.
 
 ## One image per call (NashSU parity)
 

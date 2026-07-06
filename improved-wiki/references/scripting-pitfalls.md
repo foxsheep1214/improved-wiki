@@ -127,9 +127,12 @@ cp -a ~/.agents/skills/improved-wiki/. "$BACKUP_DIR/"
    import os, subprocess
    api_key = open('/tmp/_api_key.txt').read().strip()
    env = os.environ.copy()
-   env["CAPTION_API_KEY"] = api_key  # caption key (text gen needs no key)
+   env["LLM_API_KEY"] = api_key
    subprocess.run(["script.sh", "--flag"], env=env)
    ```
+   (Note: this pattern doesn't apply to the caption provider — its key lives
+   in `~/.agents/config.json`, not an env var; see
+   `references/image-caption-strategy.md`.)
 2. **Source an env file** instead of using `$(cat ...)`:
    ```bash
    set -a; source ~/.env 2>/dev/null; set +a

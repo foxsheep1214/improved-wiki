@@ -47,10 +47,23 @@ from _paths import atomic_write  # noqa: E402
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Default 12 parallel VLM calls — captioning is pure I/O-bound (one HTTP call
-# per image), so threads give real speedup and 12 fits comfortably under the
-# Caption API rate limit for typical book figure counts. Override per
-# run with the CAPTION_MAX_WORKERS env var.
+# per image), so threads give real speedup and 12 fits comfortably under a
+# remote multi-tenant API's rate limit for typical book figure counts. This
+# default does NOT fit a local Ollama instance (single model, effectively
+# serial inference) — see OLLAMA_CAPTION_MAX_WORKERS below. Override per
+# run with the CAPTION_MAX_WORKERS env var (an explicit override always wins,
+# including for Ollama).
 CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "12"))
+
+# Local Ollama serves vision requests with very limited real parallelism
+# (default OLLAMA_NUM_PARALLEL is 1-4 depending on available memory, one
+# model instance). Bug 2026-07-06: with 12 workers hammering a local Ollama
+# qwen3-vl:8b, most requests queued server-side long enough that the
+# client-side per-request timeout fired before the model ever started on
+# them — surfacing as spurious "TimeoutError: timed out" placeholders that
+# had nothing to do with any single image. Capping concurrency for local
+# Ollama removes the queuing, not just the symptom.
+OLLAMA_CAPTION_MAX_WORKERS = 3
 
 # How many chars of before/after body text to pass as anchoring context.
 # NashSU parity (image-caption-pipeline.ts CONTEXT_CHARS): NashSU tuned this
@@ -100,6 +113,14 @@ def _stage_1_3_is_caption_failed(text: str) -> bool:
     """Detect VLM failure responses that shouldn't be treated as valid captions."""
     if not text or len(text) < 15:
         return True
+    # The "[待重试]" placeholder itself (written on retry-exhaustion — see
+    # _stage_1_3_caption_images_batch) must always be re-detected as pending.
+    # Bug 2026-07-06: it wasn't, because its trailing {err} text (e.g.
+    # "TimeoutError: timed out") rarely matches the markers below, so
+    # _stage_1_3_pending_images silently treated the placeholder as a
+    # permanent cached caption and never retried it.
+    if text.startswith("[待重试]"):
+        return True
     failure_markers = ["解析失败", "无法识别", "unable to", "cannot describe",
                        "抱歉", "sorry", "I can't", "not clear", "无法描述"]
     text_lower = text.lower()
@@ -136,8 +157,8 @@ source_ingest: "{source_label or media_dir.parent.name}"
 # [suggestion] VLM image captioning skipped — no caption provider API key
 
 Stage 1.3 (VLM image captioning) was **entirely skipped** because
-`caption_api_key` is empty: `~/.agents/config.json` is absent and neither
-`CAPTION_API_KEY` nor `LLM_API_KEY` is set in the environment.
+`caption_api_key` is empty: `~/.agents/config.json` has no `caption_provider`
+entry configured.
 
 **Impact:** {total_images} image(s) were NOT captioned by the VLM.
 {already_captioned} already had a caption (prior run); **{pending} have no
@@ -145,9 +166,9 @@ VLM description** and remain uncaptioned. Image search/retrieval quality is
 degraded.
 
 **Fix:** configure a caption provider — create `~/.agents/config.json`
-with a `providers.<name>` entry (`api_key` + `base_url` + `protocol` + `model`), or
-`export CAPTION_API_KEY=...`, then re-run ingest. Stage 1.3 resumes from
-cache and only captions pending images.
+with a `caption_provider` field and a matching `providers.<name>` entry
+(`api_key` + `base_url` + `protocol` + `model`), then re-run ingest.
+Stage 1.3 resumes from cache and only captions pending images.
 
 ## Resolution
 _配置 caption provider API key 后重跑 ingest 即可补齐；处理完成后将 `resolved: false` 改为 `resolved: true`。_
@@ -171,15 +192,20 @@ def _caption_no_key_pause(config, source_label: str, media_dir: Path,
           f"{already_captioned}/{total_images} images have prior captions, "
           f"{pending} will get NO VLM description.")
     print(f"⚠️  [caption] PAUSING ingest — no silent fallback. Configure "
-          f"~/.agents/config.json (providers.<name>.api_key) or export "
-          f"CAPTION_API_KEY, then re-run (cached, resumes here).\n")
+          f"~/.agents/config.json (caption_provider + providers.<name>.api_key), "
+          f"then re-run (cached, resumes here).\n")
     _emit_caption_skip_review(config, source_label, media_dir, total_images, already_captioned)
     raise RuntimeError(
         "Caption provider API key missing — VLM captioning (Stage 1.3) cannot run. "
-        "No fallback: configure ~/.agents/config.json with a caption_provider entry or "
-        "export CAPTION_API_KEY, then re-run (extraction is cached, resumes from "
-        "Stage 1.3)."
+        "No fallback: configure ~/.agents/config.json with a caption_provider entry, "
+        "then re-run (extraction is cached, resumes from Stage 1.3)."
     )
+
+
+def _stage_1_3_is_ollama(config: Config) -> bool:
+    """True if the caption provider's base_url points at a local Ollama instance."""
+    base_url = config.caption_base_url or ""
+    return "127.0.0.1:11434" in base_url or "localhost:11434" in base_url
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -545,7 +571,7 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         # returns content even when the model has a thinking/reasoning mode
         # (the OpenAI-compatible /v1/chat/completions sometimes returns
         # content=null with the answer only in "reasoning").
-        is_ollama = "127.0.0.1:11434" in config.caption_base_url or "localhost:11434" in config.caption_base_url
+        is_ollama = _stage_1_3_is_ollama(config)
         data_url = f"data:{media_type};base64,{img_data}"
         content_parts = [
             {"type": "text", "text": prompt_text},
@@ -580,7 +606,11 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
             for attempt in range(3):
                 try:
                     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-                    with urllib.request.urlopen(req, timeout=180) as resp:
+                    # 300s (not the 180s used for remote providers below): local
+                    # Ollama vision inference is slower and, even with capped
+                    # concurrency (OLLAMA_CAPTION_MAX_WORKERS), a request can
+                    # still queue briefly behind another in-flight caption call.
+                    with urllib.request.urlopen(req, timeout=300) as resp:
                         data = json.loads(resp.read())
                     msg = data.get("message", {})
                     text = (msg.get("content") or "").strip()
@@ -731,6 +761,19 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
 
     ctx_map = _stage_1_3_build_context_map(config)
     label = f" [{source_label}]" if source_label else ""
+
+    # Local Ollama can't actually serve `max_workers` vision calls in
+    # parallel (see OLLAMA_CAPTION_MAX_WORKERS above) — cap unless the user
+    # explicitly set CAPTION_MAX_WORKERS, in which case honor their choice.
+    if _stage_1_3_is_ollama(config) and "CAPTION_MAX_WORKERS" not in os.environ \
+            and max_workers > OLLAMA_CAPTION_MAX_WORKERS:
+        print(f"[caption]{label} Local Ollama detected — capping parallel "
+              f"workers {max_workers} → {OLLAMA_CAPTION_MAX_WORKERS} (a single "
+              f"Ollama instance serializes most concurrent vision calls; "
+              f"higher concurrency just queues requests until they exceed the "
+              f"per-request timeout). Set CAPTION_MAX_WORKERS to override.")
+        max_workers = OLLAMA_CAPTION_MAX_WORKERS
+
     print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
           f"→ one VLM call each (parallel, max {max_workers} workers, "
           f"{len(ctx_map)} figures with context)")

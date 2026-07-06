@@ -33,9 +33,10 @@ cp $SKILL_DIR/templates/overview.md  ./wiki/overview.md
 
 # 5. Set the project root env var. Text-generation LLM work runs in
 #    conversation mode (the calling agent's current model) — no LLM API
-#    key needed. The only external key is for image captioning (VLM provider):
+#    key needed. Image captioning (VLM provider) is configured separately in
+#    ~/.agents/config.json (see references/image-caption-strategy.md) — only
+#    needed if your source has images to caption:
 export IMPROVED_WIKI_ROOT=$(pwd)
-export CAPTION_API_KEY=***   # only needed if your source has images to caption (VLM)
 # Optional: force the wiki's output language (NashSU outputLanguage parity).
 # 'auto' (default / unset) detects per source; set to e.g. Chinese or English
 # to force every generated page + lint directive into that language.
@@ -146,7 +147,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | Symptom | Cause | Fix |
 |---|---|---|
 | `ValueError: Unknown raw folder 'X'` | File is in a folder the script doesn't recognize | Either move the file to a recognized first-level folder (Book/Paper/Datasheet/... — Titlecase) or pass `--type X` |
-| `LLM_API_KEY not set` / caption step fails | Image-caption key not exported (text gen needs no key — it runs in conversation mode) | `export CAPTION_API_KEY=***` (or set `providers.caption.api_key` in `~/.agents/config.json`; only the Stage 1.3 caption step calls the VLM) |
+| Caption step fails / pauses at Stage 1.3 | No `caption_provider` configured (text gen needs no key — it runs in conversation mode) | Set `caption_provider` + a matching `providers.<name>` entry (`api_key`+`base_url`+`protocol`+`model`) in `~/.agents/config.json`; only the Stage 1.3 caption step calls the VLM |
 | `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the caption provider key/endpoint used by Stage 1.3 |
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
