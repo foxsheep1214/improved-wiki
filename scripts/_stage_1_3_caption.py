@@ -57,13 +57,10 @@ CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "12"))
 
 # Local Ollama serves vision requests with very limited real parallelism
 # (default OLLAMA_NUM_PARALLEL is 1-4 depending on available memory, one
-# model instance). Bug 2026-07-06: with 12 workers hammering a local Ollama
-# qwen3-vl:8b, most requests queued server-side long enough that the
-# client-side per-request timeout fired before the model ever started on
-# them — surfacing as spurious "TimeoutError: timed out" placeholders that
-# had nothing to do with any single image. Capping concurrency for local
-# Ollama removes the queuing, not just the symptom.
-OLLAMA_CAPTION_MAX_WORKERS = 3
+# model instance). Capping concurrency to 1 (serial) for local Ollama ensures
+# no client-side timeouts from server-side queueing. Each image waits its turn,
+# but gets full time to complete.
+OLLAMA_CAPTION_MAX_WORKERS = 1
 
 # How many chars of before/after body text to pass as anchoring context.
 # NashSU parity (image-caption-pipeline.ts CONTEXT_CHARS): NashSU tuned this
