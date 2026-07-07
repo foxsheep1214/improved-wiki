@@ -49,6 +49,16 @@ Two other external-API dependencies (not text generation):
 
 > **No-silent-fallback policy (2026-06-24)**: the ingest path allows NO silent fallback. If a main path cannot run (missing API key, missing service, LLM call failure after retries, broken config), the pipeline **warns and pauses** (raises `RuntimeError`) rather than degrading quality. Extraction/page writes are cached, so re-running after fixing the dependency resumes from the failed stage. This applies to: caption key missing, caption batch failure, embedding stack missing, LLM page-merge failure, broken `~/.agents/config.json`. (Corrupted cache/stage-progress files are the one exception: they warn loudly and reset, since re-ingesting is correct recovery, not quality degradation.)
 
+## 🔴 Checkpoints (human-gated)
+
+The pipeline is autonomous by design — most stages run without confirmation. These are the **only** decision points where the calling agent MUST stop and confirm with the user before proceeding (autonomous-runaway or destructive):
+
+🔴 **STOP · Batch ingest (≥2 files)** — before launching `ingest.py f1.pdf f2.pdf ...`, confirm the file list and target project with the user. Auto-parallelism spawns OCR + up to `--parallel` sub-agents and runs for a long time; a wrong file list or wrong project is expensive to unwind.
+🔴 **STOP · `--delete` re-ingest** — `--delete` removes the source page + cache + orphan concepts/entities + media. Confirm the source slug with the user before running; see `references/re-ingest-comparison.md`.
+🔴 **STOP · Deep research** — `/improved-wiki deep-research <topic>` runs a closed web→wiki loop that auto-grows the KB (entity/concept pages + review items). Confirm the topic scope with the user first; one topic per invocation, no auto-chain.
+
+Single-file auto-ingest, lint, graph, and save-chat-to-wiki are NOT gated — proceed directly.
+
 ## Entry points
 
 - **Auto Ingest**: `python3 scripts/ingest.py file.pdf […]` — fully automated pipeline; the calling agent does each LLM step with the current model
