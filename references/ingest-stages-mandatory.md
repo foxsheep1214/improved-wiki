@@ -126,6 +126,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 3.4 · Review ⭐ 永远不能跳
 - **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate），写入 `wiki/REVIEW/<type>/<date>-<source>-<slug>.md` + `review-suggestions.json`。运行在已写盘文件上。
 - **go/no-go**：review items 数量 ≥0（即使 0 也要记）；`wiki/REVIEW/` 结构合法。
+- **时机偏离 NashSU（有意，audit M2 2026-07-07）**：NashSU 在 `writeFileBlocks` **之前**对 in-memory generation 跑 review；improved-wiki 在 3.1 写盘**之后**对已落盘文件跑。这是刻意选择，理由：(1) review items 本就是非阻断 triage（`resolved: false` 等人工处理），NashSU 的"写盘前"也只是时机不同、并不拦截写盘，故"写盘前拦截能力"在 NashSU 侧也不成立；(2) 写盘后 review 看到 enrichment/wikilink-merge/page-merge 之后的真实 on-disk 内容，finding 反映最终状态，对 lint/cross-source dedup 友好，而写盘前看到的是 pre-enrichment 内容、易产出过时 finding；(3) 真正的结构性失败拦截已由 Stage 2.6 `_stage_2_6_validate_required_sections` 硬门禁（缺 section 直接 raise）覆盖。代价：review 发现问题时页已落盘，需后续修复——但 review items 本就不阻断，该代价可接受。不额外跑 pre-write LLM pass（双倍 review 成本对非阻断 triage 项 ROI 低）。
 
 ### Stage 3.5 · Aggregate Repair + Cache ⭐ 永远不能跳
 - **作用**：log.md 程序化 append（LLM 不参与，防丢历史）+ index.md LLM 整页重写（喂入磁盘扫描的权威页面清单，全分类同步；LLM 失败/超容量门/>250 页时退回 Sources 单行 append 兜底）+ overview.md LLM 重写（改进 prompt：禁止源清单堆砌、按主题综述；5 段结构校验；失败保留当前；超限压缩模式；首次 ingest 创建）+ 写 `ingest-cache.json`。
