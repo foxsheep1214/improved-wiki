@@ -72,8 +72,8 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
                 if title:
                     existing[f.stem] = _stage_2_title_words(title)
                     existing_cjk[f.stem] = _stage_2_title_cjk_bigrams(title)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[2.3] warn: skip {f}: {type(e).__name__}: {e}")
 
     for name in found:
         name_words = _stage_2_title_words(name)
@@ -141,8 +141,8 @@ def stage_2_3_resolve_proposed_connections(wiki_root: Path, chunk_analyses: list
                 content = f.read_text(encoding="utf-8", errors="ignore")
                 title = _stage_2_frontmatter_title(content)
                 existing[f.stem] = (type_dir, _stage_2_title_words(title) if title else set())
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[2.3] warn: skip {f}: {type(e).__name__}: {e}")
 
     resolved = []
     seen = set()

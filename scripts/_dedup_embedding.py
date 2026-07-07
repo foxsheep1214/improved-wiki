@@ -92,7 +92,13 @@ def embed_pages(pages: list[dict]) -> dict[str, Optional[list[float]]]:
             vecs = embed_texts(chunk_texts, base_url, model, api_key)
             for k, v in zip(chunk_keys, vecs):
                 out[k] = list(v) if v else None
-        except Exception:
+        except Exception as e:
+            # Single-batch failure is non-fatal (the rest continue), but must
+            # be visible: these pages get None and are silently skipped in
+            # candidate_pairs, so an unreported batch failure hides dedup
+            # gaps. Overall success ratio <min_success_ratio still raises.
+            print(f"[dedup] warn: embedding batch failed ({type(e).__name__}: {e}) — "
+                  f"{len(chunk_keys)} pages marked None and will be skipped")
             for k in chunk_keys:
                 out[k] = None
     return out

@@ -602,8 +602,12 @@ def save_progress(config: Config, source_hash: str, data: dict) -> None:
         if pp.exists():
             try:
                 existing = json.loads(pp.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception as e:
                 # Corrupted artifact cache is not fatal — rebuild from empty.
+                # Warn loudly (mirrors load_stages) so the user knows why
+                # artifacts are being re-derived (policy 2026-06-24).
+                print(f"⚠️  [progress] {pp} corrupted ({type(e).__name__}: {e}) "
+                      f"— discarding artifact cache, will rebuild from empty.")
                 existing = {}
         existing.update(data)
         existing["_updated_at"] = int(time.time() * 1000)
