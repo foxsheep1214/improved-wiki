@@ -30,7 +30,7 @@ from _dedup_embedding import candidate_pairs, cluster_by_pairs
 DEDUP_COSINE_THRESHOLD = 0.82
 
 
-def _stage_2_5_extract_concept_blocks(file_blocks, folder="concepts"):
+def _dedup_extract_concept_blocks(file_blocks, folder="concepts"):
     """Extract this ingest's just-generated page blocks for one folder.
 
     ``folder`` selects the pool ("concepts" or "entities"). A1 (audit
@@ -59,7 +59,7 @@ def _stage_2_5_extract_concept_blocks(file_blocks, folder="concepts"):
     return concepts
 
 
-def _stage_2_5_find_duplicate_concepts(concepts, *, embeddings=None):
+def _dedup_find_duplicate_concepts(concepts, *, embeddings=None):
     """Embedding (cosine) prefilter over this source's just-generated concepts.
 
     Returns candidate groups as lists of indices into ``concepts`` (groups of
@@ -77,7 +77,7 @@ def _stage_2_5_find_duplicate_concepts(concepts, *, embeddings=None):
     return [[slug_to_index[sid] for sid in cl] for cl in clusters]
 
 
-def _stage_2_5_confirm_prompt(groups_concepts):
+def _dedup_confirm_prompt(groups_concepts):
     """Batched confirm prompt: ALL candidate groups in ONE call.
 
     Was one LLM call per group (Finding C: N groups → N conversation-mode
@@ -107,11 +107,11 @@ When unsure, reply `GROUP <n>: MERGE no`.
 """.format(body=body)
 
 
-def _stage_2_5_confirm_merges_with_llm(groups_concepts, config):
+def _dedup_confirm_merges_with_llm(groups_concepts, config):
     """One LLM call confirming ALL candidate groups. Returns a list of
     (should_merge, primary_slug) aligned to ``groups_concepts``. Conservative:
     any group whose verdict is missing/unparseable/not-yes → (False, "")."""
-    prompt = _stage_2_5_confirm_prompt(groups_concepts)
+    prompt = _dedup_confirm_prompt(groups_concepts)
     try:
         response, _ = call_anthropic_protocol(prompt, config, max_tokens=400, label="dedup-confirm")
     except Exception as e:
@@ -130,7 +130,7 @@ def _stage_2_5_confirm_merges_with_llm(groups_concepts, config):
     return verdicts
 
 
-def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
+def _dedup_generate_merge_rules(concepts, duplicate_groups, config=None):
     rules = []
     if not duplicate_groups:
         return rules
@@ -139,7 +139,7 @@ def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
     # config must not silently merge every candidate group.
     if config is None:
         return rules
-    verdicts = _stage_2_5_confirm_merges_with_llm(groups_concepts, config)
+    verdicts = _dedup_confirm_merges_with_llm(groups_concepts, config)
     for group_concepts, (should_merge, primary_slug) in zip(groups_concepts, verdicts):
         if not should_merge:
             continue
@@ -165,7 +165,7 @@ def _stage_2_5_generate_merge_rules(concepts, duplicate_groups, config=None):
 
 
 
-def _stage_2_5_rewrite_wikilinks(content, slug_map, current_slug=""):
+def _dedup_rewrite_wikilinks(content, slug_map, current_slug=""):
     """Redirect [[target]] / [[target|text]] wikilinks pointing at a merged
     duplicate slug to the merge's primary slug instead. Handles both the bare
     stem and the `concepts/<slug>` path form (case-insensitive per
@@ -196,7 +196,7 @@ def _stage_2_5_rewrite_wikilinks(content, slug_map, current_slug=""):
 _STAGE_2_5_RELATED_LINE_RE = re.compile(r"^(related:[ \t]*\[)([^\]\r\n]*)(\][ \t]*)$", re.MULTILINE)
 
 
-def _stage_2_5_rewrite_related(content, slug_map, current_slug=""):
+def _dedup_rewrite_related(content, slug_map, current_slug=""):
     """Rewrite frontmatter ``related:`` inline-array entries pointing at a
     merged duplicate slug to the primary slug. Entries are bare stems
     (optionally quoted and/or `concepts/`-prefixed) — the wikilink rewrite
@@ -231,7 +231,7 @@ def _stage_2_5_rewrite_related(content, slug_map, current_slug=""):
     return content[:m.start(2)] + inner + content[m.end(2):]
 
 
-def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
+def _dedup_apply_merge_rules(file_blocks, merge_rules):
     if not merge_rules:
         return file_blocks
     # Deletions are (folder, slug)-keyed so an entity merge can never delete a
@@ -254,13 +254,13 @@ def _stage_2_5_apply_merge_rules(file_blocks, merge_rules):
         if block_folder and (block_folder, slug) in slugs_to_delete:
             continue
         if slug_map:
-            content = _stage_2_5_rewrite_wikilinks(content, slug_map, current_slug=slug)
-            content = _stage_2_5_rewrite_related(content, slug_map, current_slug=slug)
+            content = _dedup_rewrite_wikilinks(content, slug_map, current_slug=slug)
+            content = _dedup_rewrite_related(content, slug_map, current_slug=slug)
         result.append((path, content))
     return result
 
 
-def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = False) -> dict:
+def dedup_intra_source(file_blocks, chunk_analyses, config, *, verbose: bool = False) -> dict:
     """Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
 
     Runs before the source page so the index lists de-duplicated concepts.
@@ -282,15 +282,15 @@ def stage_2_5_dedup(file_blocks, chunk_analyses, config, *, verbose: bool = Fals
     # A1 (audit 2026-07-02): entities join the dedup — separate candidate pool
     # (never merged across the concepts/entities boundary), but ONE batched
     # confirm call for both pools (conversation-mode handoffs are expensive).
-    concepts = _stage_2_5_extract_concept_blocks(file_blocks)
-    entities = _stage_2_5_extract_concept_blocks(file_blocks, folder="entities")
-    concept_groups = _stage_2_5_find_duplicate_concepts(concepts)
-    entity_groups = _stage_2_5_find_duplicate_concepts(entities)
+    concepts = _dedup_extract_concept_blocks(file_blocks)
+    entities = _dedup_extract_concept_blocks(file_blocks, folder="entities")
+    concept_groups = _dedup_find_duplicate_concepts(concepts)
+    entity_groups = _dedup_find_duplicate_concepts(entities)
     items = concepts + entities
     offset = len(concepts)
     groups = concept_groups + [[i + offset for i in g] for g in entity_groups]
-    merge_rules = _stage_2_5_generate_merge_rules(items, groups, config=config)
-    file_blocks = _stage_2_5_apply_merge_rules(file_blocks, merge_rules)
+    merge_rules = _dedup_generate_merge_rules(items, groups, config=config)
+    file_blocks = _dedup_apply_merge_rules(file_blocks, merge_rules)
     concept_count_after = sum(1 for p, _ in file_blocks if "/concepts/" in p)
     entity_count_after = sum(1 for p, _ in file_blocks if "/entities/" in p)
     if merge_rules:

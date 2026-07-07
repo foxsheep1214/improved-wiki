@@ -3,7 +3,7 @@
 
 Runs OFFLINE (user-invoked, not during ingest) across the ENTIRE wiki to merge
 duplicates that accumulated across multiple ingests. Distinct from Stage 2.5
-源内去重 (intra-source dedup, `_stage_2_5_dedup.py`) which is a conservative
+源内去重 (intra-source dedup, `_dedup_intra_source.py`) which is a conservative
 inline filter on one source's blocks before write. This module is thorough:
 backs up, writes a report, and rewrites all `[[wikilinks]]` + `related:`
 across the wiki so merges leave no broken links.

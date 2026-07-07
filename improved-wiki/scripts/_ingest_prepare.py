@@ -500,8 +500,8 @@ def _do_prepare(
             # (multi-chunk books only). Runs before the source page so the index
             # lists de-duplicated concepts. (Former standalone Stage 2.5; folded
             # into 2.4 — embedding prefilter + LLM confirm, no-fallback raise.)
-            from _stage_2_5_dedup import stage_2_5_dedup
-            _stage_2_5 = stage_2_5_dedup(file_blocks, chunk_analyses, config, verbose=verbose)
+            from _dedup_intra_source import dedup_intra_source
+            _stage_2_5 = dedup_intra_source(file_blocks, chunk_analyses, config, verbose=verbose)
             file_blocks = _stage_2_5["file_blocks"]
             dedup_was_run = _stage_2_5["dedup_was_run"]
             concept_count_before = _stage_2_5["concept_count_before"]
@@ -546,17 +546,17 @@ def _do_prepare(
             # stage_2_9_done is set only after the whole tail succeeds).
             if query_blocks:
                 file_blocks = list(file_blocks) + query_blocks
-                from _stage_2_8_query_resolve import (stage_2_8_resolve_queries,
-                                                       _stage_2_8_update_file_blocks_after_resolution,
-                                                       _stage_2_8_apply_cross_refs)
-                query_resolutions = stage_2_8_resolve_queries(file_blocks, config.wiki_dir, config)
+                from _query_resolve_cross_source import (query_resolve_cross_source,
+                                                       _query_resolve_update_file_blocks_after_resolution,
+                                                       _query_resolve_apply_cross_refs)
+                query_resolutions = query_resolve_cross_source(file_blocks, config.wiki_dir, config)
                 if any(r["status"] == "closed" for r in query_resolutions.values()):
                     before_q = len(file_blocks)
-                    file_blocks = _stage_2_8_update_file_blocks_after_resolution(file_blocks, query_resolutions)
+                    file_blocks = _query_resolve_update_file_blocks_after_resolution(file_blocks, query_resolutions)
                     print(f"  [stage 2.7] Removed {before_q - len(file_blocks)} closed query block(s)")
                 # A3: write resolve conclusions into kept query frontmatter
                 # (cross_refs) instead of leaving them only in the progress cache.
-                file_blocks = _stage_2_8_apply_cross_refs(file_blocks, query_resolutions)
+                file_blocks = _query_resolve_apply_cross_refs(file_blocks, query_resolutions)
             else:
                 query_resolutions = {}
 

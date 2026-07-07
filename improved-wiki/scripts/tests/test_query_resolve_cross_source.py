@@ -9,7 +9,7 @@ handoff, one verdict line per query; missing/unparseable lines default to
 kept), and the unchanged LLM-judge default-to-kept + closed-query drop.
 Embeddings/embed calls are injected or spied (no network).
 
-Run:  python3 scripts/tests/test_stage_2_8_query_resolve.py
+Run:  python3 scripts/tests/test_query_resolve_cross_source.py
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _dedup_embedding as emb  # noqa: E402
-import _stage_2_8_query_resolve as q  # noqa: E402
+import _query_resolve_cross_source as q  # noqa: E402
 
 
 def _write_page(wiki_root, sub, stem, title, body="body"):
@@ -52,7 +52,7 @@ class TestFindRelatedViaEmbedding(unittest.TestCase):
             "concepts/newton": [0.0, 1.0],
             "__query__q1": [0.98, 0.02],
         }
-        related = q._stage_2_8_find_related_wiki_pages(query, existing, vectors)
+        related = q._query_resolve_find_related_wiki_pages(query, existing, vectors)
         self.assertEqual([pid for pid, _t, _s in related],
                          ["concepts/fourier", "concepts/newton"])
         self.assertGreater(related[0][2], q.RESOLVE_COSINE_THRESHOLD)
@@ -66,7 +66,7 @@ class TestFindRelatedViaEmbedding(unittest.TestCase):
         ]
         vectors = {f"concepts/c{i}": [1.0, i / 100.0] for i in range(12)}
         vectors["__query__q1"] = [1.0, 0.0]
-        related = q._stage_2_8_find_related_wiki_pages(
+        related = q._query_resolve_find_related_wiki_pages(
             {"slug": "q1", "title": "T", "body": "b"}, existing, vectors, top_k=8)
         self.assertEqual(len(related), 8)
 
@@ -75,7 +75,7 @@ class TestFindRelatedViaEmbedding(unittest.TestCase):
                      "title": "Fourier Transform", "tags": [], "body": "x"}]
         query = {"slug": "q1", "title": "T", "body": "b"}
         self.assertEqual(
-            q._stage_2_8_find_related_wiki_pages(query, existing, {"concepts/fourier": [1.0, 0.0]}),
+            q._query_resolve_find_related_wiki_pages(query, existing, {"concepts/fourier": [1.0, 0.0]}),
             [])
 
 
@@ -87,7 +87,7 @@ class TestResolveQueriesFlow(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 wiki = Path(tmp)  # no concepts/ or entities/ dirs
-                res = q.stage_2_8_resolve_queries(
+                res = q.query_resolve_cross_source(
                     [_query_block("q1", "Anything")], wiki, object())
         finally:
             q.embed_pages = orig
@@ -102,7 +102,7 @@ class TestResolveQueriesFlow(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 wiki = Path(tmp)
                 _write_page(wiki, "concepts", "fourier", "Fourier Transform")
-                res = q.stage_2_8_resolve_queries(
+                res = q.query_resolve_cross_source(
                     [("concepts/x.md", "---\ntitle: X\n---\nbody")], wiki, object())
         finally:
             q.embed_pages = orig
@@ -118,7 +118,7 @@ class TestResolveQueriesFlow(unittest.TestCase):
                 wiki = Path(tmp)
                 _write_page(wiki, "concepts", "fourier", "Fourier Transform")
                 with self.assertRaises(emb.DuplicatePrefilterError):
-                    q.stage_2_8_resolve_queries(
+                    q.query_resolve_cross_source(
                         [_query_block("q1", "什么是傅里叶变换")], wiki, object())
         finally:
             q.embed_pages = orig
@@ -143,7 +143,7 @@ class TestResolveQueriesFlow(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 wiki = Path(tmp)
                 _write_page(wiki, "concepts", "fourier", "Fourier Transform")
-                res = q.stage_2_8_resolve_queries(
+                res = q.query_resolve_cross_source(
                     [_query_block("q1", "什么是傅里叶变换")], wiki, object(),
                     embeddings=embeddings)
         finally:
@@ -167,7 +167,7 @@ class TestResolveQueriesFlow(unittest.TestCase):
                 wiki = Path(tmp)
                 _write_page(wiki, "concepts", "high", "High Match")
                 _write_page(wiki, "concepts", "low", "Low Match")
-                res = q.stage_2_8_resolve_queries(
+                res = q.query_resolve_cross_source(
                     [_query_block("q1", "High Match?")], wiki, object(),
                     embeddings=embeddings)
         finally:
@@ -194,7 +194,7 @@ class TestBatchJudge(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 wiki = Path(tmp)
                 _write_page(wiki, "concepts", "fourier", "Fourier Transform")
-                return q.stage_2_8_resolve_queries(
+                return q.query_resolve_cross_source(
                     blocks, wiki, object(), embeddings=self._EMBEDDINGS)
         finally:
             q.call_anthropic_protocol = orig
@@ -274,7 +274,7 @@ class TestJudgeUnchangedBehavior(unittest.TestCase):
             ("concepts/c.md", "---\ntitle: C\n---\nbody"),
         ]
         resolutions = {"q1": {"status": "closed"}, "q2": {"status": "kept"}}
-        result = q._stage_2_8_update_file_blocks_after_resolution(file_blocks, resolutions)
+        result = q._query_resolve_update_file_blocks_after_resolution(file_blocks, resolutions)
         paths = [p for p, _ in result]
         self.assertEqual(paths, ["queries/q2.md", "concepts/c.md"])
 
@@ -288,7 +288,7 @@ class TestCrossRefsWriteBack(unittest.TestCase):
         resolutions = {"q1": {"status": "kept",
                               "resolution_pages": ["concepts/high", "entities/e1"],
                               "reason": "r"}}
-        result = q._stage_2_8_apply_cross_refs(file_blocks, resolutions)
+        result = q._query_resolve_apply_cross_refs(file_blocks, resolutions)
         q1 = dict(result)["queries/q1.md"]
         self.assertIn('cross_refs: ["concepts/high", "entities/e1"]', q1)
         # Non-query block untouched.
@@ -298,13 +298,13 @@ class TestCrossRefsWriteBack(unittest.TestCase):
 
     def test_no_resolution_pages_leaves_query_untouched(self):
         block = ("queries/q1.md", '---\ntitle: "Q1?"\n---\nbody')
-        result = q._stage_2_8_apply_cross_refs(
+        result = q._query_resolve_apply_cross_refs(
             [block], {"q1": {"status": "kept", "resolution_pages": [], "reason": "r"}})
         self.assertEqual(result, [block])
 
     def test_unresolved_slug_left_untouched(self):
         block = ("queries/q9.md", '---\ntitle: "Q9?"\n---\nbody')
-        result = q._stage_2_8_apply_cross_refs([block], {})
+        result = q._query_resolve_apply_cross_refs([block], {})
         self.assertEqual(result, [block])
 
 

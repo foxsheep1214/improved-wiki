@@ -24,7 +24,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import _stage_2_5_dedup as d  # noqa: E402
+import _dedup_intra_source as d  # noqa: E402
 
 _RULES = [{
     "primary_slug": "primary-concept", "primary_title": "Primary",
@@ -34,7 +34,7 @@ _RULES = [{
 
 
 def _apply(file_blocks):
-    return dict(d._stage_2_5_apply_merge_rules(file_blocks, _RULES))
+    return dict(d._dedup_apply_merge_rules(file_blocks, _RULES))
 
 
 class TestSiblingLinkRewrite(unittest.TestCase):

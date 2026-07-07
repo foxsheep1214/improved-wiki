@@ -25,9 +25,9 @@ improved-wiki 流水线 = **17 个 active Stage（含 Phase 0 前置门，跨 4 
 | 2.1 | `stage_2_1_global_digest` | 全局摘要 |
 | 2.2 | `_stage_2_2_analyze_chunk` | 逐 chunk 分析（**全部 chunk 分析完**再进入 2.3） |
 | 2.3 | `stage_2_3_*`（`_stage_2_3_incremental.py`） | 已存在 wiki 关联检测（在 2.2 与 2.4 之间，读 wiki） |
-| 2.4 | `_stage_2_4_generate_*` + `_stage_2_5_dedup.py` | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发）+ 源内概念去重收尾（embedding 语义初筛 cosine≥0.82 + LLM 确认，多 chunk；无回退） |
+| 2.4 | `_stage_2_4_generate_*` + `_dedup_intra_source.py` | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发）+ 源内概念去重收尾（embedding 语义初筛 cosine≥0.82 + LLM 确认，多 chunk；无回退） |
 | 2.6 | `stage_2_6_source_page` | 源页生成（源索引；2.4 之后） |
-| 2.7 | `stage_2_7_query_generation` + `_stage_2_8_query_resolve.py` | 问题生成 + 跨源 query 解析（候选 top-k **全部**交 LLM judge，一次批量 handoff，无 cosine 门槛；`RESOLVE_COSINE_THRESHOLD=0.70` 仅标记 `cross_refs`；无回退） |
+| 2.7 | `stage_2_7_query_generation` + `_query_resolve_cross_source.py` | 问题生成 + 跨源 query 解析（候选 top-k **全部**交 LLM judge，一次批量 handoff，无 cosine 门槛；`RESOLVE_COSINE_THRESHOLD=0.70` 仅标记 `cross_refs`；无回退） |
 | 2.9 | `stage_2_9_comparison_generation` | 源内对比生成 |
 | 3.1 | `stage_3_1_write_wiki_file` | 文件写盘（含同名 slug 三层 page-merge，NashSU parity） |
 | 3.2 | `stage_3_2_inject_images` | 图片注入 source 页 |

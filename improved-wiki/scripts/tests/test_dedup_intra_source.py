@@ -1,10 +1,10 @@
-"""Tests for Stage 2.4 in-source dedup sub-step (_stage_2_5_dedup).
+"""Tests for Stage 2.4 in-source dedup sub-step (_dedup_intra_source).
 
 Covers the embedding-prefilter swap (Jaccard → cosine), the no-fallback raise
 when embeddings are unavailable, and the unchanged LLM-confirm gate + wikilink
 rewrite. Embeddings are injected (no network), mirroring test_dedup_embedding.
 
-Run:  python3 scripts/tests/test_stage_2_5_dedup.py
+Run:  python3 scripts/tests/test_dedup_intra_source.py
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _dedup_embedding as emb  # noqa: E402
-import _stage_2_5_dedup as d  # noqa: E402
+import _dedup_intra_source as d  # noqa: E402
 
 
 def _concept(slug, title, defn="some definition"):
@@ -36,7 +36,7 @@ class TestFindDuplicateConceptsEmbedding(unittest.TestCase):
         vectors = {"pao": [1.0, 0.0], "julinjun": [0.99, 0.01], "other": [0.0, 1.0]}
 
         # Act
-        groups = d._stage_2_5_find_duplicate_concepts(concepts, embeddings=vectors)
+        groups = d._dedup_find_duplicate_concepts(concepts, embeddings=vectors)
 
         # Assert: pao+julinjun cluster together by index; other excluded.
         self.assertEqual([sorted(g) for g in groups], [[0, 1]])
@@ -44,10 +44,10 @@ class TestFindDuplicateConceptsEmbedding(unittest.TestCase):
     def test_orthogonal_vectors_yield_no_groups(self):
         concepts = [_concept("a", "A"), _concept("b", "B"), _concept("c", "C")]
         vectors = {"a": [1.0, 0.0, 0.0], "b": [0.0, 1.0, 0.0], "c": [0.0, 0.0, 1.0]}
-        self.assertEqual(d._stage_2_5_find_duplicate_concepts(concepts, embeddings=vectors), [])
+        self.assertEqual(d._dedup_find_duplicate_concepts(concepts, embeddings=vectors), [])
 
     def test_single_concept_returns_no_groups(self):
-        self.assertEqual(d._stage_2_5_find_duplicate_concepts([_concept("a", "A")]), [])
+        self.assertEqual(d._dedup_find_duplicate_concepts([_concept("a", "A")]), [])
 
     def test_no_fallback_raises_when_embeddings_unavailable(self):
         # Most pages fail to embed (None) → DuplicatePrefilterError, NOT a silent
@@ -55,7 +55,7 @@ class TestFindDuplicateConceptsEmbedding(unittest.TestCase):
         concepts = [_concept("a", "A"), _concept("b", "B"), _concept("c", "C")]
         broken = {"a": [1.0, 0.0], "b": None, "c": None}
         with self.assertRaises(emb.DuplicatePrefilterError):
-            d._stage_2_5_find_duplicate_concepts(concepts, embeddings=broken)
+            d._dedup_find_duplicate_concepts(concepts, embeddings=broken)
 
 
 class TestLlmConfirmGate(unittest.TestCase):
@@ -64,7 +64,7 @@ class TestLlmConfirmGate(unittest.TestCase):
         orig = d.call_anthropic_protocol
         d.call_anthropic_protocol = lambda *a, **k: ("GROUP 1: MERGE no", None)
         try:
-            rules = d._stage_2_5_generate_merge_rules(concepts, [[0, 1]], config=object())
+            rules = d._dedup_generate_merge_rules(concepts, [[0, 1]], config=object())
         finally:
             d.call_anthropic_protocol = orig
         self.assertEqual(rules, [])
@@ -75,7 +75,7 @@ class TestLlmConfirmGate(unittest.TestCase):
         orig = d.call_anthropic_protocol
         d.call_anthropic_protocol = lambda *a, **k: ("GROUP 1: MERGE yes | PRIMARY: pao", None)
         try:
-            rules = d._stage_2_5_generate_merge_rules(concepts, [[0, 1]], config=object())
+            rules = d._dedup_generate_merge_rules(concepts, [[0, 1]], config=object())
         finally:
             d.call_anthropic_protocol = orig
         self.assertEqual(len(rules), 1)
@@ -101,7 +101,7 @@ class TestLlmConfirmGate(unittest.TestCase):
         orig = d.call_anthropic_protocol
         d.call_anthropic_protocol = _mock
         try:
-            rules = d._stage_2_5_generate_merge_rules(
+            rules = d._dedup_generate_merge_rules(
                 concepts, [[0, 1], [2, 3]], config=object())
         finally:
             d.call_anthropic_protocol = orig
@@ -119,7 +119,7 @@ class TestLlmConfirmGate(unittest.TestCase):
         orig = d.call_anthropic_protocol
         d.call_anthropic_protocol = _boom
         try:
-            rules = d._stage_2_5_generate_merge_rules(concepts, [[0, 1]], config=object())
+            rules = d._dedup_generate_merge_rules(concepts, [[0, 1]], config=object())
         finally:
             d.call_anthropic_protocol = orig
         self.assertEqual(rules, [])
@@ -136,12 +136,12 @@ class TestEntityDedup(unittest.TestCase):
             ("wiki/entities/billingsley.md", "---\ntitle: Billingsley\n---\nbody"),
             ("entities/j-b-billingsley.md", "---\ntitle: J. B. Billingsley\n---\nbody"),
         ]
-        entities = d._stage_2_5_extract_concept_blocks(file_blocks, folder="entities")
+        entities = d._dedup_extract_concept_blocks(file_blocks, folder="entities")
         self.assertEqual([e["slug"] for e in entities],
                          ["billingsley", "j-b-billingsley"])
         self.assertTrue(all(e["folder"] == "entities" for e in entities))
         # default folder still extracts concepts only
-        concepts = d._stage_2_5_extract_concept_blocks(file_blocks)
+        concepts = d._dedup_extract_concept_blocks(file_blocks)
         self.assertEqual([c["slug"] for c in concepts], ["pao"])
 
     def test_merge_rule_carries_pool_folder(self):
@@ -155,7 +155,7 @@ class TestEntityDedup(unittest.TestCase):
         d.call_anthropic_protocol = lambda *a, **k: (
             "GROUP 1: MERGE yes | PRIMARY: billingsley", None)
         try:
-            rules = d._stage_2_5_generate_merge_rules(entities, [[0, 1]], config=object())
+            rules = d._dedup_generate_merge_rules(entities, [[0, 1]], config=object())
         finally:
             d.call_anthropic_protocol = orig
         self.assertEqual(len(rules), 1)
@@ -174,7 +174,7 @@ class TestEntityDedup(unittest.TestCase):
             "duplicate_slugs": ["j-b-billingsley"], "merge_strategy": "union",
             "merge_reason": "test", "folder": "entities",
         }]
-        result = d._stage_2_5_apply_merge_rules(file_blocks, rules)
+        result = d._dedup_apply_merge_rules(file_blocks, rules)
         paths = [p for p, _ in result]
         self.assertEqual(paths, ["entities/billingsley.md", "concepts/clutter.md"])
         self.assertIn("[[billingsley]]", dict(result)["concepts/clutter.md"])
@@ -190,7 +190,7 @@ class TestEntityDedup(unittest.TestCase):
             "duplicate_slugs": ["marcum"], "merge_strategy": "union",
             "merge_reason": "test", "folder": "entities",
         }]
-        result = d._stage_2_5_apply_merge_rules(file_blocks, rules)
+        result = d._dedup_apply_merge_rules(file_blocks, rules)
         paths = [p for p, _ in result]
         self.assertIn("concepts/marcum.md", paths)      # concept survives
         self.assertNotIn("entities/marcum.md", paths)   # entity dup removed
@@ -213,15 +213,15 @@ class TestEntityDedup(unittest.TestCase):
             calls["n"] += 1
             return ("GROUP 1: MERGE yes | PRIMARY: billingsley", None)
 
-        orig_find = d._stage_2_5_find_duplicate_concepts
+        orig_find = d._dedup_find_duplicate_concepts
         orig_llm = d.call_anthropic_protocol
-        d._stage_2_5_find_duplicate_concepts = fake_find
+        d._dedup_find_duplicate_concepts = fake_find
         d.call_anthropic_protocol = fake_llm
         try:
-            result = d.stage_2_5_dedup(
+            result = d.dedup_intra_source(
                 file_blocks, [{"chunk": 1}, {"chunk": 2}], config=object())
         finally:
-            d._stage_2_5_find_duplicate_concepts = orig_find
+            d._dedup_find_duplicate_concepts = orig_find
             d.call_anthropic_protocol = orig_llm
         paths = [p for p, _ in result["file_blocks"]]
         self.assertNotIn("wiki/entities/j-b-billingsley.md", paths)
@@ -245,7 +245,7 @@ class TestApplyMergeRewritesWikilinks(unittest.TestCase):
             "duplicate_slugs": ["julinjun"], "merge_strategy": "union",
             "merge_reason": "test",
         }]
-        result = d._stage_2_5_apply_merge_rules(file_blocks, rules)
+        result = d._dedup_apply_merge_rules(file_blocks, rules)
         paths = [p for p, _ in result]
         self.assertEqual(paths, ["concepts/pao.md", "concepts/sibling.md"])
         sibling = dict(result)["concepts/sibling.md"]

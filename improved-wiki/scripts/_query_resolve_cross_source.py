@@ -33,7 +33,7 @@ from _dedup_embedding import cosine_similarity, embed_pages, DuplicatePrefilterE
 RESOLVE_COSINE_THRESHOLD = 0.70
 
 
-def _stage_2_8_extract_query_blocks(file_blocks):
+def _query_resolve_extract_query_blocks(file_blocks):
     queries = []
     for idx, (path, content) in enumerate(file_blocks):
         if "/queries/" in path or path.startswith("queries/"):
@@ -50,7 +50,7 @@ def _stage_2_8_extract_query_blocks(file_blocks):
     return queries
 
 
-def _stage_2_8_load_existing_pages(wiki_root):
+def _query_resolve_load_existing_pages(wiki_root):
     """Load existing concept/entity pages once (id namespaced by folder so a
     concept and entity sharing a stem don't collide in the embeddings dict)."""
     pages = []
@@ -79,14 +79,14 @@ def _stage_2_8_load_existing_pages(wiki_root):
     return pages
 
 
-def _stage_2_8_query_id(query):
+def _query_resolve_query_id(query):
     return "__query__" + query["slug"]
 
 
-def _stage_2_8_embed_existing_and_queries(existing_pages, queries, *, min_success_ratio=0.8):
+def _query_resolve_embed_existing_and_queries(existing_pages, queries, *, min_success_ratio=0.8):
     """Embed existing pages + query pages in one batched call. no-fallback:
     raises DuplicatePrefilterError if too few embed (mirrors candidate_pairs)."""
-    query_pages = [{"id": _stage_2_8_query_id(qy), "title": qy["title"],
+    query_pages = [{"id": _query_resolve_query_id(qy), "title": qy["title"],
                     "tags": [], "body": qy["body"]} for qy in queries]
     all_pages = existing_pages + query_pages
     embeddings = embed_pages(all_pages)
@@ -97,13 +97,13 @@ def _stage_2_8_embed_existing_and_queries(existing_pages, queries, *, min_succes
     return embeddings
 
 
-def _stage_2_8_find_related_wiki_pages(query, existing_pages, embeddings, top_k=8):
+def _query_resolve_find_related_wiki_pages(query, existing_pages, embeddings, top_k=8):
     """Cosine-rank existing pages against one query; return the top_k as
     (page_id, title, similarity) triples — NO threshold gate (audit A3: the
     old >=0.82 gate filtered out even the best real matches, so the judge
     never fired). The judge sees every top-k candidate and decides, defaulting
     to kept. Empty when the query failed to embed."""
-    qvec = embeddings.get(_stage_2_8_query_id(query))
+    qvec = embeddings.get(_query_resolve_query_id(query))
     if not qvec:
         return []
     scored = []
@@ -114,7 +114,7 @@ def _stage_2_8_find_related_wiki_pages(query, existing_pages, embeddings, top_k=
     return [(pid, title, sim) for sim, pid, title in scored[:top_k]]
 
 
-def _stage_2_8_batch_judge_prompt(judged):
+def _query_resolve_batch_judge_prompt(judged):
     """ONE prompt covering every query that has candidate pages (2026-07-02:
     N queries previously meant N sequential single-line judge handoffs, but the
     resolve step knows all queries upfront). One verdict line per query in a
@@ -150,7 +150,7 @@ _STAGE_2_8_VERDICT_RE = re.compile(
     re.IGNORECASE)
 
 
-def _stage_2_8_parse_batch_verdicts(response, expected_slugs):
+def _query_resolve_parse_batch_verdicts(response, expected_slugs):
     """Parse per-query verdict lines from the single batch response into
     {slug: (status, reason)}. Lenient on decoration (bullets, backticks,
     [[ ]], a queries/ prefix) but strict on the STATUS keyword; unknown slugs
@@ -170,7 +170,7 @@ def _stage_2_8_parse_batch_verdicts(response, expected_slugs):
     return verdicts
 
 
-def _stage_2_8_judge_queries_batch(judged, config):
+def _query_resolve_judge_queries_batch(judged, config):
     """Judge all candidate-bearing queries in ONE conversation handoff.
 
     Returns {slug: (status, reason)} covering every judged query. Defaults to
@@ -180,7 +180,7 @@ def _stage_2_8_judge_queries_batch(judged, config):
     if not judged:
         return {}
     slugs = [query["slug"] for query, _related in judged]
-    prompt = _stage_2_8_batch_judge_prompt(judged)
+    prompt = _query_resolve_batch_judge_prompt(judged)
     try:
         response, _ = call_anthropic_protocol(
             prompt, config, max_tokens=max(400, 120 * len(judged)),
@@ -189,7 +189,7 @@ def _stage_2_8_judge_queries_batch(judged, config):
         print("  [stage 2.7] LLM batch judge failed ({} queries): {} — "
               "defaulting ALL to kept".format(len(judged), e))
         return {slug: ("kept", "llm-unavailable") for slug in slugs}
-    verdicts = _stage_2_8_parse_batch_verdicts(response, slugs)
+    verdicts = _query_resolve_parse_batch_verdicts(response, slugs)
     results = {}
     for slug in slugs:
         if slug in verdicts:
@@ -201,13 +201,13 @@ def _stage_2_8_judge_queries_batch(judged, config):
     return results
 
 
-def stage_2_8_resolve_queries(file_blocks, wiki_root, config, *, embeddings=None):
+def query_resolve_cross_source(file_blocks, wiki_root, config, *, embeddings=None):
     resolutions = {}
-    queries = _stage_2_8_extract_query_blocks(file_blocks)
+    queries = _query_resolve_extract_query_blocks(file_blocks)
     if not queries:
         return resolutions
 
-    existing_pages = _stage_2_8_load_existing_pages(wiki_root)
+    existing_pages = _query_resolve_load_existing_pages(wiki_root)
     if not existing_pages:
         # Empty wiki: nothing to resolve against. Keep every query without
         # embedding (genuine no-op, not a fallback) — avoids a spurious raise
@@ -218,14 +218,14 @@ def stage_2_8_resolve_queries(file_blocks, wiki_root, config, *, embeddings=None
         return resolutions
 
     if embeddings is None:
-        embeddings = _stage_2_8_embed_existing_and_queries(existing_pages, queries)
+        embeddings = _query_resolve_embed_existing_and_queries(existing_pages, queries)
 
     # Batch judge (2026-07-02): every candidate-bearing query goes into ONE
     # handoff instead of N sequential single-line judge calls. Queries with no
     # candidates (failed embed) keep the kept short-circuit — nothing to judge.
     judged = []
     for query in queries:
-        related = _stage_2_8_find_related_wiki_pages(query, existing_pages, embeddings)
+        related = _query_resolve_find_related_wiki_pages(query, existing_pages, embeddings)
         if related:
             judged.append((query, related))
         else:
@@ -234,7 +234,7 @@ def stage_2_8_resolve_queries(file_blocks, wiki_root, config, *, embeddings=None
                 "reason": "no related wiki pages"}
             print("  [stage 2.7] query '{}' -> kept (no related wiki pages)".format(
                 query["slug"]))
-    verdicts = _stage_2_8_judge_queries_batch(judged, config)
+    verdicts = _query_resolve_judge_queries_batch(judged, config)
     for query, related in judged:
         status, reason = verdicts[query["slug"]]
         resolutions[query["slug"]] = {
@@ -249,7 +249,7 @@ def stage_2_8_resolve_queries(file_blocks, wiki_root, config, *, embeddings=None
     return resolutions
 
 
-def _stage_2_8_update_file_blocks_after_resolution(file_blocks, resolutions):
+def _query_resolve_update_file_blocks_after_resolution(file_blocks, resolutions):
     closed_slugs = {slug for slug, res in resolutions.items() if res["status"] == "closed"}
     result = []
     for path, content in file_blocks:
@@ -260,12 +260,12 @@ def _stage_2_8_update_file_blocks_after_resolution(file_blocks, resolutions):
     return result
 
 
-def _stage_2_8_apply_cross_refs(file_blocks, resolutions):
+def _query_resolve_apply_cross_refs(file_blocks, resolutions):
     """Write resolve conclusions back into kept query pages' frontmatter as a
     `cross_refs:` list (audit A3/H3: resolution_pages previously lived only in
     the progress cache — the on-disk query page carried no trace of the
     resolve step). Closed queries are already dropped by
-    _stage_2_8_update_file_blocks_after_resolution; queries with no
+    _query_resolve_update_file_blocks_after_resolution; queries with no
     above-threshold pages are left untouched (no empty cross_refs field).
     Returns a new list — never mutates the input blocks."""
     result = []
