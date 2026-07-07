@@ -89,6 +89,10 @@ CAPTION_SYSTEM_PROMPT = (
     "Describe what is drawn in your own words."
     "\n\nFormulas: transcribe as LaTeX ($inline$ / $$display$$), not Unicode "
     "subscripts or Greek letters (write x_1, \\eta, \\alpha — not x₁, η, α)."
+    "\n\n⚠️ IMPORTANT: ALL mathematical symbols, parameters, numbers, and "
+    "expressions in your caption MUST be wrapped in LaTeX ($...$). For "
+    "example: write $T=30$, $B=4$, $f_0=0$, $t=0$, $-20$ — NOT T=30, f₀, "
+    "t=0, -20. This is mandatory."
     "\n\nOutput format: plain text, 2-4 sentences, no markdown, no preamble, no numbering."
 )
 
