@@ -2,8 +2,8 @@
 """cross_source_dedup.py — 跨源去重 (cross-source dedup): lint-time, whole-wiki.
 
 Runs OFFLINE (user-invoked, not during ingest) across the ENTIRE wiki to merge
-duplicates that accumulated across multiple ingests. Distinct from Stage 2.5
-源内去重 (intra-source dedup, `_dedup_intra_source.py`) which is a conservative
+duplicates that accumulated across multiple ingests. Distinct from the in-source
+dedup 源内去重 (2.4 closing sub-step, ex-Stage 2.5, `_dedup_intra_source.py`) which is a conservative
 inline filter on one source's blocks before write. This module is thorough:
 backs up, writes a report, and rewrites all `[[wikilinks]]` + `related:`
 across the wiki so merges leave no broken links.

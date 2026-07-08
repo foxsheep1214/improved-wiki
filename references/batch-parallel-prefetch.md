@@ -37,7 +37,7 @@
 ## 实现机制（ingest.py）
 
 - **`--no-project-lock` 标志**：单文件路径跳过 `ProjectLock`。供后台 extract 子进程用——主 batch 持锁，bg 不能再 acquire（会死锁）。Phase 0/1 不写 wiki/，不需要锁。
-- **`_launch_bg_extract`**：用 `subprocess.Popen(start_new_session=True)` 启动 detached 子进程跑 `ingest.py --stop-after-stage 1 --no-project-lock <book>`。`start_new_session` 让它跨主 batch 的 ConversationPending exit 存活。
+- **`_launch_bg_extract`**：用 `subprocess.Popen(start_new_session=True)` 启动 detached 子进程跑 `ingest.py --stop-after-stage 0 --no-project-lock <book>`（"0" = Phase 1 完成后干净退出；旧值 "1" 的停靠点已随 Stage 2.1 移除，2026-07-08 改）。`start_new_session` 让它跨主 batch 的 ConversationPending exit 存活。
 - **`_wait_extract_done`**：主 batch 到达 book N 时，poll `is_stage_done(h, "stage_1_3_done")` 等 bg 跑完（book 1 是初始 minerU 等待；book 2+ 应已被前一本 spine 期间跑完）。
 - **bg-state 持久化**（`.llm-wiki/batch-bg.json`）：记录已启动的 bg PID。`_pid_alive` 检查 PID 存活——死了就重开，不死等。跨 handoff re-invoke 复用。
 - **stage 标记**：Phase 1 完成 = `stage_1_3_done`（不是 "1"）。
