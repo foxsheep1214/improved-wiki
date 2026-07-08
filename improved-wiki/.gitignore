@@ -3,3 +3,4 @@ output/
 __pycache__/
 .llm-wiki/
 .DS_Store
+.pytest_cache/
