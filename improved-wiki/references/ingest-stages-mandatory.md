@@ -182,7 +182,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ## Resume marker 粒度 ≠ stage 编号
 
-上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_1_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点）、`stage_2_3_done`（覆盖 2.3+2.4）、`stage_2_9_done`（覆盖 2.5/2.6/2.7/2.8/2.9 整段）、`write_loop_done`、`write_phase`、`ingested`（`ingest.py::_finalize_book` 所置的整书完成标记，非某个 stage 模块自己的标记；2026-07-08 从 `stage_4_1` 改名）。崩溃恢复是从**段边界**重启，不是逐 stage、逐 chunk。
+上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点；`stage_2_1_done` 已随 Stage 2.1 于 2026-07-08 移除——存量 stages.json 里残留的该 key 无害，代码不再读）、`stage_2_3_done`（覆盖 2.3+2.4）、`stage_2_9_done`（覆盖 2.5/2.6/2.7/2.8/2.9 整段）、`write_loop_done`、`write_phase`、`ingested`（`ingest.py::_finalize_book` 所置的整书完成标记，非某个 stage 模块自己的标记；2026-07-08 从 `stage_4_1` 改名）。崩溃恢复是从**段边界**重启，不是逐 stage、逐 chunk。
 
 **对未来"合并/拆分 stage"讨论的含义**：任何编号调整默认只是文档层 renumber-only，代码与 marker 不动；但有两条**载荷性边界**碰了就坏，不能移动：
 1. `stage_2_2_done | stage_2_3_done` —— wiki-独立/依赖分界；批量 prefetch 靠在这里精确停住（`raise PrepareStopAfter("1.5")`）才能让下一本书的 prefetch 并行跑。
