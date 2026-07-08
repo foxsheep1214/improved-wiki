@@ -126,10 +126,6 @@ _STAGE_2_6_EVIDENCE_ANCHOR_RE = re.compile(
     r"[\d.\-]+",
     re.IGNORECASE,
 )
-_STAGE_2_6_GENERIC_EVIDENCE_RE = re.compile(
-    r"(?:^Ch\.?\s*\d+$|^Chapter\s*\d+$|^this\s+(?:section|chapter)$|^§\s*\d+$)",
-    re.IGNORECASE,
-)
 
 
 def _stage_2_6_validate_evidence_quality(response: str) -> None:
@@ -162,14 +158,6 @@ def _stage_2_6_validate_evidence_quality(response: str) -> None:
             f"than reading the source text. Re-run Stage 2.6 (and check "
             f"Stage 2.2 chunk analyses for source_quotes and evidence anchors)."
         )
-    section = response[m.end():]
-    nxt = re.search(r"^##\s", section, re.MULTILINE)
-    if nxt:
-        section = section[:nxt.start()]
-    labels = len(_STAGE_2_6_CLAIM_LABEL_RE.findall(section))
-    if labels:
-        return labels
-    return len(re.findall(r"^(?:-|\*|\d+\.)\s+\S", section, re.MULTILINE))
 
 
 def _stage_2_6_validate_main_arguments(response: str, outline) -> None:

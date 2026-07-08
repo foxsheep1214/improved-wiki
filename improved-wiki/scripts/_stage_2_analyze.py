@@ -664,8 +664,12 @@ concepts_found:
 #      anchor: section number (§X.X), equation number (式(N) or Eq. (N)),
 #      figure number (Figure N / 图N.N), or table number (Table N).
 #      Generic evidence like "Ch.3" or "this section" is NOT acceptable —
-#      use the most specific anchor available.
+#      use the most specific anchor available. (Front-matter chunks — preface,
+#      TOC, colophon before chapter 1 — may cite the preface/section name when
+#      no numbered anchor exists in the text.)
 #   3. Minimum 3 claims per chunk (more for dense technical chapters).
+#      Exception: front-matter chunks (preface/TOC/colophon before chapter 1)
+#      need only 1 substantive claim.
 #   4. Claims must be falsifiable/actionable assertions (quantitative results,
 #      design rules, comparative verdicts, limits, mechanisms) — NOT scope
 #      descriptions or bare definitions.
@@ -755,7 +759,8 @@ def _stage_2_2_analyze_chunk(
     Returns analysis dict with keys: concepts_found, entities_found, claims,
     formulas, connections_to_existing_wiki, digest_updates, plus _chunk_index,
     _chunk_size, _attempts.
-    On failure: returns dict with chunk_index + error key.
+    On transient LLM failure: returns dict with chunk_index + error key.
+    On claim-quality failure (C1 gate): RAISES RuntimeError (see gate below).
     """
     prompt = _stage_2_2_build_prompt(
         chunk, chunk_idx, chunk_total, global_digest, file_path, config,
@@ -778,43 +783,12 @@ def _stage_2_2_analyze_chunk(
             dt = time.time() - t0
             n_c = len(analysis.get("concepts_found") or [])
             n_e = len(analysis.get("entities_found") or [])
-            n_claims = len(analysis.get("claims") or [])
-            # C1 (2026-07-08): validate claim quality — source_quotes present
-            # and claims have evidence anchors. Hard gate: forces the agent to
-            # read the source text rather than generate from domain knowledge.
-            _quotes = (analysis.get("source_quotes") or "").strip()
-            _claims = analysis.get("claims") or []
-            if not _quotes:
-                raise RuntimeError(
-                    f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: source_quotes "
-                    f"field is empty — you must quote 2-3 key sentences from the "
-                    f"source text to prove you read it before extracting claims."
-                )
-            if n_claims < 3:
-                raise RuntimeError(
-                    f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: only {n_claims} "
-                    f"claims (minimum 3 required) — read the source text more "
-                    f"deeply and extract more substantive claims with evidence anchors."
-                )
-            _no_anchor = [c for c in _claims
-                          if isinstance(c, dict)
-                          and not re.search(
-                              r"(?:§|Section|式|Eq|Figure|Fig|图|Table|表)\s*[\d.\-]+",
-                              str(c.get("evidence", "")), re.IGNORECASE)]
-            if _no_anchor and len(_no_anchor) / max(1, len(_claims)) > 0.5:
-                raise RuntimeError(
-                    f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: {len(_no_anchor)}/"
-                    f"{len(_claims)} claims lack specific evidence anchors "
-                    f"(§X.X, 式(N), Figure N) — claims must cite the exact "
-                    f"section/equation/figure from the source text, not generic "
-                    f"chapter references."
-                )
             tag = f" (retry #{attempt})" if attempt > 0 else ""
             print(f"  [chunk {chunk_idx+1}/{chunk_total}] analyze OK{tag} — "
                   f"{n_c} concepts, {n_e} entities, {dt:.0f}s")
             if verbose:
                 print(f"    response: {response[:500]}...")
-            return analysis
+            break  # success — exit retry loop; C1 gate runs below
 
         except Exception as e:
             if attempt < max_retries and _is_retryable_exception(e):
@@ -830,6 +804,51 @@ def _stage_2_2_analyze_chunk(
                 "chunk_index": chunk_idx + 1, "error": str(e),
                 "chunk_text_length": len(chunk), "_attempts": 1 + max_retries,
             }
+
+    # C1 (2026-07-08): claim quality hard gate — OUTSIDE the retry try/except
+    # so quality failures are NOT swallowed by the LLM-call exception handler
+    # (which only returns an error dict for transient/non-quality failures).
+    # Forces the agent to read the source text rather than generate from memory.
+    _quotes = (analysis.get("source_quotes") or "").strip()
+    _claims = analysis.get("claims") or []
+    n_claims = len(_claims)
+    # Front-matter chunks (preface/TOC/colophon before chapter 1) rarely yield
+    # 3 falsifiable technical claims or §X.X/式(N) anchors — relax the minimum
+    # to 1 and skip the evidence-anchor ratio gate for them. source_quotes is
+    # still required (proves the agent read the text). heading_path is resolved
+    # deterministically by _stage_2_2_resolve_chunk_heading_path, so the agent
+    # cannot game this label.
+    _is_front_matter = heading_path == _FRONT_MATTER_LABEL
+    _min_claims = 1 if _is_front_matter else 3
+    if not _quotes:
+        raise RuntimeError(
+            f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: source_quotes "
+            f"field is empty — you must quote 2-3 key sentences from the "
+            f"source text to prove you read it before extracting claims."
+        )
+    if n_claims < _min_claims:
+        raise RuntimeError(
+            f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: only {n_claims} "
+            f"claims (minimum {_min_claims} required"
+            f"{' for front-matter chunk' if _is_front_matter else ''}) — "
+            f"read the source text more deeply and extract more substantive "
+            f"claims with evidence anchors."
+        )
+    if not _is_front_matter:
+        _no_anchor = [c for c in _claims
+                      if isinstance(c, dict)
+                      and not re.search(
+                          r"(?:§|Section|式|Eq|Figure|Fig|图|Table|表)\s*[\d.\-]+",
+                          str(c.get("evidence", "")), re.IGNORECASE)]
+        if _no_anchor and len(_no_anchor) / max(1, len(_claims)) > 0.5:
+            raise RuntimeError(
+                f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: {len(_no_anchor)}/"
+                f"{len(_claims)} claims lack specific evidence anchors "
+                f"(§X.X, 式(N), Figure N) — claims must cite the exact "
+                f"section/equation/figure from the source text, not generic "
+                f"chapter references."
+            )
+    return analysis
 
 
 

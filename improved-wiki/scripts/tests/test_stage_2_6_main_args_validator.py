@@ -112,5 +112,40 @@ class ValidatorHardGate(unittest.TestCase):
             "## Main Arguments\n\n" + body, [{"no_title": True}, 42])
 
 
+class EvidenceQualityGate(unittest.TestCase):
+    """C1 (2026-07-08): evidence-anchor quality hard gate."""
+
+    def _page(self, body: str) -> str:
+        return (
+            "## Main Arguments & Findings\n\n" + body + "\n"
+            "## Connections to Existing Wiki\n\n- [[concepts/foo]]\n"
+        )
+
+    def test_raises_when_majority_of_evidence_lacks_anchors(self):
+        body = (
+            "- **Claim:** a.\n  - **Evidence:** Ch.3\n"
+            "- **Claim:** b.\n  - **Evidence:** this section\n"
+            "- **Claim:** c.\n  - **Evidence:** Ch.7\n"
+        )
+        with self.assertRaises(RuntimeError) as cm:
+            s26._stage_2_6_validate_evidence_quality(self._page(body))
+        self.assertIn("evidence quality LOW", str(cm.exception))
+
+    def test_silent_when_evidence_has_specific_anchors(self):
+        body = (
+            "- **Claim:** a.\n  - **Evidence:** §2.3.4\n"
+            "- **Claim:** b.\n  - **Evidence:** 式(3.6)\n"
+            "- **Claim:** c.\n  - **Evidence:** Figure 4.2\n"
+        )
+        s26._stage_2_6_validate_evidence_quality(self._page(body))
+
+    def test_silent_when_too_few_evidence_lines_to_judge(self):
+        body = "- **Claim:** a.\n  - **Evidence:** Ch.3\n"
+        s26._stage_2_6_validate_evidence_quality(self._page(body))
+
+    def test_silent_when_no_main_arguments_section(self):
+        s26._stage_2_6_validate_evidence_quality("## Book Summary\n\nhi\n")
+
+
 if __name__ == "__main__":
     unittest.main()
