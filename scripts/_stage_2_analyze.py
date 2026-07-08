@@ -655,9 +655,36 @@ concepts_found:
 #   - If the chunk covers multiple topics, list each topic as a SEPARATE concept
 #   - Use the actual technical term from the book, not a generic description
 
+# ⚠️  CLAIM EXTRACTION RULES (CRITICAL — violating these causes a hard gate
+# failure that pauses the ingest):
+#   1. READ the <extracted_text> for THIS chunk before listing claims.
+#      Do NOT generate claims from domain knowledge or memory — every claim
+#      must be grounded in text you actually read in this chunk.
+#   2. EVERY claim MUST have an evidence field citing a SPECIFIC source-text
+#      anchor: section number (§X.X), equation number (式(N) or Eq. (N)),
+#      figure number (Figure N / 图N.N), or table number (Table N).
+#      Generic evidence like "Ch.3" or "this section" is NOT acceptable —
+#      use the most specific anchor available.
+#   3. Minimum 3 claims per chunk (more for dense technical chapters).
+#   4. Claims must be falsifiable/actionable assertions (quantitative results,
+#      design rules, comparative verdicts, limits, mechanisms) — NOT scope
+#      descriptions or bare definitions.
+#   5. Before listing claims, quote 2-3 key sentences from the source text
+#      that you read (verbatim, with their section/equation anchor) to prove
+#      you grounded them in the actual text. Place these quotes in the
+#      `source_quotes` field below.
+
+source_quotes: |
+  # 2-3 verbatim key sentences from THIS chunk's source text, with their
+  # section/equation/figure anchor. This proves you read the text before
+  # extracting claims. Example:
+  # §2.3.4: "The Barker code of length 13 provides optimal peak sidelobe
+  # level of -1/N for code length N."
+  # 式(3.6): "Modulating waveform = exp(j*pi*tau*B*t^2)"
+
 claims:
   - claim: "..."
-    evidence: "..."
+    evidence: "§X.X or 式(N) or Figure N — specific source-text anchor (NOT generic chapter ref)"
     confidence: "high" | "medium" | "low"
     table_ref: "Table N or Figure N"   # for datasheets: REQUIRED; for books: omit if no table source
     page_ref: "p.NN"                   # for datasheets: REQUIRED; for books: omit if not applicable
@@ -751,6 +778,37 @@ def _stage_2_2_analyze_chunk(
             dt = time.time() - t0
             n_c = len(analysis.get("concepts_found") or [])
             n_e = len(analysis.get("entities_found") or [])
+            n_claims = len(analysis.get("claims") or [])
+            # C1 (2026-07-08): validate claim quality — source_quotes present
+            # and claims have evidence anchors. Hard gate: forces the agent to
+            # read the source text rather than generate from domain knowledge.
+            _quotes = (analysis.get("source_quotes") or "").strip()
+            _claims = analysis.get("claims") or []
+            if not _quotes:
+                raise RuntimeError(
+                    f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: source_quotes "
+                    f"field is empty — you must quote 2-3 key sentences from the "
+                    f"source text to prove you read it before extracting claims."
+                )
+            if n_claims < 3:
+                raise RuntimeError(
+                    f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: only {n_claims} "
+                    f"claims (minimum 3 required) — read the source text more "
+                    f"deeply and extract more substantive claims with evidence anchors."
+                )
+            _no_anchor = [c for c in _claims
+                          if isinstance(c, dict)
+                          and not re.search(
+                              r"(?:§|Section|式|Eq|Figure|Fig|图|Table|表)\s*[\d.\-]+",
+                              str(c.get("evidence", "")), re.IGNORECASE)]
+            if _no_anchor and len(_no_anchor) / max(1, len(_claims)) > 0.5:
+                raise RuntimeError(
+                    f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total}: {len(_no_anchor)}/"
+                    f"{len(_claims)} claims lack specific evidence anchors "
+                    f"(§X.X, 式(N), Figure N) — claims must cite the exact "
+                    f"section/equation/figure from the source text, not generic "
+                    f"chapter references."
+                )
             tag = f" (retry #{attempt})" if attempt > 0 else ""
             print(f"  [chunk {chunk_idx+1}/{chunk_total}] analyze OK{tag} — "
                   f"{n_c} concepts, {n_e} entities, {dt:.0f}s")

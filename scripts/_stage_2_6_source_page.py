@@ -117,19 +117,83 @@ def _stage_2_6_main_arguments_count(response: str) -> int:
     return len(re.findall(r"^(?:-|\*|\d+\.)\s+\S", section, re.MULTILINE))
 
 
+# Evidence-anchor quality check (C1, 2026-07-08): verify that Main Arguments
+# claims cite SPECIFIC source-text anchors (§X.X, 式(N), Figure N, Table N),
+# not just generic chapter references ("Ch.7"). Generic evidence like "Ch.3"
+# or "this section" is a sign the agent didn't read the source text deeply.
+_STAGE_2_6_EVIDENCE_ANCHOR_RE = re.compile(
+    r"(?:§|Section\s|式\s*\(|Eq\.?\s*\(|Equation\s|Figure\s|Fig\.?\s|图\s|Table\s|表\s)"
+    r"[\d.\-]+",
+    re.IGNORECASE,
+)
+_STAGE_2_6_GENERIC_EVIDENCE_RE = re.compile(
+    r"(?:^Ch\.?\s*\d+$|^Chapter\s*\d+$|^this\s+(?:section|chapter)$|^§\s*\d+$)",
+    re.IGNORECASE,
+)
+
+
+def _stage_2_6_validate_evidence_quality(response: str) -> None:
+    """Hard gate (C1, 2026-07-08): check that Main Arguments claims have
+    specific evidence anchors (§X.X, 式(N), Figure N), not just generic
+    chapter references. If >50% of evidence entries lack specific anchors,
+    RAISE — the agent likely generated claims from domain knowledge rather
+    than reading the source text."""
+    m = _STAGE_2_6_MAIN_ARGS_HEADING_RE.search(response)
+    if not m:
+        return
+    section = response[m.end():]
+    nxt = re.search(r"^##\s", section, re.MULTILINE)
+    if nxt:
+        section = section[:nxt.start()]
+    # Extract evidence lines (indented **Evidence:** or - Evidence:)
+    evidence_lines = re.findall(
+        r"(?:\*\*)?Evidence(?:\*\*)?\s*[:：]\s*(.+)", section, re.IGNORECASE
+    )
+    if len(evidence_lines) < 3:
+        return  # Too few to judge
+    anchored = sum(1 for ev in evidence_lines if _STAGE_2_6_EVIDENCE_ANCHOR_RE.search(ev))
+    ratio = anchored / len(evidence_lines) if evidence_lines else 0
+    if ratio < 0.5:
+        raise RuntimeError(
+            f"Stage 2.6 Main Arguments evidence quality LOW: {anchored}/"
+            f"{len(evidence_lines)} evidence entries have specific anchors "
+            f"(§X.X, 式(N), Figure N) — {ratio:.0%} < 50% threshold. "
+            f"The agent likely generated claims from domain knowledge rather "
+            f"than reading the source text. Re-run Stage 2.6 (and check "
+            f"Stage 2.2 chunk analyses for source_quotes and evidence anchors)."
+        )
+    section = response[m.end():]
+    nxt = re.search(r"^##\s", section, re.MULTILINE)
+    if nxt:
+        section = section[:nxt.start()]
+    labels = len(_STAGE_2_6_CLAIM_LABEL_RE.findall(section))
+    if labels:
+        return labels
+    return len(re.findall(r"^(?:-|\*|\d+\.)\s+\S", section, re.MULTILINE))
+
+
 def _stage_2_6_validate_main_arguments(response: str, outline) -> None:
-    """Post-generation stage validator (A9): warn — never raise — when the
+    """Post-generation hard gate (A9, upgraded 2026-07-08): RAISE when the
     claim ledger has fewer entries than technical chapters (coverage target:
-    every technical chapter surfaces ≥1 claim, per the prompt's own rule)."""
+    every technical chapter surfaces ≥1 claim, per the prompt's own rule).
+
+    Previously warn-only — but warns were ignored by the agent, producing
+    thin Main Arguments (7-11 claims for 10-16 chapter books). Now a hard
+    gate: insufficient claims pause the ingest for re-generation."""
     chapters = _stage_2_6_technical_chapter_count(outline)
     if chapters <= 0:
         return
     entries = _stage_2_6_main_arguments_count(response)
     if entries < chapters:
-        print(f"  [stage 2.6][WARN] Main Arguments coverage LOW: {entries} "
-              f"claim entr{'y' if entries == 1 else 'ies'} < {chapters} "
-              f"technical chapter(s) — claim ledger may be under-sampled "
-              f"(check chunk-claims injection / source front-truncation)")
+        raise RuntimeError(
+            f"Stage 2.6 Main Arguments coverage LOW: {entries} "
+            f"claim entr{'y' if entries == 1 else 'ies'} < {chapters} "
+            f"technical chapter(s) — the claim ledger is under-sampled. "
+            f"Re-run Stage 2.6 ensuring ≥1 claim per technical chapter, "
+            f"each with a specific evidence anchor (§X.X, 式(N), Figure N). "
+            f"Check that Stage 2.2 chunk analyses produced sufficient claims "
+            f"with source-text evidence."
+        )
 
 
 # ── A10 (2026-07-06): required-section presence guard ──────────────────────
@@ -366,20 +430,27 @@ Wikilink each entity to its slug.
 
 The book's core claims, results, or design rules — this section is the wiki's
 claim ledger (it feeds overview Strong/Weak claims, contradiction review, and
-query grounding), so it must be COMPLETE, not sampled:
-- Include **EVERY substantive claim** from the full-book per-chunk claims list
-  above, deduplicating near-identical claims repeated across chunk overlaps
-  (keep the best-evidenced version).
-- **Substantive** = a falsifiable or actionable assertion: a quantitative
-  result, design rule, comparative verdict, limit, or mechanism explanation.
-  NOT substantive: chapter-scope descriptions, bare definitions, restatements.
-  YOU judge each claim against this test — no numeric quota either way.
-- Coverage check: every technical chapter should surface ≥1 claim; if a
-  chapter yields none, that must be because it genuinely asserts nothing
-  (e.g. pure front matter), never because it was skipped.
+query grounding), so it must be COMPLETE, not sampled.
+
+# ⚠️  MAIN ARGUMENTS RULES (CRITICAL — a hard gate checks claim count and
+# evidence quality; insufficient claims will RAISE and pause the ingest):
+#   1. Include **EVERY substantive claim** from the "Claims from per-chunk
+#      analysis" list above. Do NOT summarize, merge, or drop claims.
+#   2. Each claim MUST retain its evidence anchor (§X.X, 式(N), Figure N).
+#      Claims without specific evidence anchors will cause a HARD GATE failure.
+#   3. Minimum: 1 claim per technical chapter in the outline. A 10-chapter
+#      book must have ≥10 claims. A 15-chapter book must have ≥15.
+#   4. Claims must be falsifiable/actionable (quantitative results, design
+#      rules, comparative verdicts, limits, mechanisms) — NOT scope
+#      descriptions or bare definitions.
+#   5. Deduplicate near-identical claims across chunk overlaps (keep the
+#      best-evidenced version), but do NOT drop unique claims to save space.
+
 For EACH:
 - **Claim:** the assertion (one sentence).
-- **Evidence:** which chapter / case / equation supports it.
+- **Evidence:** which chapter / section / equation / figure supports it —
+  cite the MOST SPECIFIC anchor available (§7.5.1, 式(10.13), Figure 3.26),
+  NOT just "Ch.7".
 - **Strength:** high / medium / low.
 - **Subject:** which entity or concept the claim attaches to — do NOT transfer claims, limits, or evaluations from one subject to another just because they share keywords.
 
@@ -590,6 +661,7 @@ venue: {venue_yaml}
         related_fallback=(_gen_c + _gen_e),
     )
     _stage_2_6_validate_main_arguments(response, outline)
+    _stage_2_6_validate_evidence_quality(response)
     _stage_2_6_validate_required_sections(response, source_kind)
     if verbose:
         print(f"[stage 2.6] Source page generated ({len(response):,} chars, stop={stop_reason})")
