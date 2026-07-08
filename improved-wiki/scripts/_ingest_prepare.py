@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from _core import (
@@ -31,7 +30,6 @@ from _stage_1_extract import (
 from _frontmatter import extract_frontmatter_title
 from _frontmatter_array import parse_frontmatter_array
 from _stage_1_3_caption import _stage_1_3_inline_captions
-from _stage_2_analyze import stage_2_1_global_digest
 from _stage_2_6_source_page import stage_2_6_source_page
 from _stage_2_7_query_generation import stage_2_7_query_generation
 from _stage_2_9_comparison import (
@@ -41,7 +39,6 @@ from _stage_2_9_comparison import (
 from _stage_validators import (
     verify_stage_0,
     StageValidationError,
-    _verify_stage_2_1_digest,
     _verify_stage_2_4_file_blocks,
 )
 from _ingest_skip import _stage_0_2_should_skip, _stop_after_stage

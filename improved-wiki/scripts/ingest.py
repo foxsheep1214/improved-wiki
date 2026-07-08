@@ -86,8 +86,6 @@ from _stage_1_extract import (
     CAPTION_MAX_WORKERS,
 )
 from _stage_2_analyze import (
-    stage_2_1_global_digest,
-    _stage_2_1_chunk_text,
     _stage_2_2_analyze_chunk,
     _stage_2_2_chunk_retries,
     _stage_2_2_resolve_chunk_heading_path,

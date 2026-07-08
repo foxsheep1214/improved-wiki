@@ -22,7 +22,7 @@ improved-wiki 流水线 = **17 个 active Stage（含 Phase 0 前置门，跨 4 
 | 1.1 | `stage_1_1_extract_text` | 文本提取（minerU hybrid-engine，所有 PDF 统一） |
 | 1.2 | `stage_1_2_extract_images` | 图片提取（融进 1.1 chunk 处理） |
 | 1.3 | `stage_1_3_caption_images` | 图片 caption（VLM，configurable provider） |
-| 2.1 | `stage_2_1_global_digest` | 全局摘要 |
+| 2.1 | _(已移除，对齐 NashSU)_ | 原 Global Digest（并入 2.2 滚动） |
 | 2.2 | `_stage_2_2_analyze_chunk` | 逐 chunk 分析（**全部 chunk 分析完**再进入 2.3） |
 | 2.3 | `stage_2_3_*`（`_stage_2_3_incremental.py`） | 已存在 wiki 关联检测（在 2.2 与 2.4 之间，读 wiki） |
 | 2.4 | `_stage_2_4_generate_*` + `_dedup_intra_source.py` | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发）+ 源内概念去重收尾（embedding 语义初筛 cosine≥0.82 + LLM 确认，多 chunk；无回退） |
@@ -90,14 +90,16 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ## Phase 2：Analysis & Generation
 
-### Stage 2.1 · Global Digest
-- **作用**：1 次 LLM 调用，喂整本 PDF + schema + index，输出 6 块结构化 YAML：`book_meta`/`outline`/`key_entities`/`key_concepts`/`key_claims`/`chunk_plan`。
-- **产物**：progress checkpoint 中的 global digest。
-- **go/no-go**：`stages.global_digest_keys ≥ 1`。
+### Stage 2.1 · Global Digest（已移除，对齐 NashSU，2026-07-08）
+- **原作用**：整本单次 LLM → 6 块结构化 YAML digest，作 2.2 逐 chunk 分析的整本先验。
+- **为什么去掉**：NashSU 的 globalDigest 是逐 chunk **过程中滚动产生**（初始空，每 chunk 产出 "Updated Global Digest" 合并），**无独立整本 digest 先验**。improved-wiki 2.2 已有滚动机制（`updated_global_digest` → `accumulated_digest`），原 2.1 只给 accumulated 种子。去掉 2.1 后 2.2 纯滚动（初始空），对齐 NashSU。
+- **影响**：2.4/2.6/2.7/2.9 的 `global_digest` 数据源从 2.1 改为 2.2 滚动最终值（`_run_chunk_pipeline` 返回 5 元组含 `global_digest`）。`stage_2_1_done` marker 去掉（已消化书 stages.json 残留无害，代码不再读）。`_verify_stage_2_1_digest` 迁移到 2.2 完成后校验滚动最终 digest。`_stage_2_1_global_digest` / `_stage_2_1_build_prompt` 已作为 dead code 清理；`_stage_2_1_chunk_text`（切块函数）保留供 2.2 用。
 
 ### Stage 2.2 · Chunk Analysis
-- **作用**：对源文本切块分析（**永远不能跳**）。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`formulas`/`connections_to_existing_wiki`/`digest_updates`。
-- **go/no-go**：`stages.chunks_analyzed ≥ 1`。
+- **作用**：对源文本切块分析（**永远不能跳**）。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`formulas`/`connections_to_existing_wiki`/`digest_updates`/`updated_global_digest`。
+- **NashSU 对齐（2026-07-08）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 2.4/2.6/2.7/2.9。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），首 chunk 建立 book_meta+outline。
+- **per-chunk subagent 隔离**：保留（7/8 事故政策，见 `conversation-mode-agent-workflow.md`）——主对话滚动 `accumulated_digest`，每 chunk fresh subagent 答单 chunk。
+- **go/no-go**：`stages.chunks_analyzed ≥ 1`；2.2 完成后 `_verify_stage_2_1_digest` 校验滚动最终 digest 5 字段（`not analyze_only` 时）。
 
 ### Stage 2.4 · Generation（single-pass pipeline）
 - **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再逐 chunk 生成概念/实体页（源锚定；≤1 chunk 走单发）。**不是** analyze→generate 逐 chunk 交错——全部分析在前，生成在后（2.3 夹在中间，需要全量分析结果）。默认生成 source/concept/entity；若 `schema.md` 声明了额外 typed 文件夹（NashSU schema 驱动路由），LLM 可把贴切的页路由进去（人物→people/、方法→methods/ 等），写盘阶段会接受这些 schema 文件夹。

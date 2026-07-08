@@ -127,16 +127,6 @@ class TestD2GranularitySwitch(unittest.TestCase):
         ):
             self.assertEqual(analyze._stage_2_2_granularity_block(digest), "")
 
-    def test_stage_2_1_prompt_asks_for_granularity(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-            (cfg.raw_root / "Book").mkdir(parents=True, exist_ok=True)
-
-            prompt = analyze._stage_2_1_build_prompt(
-                "text", cfg.raw_root / "Book" / "b.pdf", cfg)
-
-            self.assertIn('granularity: "textbook" | "manual"', prompt)
-
     def test_stage_2_2_prompt_conditional_injection(self):
         with tempfile.TemporaryDirectory() as d:
             cfg = _make_config(Path(d))
