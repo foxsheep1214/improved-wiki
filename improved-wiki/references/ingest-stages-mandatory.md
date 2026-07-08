@@ -17,7 +17,7 @@ improved-wiki 流水线 = **16 个 active Stage（含 Phase 0 前置门，跨 4 
 
 | Stage | 代码函数 | 说明 |
 |-------|---------|------|
-| 0.1 | `normalize_raw_names.py --check` | raw 命名规范检查（前置门） |
+| 0.1 | `stage_0_1_check_file`（`_do_prepare` 内置，2026-07-08 接入；批量修复用 CLI `--check/--fix`） | raw 命名规范检查（前置门） |
 | 0.2 | 源页存在性检查 | 源页去重（`wiki/sources/<rel>.md`） |
 | 1.1 | `stage_1_1_extract_text` | 文本提取（minerU hybrid-engine，所有 PDF 统一） |
 | 1.2 | `stage_1_2_extract_images` | 图片提取（融进 1.1 chunk 处理） |

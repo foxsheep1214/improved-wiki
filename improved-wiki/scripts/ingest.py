@@ -241,7 +241,7 @@ def ingest_one(
     template_name = prepared["template_name"]
 
     # Check stop-after-stage (best-effort; _do_prepare runs all of Stage 0-2)
-    for stage_check in ("0", "0.5", "0.6", "1", "1.5", "2.0", "2", "2.3", "2.5"):
+    for stage_check in ("0", "1.5", "2.0", "2"):
         if _should_stop_after(config, stage_check, {"status": "ok"}):
             return {"status": "ok", "stopped_after": stage_check}
 
@@ -309,8 +309,12 @@ def _launch_bg_extract(file: Path, config: Config, state: dict) -> None:
         return  # already running
     # stale entry (dead pid) or new — (re)launch
     log_path = config.runtime_dir / f"bg-extract-{h[:8]}.log"
+    # "0" = clean exit after Phase 1 (extract+caption), exit 0. The old value
+    # "1" (stop after the former Stage 2.1 digest) lost its check site when
+    # 2.1 was removed 2026-07-08 — a bg process passing it would run into the
+    # 2.2 chunk pipeline and die at the first LLM handoff instead.
     cmd = [sys.executable, str(_script_dir / "ingest.py"),
-           "--stop-after-stage", "1", "--no-project-lock", str(file)]
+           "--stop-after-stage", "0", "--no-project-lock", str(file)]
     try:
         log = open(log_path, "w", encoding="utf-8")
     except OSError:
@@ -497,11 +501,12 @@ def main() -> int:
     parser.add_argument(
         "--stop-after-stage",
         default=None,
-        choices=["0", "0.5", "0.6", "1", "1.5", "2", "2.0", "2.3", "2.5", "2.5c", "3", "3.5", "4"],
+        choices=["0", "1.5", "2", "2.0"],
         help="Stop pipeline after completing the named stage (clean exit, cache saved). "
              "Use for chunked runs to avoid Bash timeout. "
-             "Stages: 0=text+image extract, 1=global digest, 1.5=chunk analysis, "
-             "2=concept/entity gen, 2.5=review, 3=write+merge+enrich",
+             "Stops: 0=Phase 1 done (extract+images+captions), 1.5=Stage 2.2 chunk "
+             "analysis done (prefetch boundary), 2/2.0=generation done (before write). "
+             "(Legacy ids 0.5/0.6/1/2.3/2.5/3/… retired — their check sites are gone.)",
     )
     parser.add_argument(
         "--no-project-lock", action="store_true",

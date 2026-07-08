@@ -261,7 +261,7 @@ def _dedup_apply_merge_rules(file_blocks, merge_rules):
 
 
 def dedup_intra_source(file_blocks, chunk_analyses, config, *, verbose: bool = False) -> dict:
-    """Stage 2.5: In-source concept dedup & merge (multi-chunk books only).
+    """In-source concept dedup & merge (2.4 closing sub-step, ex-Stage 2.5; multi-chunk books only).
 
     Runs before the source page so the index lists de-duplicated concepts.
     Single-chunk sources skip dedup. Returns a dict with the new file_blocks,

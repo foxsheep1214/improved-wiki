@@ -818,7 +818,7 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
     or vlm-engine could be forced, but hybrid-engine is the verified default
     (see stage_1_1_extract_text docstring for the rationale).
 
-    Splits PDF into ~50-page chunks. Each chunk runs minerU independently.
+    Splits PDF into MINERU_CHUNK_SIZE-page chunks. Each chunk runs minerU independently.
     Results persisted to extract_tmp_dir/<stem>/ with _mineru_stats.json for crash recovery.
     Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.2 (mirrors raw/).
 

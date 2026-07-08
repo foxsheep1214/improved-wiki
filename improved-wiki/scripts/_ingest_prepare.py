@@ -436,7 +436,7 @@ def _do_prepare(
                   f"clean exit (--stop-after-stage=2)")
             raise PrepareStopAfter("2")
 
-        # ── Stage 2.5–2.9 tail: dedup → source page → queries → resolve → comparisons ──
+        # ── Generation tail (2.4 收尾→2.9): dedup → source page → queries → resolve → comparisons ──
         # Cached as ONE segment under stage_2_9_done. 2.8 (LLM judge) and 2.9
         # (LLM comparison generation) can fire ConversationPending; without this
         # cache a resume would re-run the whole tail from 2.5. On cache hit,
