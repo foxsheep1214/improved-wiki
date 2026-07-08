@@ -139,9 +139,9 @@ captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_la
 3 次重试后，自动切到 `caption_fallback_provider` 再试 3 次，每次切换打一行日志
 （`_stage_1_3_caption_one_image_with_failover`，见上方 Architecture）。远程端点
 支持真并行，但智谱 GLM-5v-turbo 免费档限流紧——默认 `CAPTION_MAX_WORKERS=4`
-（12 会触发 429，见下方"限流"节）。付费/高频账号可调高；fallback 命中的图不受
-此并发上限的"专属"约束，因为它复用同一个线程池槽位（见下方"并发：本地 provider
-需要单独限流吗"）。
+（12 会触发 429，见下方"限流"节）。付费/高频账号可调高；fallback（本地）命中的图
+**不受此并发上限约束，而是代码强制一张一张来**（见下方"并发：本地 fallback
+provider 严格串行"）。
 
 ```json
 // ~/.agents/config.json
@@ -188,19 +188,23 @@ key 直接写文件（`~/.agents/config.json` 权限 600、不进 git）。
 
 ⚠️ **限流：必须降并发**。智谱 GLM 端点对并发敏感，`CAPTION_MAX_WORKERS=12`（旧默认）会触发 `HTTP 429: Too Many Requests`——代码重试 3 次（1s/2s/4s 退避）全落在限流窗口内，连续 3 张失败触发 `CONSECUTIVE_FAIL_PAUSE=3` 硬停（防静默降级策略）。实测 Wehner 书 12 并发跑出 39 个 429 占位 + 78 张没跑到。**代码默认已降为 `CAPTION_MAX_WORKERS=4`**（2026-07-07），降到 4 后 Wehner 书 117 张 pending 全部成功（0 占位）。Sidecar 是 cache，重跑只处理 pending（`[待重试]` 占位 + 缺失），已成功的跳过。若 4 仍 429（限流窗口期/账号日配额耗尽）：2026-07-08 起**不必再手动改并发或切 provider**——配好 `caption_fallback_provider` 后，429 耗尽 primary 重试即自动切本地 Ollama，一行日志记录切换。仍可手动降到 1 排查（详见下节）。
 
-## 并发：本地 fallback provider 需要单独限流吗？
+## 并发：本地 fallback provider 严格串行（`_FALLBACK_SEMAPHORE`，2026-07-08）
 
-不需要——**没有独立的"本地批量"机制，也不需要一个**。`CAPTION_MAX_WORKERS`
-是一个作用于整个线程池的全局并发上限（默认 4），不是"某个 provider 专属"的配额；
-一张图落到 primary 还是 fallback 是运行时才决定的（primary 失败才 failover），
-线程池不会因为某张图 failover 就临时开更多线程。`CAPTION_MAX_WORKERS=4` 这个默认值
-本来就是为智谱云端限流设的（`_stage_1_3_caption.py` 顶部常量注释也留了一句：本地
-单实例服务器场景可以设 `CAPTION_MAX_WORKERS=1`），云端限流的理由（HTTP 429 配额）
-对本地 Ollama 不成立——本地约束是硬件吞吐：Ollama 默认单模型单请求串行处理
-（除非服务端设了 `OLLAMA_NUM_PARALLEL` 开多槽位），并发发 4 个请求只会在 Ollama
-自己的队列里排队，不会真并行，但也不会出错——多余的并发只是空转，不影响正确性。
-**结论**：保持默认 `CAPTION_MAX_WORKERS=4` 即可，failover 到本地时这批并发请求
-自然排队消化；除非发现本地服务器在高并发下不稳定（OOM/超时），才需要专门调低。
+fallback（本地 Ollama）调用**代码强制一张一张来**，与 primary 的并发无关——
+`_stage_1_3_caption.py` 顶部一个进程级 `threading.Semaphore(1)`，
+`_stage_1_3_caption_one_image_with_failover` 里只把非 primary 的调用包在这把信号量里。
+primary 仍按 `CAPTION_MAX_WORKERS`（默认 4）并发；同一批里多张图同时 failover 到本地时，
+后到的线程会在信号量上排队等，日志打一行 `waiting for the fallback provider ... — one
+image at a time`，等前一张本地 caption 做完才轮到。
+
+**为什么不像 primary 一样吃 `CAPTION_MAX_WORKERS`**：`CAPTION_MAX_WORKERS=4` 这个默认值
+是为智谱云端限流设的（HTTP 429 配额），对本地 Ollama 不成立——本地约束是硬件吞吐。
+Ollama 默认单模型单请求串行处理（除非服务端设了 `OLLAMA_NUM_PARALLEL` 开多槽位，本
+skill 不假设），并发发多个请求本来就只会在 Ollama 自己的队列里堆着、不会真并行；
+用客户端信号量显式串行化，比让 4 个线程都卡在同一个单线程本地推理队列上更干净，
+也避免真发生过的空响应/思考块泄漏这类本地模型高负载下的输出质量问题。
+无需手动设 `CAPTION_MAX_WORKERS=1`——那样会连 primary 的正常并发也一起拖慢，
+现在是 primary/fallback 各自独立限流，互不影响。
 
 ## 历史 caption「解析失败」可重试修复
 

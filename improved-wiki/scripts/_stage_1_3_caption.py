@@ -42,6 +42,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -61,9 +62,20 @@ from _paths import atomic_write  # noqa: E402
 # per image), so threads give real speedup. 12 (the former default) overruns the
 # GLM-5v-turbo free-tier rate limit and trips HTTP 429 after ~3 images; 4 stays
 # under it while still parallelizing. Override per run with the
-# CAPTION_MAX_WORKERS env var (e.g. set to 1 for a local single-instance server
-# that serializes vision inference, or back up to 12 on a paid/higher-limit tier).
+# CAPTION_MAX_WORKERS env var. This cap applies to the PRIMARY provider only —
+# see _FALLBACK_SEMAPHORE below for why the fallback provider is not scaled by it.
 CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "4"))
+
+# The fallback provider (2026-07-08 failover, typically a local single-instance
+# server like Ollama) gets exactly ONE concurrent call, independent of
+# CAPTION_MAX_WORKERS: unlike GLM's cloud endpoint, a local model has no real
+# parallel capacity — Ollama serializes inference per model unless the server
+# is explicitly configured with OLLAMA_NUM_PARALLEL, which this skill does not
+# assume. Sending it 4 concurrent requests wouldn't error, but would only
+# queue at the server (see image-caption-strategy.md "并发：本地 fallback
+# provider 需要单独限流吗"). Serializing client-side avoids piling up threads
+# that are all just waiting on the same single-threaded local inference queue.
+_FALLBACK_SEMAPHORE = threading.Semaphore(1)
 
 # How many chars of before/after body text to pass as anchoring context.
 # NashSU parity (image-caption-pipeline.ts CONTEXT_CHARS): NashSU tuned this
@@ -678,11 +690,25 @@ def _stage_1_3_caption_one_image_with_failover(
     see how often the primary is failing. The no-silent-fallback boundary is
     unchanged — if every configured provider fails, the caller still treats
     this as a failure (placeholder / circuit-breaker / final raise).
+
+    Non-primary (fallback) calls are serialized process-wide via
+    _FALLBACK_SEMAPHORE — one image at a time, regardless of how many primary
+    calls are running concurrently (see the constant's comment for why).
     """
     bundles = _stage_1_3_provider_bundles(config)
     last_err = None
     for i, (label, provider) in enumerate(bundles):
-        caption, err = _stage_1_3_caption_one_image(img, provider, media_dir, ctx_map)
+        if label == "primary":
+            caption, err = _stage_1_3_caption_one_image(img, provider, media_dir, ctx_map)
+        else:
+            if not _FALLBACK_SEMAPHORE.acquire(blocking=False):
+                print(f"    [caption] {img['filename']}: waiting for the fallback "
+                      f"provider ({provider['model']}) — one image at a time...")
+                _FALLBACK_SEMAPHORE.acquire()
+            try:
+                caption, err = _stage_1_3_caption_one_image(img, provider, media_dir, ctx_map)
+            finally:
+                _FALLBACK_SEMAPHORE.release()
         if caption:
             return caption, None, label
         last_err = err

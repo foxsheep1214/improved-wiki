@@ -84,7 +84,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **依赖**：`~/.agents/config.json` 配置 caption_provider（primary，无 env-var 替代路径——base_url/model/protocol 无法只靠一个 key 推出）+ 可选 caption_fallback_provider（2026-07-08）。
 - **产物**：每图一个 `.caption.txt`。
 - **go/no-go**：每张图有 caption 文件且长度 ≥20 字符。
-- **failover（2026-07-08）**：primary 单图 3 次重试耗尽后，若配了 fallback，自动切 fallback 再试 3 次（打一行日志，非静默）——推荐 primary=GLM-5v-turbo、fallback=本地 Ollama qwen3-vl:8b-instruct，见 `image-caption-strategy.md`。
+- **failover（2026-07-08）**：primary 单图 3 次重试耗尽后，若配了 fallback，自动切 fallback 再试 3 次（打一行日志，非静默）——推荐 primary=GLM-5v-turbo、fallback=本地 Ollama qwen3-vl:8b-instruct，见 `image-caption-strategy.md`。fallback 调用严格串行（`_FALLBACK_SEMAPHORE`，一次一张），与 primary 的 `CAPTION_MAX_WORKERS` 并发互不影响。
 - **无回退**：无 provider（primary 都没配）→ `raise RuntimeError` 暂停；孤立单图两个 provider 都耗尽 → 写 `[待重试]` 占位符（下次运行重试，非质量降级）；连续 3 次（每次都已两个 provider 都试过）失败 → 判定全部 VLM 路径宕机 `raise RuntimeError` 暂停。
 
 ---

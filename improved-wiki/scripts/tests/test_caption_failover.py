@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -208,6 +210,95 @@ class TestCaptionOneImageWithFailover(unittest.TestCase):
         self.assertIsNone(caption)
         self.assertEqual(err, "primary down")
         self.assertEqual(used, "primary")
+
+
+class TestFallbackSerialization(unittest.TestCase):
+    """The fallback (local) provider gets exactly one concurrent call,
+    independent of CAPTION_MAX_WORKERS — see _FALLBACK_SEMAPHORE."""
+
+    def setUp(self):
+        self._orig = cap._stage_1_3_caption_one_image
+
+    def tearDown(self):
+        cap._stage_1_3_caption_one_image = self._orig
+        # Defensive: a failed assertion mid-test must not leave the process-wide
+        # semaphore permanently held and starve every later test in this module.
+        while cap._FALLBACK_SEMAPHORE.acquire(blocking=False):
+            pass
+        cap._FALLBACK_SEMAPHORE.release()
+
+    def test_fallback_calls_never_overlap(self):
+        active = {"count": 0, "max": 0}
+        lock = threading.Lock()
+
+        def fake(img, provider, media_dir, ctx_map):
+            if provider["model"] != "glm-5v-turbo":  # the fallback bundle
+                with lock:
+                    active["count"] += 1
+                    active["max"] = max(active["max"], active["count"])
+                time.sleep(0.05)
+                with lock:
+                    active["count"] -= 1
+                return "local caption", None
+            return None, "primary always fails, forcing every image to fall over"
+        cap._stage_1_3_caption_one_image = fake
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(
+                Path(d),
+                caption_fallback_base_url="http://127.0.0.1:11434",
+                caption_fallback_model="qwen3-vl:8b-instruct",
+            )
+            results = []
+            results_lock = threading.Lock()
+
+            def worker(i):
+                r = cap._stage_1_3_caption_one_image_with_failover(
+                    {"filename": f"p{i}.jpg"}, cfg, Path(d), {})
+                with results_lock:
+                    results.append(r)
+
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+
+        self.assertEqual(active["max"], 1,
+                          "fallback provider received overlapping concurrent calls")
+        self.assertEqual(len(results), 4)
+        self.assertTrue(all(caption == "local caption" for caption, _err, _used in results))
+
+    def test_primary_calls_still_run_concurrently(self):
+        # Sanity check that the fallback semaphore does NOT also throttle the
+        # primary — only non-primary bundles are gated.
+        active = {"count": 0, "max": 0}
+        lock = threading.Lock()
+
+        def fake(img, provider, media_dir, ctx_map):
+            with lock:
+                active["count"] += 1
+                active["max"] = max(active["max"], active["count"])
+            time.sleep(0.05)
+            with lock:
+                active["count"] -= 1
+            return "cloud caption", None
+        cap._stage_1_3_caption_one_image = fake
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))  # no fallback configured
+            threads = [
+                threading.Thread(
+                    target=lambda i=i: cap._stage_1_3_caption_one_image_with_failover(
+                        {"filename": f"p{i}.jpg"}, cfg, Path(d), {}))
+                for i in range(4)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5)
+
+        self.assertGreater(active["max"], 1, "primary calls should overlap")
 
 
 if __name__ == "__main__":
