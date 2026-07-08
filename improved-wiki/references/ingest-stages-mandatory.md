@@ -7,9 +7,9 @@ related: [SKILL.md, known-issues, scanned-pdf-ocr-pipeline, image-caption-strate
 
 # 强制 Ingest Stage 清单
 
-improved-wiki 流水线 = **16 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾、跨源 query 解析原 2.8 并入 2.7 收尾，功能保留、编号退休）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。任何 Stage 都不能跳过。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
+improved-wiki 流水线 = **16 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾、跨源 query 解析原 2.8 并入 2.7 收尾，功能保留、编号退休）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
 
-**跳过的代价**：raw 是 sacred（图也是 raw 的一部分）；缺 stage 产物则审计无法回溯；不写 cache 下次重跑；跳过的 stage 永远不会被补做，错误留在 wiki 里。
+**执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 串行调度，agent 只答 prompt、无法跳过任何 stage（2.7/2.9 的跳过条件也是代码内置判断）。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。仅两条例外仍靠 agent 自觉：① **Stage 0.1 命名检查未接入 `ingest.py`**，喂文件前须手动跑 `normalize_raw_names.py --check`；② 不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。
 
 > **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。完整政策见 SKILL.md「No-silent-fallback policy」段。唯一例外：cache/stage-progress 状态文件损坏 → 告警+重置。
 
@@ -42,12 +42,12 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ## Phase 0：Pre-Ingest Gates
 
-### Stage 0.1 · Raw 文件命名规范检查 ⭐ 强制
+### Stage 0.1 · Raw 文件命名规范检查（唯一 agent 手动前置门）
 - **作用**：确保 raw/ 下文件符合项目命名规范（规则记在 `<project>/raw/NAMING.md`）。
 - **流程**：`NAMING.md` 不存在 → 🛑 阻止 ingest，帮用户起草；存在 → `normalize_raw_names.py --check`，违规 → 🛑 阻止。
 - **go/no-go**：`raw/NAMING.md` 存在且候选文件全部合规。
 
-### Stage 0.2 · 源页去重检查 ⭐ 任何文件选取前强制
+### Stage 0.2 · 源页去重检查
 - **作用**：判断候选文件该跳过、续跑还是从头消化。**唯一完整性信号是 `ingested` marker**（`_finalize_book` 在 Stage 3.7 embeddings 之后置位，见 `scripts/_ingest_skip.py::_stage_0_2_should_skip`）；源页 `wiki/sources/<raw-rel-path>.md` 的存在性作辅助判据。**不依赖 `ingest-cache.json`**——缓存不可靠：可被删、跨对话丢失、并发损坏。
 - **四状态决策**（`stage_4_1` marker 已于 2026-07-08 改名为 `ingested`，已消化书的 stages.json 已同步迁移）：
   1. `ingested` marker 在 + 源页存在 → **skip**（整本完成）。
@@ -61,7 +61,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ## Phase 1：Extraction
 
-### Stage 1.1 · 文本提取 ⭐ 永远不能跳
+### Stage 1.1 · 文本提取
 - **作用**：所有 PDF（文本版/扫描版/混合版）统一走本地持久化 minerU API 服务器（`mineru.cli.fast_api`，端口 19999），按 32 页/chunk（`MINERU_CHUNK_SIZE`）调 `/file_parse`，`backend=hybrid-engine`、`parse_method=auto`（按页自动判 txt vs VLM OCR），保留表格/公式/图片。method 标签恒为 `mineru-api`。fitz 仅用于 `--dry-run` 的 PDF 类型诊断（text/mixed/scanned），不参与提取决策。
 - **NashSU 对齐**：NashSU 用 minerU **云** API（mineru.net，需 token，pipeline/vlm，200 页上限）；improved-wiki 用**本地**免费服务器（hybrid-engine/auto，无 token，无页数上限）——有意偏离。garbled-font 预检测与提取质量门已于 2026-07-08 移除（NashSU 二者皆无；minerU 3.4.0 上 OCR 影响有限）。`verify_stage_0` 的 ≥100 字符基本非空校验是唯一提取门。
 - **为什么不用 PyMuPDF 直抽**：在数据手册/图表密集型 PDF 上漏检表格/公式/图（实测 73 表格/7 公式/157 图 vs 0/0/2）。
@@ -71,7 +71,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：`verify_stage_0` ≥100 字符（基本非空，防空提取浪费下游 LLM）。
 - **已知坑**：`mineru -b pipeline` CLI 在 3.4.0 有 502 bug，不可用；API path（hybrid-engine/auto）是唯一提取后端。
 
-### Stage 1.2 · 图片提取 ⭐ 永远不能跳
+### Stage 1.2 · 图片提取
 - **作用**：图片存盘（harvest）融进 Stage 1.1 chunk 循环——每个 chunk 调 `/file_parse` 后，`_stage_1_2_harvest_images()` 从响应 `images`（base64）+ `content_list`（页码映射）存图到 `wiki/media/<type>/<pdf-stem>/`，文件名 `p<NNN>-mineru_<md5前8>.<ext>`。manifest 汇总（`_stage_1_2_extract_from_mineru`）+ PPTX/DOCX 提取（`_stage_1_2_extract_images_office`，从 zip 内 `ppt/media`/`word/media` 取图）+ Markdown 提取（`_stage_1_2_extract_markdown_images`，解析 `![[ref]]`/`![alt](ref)` 复制本地图片，NashSU `extractAndSaveMarkdownImages` parity）仍为独立 1.2 阶段（`stage_1_2_done` marker）。全本跑完汇总 `_manifest.json`，并直接调 Stage 1.3 配文字。
 - **NashSU 对齐**：mineru 取图对齐（本地 API base64 vs 云 zip markdown，架构差异）；无 `extractAndSaveSourceImages` 的 pdfium 回退（1.1 no-silent-fallback 延伸，minerU 必跑或 raise）；Markdown 图片提取于 2026-07-08 补齐（此前 .md 源不提图，是唯一缺口）。
 - **产物**：`wiki/media/<type>/<pdf-stem>/p<NNN>-mineru_<id>.<ext>` + `_manifest.json`。
@@ -79,7 +79,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **尺寸过滤**：`MINERU_IMG_MIN_WIDTH/HEIGHT` 默认 20px（故意低，保留公式截图）。
 - **注意**：API 路径按 `page+md5前8` 命名，不做跨页 sha256 全局去重（同一图重复出现在不同页会各存一份）。
 
-### Stage 1.3 · 图片 captioning ⭐ 永远不能跳
+### Stage 1.3 · 图片 captioning
 - **作用**：对每张图用 VLM 生成 2-4 句描述（与源文本同语言，NashSU `captionImage` parity）。**一图一调用** + 上下文感知 prompt（前后正文作 anchoring context，NashSU `buildCaptionPromptWithContext` parity；`CONTEXT_CHARS=150`）。
 - **依赖**：`~/.agents/config.json` 配置 caption_provider（无 env-var 替代路径——base_url/model/protocol 无法只靠一个 key 推出）。
 - **产物**：每图一个 `.caption.txt`。
@@ -96,7 +96,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **影响**：2.4/2.6/2.7/2.9 的 `global_digest` 数据源从 2.1 改为 2.2 滚动最终值（`_run_chunk_pipeline` 返回 5 元组含 `global_digest`）。`stage_2_1_done` marker 去掉（已消化书 stages.json 残留无害，代码不再读）。`_verify_stage_2_1_digest` 迁移到 2.2 完成后校验滚动最终 digest。`_stage_2_1_global_digest` / `_stage_2_1_build_prompt` 已作为 dead code 清理；`_stage_2_1_chunk_text`（切块函数）保留供 2.2 用。
 
 ### Stage 2.2 · Chunk Analysis
-- **作用**：对源文本切块分析（**永远不能跳**）。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`formulas`/`connections_to_existing_wiki`/`digest_updates`/`updated_global_digest`。
+- **作用**：对源文本切块分析。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`formulas`/`connections_to_existing_wiki`/`digest_updates`/`updated_global_digest`。
 - **NashSU 对齐（2026-07-08）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 2.4/2.6/2.7/2.9。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），首 chunk 建立 book_meta+outline。
 - **per-chunk subagent 隔离**：保留（7/8 事故政策，见 `conversation-mode-agent-workflow.md`）——主对话滚动 `accumulated_digest`，每 chunk fresh subagent 答单 chunk。
 - **go/no-go**：`stages.chunks_analyzed ≥ 1`；2.2 完成后 `_verify_stage_2_1_digest` 校验滚动最终 digest 5 字段（`not analyze_only` 时）。
@@ -129,20 +129,20 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **作用**：Phase 3 唯一磁盘写入入口。先 source page gate（无 source 页则从 digest 生成 stub 追加），再原子写盘（.tmp → rename）。
 - **go/no-go**：page_blocks 数 == 写盘成功数；source page 已落盘。
 
-### Stage 3.2 · 图片注入 ⭐ 永远不能跳
+### Stage 3.2 · 图片注入
 - **作用**：在 source 页末尾追加 `## Embedded Images` 段，列出所有图 + caption。
 - **go/no-go**：source 页含 `## Embedded Images` + ≥1 行图引用。
 
-### Stage 3.4 · Review ⭐ 永远不能跳
+### Stage 3.4 · Review
 - **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate），写入 `wiki/REVIEW/<type>/<date>-<source>-<slug>.md` + `review-suggestions.json`。运行在已写盘文件上。
 - **go/no-go**：review items 数量 ≥0（即使 0 也要记）；`wiki/REVIEW/` 结构合法。
 - **时机偏离 NashSU（有意，audit M2 2026-07-07）**：NashSU 在 `writeFileBlocks` **之前**对 in-memory generation 跑 review；improved-wiki 在 3.1 写盘**之后**对已落盘文件跑。这是刻意选择，理由：(1) review items 本就是非阻断 triage（`resolved: false` 等人工处理），NashSU 的"写盘前"也只是时机不同、并不拦截写盘，故"写盘前拦截能力"在 NashSU 侧也不成立；(2) 写盘后 review 看到 enrichment/wikilink-merge/page-merge 之后的真实 on-disk 内容，finding 反映最终状态，对 lint/cross-source dedup 友好，而写盘前看到的是 pre-enrichment 内容、易产出过时 finding；(3) 真正的结构性失败拦截已由 Stage 2.6 `_stage_2_6_validate_required_sections` 硬门禁（缺 section 直接 raise）覆盖。代价：review 发现问题时页已落盘，需后续修复——但 review items 本就不阻断，该代价可接受。不额外跑 pre-write LLM pass（双倍 review 成本对非阻断 triage 项 ROI 低）。
 
-### Stage 3.5 · Aggregate Repair + Cache ⭐ 永远不能跳
+### Stage 3.5 · Aggregate Repair + Cache
 - **作用**：log.md 程序化 append（LLM 不参与，防丢历史）+ index.md LLM 整页重写（喂入磁盘扫描的权威页面清单，全分类同步；LLM 失败/超容量门/>250 页时退回 Sources 单行 append 兜底）+ overview.md LLM 重写（改进 prompt：禁止源清单堆砌、按主题综述；5 段结构校验；失败保留当前；超限压缩模式；首次 ingest 创建）+ 写 `ingest-cache.json`。
 - **go/no-go**：每个本次 raw 文件都有 hash 记录；index/log/overview 已更新。
 
-### Stage 3.7 · Embeddings ⭐ 强制
+### Stage 3.7 · Embeddings
 - **作用**：把 wiki/ 页面 chunk 化 + embed 写到 LanceDB。默认本地 Ollama bge-m3（`http://127.0.0.1:11434/v1`），无需 export 环境变量。
 - **依赖**：lancedb 已装 + Ollama 运行 + bge-m3 已拉取。
 - **产物**：`lancedb/` 表 + `embed-cache.json`。
@@ -170,7 +170,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 关键依赖：
 - 1.2 先于 1.3（先有图才能 caption）；1.2/1.3 先于 3.2（注入图引用）
-- 2.2 永远不跳（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
+- 2.2 对所有源运行（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
 - 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.4 生成后收尾跑源内去重（原 2.5，单 chunk 跳过）；2.6 源页在 2.4 之后
 - Phase 2 全在内存（2.3→2.4→2.6→2.7→2.9 串行），产出统一由 3.1 写盘
 - 2.7 conditional（datasheet/standard 跳过 query 生成）；2.7 跨源解析收尾 conditional（无 query 或 wiki 空跳过，原 2.8）；2.9 conditional（无 concept 或 concept <2 跳过）
@@ -206,7 +206,7 @@ test -d wiki/media/*/<slug> && find wiki/media/<type>/<slug> \( -name '*.jpeg' -
 
 ## 项目特定策略
 
-每个 wiki 项目可在 `wiki/methodology/` 写 per-project 决策页（VLM 选择、批量大小等），引用本清单。**不放本清单复制，也不放"跳过了哪些 stage + 原因"**。通用消化策略是本 skill 的责任。如真的跳过某个 ⭐ stage，在 `wiki/methodology/` 加说明并标注"已知违反强制清单，原因：……"——显式记录偏离 = 合规；静默跳过 = 违规。
+每个 wiki 项目可在 `wiki/methodology/` 写 per-project 决策页（VLM 选择、批量大小等），引用本清单，**不放本清单复制**。通用消化策略是本 skill 的责任。若对某本书有偏离本清单的处理（如用户点名跳过某 stage），在 `wiki/methodology/` 显式记录偏离及原因——显式记录 = 合规；静默偏离 = 违规。
 
 ---
 

@@ -72,7 +72,7 @@ Single-file auto-ingest, lint, graph, and save-chat-to-wiki are NOT gated — pr
 ## Reference map
 
 **Pipeline core**:
-- `references/ingest-stages-mandatory.md` — ingest stage checklist (Phase 0-3 + Lint + Graph, ⭐ easy-to-skip stages marked)
+- `references/ingest-stages-mandatory.md` — ingest stage checklist (Phase 0-3 + Lint + Graph; stages are code-enforced by `ingest.py` — the checklist is a behavior spec, not agent discipline)
 - `references/query-generation.md` — Stage 2.7: auto-generate `wiki/queries/`
 - `references/comparison-generation.md` — Stage 2.9: auto-generate `wiki/comparisons/` (in-source concept pairs AND systematic multi-way 3+ comparisons)
 - `references/dedup-design.md` — two dedup tiers: intra-source (Stage 2.4 closing sub-step, ingest-time) vs cross-source (CLI, lint-time); distinct responsibilities, not interchangeable
