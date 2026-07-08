@@ -656,46 +656,33 @@ def _stage_1_3_pending_images(images: list[dict], media_dir: Path) -> list[dict]
     return pending
 
 
-def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_dir: Path,
-                    source_label: str = "",
-                    max_workers: int = CAPTION_MAX_WORKERS) -> int:
-    """Caption every pending image, one VLM call per image, in parallel.
+# C-caption (2026-07-08): rounds + backoff before Stage 1.3 is allowed to hand
+# off to Stage 2. Diagnosed on "EW and Radar Systems Handbook" — a single pass
+# left 17/331 images as `[待重试]` placeholders, and nothing forced a retry
+# before generation ran against the (still-incomplete) media directory; the
+# only thing that ever picked them back up was a human happening to re-run
+# ingest.py for that exact book again. Isolated stragglers now get up to
+# _MAX_CAPTION_ROUNDS passes with cooldown between rounds; only if they are
+# STILL failing after all rounds does the batch raise (see final check in
+# _stage_1_3_caption_images_batch) — so Stage 1.3 either finishes clean or
+# pauses loudly, it no longer silently hands off a partial result.
+_MAX_CAPTION_ROUNDS = 3
+_ROUND_BACKOFF_SECONDS = (15, 45)  # before round 2, round 3 (rate-limit cooldown)
 
-    NashSU parity (2026-06-24): one image per call with a context-aware
-    prompt. `max_workers` caps the parallel calls.
 
-    No-silent-fallback policy: a missing API key pauses the ingest. Isolated
-    per-image failures after retries get a loud `[待重试]` placeholder (which
-    is itself pending, so the next run retries it). CONSECUTIVE_FAIL_PAUSE
-    failures in a row means the VLM main path is down → pause (raise), so we
-    never silently produce a wave of placeholders.
+def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir: Path,
+                                  ctx_map: dict, label: str) -> int:
+    """One parallel pass over `pending`. Returns captioned count.
+
+    CONSECUTIVE_FAIL_PAUSE failures in a row within THIS round still raises
+    immediately (fast circuit breaker for a fully-down provider — no point
+    burning a whole round's backoff on a config that's simply broken).
+    Isolated failures write a `[待重试]` placeholder and are left for the
+    next round (or the caller's final no-fallback raise).
     """
-    from _stage_1_1_scanned import log_event
-
-    if not images:
-        return 0
-    if not config.caption_api_key:
-        already = sum(1 for img in images
-                      if (media_dir / (img["filename"] + ".caption.txt")).exists())
-        _caption_no_key_pause(config, source_label, media_dir, len(images), already)
-        return 0  # unreachable — _caption_no_key_pause always raises
-
-    pending = _stage_1_3_pending_images(images, media_dir)
-    if not pending:
-        label = f" [{source_label}]" if source_label else ""
-        print(f"[caption]{label} (cached) All {len(images)} images already captioned")
-        return 0
-
-    ctx_map = _stage_1_3_build_context_map(config)
-    label = f" [{source_label}]" if source_label else ""
-
-    print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
-          f"→ one VLM call each (parallel, max {max_workers} workers, "
-          f"{len(ctx_map)} figures with context)")
-
     captioned = 0
     consecutive_fail = 0
-    workers = min(max_workers, len(pending)) or 1
+    workers = min(CAPTION_MAX_WORKERS, len(pending)) or 1
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_img = {
             executor.submit(_stage_1_3_caption_one_image, img, config, media_dir, ctx_map): img
@@ -734,9 +721,72 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
                         f"is not working. Fix the provider and re-run (cached, "
                         f"resumes from Stage 1.3)."
                     )
-
-    print(f"[caption] Done — {captioned}/{len(pending)} captions written")
     return captioned
+
+
+def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_dir: Path,
+                    source_label: str = "",
+                    max_workers: int = CAPTION_MAX_WORKERS) -> int:
+    """Caption every pending image, one VLM call per image, in parallel.
+
+    NashSU parity (2026-06-24): one image per call with a context-aware
+    prompt. `max_workers` caps the parallel calls.
+
+    No-silent-fallback policy: a missing API key pauses the ingest.
+    Isolated per-image failures get up to _MAX_CAPTION_ROUNDS retry rounds
+    with backoff (C-caption, 2026-07-08) — Stage 1.3 does NOT hand off to
+    Stage 2 with placeholders still in place. CONSECUTIVE_FAIL_PAUSE
+    failures in a row within any round means the VLM main path is down →
+    pause (raise) immediately, without waiting for the remaining rounds.
+    """
+    if not images:
+        return 0
+    if not config.caption_api_key:
+        already = sum(1 for img in images
+                      if (media_dir / (img["filename"] + ".caption.txt")).exists())
+        _caption_no_key_pause(config, source_label, media_dir, len(images), already)
+        return 0  # unreachable — _caption_no_key_pause always raises
+
+    label = f" [{source_label}]" if source_label else ""
+    first_pending = _stage_1_3_pending_images(images, media_dir)
+    if not first_pending:
+        print(f"[caption]{label} (cached) All {len(images)} images already captioned")
+        return 0
+
+    ctx_map = _stage_1_3_build_context_map(config)
+    total_captioned = 0
+    pending = first_pending
+    for round_idx in range(_MAX_CAPTION_ROUNDS):
+        if round_idx == 0:
+            print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
+                  f"→ one VLM call each (parallel, max {max_workers} workers, "
+                  f"{len(ctx_map)} figures with context)")
+        else:
+            wait = _ROUND_BACKOFF_SECONDS[min(round_idx - 1, len(_ROUND_BACKOFF_SECONDS) - 1)]
+            print(f"[caption]{label} round {round_idx+1}/{_MAX_CAPTION_ROUNDS}: "
+                  f"{len(pending)} still pending — waiting {wait}s "
+                  f"(rate-limit cooldown) before retry...")
+            time.sleep(wait)
+        total_captioned += _stage_1_3_caption_one_round(pending, config, media_dir, ctx_map, label)
+        pending = _stage_1_3_pending_images(images, media_dir)
+        if not pending:
+            break
+
+    if pending:
+        names = ", ".join(img["filename"] for img in pending[:8])
+        more = f" (+{len(pending) - 8} more)" if len(pending) > 8 else ""
+        raise RuntimeError(
+            f"Caption: {len(pending)}/{len(images)} images still failing after "
+            f"{_MAX_CAPTION_ROUNDS} rounds: {names}{more}. No fallback — the "
+            f"ingest does not advance to Stage 2 with incomplete captions. "
+            f"Fix the provider (rate limit window, or switch caption_provider "
+            f"in ~/.agents/config.json) and re-run (cached, resumes from "
+            f"Stage 1.3, only re-does the images still pending)."
+        )
+
+    print(f"[caption]{label} Done — {total_captioned} new captions written, "
+          f"{len(images)}/{len(images)} images now captioned")
+    return total_captioned
 
 
 # ══════════════════════════════════════════════════════════════════════════════

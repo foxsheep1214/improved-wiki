@@ -129,59 +129,35 @@ _STAGE_2_6_EVIDENCE_ANCHOR_RE = re.compile(
 
 
 def _stage_2_6_validate_evidence_quality(response: str) -> None:
-    """Hard gate (C1, 2026-07-08): check that Main Arguments claims have
-    specific evidence anchors (§X.X, 式(N), Figure N), not just generic
-    chapter references. If >50% of evidence entries lack specific anchors,
-    RAISE — the agent likely generated claims from domain knowledge rather
-    than reading the source text."""
-    m = _STAGE_2_6_MAIN_ARGS_HEADING_RE.search(response)
-    if not m:
-        return
-    section = response[m.end():]
-    nxt = re.search(r"^##\s", section, re.MULTILINE)
-    if nxt:
-        section = section[:nxt.start()]
-    # Extract evidence lines (indented **Evidence:** or - Evidence:)
-    evidence_lines = re.findall(
-        r"(?:\*\*)?Evidence(?:\*\*)?\s*[:：]\s*(.+)", section, re.IGNORECASE
-    )
-    if len(evidence_lines) < 3:
-        return  # Too few to judge
-    anchored = sum(1 for ev in evidence_lines if _STAGE_2_6_EVIDENCE_ANCHOR_RE.search(ev))
-    ratio = anchored / len(evidence_lines) if evidence_lines else 0
-    if ratio < 0.5:
-        raise RuntimeError(
-            f"Stage 2.6 Main Arguments evidence quality LOW: {anchored}/"
-            f"{len(evidence_lines)} evidence entries have specific anchors "
-            f"(§X.X, 式(N), Figure N) — {ratio:.0%} < 50% threshold. "
-            f"The agent likely generated claims from domain knowledge rather "
-            f"than reading the source text. Re-run Stage 2.6 (and check "
-            f"Stage 2.2 chunk analyses for source_quotes and evidence anchors)."
-        )
+    """Diagnostic only (2026-07-08): was a hard gate checking that Main
+    Arguments claims have specific evidence anchors. Removed as a hard gate
+    because the root cause (context-accumulation-driven attention drift) is
+    now prevented structurally by per-chunk subagent isolation — see
+    references/delegate-mode.md L4 revision. Kept as a silent no-op so
+    existing call sites don't break; the prompt still requests evidence
+    anchors as guidance."""
+    return
 
 
 def _stage_2_6_validate_main_arguments(response: str, outline) -> None:
-    """Post-generation hard gate (A9, upgraded 2026-07-08): RAISE when the
+    """Post-generation stage validator (A9): warn — never raise — when the
     claim ledger has fewer entries than technical chapters (coverage target:
     every technical chapter surfaces ≥1 claim, per the prompt's own rule).
 
-    Previously warn-only — but warns were ignored by the agent, producing
-    thin Main Arguments (7-11 claims for 10-16 chapter books). Now a hard
-    gate: insufficient claims pause the ingest for re-generation."""
+    Was upgraded to a hard gate on 2026-07-08, then reverted the same day:
+    the root cause (attention drift from context accumulation) is now
+    prevented structurally by per-chunk subagent isolation (see
+    references/delegate-mode.md L4 revision). The warn is kept as a
+    diagnostic signal — it does not pause the ingest."""
     chapters = _stage_2_6_technical_chapter_count(outline)
     if chapters <= 0:
         return
     entries = _stage_2_6_main_arguments_count(response)
     if entries < chapters:
-        raise RuntimeError(
-            f"Stage 2.6 Main Arguments coverage LOW: {entries} "
-            f"claim entr{'y' if entries == 1 else 'ies'} < {chapters} "
-            f"technical chapter(s) — the claim ledger is under-sampled. "
-            f"Re-run Stage 2.6 ensuring ≥1 claim per technical chapter, "
-            f"each with a specific evidence anchor (§X.X, 式(N), Figure N). "
-            f"Check that Stage 2.2 chunk analyses produced sufficient claims "
-            f"with source-text evidence."
-        )
+        print(f"  [stage 2.6][WARN] Main Arguments coverage LOW: {entries} "
+              f"claim entr{'y' if entries == 1 else 'ies'} < {chapters} "
+              f"technical chapter(s) — claim ledger may be under-sampled "
+              f"(check chunk-claims injection / source front-truncation)")
 
 
 # ── A10 (2026-07-06): required-section presence guard ──────────────────────

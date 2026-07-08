@@ -182,21 +182,30 @@ a single ingest (Stage 2.6 writes it, then enrichment re-merges it). If you see 
 same source page appearing in multiple merge tasks, reuse your first merge result —
 the content doesn't change between merges.
 
-## 链式作答（L4，2026-07-02）：压缩交接死区
+## 链式作答 → 每 chunk 独立 subagent（L4 修订，2026-07-08）
 
-实测交接死区（通知→主对话→re-invoke→派新 agent）≈ 墙钟的 ~30%。串行链
-（2.2 逐 chunk / 2.4 逐 chunk）可用**链式 subagent** 压缩：
+**旧政策（2026-07-02）：** 链式作答上限 2 个 handoff，用于压缩交接死区（≈30%
+墙钟），叠加预取后单书 ≈ -15%。
 
-- 作答 agent 写完 `.txt` 后**自己 re-invoke ingest.py**；若新 handoff 与本次
-  **同 stage 同类型**（如 2.2 的下一个 chunk），直接连答，**每个 agent 上限 2 个
-  handoff**（防上下文膨胀），然后退出并报告推进到哪一步。
+**为什么废除：** 上限=2 只是**减缓**上下文累积，不**消除**它。2026-07-08 的
+EW and Radar Systems Handbook 事故证明：即使不连答（在主对话里逐个答），
+主对话自身的 context 也会随每个 chunk 的 250K 字符 prompt + 响应单调累积，
+到后面的 chunk 时模型注意力被稀释到全书广度上，退化成"凭记忆答题"而非读原文。
+C1/C3 硬门禁（source_quotes / key_details≤5）是在**输出端**拦症状，但**输入端**
+的根因——上下文累积导致注意力分散——只有结构隔离能治。
+
+**新政策（2026-07-08）：Stage 2.2 / 2.4 每个 chunk 派一个全新 subagent，
+上限 1 handoff，答完即销毁。**
+
+- subagent 的上下文里**只有**这一个 chunk 的 prompt（源文 + schema + 前序 digest），
+  没有其他 chunk 的干扰——等价于 NashSU 子进程的无状态 `streamChat`。
+- 主对话的 context 保持干净，只做编排（派发、re-invoke、进度跟踪），不承载 chunk 原文。
+- **1 handoff 是硬上限，不是"看着还行就多答一个"**：答完这一个 chunk 必须退出，
+  即使书还没摄入完。下一个 chunk 由主对话重新派发新 subagent。
+- 交接死区重新成为代价（≈30% 墙钟），但这是用速度换质量——放弃旧 L4 的 -15% 效率。
 - 不同 stage 类型的 handoff 一律留给主对话重新派发（保证 prompt 规则正确）。
-- 仅限单书串行链内；跨书 2.3+ 并行仍然禁止（不变量不变）。
-- 效果：链上死区约减半，叠加 1.5 预取后 Skolnik 级单书墙钟 ≈ -15%。
-- **上限是硬性的，不是"看着还行就多连一个"**：第 2 个 handoff 答完必须退出，
-  即使书还没摄入完。2026-07-07 的 Skolnik 事故根因就是驱动 agent 没有在上限处
-  退出，一路连答到第 14 个 chunk，context 单调累积、退化成占位符输出
-  （"Radar Handbook Content" 而非真实概念名）。即便严格执行上限=2，也要在
-  每次 re-invoke 前跑一次质量检查防止提前退化的响应蒙混过关——见
-  `references/conversation-mode-agent-workflow.md` "Stage 2.2 quality gate"
-  一节 + `scripts/qc_stage22.py`。
+- 仅限单书串行；跨书 2.3+ 并行仍然禁止（不变量不变）。
+- 每次 re-invoke 前仍跑 `scripts/qc_stage22.py` 质量检查防止退化响应蒙混过关。
+- **Skolnik 事故（2026-07-07）的教训仍然适用**：那次根因是连答 14 个 chunk
+  不退出；新政策下不可能发生（上限=1），但主对话如果跳过 subagent 直接自己答
+  多个 chunk，效果等价于"连答"，同样退化——所以"主对话直接答"也被禁止。

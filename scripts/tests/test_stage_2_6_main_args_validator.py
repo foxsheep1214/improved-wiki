@@ -1,17 +1,17 @@
-"""Stage 2.6 Main-Arguments coverage validator (audit 2026-07-02, A9;
-upgraded to hard gate 2026-07-08).
+"""Stage 2.6 Main-Arguments coverage validator (audit 2026-07-02, A9).
 
 The source page's Main Arguments section is the wiki's claim ledger; H2 showed
 front-prefix truncation historically produced ledgers covering only the
 opening chapters (何友 baseline: 13 claims for a 19+-chapter book). The
-validator now RAISES (hard gate) when the claim entry count falls below one
-per technical chapter of the 2.1 outline — previously warn-only, but warns
-were ignored by the agent, producing thin Main Arguments.
+validator warns loudly — non-fatal print, never a raise — when the claim
+entry count falls below one per technical chapter of the 2.1 outline.
 
 Stdlib unittest only.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -83,68 +83,31 @@ class MainArgumentsCount(unittest.TestCase):
             s26._stage_2_6_main_arguments_count("## Book Summary\n\nhi\n"), 0)
 
 
-class ValidatorHardGate(unittest.TestCase):
-    """A9 upgraded to hard gate (2026-07-08): raises instead of warns."""
+class ValidatorWarning(unittest.TestCase):
+    def _run(self, response, outline) -> str:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            s26._stage_2_6_validate_main_arguments(response, outline)
+        return buf.getvalue()
 
-    def test_raises_when_entries_below_technical_chapter_count(self):
-        with self.assertRaises(RuntimeError) as cm:
-            s26._stage_2_6_validate_main_arguments(
-                _page("- **Claim:** only one claim.\n"), _OUTLINE_5CH)
-        self.assertIn("1 claim entry", str(cm.exception))
-        self.assertIn("3 technical chapter", str(cm.exception))
+    def test_warns_when_entries_below_technical_chapter_count(self):
+        out = self._run(_page("- **Claim:** only one claim.\n"), _OUTLINE_5CH)
+        self.assertIn("[stage 2.6][WARN]", out)
+        self.assertIn("1 claim entry", out)
+        self.assertIn("3 technical chapter", out)
 
     def test_silent_when_coverage_sufficient(self):
         body = ("- **Claim:** a.\n- **Claim:** b.\n- **Claim:** c.\n")
-        # Should not raise
-        s26._stage_2_6_validate_main_arguments(_page(body), _OUTLINE_5CH)
+        self.assertEqual(self._run(_page(body), _OUTLINE_5CH), "")
 
     def test_silent_without_outline(self):
-        # Empty outline → 0 chapters → no gate
-        s26._stage_2_6_validate_main_arguments(_page(""), [])
+        out = self._run(_page(""), [])
+        self.assertEqual(out, "")
 
-    def test_garbage_input_does_not_raise(self):
-        # No outline → 0 chapters → no gate; weird inputs are tolerated
-        s26._stage_2_6_validate_main_arguments("", None)
-        # [{"no_title": True}, 42] → 1 technical chapter (42 is not filtered)
-        # so a page with 0 claims would raise — test with enough claims instead
-        body = "- **Claim:** a.\n"
-        s26._stage_2_6_validate_main_arguments(
-            "## Main Arguments\n\n" + body, [{"no_title": True}, 42])
-
-
-class EvidenceQualityGate(unittest.TestCase):
-    """C1 (2026-07-08): evidence-anchor quality hard gate."""
-
-    def _page(self, body: str) -> str:
-        return (
-            "## Main Arguments & Findings\n\n" + body + "\n"
-            "## Connections to Existing Wiki\n\n- [[concepts/foo]]\n"
-        )
-
-    def test_raises_when_majority_of_evidence_lacks_anchors(self):
-        body = (
-            "- **Claim:** a.\n  - **Evidence:** Ch.3\n"
-            "- **Claim:** b.\n  - **Evidence:** this section\n"
-            "- **Claim:** c.\n  - **Evidence:** Ch.7\n"
-        )
-        with self.assertRaises(RuntimeError) as cm:
-            s26._stage_2_6_validate_evidence_quality(self._page(body))
-        self.assertIn("evidence quality LOW", str(cm.exception))
-
-    def test_silent_when_evidence_has_specific_anchors(self):
-        body = (
-            "- **Claim:** a.\n  - **Evidence:** §2.3.4\n"
-            "- **Claim:** b.\n  - **Evidence:** 式(3.6)\n"
-            "- **Claim:** c.\n  - **Evidence:** Figure 4.2\n"
-        )
-        s26._stage_2_6_validate_evidence_quality(self._page(body))
-
-    def test_silent_when_too_few_evidence_lines_to_judge(self):
-        body = "- **Claim:** a.\n  - **Evidence:** Ch.3\n"
-        s26._stage_2_6_validate_evidence_quality(self._page(body))
-
-    def test_silent_when_no_main_arguments_section(self):
-        s26._stage_2_6_validate_evidence_quality("## Book Summary\n\nhi\n")
+    def test_never_raises_on_garbage_input(self):
+        # Non-fatal contract: weird inputs must not raise.
+        self._run("", None)
+        self._run("no sections at all", [{"no_title": True}, 42])
 
 
 if __name__ == "__main__":

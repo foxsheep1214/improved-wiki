@@ -47,46 +47,49 @@ These are repetitive — the same pages may be re-merged across runs.
 - For JSON wikilink tasks: output `{}`
 - Stop when `ingest.py` exits 0 (pipeline complete) or a non-merge/non-JSON LLM stage appears
 
-## Stage 2.2 quality gate (mandatory, added 2026-07-07)
+## Stage 2.2 quality gate (mandatory, revised 2026-07-08)
 
-**Incident (Skolnik, 14 chunks)**: a driving sub-agent kept answering
-`CONVERSATION →` turn after turn without ever exiting — the existing L4 chain
-cap (`references/delegate-mode.md`, "链式作答": max **2** same-stage handoffs
-per sub-agent, then exit and let the parent dispatch a fresh one) was not
-enforced. Context accumulated monotonically; Stage 2.4 prompts are 290–440 KB
-each (they embed the full chunk source text), and after chaining well past the
-cap the sub-agent degraded to placeholder outputs ("Radar Handbook Content"
-instead of real concept names) rather than actually reading the source.
+**Incident (Skolnik, 14 chunks, 2026-07-07)**: a driving sub-agent kept answering
+`CONVERSATION →` turn after turn without ever exiting. Context accumulated
+monotonically; Stage 2.4 prompts are 290–440 KB each (they embed the full chunk
+source text), and after chaining the sub-agent degraded to placeholder outputs
+("Radar Handbook Content" instead of real concept names).
 
-**This is not a new cap — it's a reminder that the existing one is not
-optional**: the L4 rule's "上限2个handoff" is a hard ceiling, not a target to
-approach. A sub-agent chaining Stage 2.2 or Stage 2.4 handoffs MUST exit after
-its 2nd handoff and report progress back to the parent, every time, regardless
-of book size or batch size. If a driving agent ever finds itself answering a
-3rd consecutive same-stage handoff, that is the bug to fix (the exit-after-2
-step was skipped), not a sign the cap should be relaxed.
+**Incident (EW and Radar Systems Handbook, 5 chunks, 2026-07-08)**: the driving
+agent answered all 5 chunks in the main conversation (not via subagent dispatch).
+The main conversation's context accumulated the same way a chained subagent's
+would — by chunk 5, attention was spread across the whole book and the model
+generated thin, generic output (17 concepts / 12 claims for a 455-page handbook).
+C1/C3 hard gates caught the symptom; the root cause was **main-conversation context
+accumulation**, identical to the Skolnik chaining failure but in the parent agent.
 
-**Quality gate (new — catches degradation at the cheapest point, Stage 2.2,
-before it propagates into Stage 2.4's generated pages)**: after every Stage 2.2
-response, before deciding whether to chain the next handoff or hand back to the
-parent, verify:
+**Root cause (both incidents)**: stateful conversation mode — the driving agent's
+context window grows with every chunk answered, degrading attention on later chunks.
+This is NOT a model-capability problem; it is an architecture problem. NashSU is
+immune because each `streamChat` is a stateless subprocess (fresh process, zero
+history). improved-wiki's conversation mode is stateful, so it must isolate each
+chunk's LLM call into a fresh subagent to achieve the same effect.
+
+**Policy (revised 2026-07-08 — supersedes the old L4 "max 2 handoffs" rule)**:
+- Stage 2.2 / 2.4: **dispatch a fresh subagent per chunk, max 1 handoff, then exit.**
+  See `references/delegate-mode.md` L4 revision.
+- The main conversation MUST NOT answer chunk prompts directly — doing so turns
+  the main conversation into an unbounded "super-subagent" with no isolation.
+- If a driving agent ever finds itself answering a 2nd consecutive same-stage
+  chunk prompt, that is the bug to fix (the per-chunk dispatch was skipped).
+
+**Quality gate (catches degradation at the cheapest point, Stage 2.2, before it
+propagates into Stage 2.4's generated pages)**: after every Stage 2.2 response,
+before advancing, verify:
 - ≥ 5 real concepts (count `- name:` entries in `concepts_found`)
 - No placeholder names (regex: `(?i)chunk \d|handbook content|reference material|technical content|book content`)
 - Response size ≥ 3000 bytes
+- C1 gate: source_quotes present, ≥3 claims with evidence anchors (enforced in code)
+- C3 gate: no concept with >5 key_details (enforced in code)
 
-Run `scripts/qc_stage22.py` (generalized from the ad-hoc script that caught the
-Skolnik incident; scans every `Stage-2-2-Chunk-*.txt` under
+Run `scripts/qc_stage22.py` (scans every `Stage-2-2-Chunk-*.txt` under
 `.llm-wiki/conversation/*/`) to check all responses at once. If a response
-fails the gate, delete the `.txt` and re-dispatch that turn — the sub-agent
-must actually read the chunk source text this time.
-
-**What NOT to do**:
-- Do NOT let a sub-agent drive an entire multi-chunk book or multi-book batch
-  end-to-end by ignoring the L4 exit-after-2 step — that is exactly how
-  Skolnik degraded.
-- Do NOT skip the quality gate even when context is tight — a thin Stage 2.2
-  response propagates to Stage 2.4 (ALREADY COVERED) and silently drops whole
-  chapters from the wiki (Skolnik chapters 5–26).
+fails the gate, delete the `.txt` and re-dispatch that chunk's subagent.
 
 ## Reading extracted text for Stage 2.1
 
@@ -125,17 +128,34 @@ keep each chunk well-extracted and formula-faithful:
    grep -n "frac\|tag{2-\|sigma\|lambda" "$EXTRACT_DIR"/p0NNN.txt   # find the eqn
    ```
 
-**Answer each chunk DIRECTLY yourself — do NOT fan out to per-chapter sub-agents.**
-A ~256K-char chunk (~2–3 chapters) is directly manageable in a single analyze pass
-and a single generate pass. A 2026-07-01 A/B ingest confirmed this: the 64K arm ran
-the whole book in **10 native round-trips with no fan-out**, cleaner than a 192K
-whole-book single chunk that had to be fanned out into per-chapter helpers +
-split-generation groups (which stalled repeatedly on orchestration for no quality
-gain). Sub-agent fan-out is only worth considering if you deliberately override the
-ceiling far up (`IMPROVED_WIKI_TARGET_TOKENS_CEIL=192000`) so one chunk spans the
-whole book — which is not the default and not recommended for dense references.
-For Stage 2.4, generate the chunk's exact slug list inline; verify block-count ==
-requested slugs (minus the `foo-bar` placeholder) before advancing.
+**Dispatch a FRESH subagent per chunk — do NOT answer chunks in the main conversation.**
+Each Stage 2.2 / 2.4 chunk prompt embeds ~250K chars of source text. If the driving
+agent answers chunk N in the main conversation, that full prompt + response stays in
+the main context window — by chunk N+1 the model's attention is spread across all
+prior chunks, not focused on the current one. This is the root cause of the
+"progressive thinning" failure (EW and Radar Systems Handbook, 2026-07-08: chunk 1
+had 10 concepts, but by chunk 5 the model was generating from domain memory rather
+than reading the source). C1/C3 hard gates (source_quotes, key_details≤5) catch the
+*symptom* — thin output — but do not prevent the *cause*: context accumulation
+degrading attention on later chunks.
+
+The fix is structural isolation: **one fresh subagent per chunk, max 1 handoff,
+then exit.** The subagent sees ONLY that chunk's prompt (source text + schema +
+prior digest), answers, and is destroyed — zero cross-chunk accumulation. This is
+the subagent equivalent of NashSU's stateless `streamChat` subprocess (each call is
+a fresh process with no memory of prior calls). The driving agent's main-conversation
+context stays clean for orchestration (dispatch, re-invoke, progress tracking).
+
+The 2026-07-01 A/B test (64K no-fan-out vs 192K with-fan-out) measured *chunk-size*
+tradeoffs but NOT *context-isolation* tradeoffs — it never compared "answer in main
+conversation" vs "fresh subagent per chunk." The quality benefit of per-chunk
+isolation was therefore never measured and never documented until the 2026-07-08
+EW/Radar incident. The ~15% wall-clock savings from L4 chained answering (max 2
+handoffs) is abandoned in favor of quality — see `references/delegate-mode.md` L4
+revision (2026-07-08).
+
+For Stage 2.4, the subagent generates that chunk's exact slug list; verify
+block-count == requested slugs (minus the `foo-bar` placeholder) before advancing.
 
 ## Re-ingest (comparison or correction)
 
