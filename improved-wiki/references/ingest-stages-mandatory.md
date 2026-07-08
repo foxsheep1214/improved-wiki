@@ -98,7 +98,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.2 · Chunk Analysis
 - **作用**：对源文本切块分析。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`formulas`/`connections_to_existing_wiki`/`digest_updates`/`updated_global_digest`。
 - **NashSU 对齐（2026-07-08）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 2.4/2.6/2.7/2.9。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），首 chunk 建立 book_meta+outline。
-- **per-chunk subagent 隔离**：保留（7/8 事故政策，见 `conversation-mode-agent-workflow.md`）——主对话滚动 `accumulated_digest`，每 chunk fresh subagent 答单 chunk。
+- **per-handoff subagent 隔离**：每 chunk fresh subagent 答单 chunk（7/8 事故政策；当晚扩展为**所有** LLM handoff 均派 fresh subagent、主对话只编排，见 `delegate-mode.md` L4）。
 - **go/no-go**：`stages.chunks_analyzed ≥ 1`；2.2 完成后 `_verify_stage_2_1_digest` 校验滚动最终 digest 5 字段（`not analyze_only` 时）。
 
 ### Stage 2.4 · Generation（single-pass pipeline）

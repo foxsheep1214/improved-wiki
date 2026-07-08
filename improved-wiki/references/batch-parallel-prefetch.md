@@ -49,13 +49,13 @@ cd <project-root>
 python3 ingest.py "raw/Book/A.pdf" "raw/Book/B.pdf" "raw/Book/C.pdf"
 ```
 
-batch 自动：启动 bg extract（B、C）→ 处理 A（2.2 + spine，LLM handoff 给你）→ 你答一个 handoff、重跑，batch 推进 → A 写完 → B（Phase 0/1 已就绪）→ ...。每个 handoff 你作答后重跑即可。
+batch 自动：启动 bg extract（B、C）→ 处理 A（2.2 + spine，LLM handoff 给你）→ 你派 fresh subagent 答一个 handoff、重跑，batch 推进 → A 写完 → B（Phase 0/1 已就绪）→ ...。每个 handoff 派 subagent 作答后重跑即可。
 
-## context 隔离（可选，省钱）
+## context 隔离（强制，2026-07-08 起）
 
-主对话累积历史会让每个 handoff 作答越来越贵。可选：每个 handoff 派一个 fresh subagent 作答（读 prompt、写 .txt、返回），主对话只协调。subagent 不继承主对话上下文，省 ~150k input token/handoff。
+主对话累积历史会让每个 handoff 作答越来越贵。**强制（2026-07-08 起，原为可选）**：每个 handoff 派一个 fresh subagent 作答（读 prompt、写 .txt、返回），主对话只协调（唯一例外 context probe）。subagent 不继承主对话上下文，省 ~150k input token/handoff，且消除多书累积的注意力稀释（见 delegate-mode.md L4）。
 
-**注意（与 SKILL.md 规则的关系）**：可**并行**作答的只有 wiki-independent 的预取 handoff（Phase 0/1 + 2.2，SKILL.md 规则）。串行 spine（2.3+）的 handoff 一次只有一个 pending——把它交给一个 fresh subagent 作答只是 context 隔离（省 token），**不是并行**，不违反串行不变量；spine 的协调（重跑 batch）必须留在主对话，保证一本一本串行。任何时刻都不允许两本书的 2.3+ handoff 同时在处理。
+**注意（与 SKILL.md 规则的关系）**：可**并行**作答的只有 wiki-independent 的预取 handoff（Phase 0/1 + 2.2，SKILL.md 规则）。串行 spine（2.3+）的 handoff 一次只有一个 pending——把它交给一个 fresh subagent 作答是 context 隔离（自 2026-07-08 起为强制政策），**不是并行**，不违反串行不变量；spine 的协调（重跑 batch）必须留在主对话，保证一本一本串行。任何时刻都不允许两本书的 2.3+ handoff 同时在处理。
 
 ## 进阶：`--stop-after-stage 1.5` 预取（隐藏下一本的 2.2，实测 2026-07-02）
 

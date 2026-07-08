@@ -32,10 +32,11 @@ Text generation has exactly one path, routed by
 `_llm_api.call_anthropic_protocol`:
 
 - **Conversation mode** (the only mode, no flag needed) — `ingest.py` writes a prompt
-  file at each LLM step and hands off (exit 101); the calling agent (the current
-  Claude Code conversation) answers with the current model and re-invokes with
-  identical args (see `references/delegate-mode.md`). Serial only — each call exits
-  the process. Wikilink enrichment also routes through this path now (batched: one
+  file at each LLM step and hands off (exit 101); the calling agent dispatches a
+  **fresh subagent per handoff** to answer it (1 handoff, then exit — NashSU per-call
+  statelessness; the main conversation only orchestrates and re-invokes; sole
+  exception: the context probe. See `references/delegate-mode.md` L4). Serial only —
+  each call exits the process. Wikilink enrichment also routes through this path now (batched: one
   round-trip per ingest covering every page written, not one per page).
 
 There is no direct-API text-gen path: this skill only runs from a CLI session

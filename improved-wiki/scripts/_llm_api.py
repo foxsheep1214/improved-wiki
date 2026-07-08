@@ -148,6 +148,9 @@ def conversation_handoff(
     print(f"  CONVERSATION → {tag}", flush=True)
     print(f"  Prompt:  {prompt_file}", flush=True)
     print(f"  Result:  {result_file}", flush=True)
+    print(f"  Answer via a FRESH subagent (1 handoff, then exit) — the main", flush=True)
+    print(f"  conversation only orchestrates; sole exception: the context probe.", flush=True)
+    print(f"  (NashSU per-call statelessness — see delegate-mode.md L4.)", flush=True)
     print(f"{'=' * 60}\n", flush=True)
     raise ConversationPending()
 

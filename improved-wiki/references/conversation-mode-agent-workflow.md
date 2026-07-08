@@ -30,7 +30,7 @@ Each step: `ingest.py` exits 101 → read prompt `.md` → write response `.txt`
 | Stage 2.4 | `Stage-2-4-Generation-*.md` | FILE blocks (`---FILE:wiki/<path>---\n...\n---END FILE---`) for source + concepts + entities | The largest step. Generate a page for EVERY concept/entity listed. Use exact slugs from the prompt. Only link to pages in the "Linkable pages" list. |
 | Stage 2.7 | `Stage-2-7-QueryGeneration-*.md` | 0-5 query FILE blocks or `---QUERIES: 0---` | Each query: type=query, title, background, clues, to-explore, see-also |
 | Stage 2.9 | `Stage-2-9-ComparisonReview-*.md` | 0-N comparison FILE blocks or `---COMPARISONS_IN_SOURCE: 0---` | Each comparison: why compare, table (≥4 dimensions), selection guide, see-also. |
-| Stage 3.4 | `Stage-3-4-Review-*.md` | YAML array of ≥5 review items (`type`/`title`/`description`/`affected_pages`/`severity`/`search_queries`) | Runs **after** Stage 3.1 write, on the already-written pages. Single handoff, no chunk chain — same as 2.6/2.7/2.9: just answer it and move on, no cap/dispatch decision to make. |
+| Stage 3.4 | `Stage-3-4-Review-*.md` | YAML array of ≥5 review items (`type`/`title`/`description`/`affected_pages`/`severity`/`search_queries`) | Runs **after** Stage 3.1 write, on the already-written pages. Single handoff, no chunk chain — but still dispatch a fresh subagent, same as every handoff (policy 2026-07-08). |
 | Merge tasks | `LLM-task-*.md` | Merged page body (no frontmatter) | **Delegate to subagent** — see below |
 | Wikilink enrichment | `LLM-task-*.md` (JSON) | `{}` to skip | Safe to skip if Stage 2.4 already added inline wikilinks |
 
@@ -48,15 +48,17 @@ These are repetitive — the same pages may be re-merged across runs.
 
 ## Stage 2.2 quality gate (mandatory, revised 2026-07-08)
 
-**Policy — dispatch a fresh subagent per chunk (Stage 2.2 / 2.4), max 1 handoff,
-then exit; the main conversation MUST NOT answer chunk prompts directly.** Chained
-or main-conversation answering accumulates each chunk's ~250K-char prompt in one
-context window and degrades later chunks into thin/placeholder output (两起事故：
-Skolnik 连答 14 chunks 2026-07-07；EW/Radar Handbook 主对话直答 5 chunks
-2026-07-08). 事故全程、根因分析与政策沿革的**权威版在
-`references/delegate-mode.md`（L4 修订）**——本文件只保留操作检查。If you find
-yourself answering a 2nd consecutive same-stage chunk prompt, the per-chunk
-dispatch was skipped — that is the bug.
+**Policy — dispatch a fresh subagent per handoff (EVERY prompt file: chunked
+2.2/2.4 AND single-shot 2.6/2.7/2.9/3.4/dedup-confirm/merge/wikilink), max 1
+handoff, then exit; the main conversation answers NO prompts (sole exception:
+the context probe).** Chained or main-conversation answering accumulates prompt
+text in one context window and degrades later output into thin/placeholder
+content (两起事故：Skolnik 连答 14 chunks 2026-07-07；EW/Radar Handbook 主对话
+直答 5 chunks 2026-07-08；单发 handoff 在 batch 多书时同样累积). 事故全程、根因
+分析与政策沿革的**权威版在 `references/delegate-mode.md`（L4 修订）**——本文件
+只保留操作检查。If you find yourself answering ANY handoff in the main
+conversation (other than the probe), the per-handoff dispatch was skipped —
+that is the bug.
 
 **Quality gate (catches degradation at the cheapest point, Stage 2.2, before it
 propagates into Stage 2.4's generated pages)**: after every Stage 2.2 response,
