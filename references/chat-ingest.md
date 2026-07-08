@@ -44,7 +44,7 @@ python3 scripts/ingest.py "raw/Book/Book.pdf" --stop-after-stage 0
 
 These are I/O operations — no LLM reasoning needed, no reason to involve the user.
 
-### Step 2: Present Analysis (Stage 2.1 equivalent)
+### Step 2: Present Analysis (Stage 2.2 digest equivalent)
 
 Claude reads the extracted text and presents a structured **digest** to the user:
 

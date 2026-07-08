@@ -135,11 +135,10 @@ def validate_stage_outputs(
     """
     warnings: list[str] = []
 
-    # Stage 0: extracted text sufficiency.
-    # Only a soft, redundant cross-check — a genuinely short/empty extraction is
-    # (No hard gate at extract time: the _verify_stage_1_1_text quality gate
-    # was removed 2026-07-08 for NashSU alignment; verify_stage_0's >=100-char
-    # check is the only extraction guard.) Guard on non-empty text: on a write-phase RESUME the caller
+    # Stage 0: extracted text sufficiency. Only a soft, redundant cross-check —
+    # no hard gate at extract time (the _verify_stage_1_1_text quality gate was
+    # removed 2026-07-08 for NashSU alignment; verify_stage_0's >=100-char
+    # check is the only extraction guard). Guard on non-empty text: on a write-phase RESUME the caller
     # does not reload the cached extracted text and passes "", which otherwise
     # fired a false "0 chars" warning even though extraction succeeded and every
     # page wrote. The empty-string case here means "not reloaded this run", not

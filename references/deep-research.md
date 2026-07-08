@@ -188,7 +188,7 @@ python3 scripts/ingest.py wiki/queries/<slug>.md
 The ingest entry-point accepts a `wiki/queries/` path directly (NashSU `autoIngest` parity): `_bridge_wiki_queries_to_raw` copies the page into `raw/queries/<slug>.md` and ingests that copy, so the rest of the raw-root-centric pipeline sees a normal source. The original `wiki/queries/<slug>.md` stays as the human-readable research page. (NashSU's `autoIngest` is path-agnostic and reads `wiki/queries/` directly; the improved-wiki pipeline derives source identity from a `raw/` path in ~20 places, so the copy is the bridge instead of a full refactor.)
 
 The ingest pipeline will:
-1. **Stage 2.1**: Analyze the research page → extract key entities/concepts
+1. **Stage 2.2**: Analyze the research page → extract key entities/concepts
 2. **Stage 2.4**: Generate entity/concept pages for newly discovered items
 3. **Stage 2.7**: Generate follow-up query pages if open questions found
 4. **Stage 2.9**: Generate comparison pages if relevant

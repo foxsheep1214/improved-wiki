@@ -76,7 +76,7 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # for the LLM; only the cache *key* is stabilized.
     #
     # Two prompt shapes carry the list, both must be redacted:
-    #   1. Inline single-line (Stage 2.1/2.8): "- Existing wiki pages: a, b, c"
+    #   1. Inline single-line (legacy 2.1/2.8 prompt shape): "- Existing wiki pages: a, b, c"
     #   2. Heading + multi-line list (Stage 2.4/2.7/2.9/3.4):
     #        "# Existing wiki pages ..." followed by indented dash items or a
     #        bare comma-separated line, terminated by a blank line or the next
@@ -93,9 +93,9 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # Redact volatile image alt-text captions. The image filename (a content
     # hash) is stable across runs, but the VLM/minerU alt-text caption may be
     # present or absent depending on the Stage 1.3 caption-cache state. Without
-    # this, Stage 2.1's extracted_text block changes hash whenever captions are
-    # added/removed, thrashing the 2.1 digest slug and re-prompting Stage 2.1
-    # on every resume (observed: 497f2b16 -> e20e22a4 for the same paper).
+    # this, a prompt's extracted_text block changes hash whenever captions are
+    # added/removed, thrashing the slug and re-prompting the stage on every
+    # resume (observed: 497f2b16 -> e20e22a4 for the same paper's digest).
     # Only the cache KEY is stabilized; the full prompt is still written to the
     # .md for the LLM.
     stable_prompt = re.sub(r'!\[[^\]]*\]\(', '![](', stable_prompt)
@@ -209,6 +209,4 @@ def _infer_stage(prompt: str) -> str:
         return "Stage-2-9-Comparison"
     if "review the concepts just generated for a book" in head.lower():
         return "Stage-2-9-ComparisonReview"
-    if "performing **Stage 1: Global Digest**" in head or "produce a **high-level structural summary**" in head:
-        return "Stage-2-1-Global-Digest"
     return "LLM-task"

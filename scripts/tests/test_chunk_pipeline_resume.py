@@ -241,15 +241,21 @@ class TestPrefetchBoundary(unittest.TestCase):
 
     def test_spine_reuses_cached_2_2_and_runs_generation(self):
         """After prefetch cached 2.2, a normal (analyze_only=False) call restores
-        chunk_analyses (no re-analysis) and proceeds to the generation tail."""
+        chunk_analyses + the persisted roll-up digest (no re-analysis) and
+        proceeds to the generation tail."""
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _make_config(tmp)
             raw = self._raw_file(tmp)
             h = _core.file_sha256(raw)
 
-            # Seed the prefetch cache (2.2 done, 2.3 NOT done).
-            _core.save_progress(cfg, h, {"chunk_analyses": self._fake_ca})
+            # Seed the prefetch cache (2.2 done, 2.3 NOT done) with the rolled-up
+            # digest the prefetch persists on 2.2 completion (5 required keys).
+            valid_digest = {"book_meta": {"granularity": "book"}, "outline": [],
+                            "key_concepts": ["soc"], "key_claims": [],
+                            "key_entities": []}
+            _core.save_progress(cfg, h, {"chunk_analyses": self._fake_ca,
+                                         "global_digest": valid_digest})
             _core.mark_stage_done(cfg, h, "stage_2_2_done")
 
             # Re-analysis must NOT happen on the spine resume.
@@ -263,12 +269,40 @@ class TestPrefetchBoundary(unittest.TestCase):
             _ingest_chunks._generate_from_analyses = _fake_gen
 
             ca, analysis, blocks, assoc, _gd = _ingest_chunks._run_chunk_pipeline(
-                "extracted " * 50, {"key_concepts": ["soc"]}, raw, cfg,
+                "extracted " * 50, {}, raw, cfg,
                 "template", _core.load_progress(cfg, h), verbose=False)
 
             self.assertEqual(calls["ca"], self._fake_ca)  # generation got cached 2.2
             self.assertEqual(analysis, {"method": "stub"})
             self.assertEqual(blocks, [("concepts/soc.md", "body")])
+            self.assertEqual(_gd, valid_digest)  # roll-up digest restored
+
+    def test_spine_invalidates_pre_rollup_cache_and_reruns_2_2(self):
+        """A cached 2.2 WITHOUT a persisted roll-up digest (pre-roll-up cache)
+        is invalidated and re-analyzed instead of silently feeding an empty
+        digest to 2.4/2.6/2.7/2.9."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = self._raw_file(tmp)
+            h = _core.file_sha256(raw)
+
+            # Pre-roll-up cache: chunk_analyses persisted, no global_digest.
+            _core.save_progress(cfg, h, {"chunk_analyses": self._fake_ca})
+            _core.mark_stage_done(cfg, h, "stage_2_2_done")
+
+            class _Reanalyzed(Exception):
+                pass
+            _ingest_chunks._analyze_all_chunks = lambda *_a, **_k: (
+                _ for _ in ()).throw(_Reanalyzed())
+
+            with self.assertRaises(_Reanalyzed):
+                _ingest_chunks._run_chunk_pipeline(
+                    "extracted " * 50, {}, raw, cfg,
+                    "template", _core.load_progress(cfg, h), verbose=False)
+
+            # Marker invalidated so the fresh 2.2 run persists a valid digest.
+            self.assertFalse(_core.is_stage_done(cfg, h, "stage_2_2_done"))
 
 
 if __name__ == "__main__":

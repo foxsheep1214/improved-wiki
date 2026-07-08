@@ -39,7 +39,6 @@ This script is idempotent: if the source page exists for a file, it's skipped.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -49,7 +48,6 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any
 
 # ── Imports from split stage modules (refactored 2026-06-18) ──
 from _core import (
@@ -85,6 +83,7 @@ from _stage_1_extract import (
     _stage_1_1_detect_pdf_type,
     CAPTION_MAX_WORKERS,
 )
+from _stage_1_1_scanned import MINERU_CHUNK_SIZE
 from _stage_2_analyze import (
     _stage_2_2_analyze_chunk,
     _stage_2_2_chunk_retries,
@@ -103,16 +102,12 @@ from _stage_3_write import (
     _stage_3_1_auto_correct_wiki_path, _stage_3_1_contains_cjk, _stage_3_1_make_cjk_slug,
     _stage_3_1_backup_existing_page,
 )
-from _stage_3_2_inject_images import stage_3_2_inject_images
 from _stage_3_7_embed import stage_3_7_embed_new_pages
 from _watch import ingest_watch
-from _stage_validators import (verify_stage_0, StageValidationError, _verify_or_die, _verify_stage_2_1_digest, _verify_stage_2_2_chunks, _verify_stage_2_4_file_blocks, validate_stage_outputs)
 
 
-# Use shared runtime detection (matches all other scripts)
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
-from _paths import detect_runtime_dir  # noqa: E402
 from _conversation_router import (  # noqa: E402,F401  (import side-effect: registers conversation router)
     call_anthropic_protocol,
     _load_task_manifest,
@@ -647,16 +642,16 @@ def main() -> int:
                 pages = len(doc)
                 doc.close()
                 _pdf_type, avg_chars = _stage_1_1_detect_pdf_type(raw_file)
-                mineru_chunks = max(1, (pages + 49) // 50)  # MINERU_CHUNK_SIZE = 50 pages
+                mineru_chunks = max(1, (pages + MINERU_CHUNK_SIZE - 1) // MINERU_CHUNK_SIZE)
                 print(f"  PDF: {pages} pages, avg {avg_chars:.0f} chars/page (sampled)")
-                print(f"  minerU extraction: ~{mineru_chunks} chunk(s) (50 pages/chunk, hybrid-engine)")
+                print(f"  minerU extraction: ~{mineru_chunks} chunk(s) ({MINERU_CHUNK_SIZE} pages/chunk, hybrid-engine)")
                 est_chars = int(max(avg_chars, 200)) * pages  # floor at 200 chars/page
                 chunks_est = max(1, (est_chars + config.target_chars - 1) // config.target_chars)
                 print(f"  Estimated text: ~{est_chars:,} chars ({pages} pages × {max(avg_chars, 200):.0f} chars/page)")
-                print(f"  Estimated API calls: 1 (Stage 2.1) + {chunks_est} (Stage 2.2 chunks) + 1-3 (Stage 2.4)")
+                print(f"  Estimated API calls: {chunks_est} (Stage 2.2 chunks) + 1-3 (Stage 2.4)")
             except Exception:
                 pass
-        print(f"  Stages: text-extract -> image-extract+caption -> digest -> chunk -> generate -> review -> inject -> write -> cache")
+        print(f"  Stages: text-extract -> image-extract+caption -> chunk+analyze -> generate -> review -> inject -> write -> cache")
         return 0
 
     h = file_sha256(raw_file)

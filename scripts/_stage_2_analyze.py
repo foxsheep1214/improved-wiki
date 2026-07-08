@@ -261,7 +261,7 @@ def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end
     return ""
 
 
-# ---------- Stage 1: Global Digest ----------
+# ---------- Stage 2.2 prompt building + chunking ----------
 
 def _stage_2_2_build_template_section(template: str, file_path: Path, max_chars: int = 4000) -> str:
     """Build the template injection section for a Stage 2.2 prompt.
