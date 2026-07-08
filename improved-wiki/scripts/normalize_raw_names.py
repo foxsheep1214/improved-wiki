@@ -373,6 +373,60 @@ def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: boo
     return results
 
 
+def stage_0_1_check_file(raw_file: Path, project_root: Path) -> List[str]:
+    """Per-file Stage 0.1 naming gate for the ingest pipeline (wired 2026-07-08).
+
+    Returns error strings (empty = compliant or out of scope). Scope mirrors
+    ``stage_0_1_scan_raw``: only ``.pdf`` files under a folder that declares a
+    rule are checked — so e.g. ``raw/queries/*.md`` deep-research bridge copies
+    always pass. Warn-level heuristics do not block.
+
+    Raises ``RuntimeError`` when the project has no parseable naming rules
+    (``schema.md`` missing or lacking the ```yaml rules block) — the documented
+    Stage 0.1 "draft the rules first" stop, no-silent-fallback aligned.
+    """
+    schema_md = project_root / 'schema.md'
+    if not schema_md.exists():
+        raise RuntimeError(
+            f"[Stage 0.1] {schema_md} not found — draft the project naming "
+            f"rules first (see references/raw-naming-conventions.md).")
+    rules = _stage_0_1_parse_yaml_block(schema_md.read_text(encoding='utf-8'))
+    if not rules or not rules.get('rules'):
+        raise RuntimeError(
+            f"[Stage 0.1] no ```yaml naming-rules block in {schema_md} — "
+            f"draft it first (see references/raw-naming-conventions.md).")
+
+    if raw_file.suffix.lower() != '.pdf':
+        return []
+    raw_root = project_root / 'raw'
+    try:
+        rel = raw_file.resolve().relative_to(raw_root.resolve())
+    except ValueError:
+        return []
+    if len(rel.parts) < 2 or rel.parts[0] not in rules['rules']:
+        return []
+
+    vendors_file = raw_root / 'Datasheet' / 'VENDORS.yaml'
+    if vendors_file.exists():
+        vdata = _stage_0_1_parse_simple_yaml(vendors_file.read_text(encoding='utf-8'))
+        if vdata.get('vendors'):
+            rules['vendors'] = vdata['vendors']
+        if vdata.get('vendor_prefixes'):
+            rules['vendor_prefixes'] = vdata['vendor_prefixes']
+
+    rule = _stage_0_1_resolve_rule(rules['rules'], rel.parts[0])
+    prefix_map = _stage_0_1_flatten_prefixes(rules.get('vendor_prefixes', {}))
+    issues = _stage_0_1_check_rule(raw_file, rule, rules.get('vendors', []), prefix_map)
+    forbidden_chars = rules.get('forbidden_chars') or [',', '，']
+    if isinstance(forbidden_chars, str):
+        forbidden_chars = [forbidden_chars]
+    for ch in forbidden_chars:
+        if ch and ch in raw_file.stem:
+            issues.append(("error",
+                f"文件名含禁用字符「{ch}」（逗号会被来源引用按逗号切分书名→断链），改用 ' - '"))
+    return [m for s, m in issues if s == "error"]
+
+
 # ── CLI ─────────────────────────────────────────────────────────
 
 def _stage_0_1_find_project_root() -> Optional[Path]:

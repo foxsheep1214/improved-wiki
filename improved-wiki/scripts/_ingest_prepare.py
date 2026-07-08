@@ -43,6 +43,7 @@ from _stage_validators import (
 )
 from _ingest_skip import _stage_0_2_should_skip, _stop_after_stage
 from _ingest_chunks import _run_chunk_pipeline
+from normalize_raw_names import stage_0_1_check_file
 
 # ── A6 (audit H2): big-book grounding de-bias ──
 # 2.7/2.9 grounding was `extracted_text[:source_budget]` — a pure front
@@ -214,6 +215,16 @@ def _do_prepare(
     _set_current_file(raw_file.name)
     print(f"\n=== [prepare] {raw_file.name} ===")
     try:
+        # ── Stage 0.1: raw naming gate (wired into the pipeline 2026-07-08;
+        # previously the one agent-run-only gate). Raises on violation or when
+        # the project has no naming rules — rename/draft first, then re-run.
+        _naming_errors = stage_0_1_check_file(raw_file, config.wiki_root)
+        if _naming_errors:
+            raise RuntimeError(
+                f"[Stage 0.1] {raw_file.name} 违反 raw 命名规范: "
+                + "；".join(_naming_errors)
+                + " — 先重命名（normalize_raw_names.py --fix）再 ingest。")
+
         # Dedup check — skip only if the ingest is truly complete (the
         # ``ingested`` completion marker is set); otherwise resume or re-ingest.
         if _stage_0_2_should_skip(raw_file, config):

@@ -9,7 +9,7 @@ related: [SKILL.md, known-issues, scanned-pdf-ocr-pipeline, image-caption-strate
 
 improved-wiki 流水线 = **16 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾、跨源 query 解析原 2.8 并入 2.7 收尾，功能保留、编号退休）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
 
-**执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 串行调度，agent 只答 prompt、无法跳过任何 stage（2.7/2.9 的跳过条件也是代码内置判断）。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。仅两条例外仍靠 agent 自觉：① **Stage 0.1 命名检查未接入 `ingest.py`**，喂文件前须手动跑 `normalize_raw_names.py --check`；② 不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。
+**执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 串行调度，agent 只答 prompt、无法跳过任何 stage（2.7/2.9 的跳过条件也是代码内置判断）。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。唯一仍靠 agent 自觉的规则：不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。（Stage 0.1 命名检查已于 2026-07-08 接入 `_do_prepare`——每个候选文件在 0.2 去重前自动过 `stage_0_1_check_file`，违规或项目无命名规则即 raise。）
 
 > **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。完整政策见 SKILL.md「No-silent-fallback policy」段。唯一例外：cache/stage-progress 状态文件损坏 → 告警+重置。
 
@@ -42,10 +42,10 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ## Phase 0：Pre-Ingest Gates
 
-### Stage 0.1 · Raw 文件命名规范检查（唯一 agent 手动前置门）
-- **作用**：确保 raw/ 下文件符合项目命名规范（规则记在 `<project>/raw/NAMING.md`）。
-- **流程**：`NAMING.md` 不存在 → 🛑 阻止 ingest，帮用户起草；存在 → `normalize_raw_names.py --check`，违规 → 🛑 阻止。
-- **go/no-go**：`raw/NAMING.md` 存在且候选文件全部合规。
+### Stage 0.1 · Raw 文件命名规范检查
+- **作用**：确保 raw/ 下文件符合项目命名规范（规则块以 `<project>/schema.md` 的 ```yaml 为准；datasheet 厂商表另在 `raw/Datasheet/VENDORS.yaml`）。
+- **流程**（2026-07-08 起代码强制）：`_do_prepare` 对每个候选文件调 `stage_0_1_check_file`——schema.md 缺失或无规则块 → raise（先起草规则）；违规 → raise（`normalize_raw_names.py --fix` 重命名后重跑）。范围与全库扫描一致：仅检查规则声明文件夹下的 `.pdf`（`raw/queries/*.md` 桥接件天然放行）；warn 级启发式不阻断。全库批量检查/修复仍用 `normalize_raw_names.py --check/--fix`。
+- **go/no-go**：候选文件全部合规。
 
 ### Stage 0.2 · 源页去重检查
 - **作用**：判断候选文件该跳过、续跑还是从头消化。**唯一完整性信号是 `ingested` marker**（`_finalize_book` 在 Stage 3.7 embeddings 之后置位，见 `scripts/_ingest_skip.py::_stage_0_2_should_skip`）；源页 `wiki/sources/<raw-rel-path>.md` 的存在性作辅助判据。**不依赖 `ingest-cache.json`**——缓存不可靠：可被删、跨对话丢失、并发损坏。
