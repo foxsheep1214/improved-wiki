@@ -219,8 +219,8 @@ def _do_prepare(
     _set_current_file(raw_file.name)
     print(f"\n=== [prepare] {raw_file.name} ===")
     try:
-        # Dedup check — skip only if the ingest is truly complete (stage_4_1
-        # marker set) or the source page exists and is reasonably complete.
+        # Dedup check — skip only if the ingest is truly complete (the
+        # ``ingested`` completion marker is set); otherwise resume or re-ingest.
         if _stage_0_2_should_skip(raw_file, config):
             return None
 

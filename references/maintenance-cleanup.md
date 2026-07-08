@@ -124,7 +124,7 @@ unboundedly. Options:
 
 ## "Done-but-missing" 书的诊断与恢复（2026-07-04 实战：HardwareWiki 10 本卡住）
 
-**症状**：`.llm-wiki/<hash>.stages.json` 里 `stage_4_1_done` / `write_loop_done` 都是 timestamp（看起来"消化完了"），但 `wiki/sources/<slug>.md` 实际**不存在**。
+**症状**：`.llm-wiki/<hash>.stages.json` 里 `ingested` / `write_loop_done` 都是 timestamp（看起来"消化完了"），但 `wiki/sources/<slug>.md` 实际**不存在**。
 
 **成因**：之前 ingest 进程在写 FILE blocks 阶段崩了（OOM / context 截断 / agent 重启），但 `write_loop_done` timestamp 已经写进了 stages.json（执行到一半留下的尾巴）。下一次重启后，ingest 看 cache 说"做过"直接 skip，但 wiki/ 树里什么都没有。
 

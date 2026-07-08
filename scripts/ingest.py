@@ -165,7 +165,7 @@ def _finalize_book(raw_file: Path, config: Config,
                    files_written: list, source_hash: str) -> None:
     """Per-book post-write finalization shared by the single-book and batch paths.
 
-    Runs Stage 3.7 (embeddings) → sets the ``stage_4_1`` completion marker.
+    Runs Stage 3.7 (embeddings) → sets the ``ingested`` completion marker.
 
     The dedicated post-ingest validation audit (formerly "Stage 4.1", running
     validate_ingest.py) was REMOVED for NashSU alignment: NashSU has no
@@ -173,10 +173,12 @@ def _finalize_book(raw_file: Path, config: Config,
     routing (``validateWikiPageRouting``), which improved-wiki already performs
     where NashSU does — at WRITE time in Stage 3.1
     (``_stage_3_1_auto_correct_wiki_path``) — so it is preserved automatically.
-    The ``stage_4_1`` marker KEY is kept (not renamed) as the finalize-complete
-    signal that ``_stage_0_2_should_skip`` reads, so already-ingested books stay
-    recognized as complete. ``validate_ingest.py`` remains as a standalone manual
-    tool; it is just no longer auto-run by ingest.
+    The completion marker is named ``ingested`` (renamed from the legacy
+    ``stage_4_1`` key on 2026-07-08: the old name implied a Stage 4.1 that no
+    longer exists; existing stages.json files were migrated in lockstep so
+    already-ingested books stay recognized as complete). ``_stage_0_2_should_skip``
+    reads this marker as the single completeness signal. ``validate_ingest.py``
+    remains as a standalone manual tool; it is just no longer auto-run by ingest.
 
     This finalization used to live ONLY in ingest_one, so batch_ingest — and the
     ``--watch`` queue daemon, which routes through batch_ingest — silently
@@ -191,7 +193,7 @@ def _finalize_book(raw_file: Path, config: Config,
     post-ingest graph rebuild). Run ``python3 scripts/graph.py`` manually.
     """
     stage_3_7_embed_new_pages(config, files_written)
-    mark_stage_done(config, source_hash, "stage_4_1")
+    mark_stage_done(config, source_hash, "ingested")
 
 
 def ingest_one(
@@ -218,7 +220,7 @@ def ingest_one(
         print(f"[conversation] {len(pending_tasks)} pending task(s) — resuming pipeline")
 
     # Stage-completion markers (Option A) drive resume semantics: the skip-check
-    # only short-circuits once stage_4_1 is done, so a mid-flight resume (pages
+    # only short-circuits once the ``ingested`` marker is set, so a mid-flight resume (pages
     # written but post-review stages pending) is never dropped.  _do_write in
     # turn skips the non-idempotent 3.1 write loop when `write_phase` is marked.
     try:

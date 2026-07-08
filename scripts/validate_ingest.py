@@ -42,7 +42,7 @@ SOURCES_DIR = WIKI / "sources"
 CACHE_KEY = os.environ.get("CACHE_KEY", "")
 
 
-def _stage_4_1_find_cache_entry(slug: str) -> Optional[dict]:
+def _validate_find_cache_entry(slug: str) -> Optional[dict]:
     """Find the cache entry whose key or filesWritten contains *slug*.
 
     Matching strategy (in order):
@@ -87,7 +87,7 @@ def _stage_4_1_find_cache_entry(slug: str) -> Optional[dict]:
     return None
 
 
-def _stage_4_1_find_media_dir(slug: str) -> Optional[Path]:
+def _validate_find_media_dir(slug: str) -> Optional[Path]:
     """Find media directory matching slug (recursive search — media/ mirrors raw/)."""
     if not MEDIA_DIR.is_dir():
         return None
@@ -114,7 +114,7 @@ _LINT_STATE_FILES = {
 }
 
 
-def _stage_4_1_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
+def _validate_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
     """Run structural lint with deterministic link suggestions over wiki/.
 
     Returns findings from _lint_suggest.run_structural_lint — broken-link,
@@ -151,10 +151,10 @@ def main():
     print("=" * 60)
 
     # ── Resolve cache entry ──
-    entry = _stage_4_1_find_cache_entry(SOURCE_SLUG)
+    entry = _validate_find_cache_entry(SOURCE_SLUG)
     stages = entry.get("stages", {}) if entry else {}
 
-    media = _stage_4_1_find_media_dir(SOURCE_SLUG)
+    media = _validate_find_media_dir(SOURCE_SLUG)
     source_page = None
     if SOURCES_DIR.is_dir():
         for f in SOURCES_DIR.rglob("*.md"):
@@ -466,7 +466,7 @@ def main():
     # ═══════════════════════════════════════════════
     print("\n[Lint suggestions] Structural (wiki-wide, non-gating)")
     try:
-        lint_findings = _stage_4_1_collect_structural_lint_findings(WIKI)
+        lint_findings = _validate_collect_structural_lint_findings(WIKI)
     except Exception as e:  # defensive: lint must never break the validator
         lint_findings = []
         note("structural lint skipped", f"{type(e).__name__}: {e}")

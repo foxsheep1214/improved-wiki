@@ -48,9 +48,14 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：`raw/NAMING.md` 存在且候选文件全部合规。
 
 ### Stage 0.2 · 源页去重检查 ⭐ 任何文件选取前强制
-- **作用**：判断候选文件是否已消化。**唯一依据：`wiki/sources/<raw-rel-path>.md` 是否存在**（不是 `ingest-cache.json`——缓存不可靠：可被删、跨对话丢失、并发损坏）。
-- **完整性校验**：源页存在但引用的 concepts/entities 丢失 >80% → 重新消化（防上次崩溃留残页）。
-- **go/no-go**：源页存在且 >80% 引用页面存在 → 跳过；否则进入 Stage 1.1。
+- **作用**：判断候选文件该跳过、续跑还是从头消化。**唯一完整性信号是 `ingested` marker**（`_finalize_book` 在 Stage 3.7 embeddings 之后置位，见 `scripts/_ingest_skip.py::_stage_0_2_should_skip`）；源页 `wiki/sources/<raw-rel-path>.md` 的存在性作辅助判据。**不依赖 `ingest-cache.json`**——缓存不可靠：可被删、跨对话丢失、并发损坏。
+- **四状态决策**（`stage_4_1` marker 已于 2026-07-08 改名为 `ingested`，已消化书的 stages.json 已同步迁移）：
+  1. `ingested` marker 在 + 源页存在 → **skip**（整本完成）。
+  2. `ingested` marker 在 + 源页不存在 → **stale marker**（源页被外部删了）→ 清 marker、重新消化。
+  3. `ingested` marker 不在 + 源页存在 → **resume**（已写盘但 post-write stages 未跑完；`write_phase` marker 让 3.1 写盘不重跑，resume 便宜且不重复合并已写页）。
+  4. `ingested` marker 不在 + 源页不存在 → **fresh ingest**。
+- **go/no-go**：状态 1 跳过；其余进入/续跑 Stage 1.1。
+- **历史**：曾设想"源页引用的 concepts/entities 丢失 >80% → 重消化"的 wikilink-completeness 校验，但该块代码写在一个无条件 `return False` 之后、**从未执行**，已于 2026-06-25 作为 dead code 删除（commit `1dfd4f9`）。当前**没有引用页完整性校验**；`ingested` marker 是唯一完整性信号。
 
 ---
 
@@ -143,7 +148,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ## （已移除）Phase 4：Validation — 对齐 NashSU
 
-原 Stage 4.1（ingest 末尾自动跑 `validate_ingest.py` 体检）**已移除**：NashSU 无 post-ingest 验证 stage。NashSU 唯一的 ingest 期检查是 schema 路由（`validateWikiPageRouting`），improved-wiki 已在**写盘期 Stage 3.1**（`_stage_3_1_auto_correct_wiki_path`）做了，故自动保留。`validate_ingest.py` 保留为**独立手动工具**（见下文"可选手动验证"）。Stage 3.7（embeddings）现为最后一个 stage，之后 `_finalize_book` 置 `stage_4_1` 完成标记（标记键名沿用以兼容已消化的书与跳过逻辑）。
+原 Stage 4.1（ingest 末尾自动跑 `validate_ingest.py` 体检）**已移除**：NashSU 无 post-ingest 验证 stage。NashSU 唯一的 ingest 期检查是 schema 路由（`validateWikiPageRouting`），improved-wiki 已在**写盘期 Stage 3.1**（`_stage_3_1_auto_correct_wiki_path`）做了，故自动保留。`validate_ingest.py` 保留为**独立手动工具**（见下文"可选手动验证"）。Stage 3.7（embeddings）现为最后一个 stage，之后 `_finalize_book` 置 `ingested` 完成标记（2026-07-08 从 `stage_4_1` 改名；已消化书的 stages.json 已同步迁移，`_stage_0_2_should_skip` 读 `ingested` 为唯一完整性信号）。
 
 ---
 
@@ -172,7 +177,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ## Resume marker 粒度 ≠ stage 编号
 
-上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_1_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点）、`stage_2_3_done`（覆盖 2.3+2.4）、`stage_2_9_done`（覆盖 2.5/2.6/2.7/2.8/2.9 整段）、`write_loop_done`、`write_phase`、`stage_4_1`（`ingest.py::_finalize_book` 所置，非某个 stage 模块自己的标记）。崩溃恢复是从**段边界**重启，不是逐 stage、逐 chunk。
+上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_1_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点）、`stage_2_3_done`（覆盖 2.3+2.4）、`stage_2_9_done`（覆盖 2.5/2.6/2.7/2.8/2.9 整段）、`write_loop_done`、`write_phase`、`ingested`（`ingest.py::_finalize_book` 所置的整书完成标记，非某个 stage 模块自己的标记；2026-07-08 从 `stage_4_1` 改名）。崩溃恢复是从**段边界**重启，不是逐 stage、逐 chunk。
 
 **对未来"合并/拆分 stage"讨论的含义**：任何编号调整默认只是文档层 renumber-only，代码与 marker 不动；但有两条**载荷性边界**碰了就坏，不能移动：
 1. `stage_2_2_done | stage_2_3_done` —— wiki-独立/依赖分界；批量 prefetch 靠在这里精确停住（`raise PrepareStopAfter("1.5")`）才能让下一本书的 prefetch 并行跑。

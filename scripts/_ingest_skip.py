@@ -31,36 +31,36 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
 
     Stage 0.2 dedup/skip — two gates, in order:
 
-    1. **Complete** — ``stage_4_1`` marker set: the ingest finished (through
+    1. **Complete** — ``ingested`` marker set: the ingest finished (through
        embeddings + validation). Skip. (If the source page was deleted
        externally the marker is stale — clear it and re-ingest.)
-    2. **Mid-flight** — source page exists but ``stage_4_1`` not set: pages were
+    2. **Mid-flight** — source page exists but ``ingested`` not set: pages were
        written but post-write stages may still be pending. Do NOT skip — resume.
        The finer-grained ``write_phase`` / ``write_loop_done`` markers inside
        _do_write skip the non-idempotent 3.1 write loop, so resuming is cheap
        and never re-merges already-written pages.
     3. **Fresh** — no source page: ingest from scratch.
 
-    The completion marker is the single skip signal. stage_4_1 (set only
+    The completion marker is the single skip signal. ingested (set only
     after a verified, embedded, validated ingest) is the authoritative
     completeness signal.
     """
     h = file_sha256(raw_file)
-    if is_stage_done(config, h, "stage_4_1"):
+    if is_stage_done(config, h, "ingested"):
         if not _stage_3_1_wiki_path_for_source(raw_file, config).exists():
             # Stale marker (source page deleted externally) — clear and re-ingest.
             from _core import stages_path as _sp
             _sp(config, h).unlink(missing_ok=True)
             return False
-        print(f"  [skip] Ingest complete (stage_4_1 marker present)")
+        print(f"  [skip] Ingest complete (ingested marker present)")
         return True
 
     source_page = _stage_3_1_wiki_path_for_source(raw_file, config)
     if not source_page.exists():
         return False
 
-    # Source page exists but stage_4_1 not done → mid-flight resume.  Do NOT
+    # Source page exists but ingested not done → mid-flight resume.  Do NOT
     # skip: post-write stages may still be pending.  The write_phase marker
     # inside _do_write handles skipping the non-idempotent 3.1 loop.
-    print(f"  [skip:resume] Source page exists, stage_4_1 not done — resuming")
+    print(f"  [skip:resume] Source page exists, ingested not done — resuming")
     return False

@@ -5,13 +5,13 @@ Stdlib `unittest` only — no pytest, no network, no LLM calls.
 Covers two 2026-06-25 audit findings:
 
   Finding 1 — batch/queue path skipped Stage 3.7 (embeddings) + 4.1
-  (validation) and never set the stage_4_1 marker, because that tail lived
+  (validation) and never set the ingested marker, because that tail lived
   only in ingest_one. _finalize_book now centralizes it; both ingest_one and
   batch_ingest call it. Test: _finalize_book runs embed→validate→mark in order.
 
   Finding 2 — _stage_0_2_should_skip carried ~60 lines of unreachable code
   (a wikilink-completeness check after an unconditional return). Removed; the
-  stage_4_1 marker is the single completeness signal. Test: the four
+  ingested marker is the single completeness signal. Test: the four
   marker/source-page states resolve to the right skip/resume decision.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _raw_file(tmp: Path) -> Path:
 
 
 class TestFinalizeBook(unittest.TestCase):
-    """_finalize_book = embeddings → stage_4_1 marker, in order.
+    """_finalize_book = embeddings → ingested marker, in order.
 
     The post-ingest validation auto-run (formerly between embed and the marker)
     was removed for NashSU alignment; _finalize_book now runs embeddings then
@@ -75,13 +75,13 @@ class TestFinalizeBook(unittest.TestCase):
             raw = _raw_file(tmp)
             h = _core.file_sha256(raw)
 
-            self.assertFalse(_core.is_stage_done(cfg, h, "stage_4_1"))
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
             ingest._finalize_book(raw, cfg, ["sources/x.md"], h)
 
             # Order matters: embeddings must precede the completion marker so a
             # failing/missing embed stack pauses BEFORE the book is marked done.
             self.assertEqual(self.calls, ["embed"])
-            self.assertTrue(_core.is_stage_done(cfg, h, "stage_4_1"))
+            self.assertTrue(_core.is_stage_done(cfg, h, "ingested"))
 
     def test_embed_failure_leaves_book_unmarked(self):
         """No-fallback: if embeddings raise, the book is NOT marked complete."""
@@ -97,7 +97,7 @@ class TestFinalizeBook(unittest.TestCase):
 
             with self.assertRaises(RuntimeError):
                 ingest._finalize_book(raw, cfg, ["sources/x.md"], h)
-            self.assertFalse(_core.is_stage_done(cfg, h, "stage_4_1"))
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
 
 
 class TestStage02ShouldSkip(unittest.TestCase):
@@ -120,24 +120,24 @@ class TestStage02ShouldSkip(unittest.TestCase):
             tmp = Path(d)
             cfg, raw, h = self._setup(tmp)
             self._write_source_page(cfg, raw)
-            _core.mark_stage_done(cfg, h, "stage_4_1")
+            _core.mark_stage_done(cfg, h, "ingested")
             self.assertTrue(_stage_0_2_should_skip(raw, cfg))
 
     def test_complete_marker_but_page_deleted_reingest_and_clears_marker(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg, raw, h = self._setup(tmp)
-            _core.mark_stage_done(cfg, h, "stage_4_1")  # marker set, no page
+            _core.mark_stage_done(cfg, h, "ingested")  # marker set, no page
             self.assertFalse(_stage_0_2_should_skip(raw, cfg))
             # Stale marker must be cleared so the re-ingest actually re-runs.
-            self.assertFalse(_core.is_stage_done(cfg, h, "stage_4_1"))
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
 
     def test_page_exists_no_marker_resumes(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg, raw, _h = self._setup(tmp)
             self._write_source_page(cfg, raw)
-            # Mid-flight: pages written but stage_4_1 not set → do NOT skip.
+            # Mid-flight: pages written but ingested not set → do NOT skip.
             self.assertFalse(_stage_0_2_should_skip(raw, cfg))
 
     def test_fresh_no_page_no_marker_ingests(self):
