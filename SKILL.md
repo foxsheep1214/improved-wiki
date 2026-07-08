@@ -150,6 +150,8 @@ Single-file auto-ingest, lint, graph, and save-chat-to-wiki are NOT gated — pr
 
 Full script inventory: `references/scripts-reference.md`. Entry points (bold in the reference): `ingest.py`, `graph.py`, `wiki-lint.sh`, `build_embeddings.py`, `search_wiki.py`, `validate_ingest.py`, `cross_source_dedup.py`, `sweep_reviews.py`.
 
+Scripts are owned by this skill; wiki projects **invoke** them in place（`~/.agents/skills/improved-wiki/scripts/<name>`），never copy/fork them into the project tree — a project without its own `scripts/` dir is expected. Per-project choices (VLM backend, batch size) go in the project's `wiki/methodology/` as decisions, not forked code.
+
 ## Trigger this skill
 
 **Auto Ingest**: User mentions wiki ingest / PDF OCR / batch ingest / validate-ingest / image caption / local minerU. Ingest runs in conversation mode (see "LLM execution model"); a single-book ingest is always serial. Batch parallelism rules: see "Batch ingest" under Key features. **Dedup rule**: before selecting any file, check `wiki/sources/<path>.md` exists. Never rely on `ingest-cache.json` for dedup.
