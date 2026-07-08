@@ -203,22 +203,47 @@ def load_provider_config(name: str | None = None) -> dict:
     }
 
 
+def _caption_provider_entry(provider: dict | None, name: str) -> dict | None:
+    """Shape one ~/.agents/config.json providers.<name> entry into the flat
+    dict Config/caption code consumes. Returns None if the entry is missing."""
+    if not provider:
+        return None
+    models = provider.get("models", {})
+    return {
+        "api_key": provider.get("api_key", ""),
+        "base_url": provider.get("base_url", ""),
+        "model": models.get("caption") or models.get("vision") or provider.get("model", ""),
+        "protocol": provider.get("protocol", "anthropic"),
+        "provider": name,
+    }
+
+
 def load_caption_provider() -> dict:
+    """Returns the primary caption provider dict, plus an optional
+    ``"fallback"`` sub-dict (or ``None``) resolved from ``caption_fallback_provider``.
+
+    Failover between two real-captioning VLM providers is NOT the
+    no-silent-fallback policy's target — that policy is about never silently
+    degrading to a non-caption path (e.g. OCR figure text) when captioning
+    can't run at all. A configured fallback provider is a second real VLM;
+    using it is loud (logged per image) and only after the primary's own
+    retries are exhausted (see _stage_1_3_caption.py). The final boundary is
+    unchanged: if BOTH providers are exhausted, the ingest still pauses.
+    """
     config_path = Path.home() / ".agents" / "config.json"
+    empty = {"api_key": "", "base_url": "", "model": "", "protocol": "", "provider": "", "fallback": None}
     if config_path.exists():
         try:
             cfg = json.loads(config_path.read_text(encoding="utf-8"))
             caption_name = cfg.get("caption_provider") or cfg.get("default", "")
-            provider = cfg.get("providers", {}).get(caption_name)
-            if provider:
-                models = provider.get("models", {})
-                return {
-                    "api_key": provider.get("api_key", ""),
-                    "base_url": provider.get("base_url", ""),
-                    "model": models.get("caption") or models.get("vision") or provider.get("model", ""),
-                    "protocol": provider.get("protocol", "anthropic"),
-                    "provider": caption_name,
-                }
+            primary = _caption_provider_entry(cfg.get("providers", {}).get(caption_name), caption_name)
+            if primary:
+                fallback_name = cfg.get("caption_fallback_provider", "")
+                primary["fallback"] = (
+                    _caption_provider_entry(cfg.get("providers", {}).get(fallback_name), fallback_name)
+                    if fallback_name else None
+                )
+                return primary
         except Exception as e:
             # No silent fallback: a broken config.json must surface (policy 2026-06-24).
             raise RuntimeError(
@@ -230,13 +255,7 @@ def load_caption_provider() -> dict:
     # (No env-var fallback: base_url/model/protocol can't come from a single
     # key, so a key-only env would silently produce broken HTTP calls instead
     # of the clean no-key pause below — removed 2026-07-06.)
-    return {
-        "api_key": "",
-        "base_url": "",
-        "model": "",
-        "protocol": "",
-        "provider": "",
-    }
+    return empty
 
 
 # ── NashSU-aligned context budget (ported from llm_wiki/src/lib/context-budget.ts + ingest.ts) ──
@@ -329,6 +348,10 @@ class Config:
     context_size: int | None = None
     conversation_prefix: str = ""
     caption_protocol: str = "anthropic"
+    caption_fallback_api_key: str = ""
+    caption_fallback_base_url: str = ""
+    caption_fallback_model: str = ""
+    caption_fallback_protocol: str = ""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -362,6 +385,10 @@ class Config:
             caption_base_url=caption["base_url"],
             caption_model=caption["model"],
             caption_protocol=caption.get("protocol", "anthropic"),
+            caption_fallback_api_key=(caption.get("fallback") or {}).get("api_key", ""),
+            caption_fallback_base_url=(caption.get("fallback") or {}).get("base_url", ""),
+            caption_fallback_model=(caption.get("fallback") or {}).get("model", ""),
+            caption_fallback_protocol=(caption.get("fallback") or {}).get("protocol", ""),
             chunk_size=300_000,
             chunk_overlap=3_000,
             source_budget=source_budget,

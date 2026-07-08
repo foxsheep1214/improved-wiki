@@ -81,10 +81,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 1.3 · 图片 captioning
 - **作用**：对每张图用 VLM 生成 2-4 句描述（与源文本同语言，NashSU `captionImage` parity）。**一图一调用** + 上下文感知 prompt（前后正文作 anchoring context，NashSU `buildCaptionPromptWithContext` parity；`CONTEXT_CHARS=150`）。
-- **依赖**：`~/.agents/config.json` 配置 caption_provider（无 env-var 替代路径——base_url/model/protocol 无法只靠一个 key 推出）。
+- **依赖**：`~/.agents/config.json` 配置 caption_provider（primary，无 env-var 替代路径——base_url/model/protocol 无法只靠一个 key 推出）+ 可选 caption_fallback_provider（2026-07-08）。
 - **产物**：每图一个 `.caption.txt`。
 - **go/no-go**：每张图有 caption 文件且长度 ≥20 字符。
-- **无回退**：key 缺失 → `raise RuntimeError` 暂停；孤立单图重试 3 次仍失败 → 写 `[待重试]` 占位符（下次运行重试，非质量降级）；连续 3 次失败 → 判定 VLM 主路径宕机 `raise RuntimeError` 暂停。
+- **failover（2026-07-08）**：primary 单图 3 次重试耗尽后，若配了 fallback，自动切 fallback 再试 3 次（打一行日志，非静默）——推荐 primary=GLM-5v-turbo、fallback=本地 Ollama qwen3-vl:8b-instruct，见 `image-caption-strategy.md`。
+- **无回退**：无 provider（primary 都没配）→ `raise RuntimeError` 暂停；孤立单图两个 provider 都耗尽 → 写 `[待重试]` 占位符（下次运行重试，非质量降级）；连续 3 次（每次都已两个 provider 都试过）失败 → 判定全部 VLM 路径宕机 `raise RuntimeError` 暂停。
 
 ---
 

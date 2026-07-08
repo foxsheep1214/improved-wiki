@@ -1,13 +1,24 @@
-"""Stage 1.3 unified image captioning (configurable VLM provider).
+"""Stage 1.3 unified image captioning (configurable VLM provider, with failover).
 
 Extracted from _stage_1_extract.py on 2026-06-24. Owns the per-image caption
 dispatch, VLM-failure detection, image preprocessing, the no-API-key hard-stop
 (no silent fallback per the 2026-06-24 policy), and the NashSU-style
 context-aware prompt (one image per call, 2026-06-24 port).
 
-Provider is configured via ~/.agents/config.json caption_provider entry.
-Supported protocols: anthropic (Anthropic Messages API), openai (OpenAI
-chat/completions compatible — e.g. Ollama / local models).
+Provider is configured via ~/.agents/config.json caption_provider entry
+(primary) + an optional caption_fallback_provider entry. Supported protocols:
+anthropic (Anthropic Messages API), openai (OpenAI chat/completions compatible
+— e.g. Ollama / local models).
+
+Failover (2026-07-08): when a fallback provider is configured, each image
+tries the primary first (its normal 3-attempt retry); only on primary
+exhaustion does it try the fallback (also 3 attempts). This is NOT the
+"no-silent-fallback" degradation the rest of the policy forbids — both
+providers are real VLM captioning, so using the fallback is loud (one log
+line per failover) rather than silent, and the final boundary is unchanged:
+if BOTH are exhausted, Stage 1.3 still pauses (raise). Recommended pairing:
+primary GLM-5v-turbo (cloud, higher quality), fallback a local Ollama model
+(qwen3-vl:8b-instruct) for when the cloud path is rate-limited or down.
 
 Design (NashSU parity, 2026-06-24):
   - One image per LLM call (was: 8-image batches). Each figure gets the full
@@ -61,9 +72,11 @@ CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "4"))
 # 150 chars/side covers the figure-caption sweet spot (a figure label + the
 # referring sentence) while staying cheap. We match 150 exactly.
 CONTEXT_CHARS = 150
-# A per-image call is declared systemically failed after this many consecutive
-# failures — at that point the VLM main path is assumed down and we pause
-# (no silent fallback). Isolated single failures get a retryable placeholder.
+# A per-image call (all configured providers already tried, see
+# _stage_1_3_caption_one_image_with_failover) is declared systemically failed
+# after this many consecutive failures — at that point every configured VLM
+# path is assumed down and we pause (no silent fallback to a non-caption
+# path). Isolated single failures get a retryable placeholder.
 CONSECUTIVE_FAIL_PAUSE = 3
 
 
@@ -519,9 +532,13 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
 # Per-image VLM call (one image, one call, plain-text reply)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
+def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
                                  ctx_map: dict[str, dict]) -> tuple[str | None, str | None]:
-    """Caption a single image with one VLM call. Returns (caption, error).
+    """Caption a single image against ONE provider with one VLM call.
+
+    ``provider`` is a flat bundle (api_key/base_url/model/protocol) — see
+    ``_stage_1_3_provider_bundles``. Callers needing failover between a
+    primary and fallback provider use ``_stage_1_3_caption_one_image_with_failover``.
 
     On a transient API failure, retries up to 3 times. A final failure is
     surfaced as an error string so the caller can decide (placeholder vs
@@ -550,7 +567,7 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
     prompt_text = _stage_1_3_build_user_prompt(img, ctx)
 
     # ── Protocol dispatch: anthropic vs openai ──
-    protocol = (config.caption_protocol or "anthropic").lower()
+    protocol = (provider["protocol"] or "anthropic").lower()
 
     if protocol == "openai":
         # OpenAI chat/completions format (Ollama /v1, vLLM, etc.)
@@ -559,9 +576,9 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
             {"type": "text", "text": prompt_text},
             {"type": "image_url", "image_url": {"url": data_url}},
         ]
-        url = f"{config.caption_base_url.rstrip('/')}/v1/chat/completions"
+        url = f"{provider['base_url'].rstrip('/')}/v1/chat/completions"
         body = json.dumps({
-            "model": config.caption_model,
+            "model": provider["model"],
             "max_tokens": 1024,
             "messages": [
                 {"role": "system", "content": CAPTION_SYSTEM_PROMPT},
@@ -572,8 +589,8 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         headers = {
             "Content-Type": "application/json",
         }
-        if config.caption_api_key:
-            headers["Authorization"] = f"Bearer {config.caption_api_key}"
+        if provider["api_key"]:
+            headers["Authorization"] = f"Bearer {provider['api_key']}"
 
         last_err = None
         for attempt in range(3):
@@ -599,9 +616,9 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         {"type": "text", "text": prompt_text},
         {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}},
     ]
-    url = f"{config.caption_base_url.rstrip('/')}/anthropic/v1/messages"
+    url = f"{provider['base_url'].rstrip('/')}/anthropic/v1/messages"
     body = json.dumps({
-        "model": config.caption_model,
+        "model": provider["model"],
         "max_tokens": 1024,
         "system": CAPTION_SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": content}],
@@ -613,7 +630,7 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         try:
             req = urllib.request.Request(url, data=body, method="POST", headers={
                 "Content-Type": "application/json",
-                "x-api-key": config.caption_api_key,
+                "x-api-key": provider["api_key"],
                 "anthropic-version": "2023-06-01",
             })
             with urllib.request.urlopen(req, timeout=180) as resp:
@@ -628,6 +645,51 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         if attempt < 2:
             time.sleep(2 ** attempt)
     return None, last_err
+
+
+def _stage_1_3_provider_bundles(config: Config) -> list[tuple[str, dict]]:
+    """``[("primary", {...})]`` plus ``("fallback", {...})`` when a fallback
+    provider is configured (non-empty base_url/model — an api_key can
+    legitimately be empty for an unauthenticated local server)."""
+    bundles = [("primary", {
+        "api_key": config.caption_api_key,
+        "base_url": config.caption_base_url,
+        "model": config.caption_model,
+        "protocol": config.caption_protocol,
+    })]
+    if config.caption_fallback_base_url and config.caption_fallback_model:
+        bundles.append(("fallback", {
+            "api_key": config.caption_fallback_api_key,
+            "base_url": config.caption_fallback_base_url,
+            "model": config.caption_fallback_model,
+            "protocol": config.caption_fallback_protocol,
+        }))
+    return bundles
+
+
+def _stage_1_3_caption_one_image_with_failover(
+    img: dict, config: Config, media_dir: Path, ctx_map: dict[str, dict],
+) -> tuple[str | None, str | None, str]:
+    """Try the primary provider, then the fallback (if configured) on primary
+    exhaustion. Returns (caption, error, provider_label) — label is whichever
+    provider produced the final result (or attempted last, on total failure).
+
+    Loud, not silent: a fallback attempt prints one line so the operator can
+    see how often the primary is failing. The no-silent-fallback boundary is
+    unchanged — if every configured provider fails, the caller still treats
+    this as a failure (placeholder / circuit-breaker / final raise).
+    """
+    bundles = _stage_1_3_provider_bundles(config)
+    last_err = None
+    for i, (label, provider) in enumerate(bundles):
+        caption, err = _stage_1_3_caption_one_image(img, provider, media_dir, ctx_map)
+        if caption:
+            return caption, None, label
+        last_err = err
+        if i < len(bundles) - 1:
+            print(f"    [caption] {img['filename']}: {label} ({provider['model']}) "
+                  f"failed ({err}) — trying fallback ({bundles[i+1][1]['model']})...")
+    return None, last_err, bundles[-1][0]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -681,11 +743,13 @@ def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir:
     next round (or the caller's final no-fallback raise).
     """
     captioned = 0
+    fallback_used = 0
     consecutive_fail = 0
     workers = min(CAPTION_MAX_WORKERS, len(pending)) or 1
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_img = {
-            executor.submit(_stage_1_3_caption_one_image, img, config, media_dir, ctx_map): img
+            executor.submit(_stage_1_3_caption_one_image_with_failover,
+                            img, config, media_dir, ctx_map): img
             for img in pending
         }
         done = 0
@@ -693,9 +757,9 @@ def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir:
             img = future_to_img[future]
             done += 1
             try:
-                caption, err = future.result()
+                caption, err, used = future.result()
             except Exception as e:
-                caption, err = None, f"unhandled {type(e).__name__}: {e}"
+                caption, err, used = None, f"unhandled {type(e).__name__}: {e}", "primary"
             if caption:
                 consecutive_fail = 0
                 cap_text = caption.strip()
@@ -705,7 +769,10 @@ def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir:
                 (media_dir / (img["filename"] + ".caption.txt")).write_text(
                     cap_text, encoding="utf-8")
                 captioned += 1
-                print(f"  [{done}/{len(pending)}] {img['filename']} ✓")
+                tag = " (fallback)" if used == "fallback" else ""
+                if used == "fallback":
+                    fallback_used += 1
+                print(f"  [{done}/{len(pending)}] {img['filename']} ✓{tag}")
             else:
                 consecutive_fail += 1
                 placeholder = (f"[待重试] 图片 {img['filename']}，"
@@ -717,10 +784,12 @@ def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir:
                 if consecutive_fail >= CONSECUTIVE_FAIL_PAUSE:
                     raise RuntimeError(
                         f"Caption VLM failed {consecutive_fail} images in a row "
-                        f"(last: {err}). No fallback — the main captioning path "
-                        f"is not working. Fix the provider and re-run (cached, "
-                        f"resumes from Stage 1.3)."
+                        f"(last: {err}). All configured providers exhausted — the "
+                        f"main captioning path is not working. Fix the provider(s) "
+                        f"and re-run (cached, resumes from Stage 1.3)."
                     )
+    if fallback_used:
+        print(f"  [caption] {fallback_used}/{captioned} images this round used the fallback provider")
     return captioned
 
 
@@ -732,12 +801,16 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
     NashSU parity (2026-06-24): one image per call with a context-aware
     prompt. `max_workers` caps the parallel calls.
 
-    No-silent-fallback policy: a missing API key pauses the ingest.
-    Isolated per-image failures get up to _MAX_CAPTION_ROUNDS retry rounds
-    with backoff (C-caption, 2026-07-08) — Stage 1.3 does NOT hand off to
-    Stage 2 with placeholders still in place. CONSECUTIVE_FAIL_PAUSE
-    failures in a row within any round means the VLM main path is down →
-    pause (raise) immediately, without waiting for the remaining rounds.
+    No-silent-fallback policy: a missing API key pauses the ingest. Each
+    image tries the primary provider, then a configured fallback provider
+    (2026-07-08, loud not silent — see _stage_1_3_caption_one_image_with_failover);
+    that is provider failover, not the policy's "silent degrade to no caption"
+    case. Isolated per-image failures (both providers exhausted) get up to
+    _MAX_CAPTION_ROUNDS retry rounds with backoff (C-caption, 2026-07-08) —
+    Stage 1.3 does NOT hand off to Stage 2 with placeholders still in place.
+    CONSECUTIVE_FAIL_PAUSE failures in a row within any round means every
+    configured provider's main path is down → pause (raise) immediately,
+    without waiting for the remaining rounds.
     """
     if not images:
         return 0
@@ -777,9 +850,10 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
         more = f" (+{len(pending) - 8} more)" if len(pending) > 8 else ""
         raise RuntimeError(
             f"Caption: {len(pending)}/{len(images)} images still failing after "
-            f"{_MAX_CAPTION_ROUNDS} rounds: {names}{more}. No fallback — the "
-            f"ingest does not advance to Stage 2 with incomplete captions. "
-            f"Fix the provider (rate limit window, or switch caption_provider "
+            f"{_MAX_CAPTION_ROUNDS} rounds: {names}{more}. All configured "
+            f"providers (primary + fallback, if any) exhausted — the ingest "
+            f"does not advance to Stage 2 with incomplete captions. Fix the "
+            f"provider (rate limit window, or add/switch caption_fallback_provider "
             f"in ~/.agents/config.json) and re-run (cached, resumes from "
             f"Stage 1.3, only re-does the images still pending)."
         )
