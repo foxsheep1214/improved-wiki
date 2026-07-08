@@ -30,7 +30,7 @@ ps aux | grep ingest.py | grep -v grep
 
 ### 🔒 项目锁冲突诊断（常见卡点，2026-07-04 实战修）
 
-`ingest.py:675` 的报错 `Could not acquire project lock — another ingest may be running` 经常出现，但很少是真正的"并发 ingest"——多数是**后台 OCR 子进程**还活着。improved-wiki 的 minerU Phase 0/1 在前台 batch 持锁时，会用 `subprocess.Popen(start_new_session=True)` 启动后台跑 `--no-project-lock`，但**主对话 LLM 阶段（Stage 2.1+）要求持锁**。所以常见卡法是：
+`ingest.py:675` 的报错 `Could not acquire project lock — another ingest may be running` 经常出现，但很少是真正的"并发 ingest"——多数是**后台 OCR 子进程**还活着。improved-wiki 的 minerU Phase 0/1 在前台 batch 持锁时，会用 `subprocess.Popen(start_new_session=True)` 启动后台跑 `--no-project-lock`，但**主对话 LLM 阶段（Stage 2.2+）要求持锁**。所以常见卡法是：
 
 ```
 Symptom: "ERROR: Could not acquire project lock — another ingest may be running"
@@ -52,7 +52,7 @@ fuser /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/ingest.lock 2>/dev/
 # 没回显 = 没有人持锁，可以删；in.py 自动 take over
 ```
 
-**用户策略（胡杨 2026-07-04 拍板）**：看到锁就别抢，**等 OCR 自然跑完再继续**。OCR 完成 `stage_0_done` 后会自动 `lock.release()`，主对话重新跑同一本书的 `ingest.py file.pdf`，即可从 Stage 2.1 续上。
+**用户策略（胡杨 2026-07-04 拍板）**：看到锁就别抢，**等 OCR 自然跑完再继续**。OCR 完成 `stage_0_done` 后会自动 `lock.release()`，主对话重新跑同一本书的 `ingest.py file.pdf`，即可从 Stage 2.2 续上。
 
 🚫 **禁止**：未经用户许可 `kill <pid>` 后台 OCR——即使它跑了几十分钟。minerU 重启开销大（server 冷启动 60s+），杀掉就要重头 OCR。
 

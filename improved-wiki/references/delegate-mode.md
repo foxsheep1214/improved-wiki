@@ -114,8 +114,8 @@ exceed foreground terminal timeouts. Split the run:
 ```
 
 `--stop-after-stage 0` halts **cleanly (exit 0, `{"status":"ok","stopped_after":"0"}`)**
-after Stage 1.1–1.3 (text + image + caption) complete and **before** Stage 2.1 —
-the 2.1 global digest is not even submitted. Re-running without the flag resumes
+after Stage 1.1–1.3 (text + image + caption) complete and **before** Stage 2.2 —
+no chunk-analysis prompt is even submitted. Re-running without the flag resumes
 from the cached extraction (stage_1_x_done markers). If the OCR phase times out
 mid-chunk, re-running the same command resumes from the last completed chunk
 (minerU caches per-chunk results in `.llm-wiki/extract-tmp/`).

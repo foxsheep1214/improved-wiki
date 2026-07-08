@@ -36,7 +36,7 @@ tail -f /tmp/ingest_watch.log
 Key options:
 - `--watch` — continuously re-scans `ingest-queue.json` (every 30s by default)
 - `--drain` — exit when the queue is empty (omit to loop forever)
-- `--parallel N` — max concurrent books for the wiki-independent PREFETCH only (Phase 0/1 + Stage 2.1/2.2; default: 4). The wiki-dependent spine (Stage 2.3→write) always runs one book at a time regardless of N.
+- `--parallel N` — max concurrent books for the wiki-independent PREFETCH only (Phase 0/1 + Stage 2.2; default: 4). The wiki-dependent spine (Stage 2.3→write) always runs one book at a time regardless of N.
 - `--poll-interval SECS` — override the 30s queue re-scan interval
 - `--max-retries N` — max attempts per queued entry before giving up (default: 3)
 
@@ -72,7 +72,7 @@ already have a source page in `wiki/sources/`.
   multiple processes on the same project serialize automatically, and a stale
   lock from a crashed run is auto-recovered ("Stale lock from pid=XXX — taking over").
 - **Batch parallelism rule**: only the wiki-independent PREFETCH (Phase 0/1 +
-  Stage 2.1/2.2) runs across books in parallel; the wiki-dependent spine
+  Stage 2.2) runs across books in parallel; the wiki-dependent spine
   (Stage 2.3→write) runs one book at a time (see SKILL.md "Batch ingest" and
   `references/batch-parallel-prefetch.md`). LLM calls within a single book are
   serial (conversation mode — one prompt at a time).

@@ -320,11 +320,24 @@ def _run_chunk_pipeline(
         _verify_stage_2_2_chunks(chunk_analyses, extracted_text)
         if analyze_only:
             raise PrepareStopAfter("1.5")
-        global_digest = progress.get("global_digest", global_digest)
-        result = _generate_from_analyses(
-            chunk_analyses, extracted_text, global_digest, raw_file, config,
-            template_content, verbose)
-        return (*result, global_digest)
+        # Restore the persisted roll-up digest. A pre-roll-up cache (no valid
+        # persisted global_digest) would silently feed an empty digest to
+        # 2.4/2.6/2.7/2.9 — same pattern as the stage_2_3_done restore above:
+        # warn, invalidate the marker, and fall through to re-run 2.2.
+        _digest_cached = progress.get("global_digest")
+        _digest_keys = {"book_meta", "outline", "key_concepts", "key_claims", "key_entities"}
+        if not isinstance(_digest_cached, dict) or not _digest_keys.issubset(_digest_cached):
+            print("  [stage 2.2] ⚠️  stage_2_2_done set but no valid rolled-up "
+                  "global_digest persisted (pre-roll-up cache?) — invalidating "
+                  "marker and re-running chunk analysis (prevents an empty "
+                  "digest reaching 2.4/2.6/2.7/2.9).")
+            unmark_stage_done(config, _h, "stage_2_2_done")
+        else:
+            global_digest = _digest_cached
+            result = _generate_from_analyses(
+                chunk_analyses, extracted_text, global_digest, raw_file, config,
+                template_content, verbose)
+            return (*result, global_digest)
 
     # \u2500\u2500 Stage 2.2: build chunk plan + analyze all chunks (wiki-independent) \u2500\u2500
     chunk_meta, chunk_total = _build_chunk_meta(extracted_text, config)

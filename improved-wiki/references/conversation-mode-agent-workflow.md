@@ -26,12 +26,11 @@ Each step: `ingest.py` exits 101 → read prompt `.md` → write response `.txt`
 
 | Step | Prompt file pattern | What to produce | Key tips |
 |------|-------------------|-----------------|----------|
-| Stage 2.1 | `Stage-2-1-Global-Digest-*.md` | YAML with 6 top-level keys (book_meta, outline, key_entities, key_concepts, key_claims, chunk_plan) | **Read full text from `.llm-wiki/extract-tmp/<stem>/p*.txt`** — the prompt only includes ~4K chars sampled from the middle |
-| Stage 2.2 | `Stage-2-2-Chunk-N-*.md` | YAML with chunk_index, entities_found, concepts_found, claims, formulas, connections_to_existing_wiki | Include detailed concept definitions with key_details — these feed directly into generation |
+| Stage 2.2 | `Stage-2-2-Chunk-N-*.md` | YAML with chunk_index, entities_found, concepts_found, claims, formulas, connections_to_existing_wiki, **updated_global_digest** (5 fields: book_meta/outline/key_entities/key_concepts/key_claims — rolls up across chunks; standalone 2.1 removed 2026-07-08) | Include detailed concept definitions with key_details — these feed directly into generation. First chunk establishes book_meta + outline; later chunks refine and append. |
 | Stage 2.4 | `Stage-2-4-Generation-*.md` | FILE blocks (`---FILE:wiki/<path>---\n...\n---END FILE---`) for source + concepts + entities | The largest step. Generate a page for EVERY concept/entity listed. Use exact slugs from the prompt. Only link to pages in the "Linkable pages" list. |
 | Stage 2.7 | `Stage-2-7-QueryGeneration-*.md` | 0-5 query FILE blocks or `---QUERIES: 0---` | Each query: type=query, title, background, clues, to-explore, see-also |
 | Stage 2.9 | `Stage-2-9-ComparisonReview-*.md` | 0-N comparison FILE blocks or `---COMPARISONS_IN_SOURCE: 0---` | Each comparison: why compare, table (≥4 dimensions), selection guide, see-also. |
-| Stage 3.4 | `Stage-3-4-Review-*.md` | YAML array of ≥5 review items (`type`/`title`/`description`/`affected_pages`/`severity`/`search_queries`) | Runs **after** Stage 3.1 write, on the already-written pages. Single handoff, no chunk chain — same as 2.1/2.6/2.7/2.9: just answer it and move on, no cap/dispatch decision to make. |
+| Stage 3.4 | `Stage-3-4-Review-*.md` | YAML array of ≥5 review items (`type`/`title`/`description`/`affected_pages`/`severity`/`search_queries`) | Runs **after** Stage 3.1 write, on the already-written pages. Single handoff, no chunk chain — same as 2.6/2.7/2.9: just answer it and move on, no cap/dispatch decision to make. |
 | Merge tasks | `LLM-task-*.md` | Merged page body (no frontmatter) | **Delegate to subagent** — see below |
 | Wikilink enrichment | `LLM-task-*.md` (JSON) | `{}` to skip | Safe to skip if Stage 2.4 already added inline wikilinks |
 
@@ -84,25 +83,14 @@ before advancing, verify:
 - ≥ 5 real concepts (count `- name:` entries in `concepts_found`)
 - No placeholder names (regex: `(?i)chunk \d|handbook content|reference material|technical content|book content`)
 - Response size ≥ 3000 bytes
-- C1 gate: source_quotes present, ≥3 claims with evidence anchors (enforced in code)
-- C3 gate: no concept with >5 key_details (enforced in code)
+- source_quotes present + every claim has a specific evidence anchor (prompt-schema
+  requirement — the in-pipeline C1/C3 hard gates were removed 2026-07-08 in favor of
+  per-chunk subagent isolation, so the driving agent checks this manually; 2.4
+  consumes at most 5 key_details per concept regardless)
 
 Run `scripts/qc_stage22.py` (scans every `Stage-2-2-Chunk-*.txt` under
 `.llm-wiki/conversation/*/`) to check all responses at once. If a response
 fails the gate, delete the `.txt` and re-dispatch that chunk's subagent.
-
-## Reading extracted text for Stage 2.1
-
-```bash
-EXTRACT_DIR=".llm-wiki/extract-tmp/<book-stem>"
-# Sample pages across the book
-for i in 1 15 30 50 70 90 110 130 150 170 190 210 230 250 270; do
-  f=$(printf "%s/p%04d.txt" "$EXTRACT_DIR" "$i")
-  [ -f "$f" ] && echo "=== Page $i ===" && head -10 "$f"
-done
-# Count total
-ls "$EXTRACT_DIR"/p*.txt | wc -l
-```
 
 ## Stage 2.2/2.4: scale extraction density + ground formulas (updated 2026-07-01)
 

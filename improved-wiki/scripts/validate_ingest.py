@@ -217,9 +217,9 @@ def main():
         check("media dir found", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 1: Global Digest
+    # Global Digest (rolled up by Stage 2.2; standalone 2.1 removed 2026-07-08)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.1] Global Digest")
+    print("\n[Stage 2.2] Global Digest (roll-up)")
     if entry:
         dk = stages.get("global_digest_keys", 0)
         check(f"global digest complete", dk >= 1,

@@ -6,7 +6,7 @@
 >
 > **并行边界（三层）**：
 > ① **进程级后台预取**（bg OS 子进程）：Phase 0/1（minerU + caption，非 LLM）——自动与主对话 LLM 并行；
-> ② **可并行作答的 conversation prompt** = wiki-independent 段（Phase 0/1 + Stage 2.1/2.2）——多个同时 pending 时可每个派一个 sub-agent 并行作答，**并发上限 = `--parallel N`**（默认4，见下方"并发上限"节）；
+> ② **可并行作答的 conversation prompt** = wiki-independent 段（Phase 0/1 + Stage 2.2）——多个同时 pending 时可每个派一个 sub-agent 并行作答，**并发上限 = `--parallel N`**（默认4，见下方"并发上限"节）；
 > ③ **wiki-dependent spine（2.3+）**：串行，一次只有一本书在 2.3+，其 handoff 一次只有一个 pending（见 [[batch-digest-loop]]、[[delegate-mode]]）。
 
 ## 并发上限（2026-07-07 补全）

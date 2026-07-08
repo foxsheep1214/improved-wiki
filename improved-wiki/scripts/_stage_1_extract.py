@@ -19,19 +19,12 @@ Split into facade + sub-modules 2026-06-24. Imports shared infrastructure from _
 """
 from __future__ import annotations
 
-import base64
-import fcntl
 import hashlib
-import json
 import os
 import random
 import re
-import shutil
-import subprocess
 import sys
 import time
-import urllib.request
-import urllib.error
 import zipfile
 from pathlib import Path
 
@@ -225,9 +218,9 @@ def _stage_1_1_sample_pdf(file_path: Path, sample_pages: int = 15) -> tuple[floa
       - avg_chars: mean chars/page over sampled pages with ≥10 chars (0 if none).
       - is_garbled: True if >1% of sampled chars are C0 control chars (0x00-0x1F),
         indicating custom font encoding PyMuPDF cannot decode (e.g. Fuqua book:
-        500+ chars/page but all garbage). Such PDFs have a text layer that is
-        junk — hybrid-engine/auto would read it via txt and produce garbage, so
-        the caller must force parse_method=ocr.
+        500+ chars/page but all garbage). Informational only since 2026-07-08
+        (garbled pre-detection removed from the extraction path for NashSU
+        alignment) — now consumed only by the --dry-run type estimate.
       - img_ratio: fraction of sampled text-pages with a >50%-page image.
 
     Sampling is deterministic per file (seeded by file path) so the same PDF
@@ -292,10 +285,10 @@ def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 15) -> tuple
     cost estimate in ingest.py.
 
     The active extraction path (stage_1_1_extract_text) no longer branches on
-    text/scanned/mixed: hybrid-engine/auto routes per-page internally, and the
-    only fitz-based override is the garbled-font check (is_garbled). This
-    classifier is kept so `--dry-run` can still print a human-readable type.
-    Delegates to _stage_1_1_sample_pdf.
+    any fitz detection: hybrid-engine/auto routes per-page internally (garbled
+    pre-detection removed 2026-07-08). This classifier is kept only so
+    `--dry-run` can print a human-readable type. Delegates to
+    _stage_1_1_sample_pdf.
     """
     avg, is_garbled, img_ratio = _stage_1_1_sample_pdf(file_path, sample_pages)
     if is_garbled:

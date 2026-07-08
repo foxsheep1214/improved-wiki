@@ -190,12 +190,16 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
         self.assertEqual(_infer_stage(prompt), "Stage-2-4-DedupConfirm")
 
     def test_non_directive_prompt_untouched(self):
-        # Prompts that do NOT open with the directive (e.g. the cached 2.1/2.2
-        # digest/chunk-analysis prompts) must infer exactly as before, so their
-        # slug/cache key is unchanged across this fix.
+        # Prompts that do NOT open with the directive must infer exactly as
+        # before, so their slug/cache key is unchanged across this fix.
+        # (The Stage-2-1-Global-Digest label was removed with Stage 2.1,
+        # 2026-07-08 — its old prompt phrase now falls through to LLM-task.)
+        self.assertEqual(
+            _infer_stage("You are writing a **source page** for this book"),
+            "Stage-2-6-SourcePage")
         self.assertEqual(
             _infer_stage("performing **Stage 1: Global Digest** for this source"),
-            "Stage-2-1-Global-Digest")
+            "LLM-task")
         self.assertEqual(_infer_stage("plain prompt with no markers"), "LLM-task")
 
 

@@ -12,7 +12,7 @@
 ~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。
 
 ### `detect_language()` 非拉丁文字阈值过低，几个杂散字符就能误判全书语言
-`_language.py::detect_language()` 的非拉丁脚本判定阈值只是 `max_count >= 2`——只要样本文本里出现 ≥2 个某非拉丁文字的字符，就判定整份文档是那个语言，而英文本身是纯 ASCII、完全不计入 `counts`，等于没有对照基准。实测：《Fundamentals of Radar Signal Processing - 2005 - Richard》扉页有两张伊朗大学图书馆的波斯语/阿拉伯语公章（OCR 出十几个阿拉伯字符），导致 Stage 2.1/2.4/2.6 全部注入"MANDATORY OUTPUT LANGUAGE: Arabic"，而全书正文 99%+ 是英文——这是和已记录的"São Paulo 陷阱"（`improved-wiki-language-detect-false-positive` 内存条目）同一类假阳性，但触发方式更直接（真实非拉丁文字，不是地名误判）。现有 Greek 分支已有"孤立单字符不算希腊语，需要多字符连续词"的保护（`_has_greek_word_run`），但阿拉伯语等其他非拉丁脚本分支没有对应保护。**当前规避**：生成阶段人工判断源文本主体语言、忽略错误的语言指令即可（本次已验证可行）；项目级也可用 `IMPROVED_WIKI_OUTPUT_LANGUAGE=English` 强制覆盖整本书。**未修复**：给非拉丁脚本分支加类似 Greek 的"需要有意义占比/连续词"保护，风险是可能影响现有中文等双语页面的检测结果，未做（改动前应先补测试用例）。
+`_language.py::detect_language()` 的非拉丁脚本判定阈值只是 `max_count >= 2`——只要样本文本里出现 ≥2 个某非拉丁文字的字符，就判定整份文档是那个语言，而英文本身是纯 ASCII、完全不计入 `counts`，等于没有对照基准。实测：《Fundamentals of Radar Signal Processing - 2005 - Richard》扉页有两张伊朗大学图书馆的波斯语/阿拉伯语公章（OCR 出十几个阿拉伯字符），导致各分析/生成 stage（当时含 2.1，现为 2.2/2.4/2.6）全部注入"MANDATORY OUTPUT LANGUAGE: Arabic"，而全书正文 99%+ 是英文——这是和已记录的"São Paulo 陷阱"（`improved-wiki-language-detect-false-positive` 内存条目）同一类假阳性，但触发方式更直接（真实非拉丁文字，不是地名误判）。现有 Greek 分支已有"孤立单字符不算希腊语，需要多字符连续词"的保护（`_has_greek_word_run`），但阿拉伯语等其他非拉丁脚本分支没有对应保护。**当前规避**：生成阶段人工判断源文本主体语言、忽略错误的语言指令即可（本次已验证可行）；项目级也可用 `IMPROVED_WIKI_OUTPUT_LANGUAGE=English` 强制覆盖整本书。**未修复**：给非拉丁脚本分支加类似 Greek 的"需要有意义占比/连续词"保护，风险是可能影响现有中文等双语页面的检测结果，未做（改动前应先补测试用例）。
 
 ### `_stage_1_2_extract_from_mineru()` 两处硬编码 width/height=0（已修，2026-07-06）
 `_stage_1_2_images.py::_stage_1_2_extract_from_mineru()` 有两个分支（img_source_dir 存在时的正常复制分支、OCR 缓存续跑的 media_dir 恢复分支）在构造 manifest 图片条目时把 `"width": 0, "height": 0` 写死，而不像同文件里的 `_stage_1_2_harvest_images()` 那样用 PIL 读真实尺寸。后果：凡是走这个函数生成 manifest 的书，`_manifest.json` 里全部图片尺寸恒为 0×0——图片文件本身完全正常，只是元数据没填。表征：caption 失败时的占位符统一显示"尺寸 0×0"，无论实际图片多大（发现于《High Resolution Radar 2nd - 1995 - Wehner》，同一天摄入的《Fundamentals of Radar Signal Processing》走了另一条会算真实尺寸的路径，manifest 正常）。**已修复**：抽出共享辅助 `_stage_1_2_image_size()`（PIL 读取，读失败兜底 (0,0)，跟 `_stage_1_2_harvest_images()` 一致的防御写法），两处硬编码分支都改用它。**已回填**：Wehner 现有 `_manifest.json` 332 张图的尺寸已用现存图片文件补齐，无需重跑 VLM。
@@ -35,11 +35,8 @@
 ### Wikilink enrichment merge loop after Stage 3.1
 Stage 3.1 写盘后，pipeline 生成多个 `LLM-task-*.md` merge prompt（`.llm-wiki/conversation/<hash>/`），每个让 agent 把已有 wiki 页与新内容合并。re-run 时会重新发现并 re-merge。高效处理：用 `delegate_task` 批量；wikilink 建议 JSON 任务输出 `{}` 可安全跳过（Stage 2.4 已加内联 wikilink 时无质量损失）。
 
-### Stage 2.1 只喂文本采样不是全文
-Global Digest prompt 含书的文本采样（~200K chars），非全文。全文在 `.llm-wiki/extract-tmp/<stem>/p*.txt`，agent 需要时可读更多。
-
 ### OCR timeout for 200+ page books
-minerU 50 页/chunk 串行。272 页书（6 chunks）可能超 600s 终端超时。**重跑 `ingest.py` 从缓存恢复**——已完成 chunk 跳过。`--stop-after-stage 0` 分离 OCR 与 LLM 阶段。
+minerU 32 页/chunk 串行。272 页书（9 chunks）可能超 600s 终端超时。**重跑 `ingest.py` 从缓存恢复**——已完成 chunk 跳过。`--stop-after-stage 0` 分离 OCR 与 LLM 阶段。
 
 ### `--delete` for re-ingest
 `ingest.py --delete "raw/Book/<file>.pdf"` 删 source 页 + 孤儿 concepts/entities + media + cache，再重跑即可干净重摄。

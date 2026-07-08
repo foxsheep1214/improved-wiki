@@ -302,7 +302,7 @@ def _do_prepare(
         template_content = load_template(template_name)
         print(f"  [template] {template_name}")
 
-        # ── Stage 1.2 + 1.3 pipeline (1.2 → 1.3 sequential) ∥ Stage 2.1 (parallel) ──
+        # ── Stage 1.2 + 1.3 image pipeline (1.2 → 1.3 sequential) ──
         # Helper: run 1.2→1.3 together (1.3 depends on 1.2 output)
         def _run_image_pipeline():
             stage_1_2_result: dict = {"count": 0}
@@ -378,8 +378,7 @@ def _do_prepare(
         # ![](images/...) refs to carry their VLM caption as alt text, so the
         # Stage 2.2/2.4 generation LLM sees figure semantics instead of
         # empty-alt refs it would silently paraphrase away. Runs AFTER Stage
-        # 1.3 (captions exist) and BEFORE the chunk pipeline. Stage 2.1 ran in
-        # parallel without this — acceptable, 2.1 is structural not figure-level.
+        # 1.3 (captions exist) and BEFORE the chunk pipeline.
         _media_dir = stage_1_2_result.get("media_dir")
         if _media_dir and stage_1_2_result.get("count", 0) > 0:
             _inlined = _stage_1_3_inline_captions(extracted_text, config, Path(_media_dir))
