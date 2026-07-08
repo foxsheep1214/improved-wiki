@@ -102,7 +102,7 @@ IMPROVED_WIKI_ROOT="$(pwd)" ~/.venv/bin/python3 ~/.agents/skills/improved-wiki/s
 
 ### minerU OCR can take 10+ minutes — use `--stop-after-stage 0`
 
-A 272-page book takes ~10 min for minerU OCR (6 chunks × ~100s/chunk). This will
+A 272-page book takes ~10 min for minerU OCR (9 chunks × 32 pages/chunk). This will
 exceed foreground terminal timeouts. Split the run:
 
 ```bash
@@ -125,23 +125,15 @@ mid-chunk, re-running the same command resumes from the last completed chunk
 > which runs all of Stage 0-2 (pausing at the 2.1/2.2/2.4 LLM handoffs) before
 > that check, so the process entered 2.1 and exited 101 instead of halting after
 > OCR. The check now raises `PrepareStopAfter` at the in-prepare boundary. The
-> same fix makes `1` (after global digest) and `2` (after generation) halt
-> cleanly. `1.5`/`2.3` (inside the chunk pipeline, no clean resume marker) remain
-> best-effort — they are not intercepted on a fresh run.
+> same fix makes `2` (after generation) halt cleanly; stop point `1` (after the
+> former Stage 2.1 digest) retired with 2.1's removal (2026-07-08). `1.5` stops
+> at the prefetch boundary after 2.2 (see `batch-parallel-prefetch.md`).
 
-### 🔒 项目锁冲突（看 ps 别抢锁，2026-07-04 实战修）
+### 🔒 项目锁冲突（看 ps 别抢锁）
 
-`ingest.py:675` 抛出 `Could not acquire project lock — another ingest may be running` 时，
-**绝大多数情况下另一本书的 minerU/OCR 后台还在跑**（`start_new_session=True` 的 detached 子进程，
-batch 起来时用 `--no-project-lock` 让 minerU 持锁跑 Phase 0/1，不影响主对话但慢 10-20 分钟）。
-
-**操作纪律**：
-1. **先 `ps aux | grep ingest.py | grep -v grep`** — 看到 `Python3 ... ingest.py raw/Book/<另一本>.pdf --stop-after-stage 0` 之类的进程就是 OCR 在跑。
-2. **不要 `kill`**，等 OCR 自然完成（`stage_1_1_done` 写盘后会自动 `lock.release()`）。
-3. 重跑同一本书：`ingest.py "raw/Book/this.pdf"` — 会跳过 Stage 0/1/2.1/2.2（OCR/缓存都在），从 Stage 2.4 续上。
-4. 等不下去或确认是真死锁（`ps` 看不到任何 ingest.py）→ 参考 `maintenance-cleanup.md` "🔒 项目锁冲突诊断" 段。
-
-**为什么不能抢锁**：improved-wiki 的 minerU 的锁是 `fcntl.flock`，后台 OCR 进程在另一端持着，你抢走会逼它退出、丢失正在跑的 chunk 结果，下次跑要重头 OCR（书越大越痛，500 页可能要 30 分钟）。
+`Could not acquire project lock` 绝大多数是**另一本书的后台 OCR 还在跑**，不是死锁：先
+`ps aux | grep ingest.py`，看到就**不要 kill**，等它自然完成释放锁后重跑本书（缓存都在，
+从 Stage 2.2+ 续上）。完整诊断三件套与真死锁处置见 `maintenance-cleanup.md` "🔒 项目锁冲突诊断"（权威版）。
 
 ### Wikilink enrichment generates many merge tasks
 

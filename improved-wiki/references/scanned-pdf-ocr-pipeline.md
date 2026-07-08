@@ -97,4 +97,3 @@ API path 的 `_stage_1_2_harvest_images()` 曾不读 `content_list` 的 `image_c
 
 - **Stage 1.3 Caption**：对默认路径而言，caption 已经在这条 pipeline 内部跑完了（见上方"输出物"），不再是 ingest.py 里独立调度的一步。详见 `references/image-caption-strategy.md`。
 - **PPTX/DOCX**：完全不走这条 pipeline，用 stdlib zipfile/XML 解析文字 + 图片。
-- **混合型 PDF 判定**：见 `references/ingest-stages-mandatory.md` Stage 1.1 的第四信号"隐藏 OCR 层检测"。

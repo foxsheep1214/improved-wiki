@@ -48,34 +48,15 @@ These are repetitive — the same pages may be re-merged across runs.
 
 ## Stage 2.2 quality gate (mandatory, revised 2026-07-08)
 
-**Incident (Skolnik, 14 chunks, 2026-07-07)**: a driving sub-agent kept answering
-`CONVERSATION →` turn after turn without ever exiting. Context accumulated
-monotonically; Stage 2.4 prompts are 290–440 KB each (they embed the full chunk
-source text), and after chaining the sub-agent degraded to placeholder outputs
-("Radar Handbook Content" instead of real concept names).
-
-**Incident (EW and Radar Systems Handbook, 5 chunks, 2026-07-08)**: the driving
-agent answered all 5 chunks in the main conversation (not via subagent dispatch).
-The main conversation's context accumulated the same way a chained subagent's
-would — by chunk 5, attention was spread across the whole book and the model
-generated thin, generic output (17 concepts / 12 claims for a 455-page handbook).
-C1/C3 hard gates caught the symptom; the root cause was **main-conversation context
-accumulation**, identical to the Skolnik chaining failure but in the parent agent.
-
-**Root cause (both incidents)**: stateful conversation mode — the driving agent's
-context window grows with every chunk answered, degrading attention on later chunks.
-This is NOT a model-capability problem; it is an architecture problem. NashSU is
-immune because each `streamChat` is a stateless subprocess (fresh process, zero
-history). improved-wiki's conversation mode is stateful, so it must isolate each
-chunk's LLM call into a fresh subagent to achieve the same effect.
-
-**Policy (revised 2026-07-08 — supersedes the old L4 "max 2 handoffs" rule)**:
-- Stage 2.2 / 2.4: **dispatch a fresh subagent per chunk, max 1 handoff, then exit.**
-  See `references/delegate-mode.md` L4 revision.
-- The main conversation MUST NOT answer chunk prompts directly — doing so turns
-  the main conversation into an unbounded "super-subagent" with no isolation.
-- If a driving agent ever finds itself answering a 2nd consecutive same-stage
-  chunk prompt, that is the bug to fix (the per-chunk dispatch was skipped).
+**Policy — dispatch a fresh subagent per chunk (Stage 2.2 / 2.4), max 1 handoff,
+then exit; the main conversation MUST NOT answer chunk prompts directly.** Chained
+or main-conversation answering accumulates each chunk's ~250K-char prompt in one
+context window and degrades later chunks into thin/placeholder output (两起事故：
+Skolnik 连答 14 chunks 2026-07-07；EW/Radar Handbook 主对话直答 5 chunks
+2026-07-08). 事故全程、根因分析与政策沿革的**权威版在
+`references/delegate-mode.md`（L4 修订）**——本文件只保留操作检查。If you find
+yourself answering a 2nd consecutive same-stage chunk prompt, the per-chunk
+dispatch was skipped — that is the bug.
 
 **Quality gate (catches degradation at the cheapest point, Stage 2.2, before it
 propagates into Stage 2.4's generated pages)**: after every Stage 2.2 response,
@@ -116,31 +97,10 @@ keep each chunk well-extracted and formula-faithful:
    grep -n "frac\|tag{2-\|sigma\|lambda" "$EXTRACT_DIR"/p0NNN.txt   # find the eqn
    ```
 
-**Dispatch a FRESH subagent per chunk — do NOT answer chunks in the main conversation.**
-Each Stage 2.2 / 2.4 chunk prompt embeds ~250K chars of source text. If the driving
-agent answers chunk N in the main conversation, that full prompt + response stays in
-the main context window — by chunk N+1 the model's attention is spread across all
-prior chunks, not focused on the current one. This is the root cause of the
-"progressive thinning" failure (EW and Radar Systems Handbook, 2026-07-08: chunk 1
-had 10 concepts, but by chunk 5 the model was generating from domain memory rather
-than reading the source). C1/C3 hard gates (source_quotes, key_details≤5) catch the
-*symptom* — thin output — but do not prevent the *cause*: context accumulation
-degrading attention on later chunks.
-
-The fix is structural isolation: **one fresh subagent per chunk, max 1 handoff,
-then exit.** The subagent sees ONLY that chunk's prompt (source text + schema +
-prior digest), answers, and is destroyed — zero cross-chunk accumulation. This is
-the subagent equivalent of NashSU's stateless `streamChat` subprocess (each call is
-a fresh process with no memory of prior calls). The driving agent's main-conversation
-context stays clean for orchestration (dispatch, re-invoke, progress tracking).
-
-The 2026-07-01 A/B test (64K no-fan-out vs 192K with-fan-out) measured *chunk-size*
-tradeoffs but NOT *context-isolation* tradeoffs — it never compared "answer in main
-conversation" vs "fresh subagent per chunk." The quality benefit of per-chunk
-isolation was therefore never measured and never documented until the 2026-07-08
-EW/Radar incident. The ~15% wall-clock savings from L4 chained answering (max 2
-handoffs) is abandoned in favor of quality — see `references/delegate-mode.md` L4
-revision (2026-07-08).
+**Per-chunk subagent dispatch applies here too** — each 2.2/2.4 chunk prompt embeds
+~250K chars of source; structural isolation (fresh subagent, max 1 handoff, then
+exit) is what keeps chunk N+1's attention on chunk N+1 instead of the whole book.
+Policy and incident record: `references/delegate-mode.md` L4 revision (2026-07-08).
 
 For Stage 2.4, the subagent generates that chunk's exact slug list; verify
 block-count == requested slugs (minus the `foo-bar` placeholder) before advancing.

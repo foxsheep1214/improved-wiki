@@ -3,8 +3,8 @@
 ## Open issues
 
 ### Several files exceed the 800-line guideline
-`_core.py`（~1434 行）。暂无明显自然切分点，未拆。
-`ingest.py`（~692 行）协同 `_ingest_skip.py` / `_ingest_chunks.py` / `_ingest_prepare.py` / `_ingest_write.py` 四个编排子模块。
+`_core.py`（~1480 行）。暂无明显自然切分点，未拆。
+`ingest.py`（~680 行）协同 `_ingest_skip.py` / `_ingest_chunks.py` / `_ingest_prepare.py` / `_ingest_write.py` 四个编排子模块。
 `_stage_1_extract.py` 是 facade，re-export 兄弟模块 `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py` 的公开名，外部导入者无需改动。
 `_stage_2_4_generation.py`（~1326 行）仍超阈值（source-anchored 逐 chunk 生成 + 源内去重收尾逻辑集中，暂未找到干净切分点）。
 
@@ -19,7 +19,7 @@
 
 ### Stage 2.6 source 页偶发整体丢失 section 结构，根因未 100% 锁定（检测网已升级为硬门禁，2026-07-07）
 《Fundamentals of Radar Signal Processing - 2005 - Richard》今早首次摄入的 source 页完全没有走模板——标题是自创的 Bibliographic Information/Overview/Chapter Outline/Key Concepts，Main Arguments & Findings / Key Entities / Connections / Contradictions / Recommendations 全部缺失。排查过程：archived 的 Stage 2.6 conversation 产物（`.llm-wiki/conversation/47e0adf0/Stage-2-6-SourcePage-532d2243.txt`，生成时间 11:13:16，仅比 log.md 记录的摄入完成时间 11:17:17 早 4 分钟）本身内容完全合规（7 个 section 齐全、英文、43 条 claim）；`_normalize_source_frontmatter()` 只碰 frontmatter 不碰 body，排除了它改坏内容的可能；也没有可复用的旧 source 页触发 merge（首次摄入）；代码里也搜不到硬编码的 fallback 模板匹配这个坏结构。但一份 18 秒后生成的 wikilink-enrichment 提示词（`LLM-task-07027825.md`，11:13:34）里，`## PAGE: sources/Book/Fundamentals of Radar Signal Processing - 2005 - Richard.md` 下面已经是坏结构——**说明损坏发生在 Stage 2.6 生成"之后"、写盘"之前/期间"的 18 秒窗口内**，但受限于现有日志/缓存粒度，未能锁定到具体是哪一行代码/哪一次写入把好内容换成了坏内容。**检测网已升级为硬门禁**（2026-07-07，audit M5）：`_stage_2_6_validate_required_sections(response, source_kind)`（A10）在 `_stage_2_6_source_page.py` 对比 doctype-aware 的 7 个必需 H2 标题（paper 用 Paper Summary/Methodology & Results，其余用 Book Summary/Table of Contents & Key Concepts），缺失即 **raise RuntimeError** 暂停 ingest（不再是 warn-only，与 no-silent-fallback 政策一致）。这覆盖"LLM 自创结构"的失败模式；写盘窗口的损坏仍需写盘后校验（未做，因根因未锁且为单次事件）。**后续如再复现，应保留当次的 `.llm-wiki/conversation/<hash>/` 目录不要清理，为根因排查留证据**。
-`sweep_reviews.py` 规则阶段的 title/path 匹配用子串（partial）匹配，短词（`to`/`ul`/`none`/`DC` 等 2-3 字符片段）会误命中无关页面 slug。实测 ~15/197 review items 被误 auto-resolve。**缓解**：先 dry-run（不加 `--apply`），检查可疑 auto-resolve；规则阶段应要求最小匹配长度 ≥4 字符或全 slug 等值。LLM judge 阶段不受影响。详见 `references/review-sweep.md`。
+~~`sweep_reviews.py` 规则阶段子串匹配假阳性（实测 ~15/197 误 auto-resolve）~~ **已修复**：`pageExists` 现为 EXACT 匹配（文件名 id / kebab 归一化 id / frontmatter title 三种精确等值，无子串匹配，对齐 NashSU）。保留 dry-run 先行的习惯即可。
 
 ## Design decisions (not bugs)
 

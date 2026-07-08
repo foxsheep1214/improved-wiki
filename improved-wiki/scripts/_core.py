@@ -254,8 +254,6 @@ _INSTRUCTION_RESERVE_FRAC = 0.08
 _SOURCE_BUDGET_MIN = 8_000
 _SOURCE_BUDGET_MAX = 300_000
 _SOURCE_BUDGET_FRAC = 0.6
-_TARGET_CHARS_MIN = 12_000
-_TARGET_CHARS_FRAC = 0.55
 # ── Token-first chunk budgeting (replaces the fixed 60K char cap) ──
 # The per-chunk budget is expressed in TOKENS; the char window is derived
 # per-text from the measured chars/token ratio at split time (see
@@ -962,36 +960,6 @@ def schema_route_dir(fm_type: str, routing: dict[str, str]) -> str | None:
     if fm_type in routing:
         return routing[fm_type]
     return BASE_TYPE_TO_DIR.get(fm_type)
-
-
-def validate_wiki_page_routing(rel_path: str, fm_type: str,
-                               routing: dict[str, str]) -> str | None:
-    """NashSU ``validateWikiPageRouting`` parity — return an issue string when a
-    page's frontmatter ``type`` disagrees with its directory under the project
-    schema, else ``None``.
-
-    Bidirectional: (a) a schema-declared type sitting outside its declared dir;
-    (b) a page inside a schema-declared dir carrying a different type. ``rel_path``
-    is wiki-relative (a leading ``wiki/`` is tolerated). An empty ``fm_type`` is
-    never an issue (untyped pages are allowed). With an empty ``routing`` (no
-    schema.md) this is always ``None`` — NashSU-aligned.
-    """
-    fm_type = (fm_type or "").strip().strip('"').strip("'")
-    if not fm_type:
-        return None
-    norm = rel_path.replace("\\", "/").lstrip("/")
-    if norm.startswith("wiki/"):
-        norm = norm[len("wiki/"):]
-    actual_dir = norm.rsplit("/", 1)[0] if "/" in norm else ""
-    expected = routing.get(fm_type)
-    if expected is not None and actual_dir != expected:
-        return (f'type "{fm_type}" must be under "{expected or "(wiki root)"}/", '
-                f'not "{actual_dir or "(wiki root)"}/"')
-    for t, d in routing.items():
-        if d == actual_dir and t != fm_type:
-            return (f'pages under "{actual_dir or "(wiki root)"}/" must use '
-                    f'type "{t}", but found "{fm_type}"')
-    return None
 
 
 # ── Path safety (NashSU parity: isSafeIngestPath) ──

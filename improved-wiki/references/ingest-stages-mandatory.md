@@ -1,13 +1,13 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——improved-wiki 流水线的 17 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——improved-wiki 流水线的 16 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
 tags: [ingest, mandatory, pipeline]
 related: [SKILL.md, known-issues, scanned-pdf-ocr-pipeline, image-caption-strategy]
 ---
 
 # 强制 Ingest Stage 清单
 
-improved-wiki 流水线 = **17 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾、跨源 query 解析原 2.8 并入 2.7 收尾，功能保留、编号退休）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。任何 Stage 都不能跳过。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
+improved-wiki 流水线 = **16 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾、跨源 query 解析原 2.8 并入 2.7 收尾，功能保留、编号退休）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。任何 Stage 都不能跳过。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
 
 **跳过的代价**：raw 是 sacred（图也是 raw 的一部分）；缺 stage 产物则审计无法回溯；不写 cache 下次重跑；跳过的 stage 永远不会被补做，错误留在 wiki 里。
 
@@ -62,7 +62,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## Phase 1：Extraction
 
 ### Stage 1.1 · 文本提取 ⭐ 永远不能跳
-- **作用**：所有 PDF（文本版/扫描版/混合版）统一走本地持久化 minerU API 服务器（`mineru.cli.fast_api`，端口 19999），按 100 页/chunk 调 `/file_parse`，`backend=hybrid-engine`、`parse_method=auto`（按页自动判 txt vs VLM OCR），保留表格/公式/图片。method 标签恒为 `mineru-api`。fitz 仅用于 `--dry-run` 的 PDF 类型诊断（text/mixed/scanned），不参与提取决策。
+- **作用**：所有 PDF（文本版/扫描版/混合版）统一走本地持久化 minerU API 服务器（`mineru.cli.fast_api`，端口 19999），按 32 页/chunk（`MINERU_CHUNK_SIZE`）调 `/file_parse`，`backend=hybrid-engine`、`parse_method=auto`（按页自动判 txt vs VLM OCR），保留表格/公式/图片。method 标签恒为 `mineru-api`。fitz 仅用于 `--dry-run` 的 PDF 类型诊断（text/mixed/scanned），不参与提取决策。
 - **NashSU 对齐**：NashSU 用 minerU **云** API（mineru.net，需 token，pipeline/vlm，200 页上限）；improved-wiki 用**本地**免费服务器（hybrid-engine/auto，无 token，无页数上限）——有意偏离。garbled-font 预检测与提取质量门已于 2026-07-08 移除（NashSU 二者皆无；minerU 3.4.0 上 OCR 影响有限）。`verify_stage_0` 的 ≥100 字符基本非空校验是唯一提取门。
 - **为什么不用 PyMuPDF 直抽**：在数据手册/图表密集型 PDF 上漏检表格/公式/图（实测 73 表格/7 公式/157 图 vs 0/0/2）。
 - **并发限制**：系统级最多 1 个 minerU 任务，`fcntl.flock` 文件锁（超时 3600s），等待时打印 `[mineru] Waiting for lock...`。免费、无需 API key。详见 `scanned-pdf-ocr-pipeline.md`。
@@ -160,19 +160,17 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## 强制顺序与依赖
 
 ```
-0.1 → 0.2 → 1.1 → [1.2→1.3 ∥ 2.1] → 2.2 → 2.3 → 2.4 → 2.6 → 2.7 → 2.9
+0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.2 → 2.3 → 2.4 → 2.6 → 2.7 → 2.9
      → 3.1 → 3.2 → 3.4 → 3.5 → 3.7
 
-（1.2→1.3 与 2.1 在 _ingest_prepare.py 用 ThreadPoolExecutor(max_workers=2) 并行：
-   1.2→1.3 是 image pipeline（1.3 依赖 1.2 输出，内部串行），2.1 是 global digest，
-   两者无数据依赖、纯 I/O 并行；两条线程都会调 save_progress/mark_stage_done，
-   故 _progress_lock 必须线程安全——见 _core._progress_thread_lock。
+（1.2→1.3 是 image pipeline（1.3 依赖 1.2 输出，串行；1.3 内部 caption 派发 ×4 线程）。
+   原先与 image pipeline 并行的 Stage 2.1 已于 2026-07-08 移除。
    2.4 含源内去重收尾[原 2.5]；2.7 含跨源 query 解析收尾[原 2.8]）
 ```
 
 关键依赖：
-- 1.2 先于 1.3（先有图才能 caption）；1.2/1.3 与 2.1 并行（无依赖，I/O bound）；1.2/1.3 先于 3.2（注入图引用）
-- 2.1/2.2 永远不跳（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
+- 1.2 先于 1.3（先有图才能 caption）；1.2/1.3 先于 3.2（注入图引用）
+- 2.2 永远不跳（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
 - 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.4 生成后收尾跑源内去重（原 2.5，单 chunk 跳过）；2.6 源页在 2.4 之后
 - Phase 2 全在内存（2.3→2.4→2.6→2.7→2.9 串行），产出统一由 3.1 写盘
 - 2.7 conditional（datasheet/standard 跳过 query 生成）；2.7 跨源解析收尾 conditional（无 query 或 wiki 空跳过，原 2.8）；2.9 conditional（无 concept 或 concept <2 跳过）
@@ -194,12 +192,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 | Stage | 门禁检查 |
 |-------|---------|
-| 1.1 | 提取文本 ≥500 字符；minerU ≥2000 字符（`_verify_stage_1_1_text`，报错前缀写作 "Stage 0"） |
-| 2.1 | Global Digest 含 6 必需 key；≥1 concept（`_verify_stage_2_1_digest`） |
-| 2.2 | chunk 分析非空（`_verify_stage_2_2_chunks`） |
+| 2.2 | chunk 分析非空（`_verify_stage_2_2_chunks`）；滚动汇总 digest 含 5 必需 key + ≥1 concept（`_verify_stage_2_1_digest`——函数名是 2.1 时代遗留，现在 2.2 汇总后运行；缓存恢复时缺有效 digest 会失效 marker 重跑 2.2） |
 | 2.4 | ≥1 FILE block；source page FILE block 存在；路径正确（`_verify_stage_2_4_file_blocks`，**写盘前** in-memory 检查） |
+| 2.6 | source page 必需 H2 节齐全（`_stage_2_6_validate_required_sections`，doctype-aware） |
 
-> 硬 raise 门禁只有以上 4 处（外加 Phase 0 的 `verify_stage_0`）。source page 的**落盘**由 2.4 的写盘前门禁保证；写盘后 `validate_stage_outputs` 只做软校验（返回 warning 列表、**不 raise**），没有 3.1 raise 门。
+> 硬 raise 门禁只有以上几处（外加 Phase 0 的 `verify_stage_0` ≥100 字符提取门——1.1 的 `_verify_stage_1_1_text` 质量门已于 2026-07-08 移除）。source page 的**落盘**由 2.4 的写盘前门禁保证；写盘后 `validate_stage_outputs` 只做软校验（返回 warning 列表、**不 raise**），没有 3.1 raise 门。
 
 可选手动验证（**不再自动运行**——已为对齐 NashSU 移除）：`python3 scripts/validate_ingest.py`（全阶段体检，独立工具）。其它手动补充：
 ```bash

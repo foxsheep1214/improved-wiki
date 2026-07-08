@@ -227,39 +227,6 @@ class TestSchemaRouteDir(unittest.TestCase):
         self.assertIsNone(_core.schema_route_dir("", {"person": "people"}))
 
 
-class TestValidateWikiPageRouting(unittest.TestCase):
-    """NashSU validateWikiPageRouting parity — bidirectional issue detection."""
-
-    def setUp(self):
-        self.routing = {"concept": "concepts", "entity": "entities", "person": "people"}
-
-    def test_correct_routing_is_none(self):
-        self.assertIsNone(_core.validate_wiki_page_routing(
-            "people/ada.md", "person", self.routing))
-
-    def test_forward_mismatch_declared_type_wrong_dir(self):
-        issue = _core.validate_wiki_page_routing("entities/ada.md", "person", self.routing)
-        self.assertIsNotNone(issue)
-        self.assertIn("people", issue)
-
-    def test_reverse_mismatch_dir_owns_a_different_type(self):
-        # 'source' is NOT in this routing map, so the forward check is skipped and
-        # only the reverse check (people/ owns 'person') can fire.
-        issue = _core.validate_wiki_page_routing("people/foo.md", "source", self.routing)
-        self.assertIsNotNone(issue)
-        self.assertIn("person", issue)
-
-    def test_untyped_page_is_allowed(self):
-        self.assertIsNone(_core.validate_wiki_page_routing("people/x.md", "", self.routing))
-
-    def test_no_schema_is_noop(self):
-        self.assertIsNone(_core.validate_wiki_page_routing("people/x.md", "concept", {}))
-
-    def test_tolerates_leading_wiki_prefix(self):
-        self.assertIsNone(_core.validate_wiki_page_routing(
-            "wiki/people/ada.md", "person", self.routing))
-
-
 class TestStage31SchemaRoute(unittest.TestCase):
     """Write-time corrector: route by frontmatter type to its declared dir."""
 

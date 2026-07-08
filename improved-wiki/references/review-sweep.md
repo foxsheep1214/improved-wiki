@@ -66,7 +66,7 @@ Check: Both pages still exist? → NO (one was deleted/merged) → auto-resolve
 
 **Conservative rule stage**: Only `missing-page` and `duplicate` auto-resolve by rule. `contradiction` / `suggestion` / `confirm` are NOT rule-resolvable — they fall through to the LLM semantic judge (Step 3). The rule stage is purely existence-based; there is **no** page-modified-time check (neither NashSU nor the script implements one).
 
-> **Pitfall — partial-match false positives**: The rule-stage title/path matching uses substring (partial) matching, which produces false positives when a review title contains a very short common word or fragment (e.g. `to`, `ul`, `none`, `DC`). Observed in production: ~15 of 197 review items were wrongly auto-resolved because a 2-3 char substring happened to match an unrelated wiki page slug. **Mitigation**: always run `sweep_reviews.py` without `--apply` first (dry-run), inspect any auto-resolve that looks surprising, and require a minimum match length (≥4 chars) or full-slug equality for the rule stage. The LLM judge stage (Step 3) is not affected — it reads actual page content.
+> **Fixed pitfall — partial-match false positives**: the rule stage originally used substring matching, which wrongly auto-resolved ~15 of 197 review items on 2-3 char fragments (`to`, `ul`, `DC`). `pageExists` is now EXACT-match only (filename id / kebab-normalized id / frontmatter title equality — NashSU parity), so this class of false positive is gone. Running without `--apply` first (dry-run) remains good practice.
 
 ### Step 3: LLM Semantic Judgment (Slow Path)
 

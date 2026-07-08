@@ -6,9 +6,9 @@ Run after large batch ingests or when disk space / clutter becomes noticeable.
 ## `.digested` files (LEGACY — safe to delete)
 
 `.digested` files are markers from an older pipeline version. The current
-pipeline (Stage 0.2) uses `wiki/sources/<raw-rel-path>.md` existence +
-wikilink integrity as the sole dedup signal. The codebase has **zero
-references** to `.digested`.
+pipeline (Stage 0.2) decides skip/resume from the `ingested` completion marker
+in `<hash>.stages.json`（2026-07-08 从 `stage_4_1` 改名）+ `wiki/sources/<raw-rel-path>.md`
+existence. The codebase has **zero references** to `.digested`.
 
 - Found in: `raw/` subdirectories (one per category folder)
 - Typical content: a digest log listing PDFs and their ✓ status
@@ -52,7 +52,7 @@ fuser /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/ingest.lock 2>/dev/
 # 没回显 = 没有人持锁，可以删；in.py 自动 take over
 ```
 
-**用户策略（胡杨 2026-07-04 拍板）**：看到锁就别抢，**等 OCR 自然跑完再继续**。OCR 完成 `stage_0_done` 后会自动 `lock.release()`，主对话重新跑同一本书的 `ingest.py file.pdf`，即可从 Stage 2.2 续上。
+**用户策略（胡杨 2026-07-04 拍板）**：看到锁就别抢，**等 OCR 自然跑完再继续**。OCR 完成（`stage_1_1_done` 写盘）后会自动 `lock.release()`，主对话重新跑同一本书的 `ingest.py file.pdf`，即可从 Stage 2.2 续上。
 
 🚫 **禁止**：未经用户许可 `kill <pid>` 后台 OCR——即使它跑了几十分钟。minerU 重启开销大（server 冷启动 60s+），杀掉就要重头 OCR。
 
@@ -184,7 +184,7 @@ PYEOF
    ```bash
    rm /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/<hash>.stages.json
    ```
-3. 重新跑 `ingest.py <book.pdf>` → 会跳过 Stage 0/1/2.1/2.2（OCR 已 cache），直接进 Stage 2.4 generation，从已存的 `phase2-chunk-analyses.json` 续跑
+3. 重新跑 `ingest.py <book.pdf>` → 会跳过 Stage 0/1/2.2（OCR 已 cache），直接进 Stage 2.4 generation，从已存的 `phase2-chunk-analyses.json` 续跑
 
 **⚠️ 不要做的事**：
 - 不要用 `ingest.py <book> --delete` 试图"重置" — `--delete` 假设书已完成，会删 cache；这里我们要的是**保留 OCR/chunks 重做 2.4**

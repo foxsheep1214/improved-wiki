@@ -151,7 +151,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the caption provider key/endpoint used by Stage 1.3 |
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
-| Scanned PDF detected | Normal — type detection (still PyMuPDF-based sampling) routes it to minerU VLM OCR | Check the script logs for "[extract] PDF type: scanned (avg N chars/page from 10-page sample)" |
+| Scanned PDF detected | Normal — all PDFs take the unified minerU hybrid-engine/auto path; the PyMuPDF type sample only labels the `--dry-run` estimate | No action needed |
 | `wiki/index.md` is missing the new source link | Stage 3.5 normally rewrites index.md via the LLM; the deterministic fallback (`_index_append_fallback` in `_stage_3_write.py`) inserts after the `## Sources` header line via regex `^##\s+Sources.*$`, so a bilingual `## Sources（来源）` header works. The link is only skipped if there is no `## Sources` header at all | Make sure your `index.md` has a `## Sources` (or `## Sources（来源）`) header line |
 
 ---
@@ -185,5 +185,5 @@ Plan accordingly. The cron at 02:00 daily will only have time to process 1-2 sca
 ## See also
 
 - `SKILL.md` — End-to-end pipeline reference
-- `references/ingest-stages-mandatory.md` — ingest stage checklist (17 numbered stages in 4 Phases (0-3))
+- `references/ingest-stages-mandatory.md` — ingest stage checklist (16 numbered stages in 4 Phases (0-3))
 - `references/cron-installation.md` — How to install the cron job, with crontab snippets

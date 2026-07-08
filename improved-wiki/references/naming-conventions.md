@@ -298,7 +298,7 @@ wiki/media/<slug>/_manifest.json
       "hash": "<sha256>",
       "timestamp": 1718300000000,
       "filesWritten": ["wiki/sources/xxx.md", "wiki/concepts/yyy.md", ...],
-      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "mineru-api" | "mineru-api-ocr" | "mineru-api-low-quality" | "mineru-api-ocr-low-quality",
+      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "mineru-api",   // ocr/low-quality 变体已随质量门于 2026-07-08 移除，存量 cache 可能仍带旧值
       "template": "digest-book.md",
       "fileBlockCount": 15,
       "stages": {
@@ -389,13 +389,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 ---
 
-## 9. Stage Compliance 文件
-
-(removed — validate_ingest.py covers stage compliance)
-
----
-
-## 10. 日期格式
+## 9. 日期格式
 
 | 位置 | 格式 | 示例 |
 |------|------|------|
@@ -407,7 +401,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 ---
 
-## 11. 禁止的文件名模式
+## 10. 禁止的文件名模式
 
 | 禁止项 | 原因 |
 |--------|------|
@@ -421,25 +415,14 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 ---
 
-## 12. improved-wiki 与 NashSU 的已知差异
+## 11. improved-wiki 与 NashSU 的已知差异
 
-以下为残余差异。标注"已对齐"的项不再列出。
+以下为残余差异。已对齐的项不列出。
 
 | 项目 | NashSU 原生 | improved-wiki | 说明 |
 |------|------------|---------------|------|
 | Raw 布局 | `raw/sources/<type>/<file>` | `raw/<type>/<任意子目录>/<file>` | 刻意设计，人类友好 |
 | 聚合页排除 | `index.md` + `log.md`（lint universe） | findings 豁免 `index/log/overview/schema` | 分层模型见 `_lint_suggest.py` |
-| schema.md 位置 | 项目根 `${pp}/schema.md` | 项目根 `<project>/schema.md`（已对齐） | 旧版曾放 wiki/，0.5.2 起对齐到根 |
 | Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 1.2 独有产物 |
 | Lint 页面 | app UI 直接展示（内存） | `.llm-wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出；属 runtime 状态，不放入 wiki/ |
 | Review 页面 | `review.json`（app UI） | `wiki/REVIEW/<type>/<date>-<stem>-<NNN>.md` + `review.json` | 人类可浏览 + 机器可读双输出 |
-| 页面合并 | 3-layer LLM merge | 同 NashSU | — |
-| 路径安全 | 8 项 `isSafeIngestPath` | 同 NashSU | — |
-| 栅栏感知解析 | CommonMark fence tracking | 同 NashSU | — |
-| CRLF 规范化 | `\r\n` → `\n` | 同 NashSU | — |
-| 内容清理 | `ingest-sanitize.ts` | `sanitize_ingested_file_content()` | — |
-| 页面历史备份 | `.llm-wiki/page-history/` | 同 NashSU | — |
-| 动态 token 预算 | 4 层缩放 | `compute_max_tokens()` | — |
-| 内联 embedding | Stage 6 auto-run | `_auto_embed_new_pages()` | — |
-| Lint orphan 检测 | 无条件 | 同 NashSU | — |
-| Slug 优先级 | last-write-wins | 同 NashSU | — |

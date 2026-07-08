@@ -104,7 +104,7 @@ VLM 转录公式图成功率因模型而异。`CAPTION_SYSTEM_PROMPT` 规则：
 ## Usage
 
 ```bash
-export CAPTION_MAX_WORKERS=16    # more parallel workers
+export CAPTION_MAX_WORKERS=8    # 谨慎调高：GLM 免费档 12 并发即触发 429（默认 4）
 ```
 
 直接调用补 caption：
