@@ -144,9 +144,11 @@ class TestD2GranularitySwitch(unittest.TestCase):
             file_path = cfg.raw_root / "Book" / "b.pdf"
 
             manual = analyze._stage_2_2_build_prompt(
-                "text", 0, 1, {"book_meta": {"granularity": "manual"}}, file_path, cfg)
+                "text", 0, 1, {}, file_path, cfg,
+                accumulated_digest='{"book_meta": {"granularity": "manual"}}')
             textbook = analyze._stage_2_2_build_prompt(
-                "text", 0, 1, {"book_meta": {"granularity": "textbook"}}, file_path, cfg)
+                "text", 0, 1, {}, file_path, cfg,
+                accumulated_digest='{"book_meta": {"granularity": "textbook"}}')
 
             self.assertIn("COARSE granularity", manual)
             self.assertNotIn("COARSE granularity", textbook)

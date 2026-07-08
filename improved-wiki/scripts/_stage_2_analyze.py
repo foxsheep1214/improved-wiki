@@ -416,24 +416,40 @@ def _stage_2_2_schema_types_block(config: Config) -> str:
     )
 
 
-def _stage_2_2_granularity_block(global_digest: dict) -> str:
+def _stage_2_2_granularity_block(accumulated_digest) -> str:
     """D2 (user ruling 2026-07-02): book-level granularity switch.
 
-    Stage 2.1 classifies the book via ``book_meta.granularity``. For a
-    "manual" (implementation/maintenance monograph organized around one
-    device's circuits) inject a stronger COARSE-granularity directive on top
-    of the always-on granularity gate below. "textbook" or absent → empty
+    Source: book_meta.granularity in the accumulated digest (rolled up by
+    prior chunks; the first chunk has no prior digest yet → no granularity).
+    For a "manual" (implementation/maintenance monograph organized around
+    one device's circuits) inject a stronger COARSE-granularity directive on
+    top of the always-on granularity gate below. "textbook" or absent → empty
     string (existing gate only).
     """
-    book_meta = global_digest.get("book_meta") if isinstance(global_digest, dict) else None
+    book_meta = None
+    if isinstance(accumulated_digest, dict):
+        book_meta = accumulated_digest.get("book_meta")
+    elif accumulated_digest:
+        s_str = str(accumulated_digest).strip()
+        if s_str and s_str not in ("{}", '""'):
+            for _loader in (lambda t: __import__("json").loads(t),
+                            lambda t: __import__("yaml").safe_load(t)):
+                try:
+                    d = _loader(s_str)
+                    if isinstance(d, dict):
+                        book_meta = d.get("book_meta")
+                        break
+                except Exception:
+                    pass
     if not isinstance(book_meta, dict):
         return ""
     if str(book_meta.get("granularity", "")).strip().lower() != "manual":
         return ""
     return (
         "\n# Book Granularity: MANUAL — extract COARSE\n"
-        "Stage 2.1 classified this book as a device manual (implementation/"
-        "maintenance monograph organized around one device's circuits).\n"
+        "The accumulated digest classifies this book as a device manual "
+        "(implementation/maintenance monograph organized around one device's "
+        "circuits).\n"
         "COARSE granularity: chip/board/pin-level implementation details are NOT "
         "concepts — fold into system-level pages or entities; target "
         "system/subsystem-level concepts only.\n"
@@ -523,7 +539,7 @@ def _stage_2_2_build_prompt(
 
     schema_types_section = _stage_2_2_schema_types_block(config)
 
-    granularity_section = _stage_2_2_granularity_block(global_digest)
+    granularity_section = _stage_2_2_granularity_block(accumulated_digest)
 
     # ── Heading path (NashSU parity: chunk.headingPath) ──
     heading_section = ""
@@ -559,8 +575,8 @@ You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
 You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
 {template_section}{schema_types_section}{granularity_section}
 # Context: Accumulated Global Digest
-This digest is cumulative context from the Stage 2.1 outline and all PREVIOUS
-chunks — use it for continuity and to avoid re-writing the same *prose* twice.
+This digest is cumulative context rolled up across all PREVIOUS chunks — use
+it for continuity and to avoid re-writing the same *prose* twice.
 It is NOT a list of existing wiki pages: a concept named here has NOT necessarily
 been turned into a page yet. Do NOT drop a page-worthy concept from
 `concepts_found` just because its name appears in this digest — that includes
@@ -719,9 +735,26 @@ schema_typed_candidates:
 
 updated_global_digest: |
   # Accumulated Global Digest (after chunk {chunk_index + 1}/{chunk_total})
-  # Merge this chunk's key concepts, entities, and claims into the prior digest.
-  # Be cumulative — keep everything from before, add only what's new.
-  ...
+  # Cumulative: keep everything from prior chunks, add only what's new.
+  # MUST contain these 5 top-level keys. The FIRST chunk ESTABLISHES book_meta
+  # and outline; later chunks refine them and append to the other three.
+  book_meta:
+    title: "..."
+    authors: ["..."]
+    year: "..."
+    publisher: "..."
+    granularity: "textbook" | "manual"   # "manual" ONLY for implementation/maintenance monographs
+  outline:
+    - "Chapter/Section ..."
+  key_entities:
+    - name: "..."
+      type: "person" | "organization" | "system" | "model"
+  key_concepts:
+    - name: "..."
+      definition: "..."
+  key_claims:
+    - claim: "..."
+      evidence: "..."
 
 # Do NOT propose new wiki pages — that's Stage 2
 ```

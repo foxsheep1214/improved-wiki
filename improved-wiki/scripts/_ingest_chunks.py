@@ -30,7 +30,7 @@ from _stage_2_4_generation import (
     _stage_2_4_extract_names,
     _stage_2_4_per_concept_fallback,
 )
-from _stage_validators import _verify_stage_2_2_chunks
+from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_1_digest
 
 def _parse_accumulated_to_dict(accumulated) -> dict:
     """Parse the rolled-up accumulated_digest back to a dict for 2.4/2.6/2.7/2.9.
@@ -348,6 +348,13 @@ def _run_chunk_pipeline(
     # Roll the final accumulated_digest up into global_digest (dict) for
     # 2.4/2.6/2.7/2.9. Persist so a cached resume restores it.
     global_digest = _parse_accumulated_to_dict(accumulated_digest)
+
+    # Verify the rolled-up digest has the 5 required keys (book_meta/outline/
+    # key_concepts/key_claims/key_entities) that 2.4/2.6/2.7/2.9 consume.
+    # Migrated from Stage 2.1 (removed 2026-07-08): the gate now runs on the
+    # 2.2 roll-up instead of the former whole-book prior.
+    if chunk_analyses and not analyze_only:
+        _verify_stage_2_1_digest(global_digest, raw_file)
 
     save_progress(config, _h, {"chunk_analyses": chunk_analyses,
                                "global_digest": global_digest})
