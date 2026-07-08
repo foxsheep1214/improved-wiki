@@ -10,6 +10,12 @@ ideally before deciding whether to chain the next handoff or hand back to the
 parent — to catch degradation at the cheapest point, before it propagates into
 Stage 2.4's generated pages.
 
+Checks: response size, real-concept count, placeholder names, source_quotes
+present + non-empty, and every claim carrying a non-empty evidence anchor
+(the last two migrated from the C1 hard gate removed 2026-07-08 — advisory
+here: a flagged chunk means delete the .txt and re-dispatch, never a
+pipeline abort).
+
 Usage:
     python3 scripts/qc_stage22.py                       # scans IMPROVED_WIKI_ROOT (or cwd)
     IMPROVED_WIKI_ROOT=/path/to/project python3 scripts/qc_stage22.py
@@ -29,6 +35,16 @@ PLACEHOLDER = re.compile(
     r"(?i)chunk \d|handbook content|reference material|technical content|"
     r"book content|comprehensive.*content"
 )
+# source_quotes / evidence coverage (migrated from the removed C1 hard gate,
+# 2026-07-08 d28ae85 — advisory here, never a pipeline abort). The block-scalar
+# body is the indented lines following "source_quotes: |".
+SOURCE_QUOTES_BLOCK = re.compile(
+    r"^source_quotes:\s*\|[^\n]*\n((?:[ \t]+\S[^\n]*\n?)*)", re.MULTILINE)
+CLAIM_LINE = re.compile(r"^\s*-\s*claim:", re.MULTILINE)
+# A non-empty evidence value: optional quote, then a real character. Matches
+# entries in both `claims:` and the digest's `key_claims:` — claim lines are
+# counted from the same sections, so coverage compares like with like.
+EVIDENCE_LINE = re.compile(r"^\s*evidence:\s*[\"']?[^\"'\s]", re.MULTILINE)
 
 
 def check(txt_file: Path) -> tuple[bool, str]:
@@ -42,7 +58,16 @@ def check(txt_file: Path) -> tuple[bool, str]:
         return False, f"only {len(concepts)} concepts (< {MIN_CONCEPTS})"
     if placeholders:
         return False, f"placeholder names: {placeholders[:3]}"
-    return True, f"OK ({len(concepts)} concepts, {size} bytes)"
+    quotes = SOURCE_QUOTES_BLOCK.search(text)
+    if not quotes or not quotes.group(1).strip():
+        return False, ("source_quotes missing or empty (2-3 verbatim sentences "
+                       "with section/equation anchors required)")
+    n_claims = len(CLAIM_LINE.findall(text))
+    n_evidence = len(EVIDENCE_LINE.findall(text))
+    if n_evidence < n_claims:
+        return False, (f"only {n_evidence}/{n_claims} claims carry a non-empty "
+                       f"evidence anchor")
+    return True, f"OK ({len(concepts)} concepts, {n_claims} claims, {size} bytes)"
 
 
 def main() -> int:

@@ -83,10 +83,10 @@ before advancing, verify:
 - ≥ 5 real concepts (count `- name:` entries in `concepts_found`)
 - No placeholder names (regex: `(?i)chunk \d|handbook content|reference material|technical content|book content`)
 - Response size ≥ 3000 bytes
-- source_quotes present + every claim has a specific evidence anchor (prompt-schema
-  requirement — the in-pipeline C1/C3 hard gates were removed 2026-07-08 in favor of
-  per-chunk subagent isolation, so the driving agent checks this manually; 2.4
-  consumes at most 5 key_details per concept regardless)
+- source_quotes present + non-empty, and every claim carries a non-empty evidence
+  anchor (checked by `qc_stage22.py` — the in-pipeline C1/C3 hard gates were removed
+  2026-07-08 in favor of per-chunk subagent isolation, and these two checks moved
+  into the offline scanner; 2.4 consumes at most 5 key_details per concept regardless)
 
 Run `scripts/qc_stage22.py` (scans every `Stage-2-2-Chunk-*.txt` under
 `.llm-wiki/conversation/*/`) to check all responses at once. If a response
