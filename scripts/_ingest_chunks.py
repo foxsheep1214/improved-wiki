@@ -186,13 +186,26 @@ def _generate_all_chunks(
 
 
 def _parallel_gen_enabled() -> bool:
-    """OPT-IN: ``IMPROVED_WIKI_PARALLEL_GEN`` truthy → eager+drain gen mode.
+    """DEFAULT ON (2026-07-09 user decision): eager-inventory + drain mode for
+    Stage 2.4 multi-chunk generation.
 
-    Truthy = "1"/"true"/"yes" (case-insensitive). Unset/falsy = the existing
-    serial path, byte-identical to before.
+    Cross-chunk dedup in 2.4 is a lightweight REFERENCE dependency (a
+    deterministic slug list — ``slug = slugify(name)`` from already-cached 2.2
+    analyses), not a CONTENT dependency like Stage 2.2's rolling digest (chunk
+    N+1 genuinely needs chunk N's digest output to build its own prompt). NashSU
+    itself never chunks generation at all (one call for the whole book) — it has
+    no "must be serial" requirement to mirror here; improved-wiki's own per-chunk
+    grounding (avoiding "concepts drift to training-memory" on large books) is
+    what makes chunking necessary, and that grounding is per-chunk-source-text,
+    unaffected by answer order. Serial was the original default purely out of
+    launch-day conservatism ("byte-identical to before"), not a real constraint.
+
+    Explicit opt-OUT via ``IMPROVED_WIKI_PARALLEL_GEN=0``/``false``/``no``/``off``
+    (e.g. bisecting a regression) restores the old strictly-serial accumulation
+    path. Unset or any other value = parallel-safe drain mode.
     """
-    return os.environ.get("IMPROVED_WIKI_PARALLEL_GEN", "").strip().lower() in (
-        "1", "true", "yes")
+    val = os.environ.get("IMPROVED_WIKI_PARALLEL_GEN", "").strip().lower()
+    return val not in ("0", "false", "no", "off")
 
 
 def _generate_all_chunks_parallel(

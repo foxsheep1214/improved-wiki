@@ -42,6 +42,33 @@ def _stage_2_3_acronym_only_mismatch(name: str, slug: str, shared_tokens: set) -
     return bool(name_cjk) and bool(slug_cjk) and not (name_cjk & slug_cjk)
 
 
+_STAGE_2_3_ALNUM_RUN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _stage_2_3_initials(text: str) -> set:
+    """Single-letter alphanumeric segments of a name/slug — person initials."""
+    return {seg for seg in _STAGE_2_3_ALNUM_RUN_RE.findall(text.lower())
+            if len(seg) == 1}
+
+
+def _stage_2_3_initials_mismatch(name: str, slug: str) -> bool:
+    """True when both sides carry single-letter initials and the sets are
+    disjoint — a different-person collision on a shared surname.
+
+    Live failure (2026-07-09, Phased Array Antennas re-ingest):
+    _stage_2_title_words drops single-letter tokens, so "W. W. Hansen" (the
+    1938 Hansen-Woodyard co-originator) and the existing page "J. P. Hansen"
+    (an NRL sea-clutter researcher from the Skolnik handbook) both tokenized
+    to {hansen} → Jaccard 1.0 → ALREADY COVERED → generation wikilinked the
+    wrong person from the Hansen-Woodyard concept page. Same guard shape as
+    _stage_2_3_acronym_only_mismatch. One side having NO initials (bare
+    surname) is left alone — that ambiguity needs semantics, not initials.
+    """
+    a = _stage_2_3_initials(name)
+    b = _stage_2_3_initials(slug)
+    return bool(a) and bool(b) and not (a & b)
+
+
 def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: list[dict]) -> dict:
     associations = {}
     concepts_dir = wiki_root / "concepts"
@@ -90,7 +117,8 @@ def stage_2_3_detect_incremental_associations(wiki_root: Path, chunk_analyses: l
                 matches.append(slug)
             elif (words and name_words
                   and len(name_words & words) / len(name_words | words) > 0.5
-                  and not _stage_2_3_acronym_only_mismatch(name, slug, name_words & words)):
+                  and not _stage_2_3_acronym_only_mismatch(name, slug, name_words & words)
+                  and not _stage_2_3_initials_mismatch(name, slug)):
                 matches.append(slug)
             # CJK bigram Jaccard branch (A4, audit 2026-07-02): pure/mostly-CJK
             # titles previously had no non-exact match path at all. Separate

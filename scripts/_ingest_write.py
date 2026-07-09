@@ -95,6 +95,19 @@ def reconstruct_enrich_candidates(
     return out
 
 
+def _is_redundant_duplicate_write(full_path, content: str, written_this_run: dict) -> bool:
+    """True when this exact (path, content) was already written earlier in THIS
+    write loop — a duplicate FILE block (e.g. the source page emitted by both
+    2.6 and a later step). Re-merging a page against our own byte-identical
+    just-written output wastes one LLM merge handoff per duplicate —
+    delegate-mode.md documented "2-3 redundant source-page merge prompts per
+    ingest" and told the operator to reuse the first merge result by hand; now
+    enforced in code. A duplicate path with DIFFERENT content is NOT redundant:
+    that is the designed same-slug collision merge — let it through.
+    """
+    return written_this_run.get(full_path) == content
+
+
 def _reconstruct_blocks_from_disk(
     config: Config, files_written_paths: list[str]
 ) -> list[tuple[str, str]]:
@@ -243,6 +256,10 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # [[<slug>|据<ref>]] and skips the source page itself (own slug match).
     _source_page_slug = source_path.relative_to(config.wiki_dir).with_suffix("").as_posix()
 
+    # Duplicate-block guard (redundancy fix 2026-07-09): (path → content)
+    # written earlier in THIS loop; see _is_redundant_duplicate_write.
+    _written_this_run: dict[Path, str] = {}
+
     for rel_path, content in _write_blocks:
         if ".." in rel_path or rel_path.startswith("/"):
             continue
@@ -305,6 +322,12 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
         full_path = config.wiki_dir / rel_path
         is_listing = basename in _LISTING_PAGES
+
+        if _is_redundant_duplicate_write(full_path, content, _written_this_run):
+            print(f"  [skip] {rel_path} — duplicate block, identical to "
+                  f"content already written this ingest")
+            continue
+
         do_merge = full_path.exists() and not is_listing
 
         try:
@@ -314,6 +337,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             hard_failures.append(rel_path)
             continue
 
+        _written_this_run[full_path] = content
         files_written_paths.append(str(full_path.relative_to(config.wiki_root)))
         if full_path == source_path:
             source_block = (rel_path, content)

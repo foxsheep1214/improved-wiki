@@ -72,11 +72,22 @@ def enrich_wikilinks_batch(
     Never touches frontmatter. Returns {rel_path: enriched_content} for pages
     that actually changed — unchanged pages are omitted.
     """
+    # Zero-outlink gate (redundancy fix 2026-07-09): Stage 2.4 generation
+    # already mandates inline [[wikilinks]] in every page it writes, so
+    # enriching pages that ALREADY carry outlinks was a no-op round-trip in
+    # practice (the documented safe answer to the handoff was often `{}`).
+    # Keep the NashSU-parity bailout only for pages with ZERO outgoing links
+    # (merge leftovers, legacy pages); when no page qualifies, the whole LLM
+    # round-trip is skipped.
     candidates = []
     for rel_path, content in pages:
         _, body = parse_frontmatter(content)
-        if len(body) >= 100:
+        if len(body) >= 100 and "[[" not in body:
             candidates.append((rel_path, content))
+    skipped = len(pages) - len(candidates)
+    if skipped:
+        print(f"  [enrich] {skipped}/{len(pages)} page(s) already carry inline "
+              f"[[wikilinks]] — enriching {len(candidates)} zero-outlink page(s)")
     if not candidates:
         return {}
 

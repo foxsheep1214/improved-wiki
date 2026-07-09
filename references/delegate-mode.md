@@ -142,6 +142,12 @@ multiple `LLM-task-*.md` merge prompts in the conversation directory. Each promp
 to merge an existing wiki page with a new version from the current ingest. There can be
 5-15 such tasks for a single book ingest.
 
+> **零出链闸门（2026-07-09）**：enrichment 批量 round-trip 只覆盖写盘后正文
+> **零出链**的页面（`_enrich_wikilinks.py`）。2.4 生成时已强制内联
+> `[[wikilinks]]`，所以绝大多数 ingest 的 enrichment 批次为空、整个 round-trip
+> 被跳过（打印 `[enrich] N/M page(s) already carry inline [[wikilinks]]`）。
+> 见到 enrichment handoff 本身就说明确有零出链页，正常作答即可。
+
 **Pattern for handling merge tasks efficiently:**
 1. Check for pending `LLM-task-*.md` files (no corresponding `.txt`)
 2. For source-page merges that appear identical to a previous merge (same existing +
@@ -167,12 +173,15 @@ only source was the deleted book), media directory, and cache entry, then a
 fresh run re-ingests cleanly. **Authoritative flow (backup → delete → re-ingest
 → compare): `references/re-ingest-comparison.md`.**
 
-### Source page may be merged multiple times
+### Source page may be merged multiple times（已代码化，2026-07-09）
 
-The pipeline can generate 2-3 redundant source-page merge `LLM-task` prompts during
-a single ingest (Stage 2.6 writes it, then enrichment re-merges it). If you see the
-same source page appearing in multiple merge tasks, reuse your first merge result —
-the content doesn't change between merges.
+历史问题：单次 ingest 可能产生 2-3 个冗余的源页 merge `LLM-task` prompt（同一
+FILE block 在写循环中重复出现，与我们自己刚写的字节级相同内容再 merge 一次）。
+旧缓解是操作纪律（"复用第一次 merge 结果"）。现已在写循环代码级修掉
+（`_ingest_write.py::_is_redundant_duplicate_write`）：同一路径+相同内容的重复
+块直接跳过（打印 `[skip]`）；同一路径+**不同**内容仍走 merge——那是设计内的
+same-slug collision merge，不是冗余。如再见到重复 merge 任务，属回归，应查代码
+而非手工绕过。
 
 ## 链式作答 → 每个 handoff 独立 subagent（L4 修订，2026-07-08）
 
@@ -212,3 +221,26 @@ C1/C3 硬门禁（source_quotes / key_details≤5）是在**输出端**拦症状
 - **Skolnik 事故（2026-07-07）的教训仍然适用**：那次根因是连答 14 个 chunk
   不退出；新政策下不可能发生（上限=1），但主对话如果跳过 subagent 直接自己答
   多个 chunk，效果等价于"连答"，同样退化——所以"主对话直接答"也被禁止。
+
+### Hansen 事故（2026-07-09）：subagent 自行拆分单个 handoff 会产生"已完成"但答案文件不存在
+
+一个 2.2 chunk 的原始文本 ~250K 字符，subagent 有时会把这一个 handoff
+**自行拆成多个自己派发的子任务**（如"Ch1+Ch2 start / Ch2 continued / Ch3
+part1 / Ch3 part2"分头并行提取），逐段返回散装的 entities/concepts/claims 文本，
+最终给主对话回报"completed"，但从未把结果写成 schema 要求的单个 YAML 写入
+`<stage-slug>.txt`——因为分头提取的每个子任务各自只覆盖了整体 schema 的一部分
+（例如只有 concepts 没有 updated_global_digest），没有一个子任务是"完整答案"。
+主对话核对 `.txt` 文件是否存在时才发现文件从未生成，此前的分头输出全部作废，
+被迫重新派发一次完整版 subagent 重做——纯浪费。
+
+**根因**：delegate-mode 的"1 handoff = 1 subagent"约束只界定了主对话侧的派发
+粒度，没有明确禁止 subagent 自己在内部再次派发 Agent 工具。当 chunk 文本很长时，
+subagent 会"合理地"想要并行化，但并行化的产物不满足 schema 契约。
+
+**修复**：派发 2.2/2.4 等 chunk-analysis handoff 时，prompt 必须显式包含：
+"这是一个自包含的单一任务——不要派发任何后台进程或等待任何其他 agent，你自己
+读完整个 chunk、自己分析、自己写出这一个完整的 YAML 答案文件，仅此而已。"
+主对话在收到"completed"通知后，**必须先验证 `<stage-slug>.txt` 确实存在
+且内容通过 schema 校验，再继续 re-invoke `ingest.py`**——不能只信任
+"completed"状态本身，那只代表 harness 认为 subagent 停止了，不代表它完成了
+被要求的任务。

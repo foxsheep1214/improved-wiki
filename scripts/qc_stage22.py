@@ -18,8 +18,15 @@ pipeline abort).
 
 Usage:
     python3 scripts/qc_stage22.py                       # scans IMPROVED_WIKI_ROOT (or cwd)
+    python3 scripts/qc_stage22.py --conv e1aa860d       # only this book's conversation dir
     IMPROVED_WIKI_ROOT=/path/to/project python3 scripts/qc_stage22.py
+
+--conv scopes the scan to one conversation prefix (the current book). Without
+it the scan crosses every book ever ingested and drowns the signal in stale
+historical answers (observed live 2026-07-09: hundreds of flags from
+already-superseded runs).
 """
+import argparse
 import os
 import re
 import sys
@@ -71,6 +78,12 @@ def check(txt_file: Path) -> tuple[bool, str]:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--conv", default="",
+                    help="only scan this conversation prefix (e.g. e1aa860d); "
+                         "default: all books")
+    args = ap.parse_args()
+
     project_root = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
     runtime = detect_runtime_dir(project_root)
     conv_root = runtime / "conversation"
@@ -81,6 +94,8 @@ def main() -> int:
     bad = []
     total = 0
     for conv_dir in sorted(conv_root.iterdir()):
+        if args.conv and conv_dir.name != args.conv:
+            continue
         targets = sorted(
             conv_dir.glob("Stage-2-2-Chunk-*.txt"),
             key=lambda p: int(re.search(r"Chunk-(\d+)", p.name).group(1)),

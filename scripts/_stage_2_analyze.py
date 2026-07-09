@@ -33,6 +33,46 @@ def _estimate_tokens(text: str) -> int:
 _HEADING_RE = re.compile(r"^#{1,6}\s+.+$", re.MULTILINE)
 _FENCE_RE = re.compile(r"^[ \t]*(```+|~~~+)", re.MULTILINE)
 
+# Rolling-digest cap fed from chunk N into chunk N+1's prompt. NashSU parity:
+# ingest.ts `LONG_SOURCE_DIGEST_MAX = 15_000` — a fixed constant, deliberately
+# not scaled to the model context window (user decision 2026-07-09).
+_DIGEST_PROMPT_CAP = 15_000
+
+# Cap on the existing-wiki slug list embedded in each 2.2 chunk prompt. The
+# uncapped list grew with the wiki (6,253 pages → one 259KB prompt line,
+# repeated per chunk — observed live 2026-07-09, and it broke answering
+# subagents' Read tooling). NashSU trims its Current Wiki Index to 40K chars
+# (ingest.ts buildChunkAnalysisSystemPrompt); 2.4 (_LINKABLE_TOTAL_CAP) and
+# 2.6 ([:1500]) already rank-and-cap. 1000 slugs ≈ 40K chars — same budget.
+_EXISTING_SLUGS_CAP = 1000
+
+
+def _stage_2_2_cap_existing_slugs(existing_slugs: list, chunk_text: str) -> list:
+    """Bound the existing-wiki slug list shown to a chunk-analysis prompt.
+
+    Rank by relevance to THIS chunk's text — containment of the slug's tokens
+    in the chunk's token set (ASCII words ∪ CJK bigrams, reusing the 2.4
+    linkable-fill tokenizers) — keep the best _EXISTING_SLUGS_CAP, alphabetize
+    for stable presentation. The chunk text is fixed for the whole ingest, so
+    the ranked prefix (and hence the conversation-handoff prompt hash) is
+    stable across resumes. An alphabetical cut would systematically drop
+    late-sorting CJK slugs — the same disease _rank_linkable_fill fixed for
+    2.4/2.6.
+    """
+    if len(existing_slugs) <= _EXISTING_SLUGS_CAP:
+        return existing_slugs
+    from _stage_2_4_generation import _linkable_relevance_tokens
+    ref = _stage_2_title_words(chunk_text) | _stage_2_title_cjk_bigrams(chunk_text)
+
+    def _score(slug: str) -> float:
+        cand = _linkable_relevance_tokens(slug)
+        if not cand:
+            return 0.0
+        return len(cand & ref) / len(cand)
+
+    ranked = sorted(existing_slugs, key=lambda s: (-_score(s), s))
+    return sorted(ranked[:_EXISTING_SLUGS_CAP])
+
 # Fraction of the window scanned backwards for a clean boundary.
 _SEARCH_FRAC = 0.15
 # A trailing chunk smaller than this fraction of the token budget is merged back
@@ -415,16 +455,21 @@ def _stage_2_2_build_prompt(
             if key in global_digest:
                 digest_compact[key] = global_digest[key]
         digest_str = json.dumps(digest_compact, ensure_ascii=False, indent=2)
-    # Cap to keep prompts lean — but generously: this digest is the 2.2 chain's
-    # ONLY continuity channel (chunk N+1 sees earlier coverage solely through
-    # it). The old 6000-char cap silently truncated it from ~chunk 2 on for
-    # CJK books at 64K-token chunking (observed live 2026-07-02: '...
-    # (truncated)' inside the chunk-3 prompt of a 3-chunk book), degrading
-    # continuity and inviting cross-chunk duplicate concepts. 24K chars is
-    # still <3% of a 256K-char chunk prompt.
-    if len(digest_str) > 24000:
-        digest_str = digest_str[:24000] + "\n... (truncated)"
-    existing_slugs = list_existing_slugs(config)
+    # NashSU parity (user decision 2026-07-09): the chunk→chunk digest transfer
+    # matches NashSU's volume AND granularity. NashSU ingest.ts caps the rolling
+    # digest at a FIXED `LONG_SOURCE_DIGEST_MAX = 15_000` chars — deliberately
+    # NOT scaled to the model context (chunk size scales; the digest does not) —
+    # paired with a "compact document-level digest" instruction so the LLM
+    # condenses rather than accumulates verbatim (see the updated_global_digest
+    # template below). Detail is NOT lost by this: each chunk's full analysis
+    # (concepts/claims/formulas) is persisted in chunk_analyses and flows to
+    # 2.4 (per-chunk generation) and 2.6 (chunk_claims) separately — the digest
+    # is only the lightweight continuity channel. Earlier fixed caps (6K, 24K)
+    # and an interim dynamic cap (target_chars) predate this parity decision.
+    if len(digest_str) > _DIGEST_PROMPT_CAP:
+        digest_str = digest_str[:_DIGEST_PROMPT_CAP] + "\n... (truncated)"
+    existing_slugs = _stage_2_2_cap_existing_slugs(
+        list_existing_slugs(config), chunk_text)
 
     template_section = _stage_2_2_build_template_section(template, file_path, max_chars=2000)
 
@@ -470,6 +515,9 @@ You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk
 # Context: Accumulated Global Digest
 This digest is cumulative context rolled up across all PREVIOUS chunks — use
 it for continuity and to avoid re-writing the same *prose* twice.
+Keep stable names consistent with the existing wiki and prior digest: when this
+chunk re-encounters a concept/entity already named there, reuse that EXACT name
+(stable names → stable slugs → downstream dedup works).
 It is NOT a list of existing wiki pages: a concept named here has NOT necessarily
 been turned into a page yet. Do NOT drop a page-worthy concept from
 `concepts_found` just because its name appears in this digest — that includes
@@ -515,10 +563,15 @@ Analyze THIS CHUNK of the book. Extract:
    and standards.)
 3. Key claims, formulas, data points
 4. Connections to existing wiki pages (if any)
-5. An **Updated Global Digest** — merge this chunk's key discoveries into the
-   Accumulated Global Digest above, so the next chunk benefits from everything
-   learned so far. Keep it concise but cumulative: add new concepts, entities,
-   and key claims. Do NOT remove anything from the existing digest.
+5. An **Updated Global Digest** — a COMPACT document-level digest that
+   incorporates this chunk and preserves prior cross-chunk context. This is a
+   continuity ledger, NOT an archive: every concept/entity NAME from the prior
+   digest must survive (so later chunks know what is already covered), but keep
+   each entry to ONE short line — condense prior definitions/claims freely.
+   Your full per-chunk detail is already saved separately (concepts_found /
+   claims / formulas above); do NOT duplicate it here. Target well under
+   15,000 characters — anything beyond is hard-truncated before the next
+   chunk sees it.
 6. **Schema-typed page candidates** — if the project schema defines page types
    beyond entity/concept (e.g. finding, decision, methodology) AND this chunk
    genuinely contains matching content, note it for the generation stage. Use a
@@ -627,8 +680,14 @@ schema_typed_candidates:
     rationale: "..."    # one sentence: why this chunk supports this typed page
 
 updated_global_digest: |
-  # Accumulated Global Digest (after chunk {chunk_index + 1}/{chunk_total})
-  # Cumulative: keep everything from prior chunks, add only what's new.
+  # Compact Global Digest (after chunk {chunk_index + 1}/{chunk_total}) — NashSU parity
+  # A compact continuity ledger, not an archive: every prior concept/entity
+  # NAME survives, but each entry is ONE short line (condense prior prose;
+  # full detail already lives in each chunk's own analysis). Keep the whole
+  # digest well under 15,000 chars — overflow is hard-truncated.
+  # When approaching the budget, compress OLDER entries' gists down to bare
+  # names (names are non-negotiable, gists are droppable), keep book_meta +
+  # outline intact, and keep key_claims to the book's MAIN arguments only.
   # MUST contain these 5 top-level keys. The FIRST chunk ESTABLISHES book_meta
   # and outline; later chunks refine them and append to the other three.
   book_meta:
@@ -644,9 +703,9 @@ updated_global_digest: |
       type: "person" | "organization" | "system" | "model"
   key_concepts:
     - name: "..."
-      definition: "..."
+      definition: "..."   # ONE short line, not a paragraph; no key_details here
   key_claims:
-    - claim: "..."
+    - claim: "..."        # ONE line; keep only the book's MAIN arguments here
       evidence: "..."
 
 # Do NOT propose new wiki pages — that's Stage 2

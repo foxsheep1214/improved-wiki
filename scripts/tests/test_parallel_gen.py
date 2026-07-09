@@ -1,4 +1,10 @@
-"""Tests for the opt-in eager-inventory + parallel/drain Stage 2.4 gen mode.
+"""Tests for the eager-inventory + parallel/drain Stage 2.4 gen mode.
+
+DEFAULT ON since 2026-07-09 (user decision) — cross-chunk dedup in 2.4 is a
+deterministic slug lookup, not a content dependency like Stage 2.2's rolling
+digest, so answer order doesn't matter. Opt-out via
+``IMPROVED_WIKI_PARALLEL_GEN=0/false/no/off`` restores the old strictly-serial
+accumulation path (for bisecting a regression).
 
 Stdlib `unittest` only — no pytest, no network, no LLM calls.
 
@@ -11,8 +17,10 @@ Covers:
   blank names skipped.
 - ``_other_chunk_slugs`` = all stems except those owned by i, sorted.
 - Determinism of the per-chunk other-slug list.
-- Flag OFF → serial accumulation (chunk 2 sees chunk 1's produced slugs).
-- Flag ON → drain: ≥2 uncached chunks raise ConversationPending exactly once
+- Unset env var → parallel-safe drain (the new default).
+- Explicit opt-out (``0``/``false``/``no``/``off``) → serial accumulation
+  (chunk 2 sees chunk 1's produced slugs).
+- Drain mode: ≥2 uncached chunks raise ConversationPending exactly once
   after attempting ALL chunks; 0 uncached returns the union of blocks.
 """
 from __future__ import annotations
@@ -147,9 +155,45 @@ class _FlagEnv:
         return False
 
 
-class TestFlagOffSerial(unittest.TestCase):
-    """Flag OFF: chunk i is fed the slugs PRODUCED by prior chunks (accumulation),
-    NOT the full eager inventory."""
+class TestUnsetDefaultsToParallel(unittest.TestCase):
+    """Unset env var (the new default, 2026-07-09): eager inventory + drain,
+    same as explicit ``IMPROVED_WIKI_PARALLEL_GEN=1``."""
+
+    def test_unset_env_var_uses_eager_inventory_not_accumulation(self):
+        metas = [_meta(0), _meta(1), _meta(2)]
+        analyses = [
+            _analysis(concepts=["A0"]),
+            _analysis(concepts=["A1"]),
+            _analysis(concepts=["A2"]),
+        ]
+        seen_generated_slugs = {}
+
+        def fake_gen(analysis, chunk_idx, generated_slugs, *a, **kw):
+            seen_generated_slugs[chunk_idx] = list(generated_slugs)
+            name = analysis["concepts_found"][0]["name"]
+            return [(f"concepts/{name.lower()}.md", "body")]
+
+        orig = _ingest_chunks.stage_2_4_generate_chunk
+        _ingest_chunks.stage_2_4_generate_chunk = fake_gen
+        try:
+            with _FlagEnv(None):
+                blocks, slugs, stop = _ingest_chunks._generate_all_chunks(
+                    metas, analyses, {}, Path("raw.txt"), object(), "",
+                    chunk_total=3, t_start=0.0, verbose=False)
+        finally:
+            _ingest_chunks.stage_2_4_generate_chunk = orig
+
+        # Eager inventory: EVERY chunk is told about every OTHER chunk's slug
+        # up front — chunk 0 already knows about a1/a2, not accumulation-empty.
+        self.assertEqual(seen_generated_slugs[0], ["a1", "a2"])
+        self.assertEqual(seen_generated_slugs[2], ["a0", "a1"])
+        self.assertEqual(sorted(slugs), ["a0", "a1", "a2"])
+        self.assertIsNone(stop)
+
+
+class TestExplicitOptOutSerial(unittest.TestCase):
+    """Explicit opt-out (0/false/no/off): chunk i is fed the slugs PRODUCED by
+    prior chunks (accumulation), NOT the full eager inventory."""
 
     def test_serial_accumulation(self):
         metas = [_meta(0), _meta(1), _meta(2)]
@@ -169,7 +213,7 @@ class TestFlagOffSerial(unittest.TestCase):
         orig = _ingest_chunks.stage_2_4_generate_chunk
         _ingest_chunks.stage_2_4_generate_chunk = fake_gen
         try:
-            with _FlagEnv(None):
+            with _FlagEnv("0"):
                 blocks, slugs, stop = _ingest_chunks._generate_all_chunks(
                     metas, analyses, {}, Path("raw.txt"), object(), "",
                     chunk_total=3, t_start=0.0, verbose=False)
@@ -183,6 +227,12 @@ class TestFlagOffSerial(unittest.TestCase):
         self.assertNotIn("a2", seen_generated_slugs[2])
         self.assertEqual(slugs, ["a0", "a1", "a2"])
         self.assertIsNone(stop)
+
+    def test_other_opt_out_spellings(self):
+        for spelling in ("false", "No", "OFF"):
+            with self.subTest(spelling=spelling):
+                with _FlagEnv(spelling):
+                    self.assertFalse(_ingest_chunks._parallel_gen_enabled())
 
 
 class TestFlagOnDrain(unittest.TestCase):

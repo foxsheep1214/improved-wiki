@@ -7,7 +7,7 @@
 > **并行边界（三层）**：
 > ① **进程级后台预取**（bg OS 子进程）：Phase 0/1（minerU + caption，非 LLM）——自动与主对话 LLM 并行；
 > ② **可并行作答的 conversation prompt** = wiki-independent 段（Phase 0/1 + Stage 2.2）——多个同时 pending 时可每个派一个 sub-agent 并行作答，**并发上限 = `--parallel N`**（默认4，见下方"并发上限"节）；
-> ③ **wiki-dependent spine（2.3+）**：串行，一次只有一本书在 2.3+，其 handoff 一次只有一个 pending（见 [[batch-digest-loop]]、[[delegate-mode]]）。
+> ③ **wiki-dependent spine（2.3+）**：跨书串行——一次只有一本书处于 2.3+（见 [[batch-digest-loop]]、[[delegate-mode]]）。**书内 2.4 例外（2026-07-09 起默认开启）**：Stage 2.4 多 chunk 生成用预计算 slug 清单（`_build_gen_inventory`，确定性、不依赖答题顺序），一次 ingest.py 调用可能同时吐出该书全部未缓存 chunk 的生成 prompt——这些属于同一本书、同一 spine，**允许同时派多个 sub-agent 并行作答**，同样受 `--parallel N` 并发上限约束。2.2（chunk 分析）因滚动 digest 的真实内容依赖，仍严格逐 chunk 串行，不受此例外影响。
 
 ## 并发上限（2026-07-07 补全）
 
