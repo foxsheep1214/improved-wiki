@@ -66,6 +66,26 @@ def _preserve_stage_counters(prev_stages: dict, new_stages: dict) -> dict:
     return out
 
 
+def _append_ingest_warning_log(config: Config, raw_file: Path, warnings: list[str]) -> None:
+    """Persist go/no-go warnings to runtime_dir/ingest-warnings.log.
+
+    validate_stage_outputs() already prints each warning, but the console
+    output is lost once the terminal scrolls. NashSU 0.6.0 added the same
+    persistent log (projectPath/.llm-wiki/ingest-warnings.log) so warnings
+    stay inspectable after the run ends.
+    """
+    log_path = config.runtime_dir / "ingest-warnings.log"
+    try:
+        config.runtime_dir.mkdir(parents=True, exist_ok=True)
+        entry_lines = [f"## {time.strftime('%Y-%m-%dT%H:%M:%S')} | {raw_file.name}", ""]
+        entry_lines += [f"{i}. {w}" for i, w in enumerate(warnings, 1)]
+        entry_lines.append("")
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(entry_lines) + "\n")
+    except OSError as e:
+        print(f"  ⚠️  failed to write ingest-warnings.log: {e}")
+
+
 def reconstruct_enrich_candidates(
     files_written_paths: list[str], wiki_dir: Path, listing_pages: set[str]
 ) -> list[tuple[str, "Path"]]:
@@ -479,7 +499,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         stage_1_2_result, stage_1_3_result,
         review_blocks, source_path,
     )
-
+    if go_nogo_warnings:
+        _append_ingest_warning_log(config, raw_file, go_nogo_warnings)
 
     # Stage 3.5: Aggregate repair
     index_log_files = stage_3_5_aggregate_repair(source_path, raw_file, analysis, h, method, config)
