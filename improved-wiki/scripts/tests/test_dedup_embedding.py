@@ -87,6 +87,44 @@ class TestCandidatePairs(unittest.TestCase):
     def test_empty_pages(self):
         self.assertEqual(e.candidate_pairs([]), [])
 
+    def test_matches_cosine_similarity_at_moderate_scale(self):
+        """2026-07-10: candidate_pairs' inner loop was rewritten to normalize
+        each vector once and use a fast dot product instead of calling
+        cosine_similarity() (which recomputes both vectors' norms) on every
+        pairwise comparison — confirmed live as the dominant cost of an
+        O(N^2) sweep (~40 CPU-minutes on a ~7500-page wiki). This is a
+        correctness regression guard at a scale (200 pages) big enough that
+        a normalization or dot-product mistake would show up as wrong
+        membership, not just a rounding blip: every result must still equal
+        what the original per-pair cosine_similarity() call would produce.
+        """
+        import random
+        random.seed(42)
+        n = 200
+        pages = [{"id": f"p{i}"} for i in range(n)]
+        emb = {f"p{i}": [random.random() for _ in range(16)] for i in range(n)}
+        # Force a handful of near-duplicate pairs above threshold so the
+        # test isn't just checking an all-empty result.
+        emb["p1"] = list(emb["p0"])
+        emb["p1"][0] += 1e-6
+        emb["p50"] = list(emb["p49"])
+        emb["p50"][0] += 1e-6
+
+        threshold = 0.9
+        pairs = e.candidate_pairs(pages, threshold=threshold, top_k=n, embeddings=emb)
+        got = {frozenset(p) for p in pairs}
+
+        expected = set()
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = e.cosine_similarity(emb[f"p{i}"], emb[f"p{j}"])
+                if sim >= threshold:
+                    expected.add(frozenset((f"p{i}", f"p{j}")))
+
+        self.assertEqual(got, expected)
+        self.assertIn(frozenset(("p0", "p1")), got)
+        self.assertIn(frozenset(("p49", "p50")), got)
+
 
 class TestClusterByPairs(unittest.TestCase):
     def test_clusters_pairs_into_groups(self):
