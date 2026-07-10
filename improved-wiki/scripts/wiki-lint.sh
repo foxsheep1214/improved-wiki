@@ -51,6 +51,13 @@
 #   0 — clean (or with findings but no --strict)
 #   1 — broken-link or missing-frontmatter found (only with --strict)
 #   2 — script error
+#   101 — conversation handoff pending: --semantic, --sweep, or --dedup wrote
+#         a prompt and is waiting for the calling agent's answer. Answer it
+#         (per that sub-script's own conversation dir) and re-invoke
+#         wiki-lint.sh to continue the remaining default stages. (2026-07-10:
+#         --sweep/--dedup used to swallow this and silently fall through to
+#         later stages without actually applying the sweep/dedup — fixed to
+#         propagate exit 101 the same way --semantic already did.)
 
 set -uo pipefail
 
@@ -434,13 +441,27 @@ if [ "$SWEEP" = true ]; then
   echo "[lint] Review sweep: resolving satisfied review items..."
   SWEEP_OUT=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
       --project "$WIKI_ROOT" --apply 2>&1 | tail -3)
+  sweep_rc=$?
   echo "[lint] --sweep: $SWEEP_OUT"
+  if [ "$sweep_rc" -eq 101 ]; then
+    echo "[lint] --sweep: conversation handoff pending (exit 101) — the calling agent must answer the written prompt and re-invoke sweep_reviews.py to finish the sweep, then re-run wiki-lint.sh." >&2
+    exit 101
+  elif [ "$sweep_rc" -ne 0 ]; then
+    echo "[lint] --sweep: sub-script exited $sweep_rc, continuing" >&2
+  fi
 fi
 
 # ── Opt-in: Cross-source dedup (via --all; NashSU dedup parity) ──
 if [ "$DEDUP" = true ]; then
   echo "[lint] Cross-source dedup: merging near-duplicate concepts..."
   python3 "$SCRIPT_DIR/cross_source_dedup.py" --project "$WIKI_ROOT" 2>&1 | tail -5
+  dedup_rc=${PIPESTATUS[0]}
+  if [ "$dedup_rc" -eq 101 ]; then
+    echo "[lint] --dedup: conversation handoff pending (exit 101) — the calling agent must answer the written prompt and re-invoke cross_source_dedup.py to finish the dedup pass, then re-run wiki-lint.sh." >&2
+    exit 101
+  elif [ "$dedup_rc" -ne 0 ]; then
+    echo "[lint] --dedup: sub-script exited $dedup_rc, continuing" >&2
+  fi
 fi
 
 # ── Opt-in: Orphan cascade delete (via --all; NashSU handleDeleteOrphan parity) ──
