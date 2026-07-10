@@ -54,9 +54,14 @@ import time
 from pathlib import Path
 from typing import Optional
 
-# ── constants (verbatim from NashSU lint.ts L161-162) ────────────────────────
+# ── constants (adapted from NashSU lint.ts L161-162) ─────────────────────────
+# Deviation from NashSU: title group is [^\n]+? here, not [^\n-]+?. NashSU's
+# literal regex excludes hyphens from the title, so any title containing one
+# (e.g. "MIL-STD-1553 ...", extremely common for model numbers in this KB)
+# fails to match at all and the finding is silently dropped. Confirmed live
+# against a real semantic-lint batch (2026-07-10): 1 of 5 findings lost.
 LINT_BLOCK_REGEX = re.compile(
-    r"---LINT:\s*([^\n|]+?)\s*\|\s*([^\n|]+?)\s*\|\s*([^\n-]+?)\s*---\n"
+    r"---LINT:\s*([^\n|]+?)\s*\|\s*([^\n|]+?)\s*\|\s*([^\n]+?)\s*---\n"
     r"([\s\S]*?)---END LINT---"
 )
 

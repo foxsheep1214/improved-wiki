@@ -193,6 +193,43 @@ class TestSemanticLintBatchedE2E(unittest.TestCase):
                     os.environ["IMPROVED_WIKI_ROOT"] = old_root
 
 
+class TestParseLintBlocksHyphenatedTitle(unittest.TestCase):
+    """Regression (2026-07-10): a title containing a hyphen (e.g. a model
+    number like "MIL-STD-1553") must still parse. NashSU's own regex uses
+    [^\\n-]+? for the title group, which stops at the first hyphen and then
+    fails to find the closing ---, silently dropping the whole block. Our
+    copy deviates on purpose: [^\\n]+? for the title group only."""
+
+    def test_hyphenated_title_parses(self):
+        wls = _load_module()
+        raw = (
+            "---LINT: missing-page | warning | MIL-STD-1553 总线体系结构缺少统领概念页---\n"
+            "PAGES: concepts/1553-command-word-structure.md\n"
+            "七个子页面都引用了这个概念，但它自己没有页面。\n"
+            "---END LINT---\n"
+        )
+        results = wls.parse_lint_blocks(raw, now_ms=0)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["page"], "MIL-STD-1553 总线体系结构缺少统领概念页")
+
+    def test_mixed_hyphenated_and_plain_titles_all_parse(self):
+        wls = _load_module()
+        raw = (
+            "---LINT: suggestion | warning | Plain title---\n"
+            "PAGES: a.md\nbody one\n---END LINT---\n"
+            "---LINT: missing-page | warning | SA-2 has no canonical page---\n"
+            "PAGES: b.md\nbody two\n---END LINT---\n"
+            "---LINT: stale | info | F-16 radar model outdated---\n"
+            "PAGES: c.md\nbody three\n---END LINT---\n"
+        )
+        results = wls.parse_lint_blocks(raw, now_ms=0)
+        self.assertEqual(len(results), 3)
+        self.assertEqual(
+            [r["page"] for r in results],
+            ["Plain title", "SA-2 has no canonical page", "F-16 radar model outdated"],
+        )
+
+
 class TestCollectSummariesDirExclusion(unittest.TestCase):
     """Regression: derived-artifact dirs (REVIEW/, clusters/, media/, lint/)
     must NOT be fed to the semantic-lint LLM — they are diagnostics this port
