@@ -24,15 +24,20 @@
 #   - stdout: summary line
 #
 # Usage:
-#   $ ./wiki-lint.sh                 # structural + semantic + fix + fix-links + sweep + dedup + delete-orphans
+#   $ ./wiki-lint.sh                 # structural + semantic + fix + fix-links + sweep + dedup + delete-orphans(PREVIEW)
 #   $ ./wiki-lint.sh --no-semantic    # skip LLM semantic
 #   $ ./wiki-lint.sh --no-fix-links   # skip auto link-fix pass
 #   $ ./wiki-lint.sh --fix           # + auto-fix missing-frontmatter
 #   $ ./wiki-lint.sh --fix-links     # + auto-fix broken-link/orphan/no-outlinks
-#                                     (--no-stub mode: broken→review, no bulk stubs)
+#                                     (--no-stub mode: broken→review, no bulk stubs;
+#                                      2026-07-10: rewrites need score>=0.9, lower
+#                                      scores → REVIEW/suggestion items instead)
 #   $ ./wiki-lint.sh --verbose       # show every finding
 #   $ ./wiki-lint.sh --strict        # exit 1 for critical issues
 #   $ ./wiki-lint.sh --json-only     # JSON only, no .md lint pages
+#
+# The delete-orphans stage is PREVIEW + review items only (2026-07-10) — it
+# never deletes. Real delete: wiki-lint-fix.py --delete-orphans --apply.
 #
 # Standalone commands (not built into lint — NashSU parity):
 #   sweep_reviews.py                 # auto-resolve satisfied review items
@@ -464,10 +469,17 @@ if [ "$DEDUP" = true ]; then
   fi
 fi
 
-# ── Opt-in: Orphan cascade delete (via --all; NashSU handleDeleteOrphan parity) ──
+# ── Opt-in: Orphan cascade delete (NashSU handleDeleteOrphan port) ──
+# 2026-07-10 (user-approved lint hardening): PREVIEW + review items by default,
+# never an automatic delete. NashSU's delete is a human-clicked per-item button;
+# the old `--apply` here batch-deleted every orphan unattended — including
+# freshly-ingested pages that wikilink enrichment hadn't linked yet, and pages
+# that a --fix-links append in this very run had just rescued (the cache
+# predates the fix). Real delete is an explicit, separate step:
+#   wiki-lint-fix.py --delete-orphans --apply --from-cache <cache> --project-root <root>
 if [ "$DELETE_ORPHANS" = true ]; then
-  echo "[lint] Delete-orphans: cascade-deleting orphan pages..."
-  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans --apply \
+  echo "[lint] Delete-orphans: preview + review items (real delete: wiki-lint-fix.py --delete-orphans --apply)..."
+  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans --emit-review \
     --from-cache "$LINT_CACHE" \
     --project-root "$WIKI_ROOT"
 fi

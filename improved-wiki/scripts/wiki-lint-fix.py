@@ -81,11 +81,25 @@ def _atomic_write(path: Path, content: str) -> None:
     tmp.replace(path)
 
 
+# Headless auto-rewrite gate (2026-07-10, user-approved lint hardening): only
+# exact (1.0) / same-basename (0.96) tier suggestions are rewritten without a
+# human. Contains-tier (0.82) and fuzzy-Levenshtein suggestions go to
+# REVIEW/suggestion instead — string-similar is not meaning-similar, and a
+# headless batch multiplies one bad suggestion (real incident class: the
+# substring 脉冲压缩 auto-linked across 10+ pages to the narrower
+# 脉冲压缩与MTI组合 page). NashSU has no such gate because its Fix is
+# human-clicked per item; this gate restores that judgment for the batch path.
+BROKEN_LINK_AUTO_REWRITE_MIN_SCORE = 0.9
+
+
 def plan_fixes(findings: list[dict]) -> list[dict]:
     """Turn lint findings into a list of fix actions.
 
     Action shapes:
       {kind: "rewrite", page, broken, suggested}
+      {kind: "review-rewrite", page, broken, suggested, score}
+                                       # suggestion below the auto-rewrite gate
+                                       # → routed to REVIEW, never auto-applied
       {kind: "stub", broken, page}     # create stub AND rewrite [[broken]] in `page`
       {kind: "append", page, target}   # append [[target]] to `page`
     """
@@ -99,8 +113,16 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
             if not broken or not page:
                 continue
             if suggested:
-                actions.append({"kind": "rewrite", "page": page,
-                                "broken": broken, "suggested": suggested})
+                score = fnd.get("suggested_score")
+                # A missing score (stale cache from an older lint) is treated
+                # conservatively: no headless rewrite, route to review.
+                if score is not None and score >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE:
+                    actions.append({"kind": "rewrite", "page": page,
+                                    "broken": broken, "suggested": suggested})
+                else:
+                    actions.append({"kind": "review-rewrite", "page": page,
+                                    "broken": broken, "suggested": suggested,
+                                    "score": score})
             else:
                 # Carry `page` so apply_fixes can repoint [[broken]] at the new
                 # stub — otherwise the link stays dangling and the next lint run
@@ -480,6 +502,128 @@ a related concept, or ignore.
         print(f"[lint-fix] emitted {count} unsuggestable orphan/no-outlinks review item(s)")
 
 
+def _emit_review_for_uncertain_rewrite(
+    wiki_dir: Path,
+    review_actions: list[dict],
+    *,
+    dry_run: bool,
+) -> None:
+    """Write review items for broken-link suggestions BELOW the auto-rewrite
+    gate (contains-tier / fuzzy matches). Each item names the proposed target
+    and its score so a human can approve the rewrite, pick another target, or
+    ignore. Idempotent: stable filename per broken target."""
+    if not review_actions:
+        return
+    review_dir = wiki_dir / "REVIEW" / "suggestion"
+    seen: set[str] = set()
+    count = 0
+    for act in review_actions:
+        broken = act.get("broken", "")
+        if not broken or broken in seen:
+            continue
+        seen.add(broken)
+        ref_pages = [a["page"] for a in review_actions
+                     if a.get("broken") == broken and a.get("page")]
+        suggested = act.get("suggested", "")
+        score = act.get("score")
+        score_str = f"{score}" if score is not None else "unknown (older cache)"
+        slug = broken.replace("/", "-").replace("\\", "-")[:60]
+        date_str = "2026-07-10"  # stable date → idempotent re-runs
+        fname = f"{date_str}-lint-uncertain-rewrite-{slug}.md"
+        fpath = review_dir / fname
+        if dry_run:
+            print(f"  [review]    would create {fpath.relative_to(wiki_dir)}")
+            count += 1
+            continue
+        review_dir.mkdir(parents=True, exist_ok=True)
+        ref_list = "\n".join(f"  - {p}" for p in ref_pages[:10])
+        content = f"""---
+type: review
+review_type: suggestion
+title: "Uncertain link rewrite: [[{broken}]] → [[{suggested}]]"
+created: {date_str}
+resolved: false
+resolved_at: null
+resolved_reason: null
+affected_pages:
+{ref_list}
+---
+
+# Uncertain link rewrite: [[{broken}]] → [[{suggested}]]
+
+Structural lint suggests rewriting the broken link ``[[{broken}]]`` to
+``[[{suggested}]]`` (similarity score {score_str}), but the score is below the
+headless auto-rewrite gate ({BROKEN_LINK_AUTO_REWRITE_MIN_SCORE}) — the match
+may be string-similar without being the right page. Routed to review so a
+human decides.
+
+**Referenced by:**
+{ref_list}
+
+**Options:** Approve rewrite | Pick a different target | Create the missing page | Skip
+"""
+        _atomic_write(fpath, content)
+        print(f"  [review]    created {fpath.relative_to(wiki_dir)}")
+        count += 1
+    print(f"[lint-fix] emitted {count} uncertain-rewrite review item(s) "
+          f"(score < {BROKEN_LINK_AUTO_REWRITE_MIN_SCORE} — not auto-applied)")
+
+
+def _emit_review_for_orphan_delete(
+    wiki_dir: Path,
+    orphan_rels: list[str],
+) -> None:
+    """Write one review item per orphan page queued for deletion (2026-07-10,
+    user-approved lint hardening: wiki-lint.sh's delete-orphans stage is now a
+    preview + these review items; the actual cascade-delete requires an
+    explicit ``wiki-lint-fix.py --delete-orphans --apply``).
+
+    Always writes (this IS the preview's actionable output — an orphan that
+    should genuinely go, like a stale placeholder stub, gets deleted after a
+    human approves; a freshly-ingested page that simply has no inbound links
+    yet gets spared). Idempotent: stable filename per page."""
+    review_dir = wiki_dir / "REVIEW" / "suggestion"
+    count = 0
+    for rel in orphan_rels:
+        slug = rel.removesuffix(".md").replace("/", "-").replace("\\", "-")[:60]
+        date_str = "2026-07-10"  # stable date → idempotent re-runs
+        fname = f"{date_str}-lint-orphan-delete-{slug}.md"
+        fpath = review_dir / fname
+        if fpath.exists():
+            continue
+        review_dir.mkdir(parents=True, exist_ok=True)
+        content = f"""---
+type: review
+review_type: suggestion
+title: "Orphan delete candidate: {rel}"
+created: {date_str}
+resolved: false
+resolved_at: null
+resolved_reason: null
+affected_pages:
+  - {rel}
+---
+
+# Orphan delete candidate: {rel}
+
+No other pages link to this page. It is a candidate for cascade deletion
+(file + index listing + inbound ``[[wikilinks]]`` + ``related:`` refs), but
+deletion is no longer automatic: an orphan may simply be a freshly-ingested
+page that wikilink enrichment has not linked yet, or one only referenced from
+REVIEW items. Note: if a ``--fix-links`` pass in the same lint run appended an
+inbound link to this page, it may no longer be an orphan — re-run lint to
+confirm before deleting.
+
+**To delete after review:** ``wiki-lint-fix.py --delete-orphans --apply``
+
+**Options:** Delete | Link it from a related page | Skip
+"""
+        _atomic_write(fpath, content)
+        print(f"  [review]    created {fpath.relative_to(wiki_dir)}")
+        count += 1
+    print(f"[lint-fix] emitted {count} orphan-delete review item(s)")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--apply", action="store_true",
@@ -495,6 +639,13 @@ def main() -> int:
                              "index.md listing + body [[wikilinks]] + related: refs). "
                              "Default OFF. Honors --apply (omit for dry-run preview). "
                              "Does NOT run the link auto-fixes.")
+    parser.add_argument("--emit-review", action="store_true",
+                        help="With --delete-orphans and WITHOUT --apply: in addition "
+                             "to the preview listing, write one REVIEW/suggestion "
+                             "item per orphan so a human can approve deletion. This "
+                             "is what wiki-lint.sh's delete-orphans stage passes "
+                             "(2026-07-10): preview + review by default, real delete "
+                             "only via an explicit --delete-orphans --apply.")
     parser.add_argument("--no-stub", action="store_true",
                         help="Skip creating empty stub pages for broken links that "
                              "have no suggested target. Only rewrite (typo→canonical) "
@@ -554,6 +705,8 @@ def main() -> int:
         if not orphan_rels:
             print("[lint-fix] no orphans to delete ✅")
             return 0
+        if args.emit_review and not args.apply:
+            _emit_review_for_orphan_delete(wiki_dir, orphan_rels)
         dsummary = cascade_delete_orphans(
             wiki_dir, orphan_rels, dry_run=not args.apply)
         print(f"[lint-fix] {mode} (delete-orphans) summary: "
@@ -566,6 +719,15 @@ def main() -> int:
         return 0
 
     actions = plan_fixes(findings)
+    # Suggestions below the auto-rewrite gate are never applied headlessly —
+    # they become review items carrying the proposed target for human approval.
+    review_rewrites = [a for a in actions if a.get("kind") == "review-rewrite"]
+    if review_rewrites:
+        actions = [a for a in actions if a.get("kind") != "review-rewrite"]
+        print(f"[lint-fix] {len(review_rewrites)} suggestion(s) below the "
+              f"auto-rewrite gate ({BROKEN_LINK_AUTO_REWRITE_MIN_SCORE}) → review items")
+        _emit_review_for_uncertain_rewrite(wiki_dir, review_rewrites,
+                                           dry_run=not args.apply)
     if args.no_stub:
         _before = len(actions)
         stub_actions = [a for a in actions if a.get("kind") == "stub"]

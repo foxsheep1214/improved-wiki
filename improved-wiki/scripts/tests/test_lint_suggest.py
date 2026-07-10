@@ -67,6 +67,39 @@ class TestRunStructuralLint(unittest.TestCase):
         self.assertEqual(broken["broken_target"], "transfomer")
         self.assertEqual(broken["suggested_target"], "transformer.md")
 
+    def test_broken_link_finding_carries_suggestion_score(self):
+        """2026-07-10: findings must carry `suggested_score` so the headless
+        fixer can gate auto-rewrites (>=0.9 auto, below -> review). NashSU
+        never persists the score because its Fix is human-clicked per item;
+        this is an improved-wiki extension field on the cache."""
+        pages = [
+            ("transformer.md", "---\ntitle: Transformer\n---\n# Transformer\nAttention model."),
+            # fuzzy typo: "transfomer" vs "transformer" -> Levenshtein ~0.909
+            ("attention.md", "# Attention\nSee [[transfomer]]."),
+            # contains-tier: broken target contains an existing slug -> 0.82
+            ("recurrent.md", "# RNN\nSee [[the transformer architecture overview]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        fuzzy = finding(results, type="broken-link", broken_target="transfomer")
+        self.assertIsNotNone(fuzzy)
+        self.assertAlmostEqual(fuzzy["suggested_score"], 1 - 1 / 11, places=4)
+        contains = finding(results, type="broken-link",
+                           broken_target="the transformer architecture overview")
+        self.assertIsNotNone(contains)
+        self.assertEqual(contains["suggested_target"], "transformer.md")
+        self.assertAlmostEqual(contains["suggested_score"], ls.CONTAINS_TARGET_SCORE)
+
+    def test_no_suggestion_has_none_score(self):
+        pages = [
+            ("transformer.md", "---\ntitle: Transformer\n---\n# T\nbody."),
+            ("attention.md", "# Attention\nSee [[completely-unrelated-xyzzy-target]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        broken = finding(results, type="broken-link")
+        self.assertIsNotNone(broken)
+        self.assertIsNone(broken.get("suggested_target"))
+        self.assertIsNone(broken.get("suggested_score"))
+
     def test_with_suggestions_false_skips_slow_suggestion_engine(self):
         # validate_ingest.py runs over the whole wiki; the O(n^2) suggestion
         # engine (suggest_related_page / suggest_broken_target) is too slow on

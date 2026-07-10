@@ -172,6 +172,75 @@ class TestApply(unittest.TestCase):
             self.assertIn("entities/paos.md", idx)
 
 
+class TestApplySnapshotFreshness(unittest.TestCase):
+    """2026-07-10: _apply_merges must not act on a stale in-memory snapshot.
+
+    The pages list is collected once at run_phase2 start; the old code built
+    pages_by_slug once from it and never refreshed, so when two groups share a
+    page (group 1 merges A+B into A, group 2 merges A+C), group 2's merger was
+    fed A's PRE-merge content — its output would silently discard group 1's
+    merged-in material. In practice one process invocation usually handled one
+    group (each ConversationPending exits and the next invocation re-reads from
+    disk), which masked the bug; the parallel-eager dedup flow now applies many
+    groups in one invocation, so the snapshot must be updated after each merge.
+    """
+
+    def test_second_group_sees_first_groups_merged_content(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            (wiki / "entities").mkdir(parents=True)
+            (wiki / "entities" / "alpha.md").write_text(_page(
+                "type: entity\ntitle: Alpha\ntags: []\nrelated: []\nsources: [\"a.pdf\"]",
+                "Alpha original body.",
+            ), encoding="utf-8")
+            (wiki / "entities" / "alpha-variant.md").write_text(_page(
+                "type: entity\ntitle: Alpha Variant\ntags: []\nrelated: []\nsources: [\"b.pdf\"]",
+                "MERGED-IN-BY-GROUP-ONE.",
+            ), encoding="utf-8")
+            (wiki / "entities" / "alpha-alias.md").write_text(_page(
+                "type: entity\ntitle: Alpha Alias\ntags: []\nrelated: []\nsources: [\"c.pdf\"]",
+                "Alias body.",
+            ), encoding="utf-8")
+            (wiki / "index.md").write_text("# Index\n", encoding="utf-8")
+
+            merge_prompts: list[str] = []
+            merged_v1 = _page(
+                "type: entity\ntitle: Alpha\ncreated: 2026-01-01\nupdated: 2026-01-01\n"
+                "tags: []\nrelated: []\nsources: []",
+                "Alpha original body.\n\nMERGED-IN-BY-GROUP-ONE.",
+            )
+            merged_v2 = _page(
+                "type: entity\ntitle: Alpha\ncreated: 2026-01-01\nupdated: 2026-01-01\n"
+                "tags: []\nrelated: []\nsources: []",
+                "Alpha original body.\n\nMERGED-IN-BY-GROUP-ONE.\n\nAlias body.",
+            )
+
+            def llm_call(system_prompt: str, user_message: str) -> str:
+                if "likely refer to the same" in system_prompt:
+                    return json.dumps({"groups": [
+                        {"slugs": ["alpha", "alpha-variant"],
+                         "reason": "same", "confidence": "high"},
+                        {"slugs": ["alpha", "alpha-alias"],
+                         "reason": "same", "confidence": "high"},
+                    ]})
+                merge_prompts.append(user_message)
+                return merged_v1 if len(merge_prompts) == 1 else merged_v2
+
+            report = ds.run_phase2(root, llm_call, apply=True, today=FIXED_TODAY,
+                                   embedding_prefilter=False)
+            self.assertEqual(len(report["applied"]), 2)
+            # Group 2's merge prompt must contain group 1's merged output for
+            # the shared canonical page — not alpha's original pre-merge body.
+            self.assertEqual(len(merge_prompts), 2)
+            self.assertIn("MERGED-IN-BY-GROUP-ONE.", merge_prompts[1])
+            # And the deleted alpha-variant must no longer appear as a live
+            # "other page" in group 2's prompt context.
+            final = (wiki / "entities" / "alpha.md").read_text(encoding="utf-8")
+            self.assertIn("Alias body.", final)
+            self.assertIn("MERGED-IN-BY-GROUP-ONE.", final)
+
+
 class TestWhitelist(unittest.TestCase):
     def test_whitelist_suppresses_group(self):
         with tempfile.TemporaryDirectory() as t:

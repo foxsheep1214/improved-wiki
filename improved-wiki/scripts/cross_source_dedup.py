@@ -427,10 +427,21 @@ def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilt
               flush=True)
     else:
         emb_pages: List[dict] = []
+        _seen_slugs: set[str] = set()
         for path, content in pages:
             slug = _slug_from_path(path)
             if slug not in summary_by_slug:
                 continue
+            # Two files with the same basename in different dirs (e.g.
+            # queries/skolnik-m-i.md and entities/skolnik-m-i.md) map to one
+            # slug — only embed it once, or downstream id-keyed structures get
+            # duplicate entries (observed 2026-07-10: the same stub listed
+            # twice in a detector batch). The broader slug-collision issue
+            # (slug-keyed merge acting on the wrong file) is tracked in
+            # references/known-issues.md.
+            if slug in _seen_slugs:
+                continue
+            _seen_slugs.add(slug)
             s = summary_by_slug[slug]
             # NashSU vectors summary.description (the short blurb), not the full
             # body, for candidate generation. (NashSU summaryToEmbeddingPage)
@@ -611,14 +622,26 @@ def _merge_lock(runtime: Path):
 
 def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
                   apply_low_confidence) -> list:
-    """Merge each detected group and persist. Must run under _merge_lock."""
+    """Merge each detected group and persist. Must run under _merge_lock.
+
+    Snapshot freshness (2026-07-10): the in-memory page snapshot is updated
+    after every merge (canonical content replaced, rewrites applied, deleted
+    pages dropped) so a later group sharing a page with an earlier one merges
+    the POST-merge content instead of a stale pre-merge copy. Previously the
+    snapshot was built once and never refreshed — masked in practice because
+    conversation mode usually processed one group per process invocation
+    (re-reading from disk each time), but the parallel-eager flow applies many
+    groups in one invocation.
+    """
     applied: list = []
     backup_dir = runtime / f"dedup-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    pages_by_slug = {_slug_from_path(p): (p, c) for p, c in pages}
+    content_by_path = dict(pages)
     for g in groups:
         if g.get("confidence") == "low" and not apply_low_confidence:
             continue
+        pages_by_slug = {_slug_from_path(p): (p, c)
+                         for p, c in content_by_path.items()}
         canonical_slug = g["slugs"][0]
         group_pages = []
         for slug in g["slugs"]:
@@ -630,11 +653,19 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
             group_pages.append({"slug": slug, "path": path, "content": content})
         if len(group_pages) < 2:
             continue
-        other_pages = [{"path": p, "content": c} for p, c in pages
-                       if _slug_from_path(p) not in {gp["slug"] for gp in group_pages}]
+        group_slugs = {gp["slug"] for gp in group_pages}
+        other_pages = [{"path": p, "content": c}
+                       for p, c in content_by_path.items()
+                       if _slug_from_path(p) not in group_slugs]
         result = _dedup.merge_duplicate_group(
             group_pages, canonical_slug, other_pages, llm_call, today=today)
         _persist_merge(project_root, result, backup_dir)
+        # Sync the in-memory snapshot with what _persist_merge just wrote.
+        for p in result.pages_to_delete:
+            content_by_path.pop(p, None)
+        content_by_path[result.canonical_path] = result.canonical_content
+        for r in result.rewrites:
+            content_by_path[r["path"]] = r["new_content"]
         removed = {_slug_from_path(p) for p in result.pages_to_delete}
         applied.append({"canonical": canonical_slug, "merged_away": sorted(removed),
                         "rewrites": [r["path"] for r in result.rewrites]})

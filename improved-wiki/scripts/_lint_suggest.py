@@ -249,7 +249,11 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
 
     slug_map = _build_slug_map(data)
 
-    def suggest_broken_target(target: str) -> _PageData | None:
+    def suggest_broken_target(target: str) -> "tuple[_PageData, float] | None":
+        # Returns (page, score) — the score is persisted on the finding
+        # (suggested_score, 2026-07-10) so the headless fixer can gate
+        # auto-rewrites by confidence tier. NashSU never needs the score
+        # persisted because its Fix is human-clicked per item.
         # Fast path: strip surrounding quotes that leak from YAML-formatted
         # related fields (e.g. [[concepts/foo"]] or [["concepts/foo"]]).
         # Try the clean version as an exact slug lookup before fuzzy scoring —
@@ -260,12 +264,14 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             clean_norm = normalize_link_target(clean)
             if clean_norm in slug_map:
                 clean_short = slug_map[clean_norm]
-                return next((p for p in data if p.short_name == clean_short), None)
+                page = next((p for p in data if p.short_name == clean_short), None)
+                return (page, 1.0) if page else None
             # Also try basename-only lookup (for targets like "concepts/ieee").
             clean_base = re.sub(r"\.md$", "", _get_file_name(clean)).lower()
             if clean_base in slug_map:
                 clean_short = slug_map[clean_base]
-                return next((p for p in data if p.short_name == clean_short), None)
+                page = next((p for p in data if p.short_name == clean_short), None)
+                return (page, 1.0) if page else None
 
         _MIN = BROKEN_LINK_SUGGESTION_MIN_SCORE
         best: tuple[_PageData, float] | None = None
@@ -294,7 +300,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             # counted in the single scan above — no second O(n) pass.)
             if best[1] <= CONTAINS_TARGET_SCORE and best_ties > 1:
                 return None
-            return best[0]
+            return best
         return None
 
     def suggest_related_page(page: _PageData, direction: str) -> _PageData | None:
@@ -354,9 +360,9 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
     # the target string and the (fixed) candidate set, so the same broken link
     # repeated across many pages is scanned once. On a wiki with lots of dangling
     # links this is a big win (e.g. 1856 broken links → 773 distinct targets).
-    _broken_cache: dict[str, "_PageData | None"] = {}
+    _broken_cache: dict[str, "tuple[_PageData, float] | None"] = {}
 
-    def _cached_broken_target(target: str) -> "_PageData | None":
+    def _cached_broken_target(target: str) -> "tuple[_PageData, float] | None":
         key = target.lower()
         if key not in _broken_cache:
             _broken_cache[key] = suggest_broken_target(target)
@@ -399,14 +405,18 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             basename = re.sub(r"\.md$", "", _get_file_name(link)).lower()
             if lookup in slug_map or basename in slug_map:
                 continue
-            suggested_target = _cached_broken_target(link) if with_suggestions else None
+            suggestion = _cached_broken_target(link) if with_suggestions else None
             results.append({
                 "type": "broken-link",
                 "severity": "warning",
                 "page": short_name,
                 "detail": f"Broken link: [[{link}]] — target page not found.",
                 "broken_target": link,
-                "suggested_target": suggested_target.short_name if suggested_target else None,
+                "suggested_target": suggestion[0].short_name if suggestion else None,
+                # improved-wiki extension (2026-07-10): the suggestion's
+                # similarity score, persisted so wiki-lint-fix.py can gate
+                # headless auto-rewrites (>=0.9 auto, below -> review).
+                "suggested_score": round(suggestion[1], 4) if suggestion else None,
             })
 
     return results

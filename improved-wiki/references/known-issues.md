@@ -11,6 +11,9 @@
 ### minerU 偶尔把公式区域分类为 `image` 而非 `equation`
 ~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。
 
+### 跨目录同名 basename 的 slug 碰撞（dedup/merge 侧未彻底解决，2026-07-10）
+`cross_source_dedup.py` 全链路用 `_slug_from_path()`（只取文件名 stem）作页面 id：`queries/skolnik-m-i.md` 和 `entities/skolnik-m-i.md` 映射到同一个 slug `skolnik-m-i`，slug 键的 dict（`summary_by_slug`、`_apply_merges` 的 `pages_by_slug`）会静默塌缩成一条（后者覆盖前者）。**实测表征**（RadarWiki 2026-07-10）：`matched-filter`、`skolnik-m-i` 在 detector 候选清单里各出现两次。已修的部分：embedding 预筛的 `emb_pages` 现在按 slug 去重（不再产生重复 id）。**未修的部分**：若一个合并组恰好包含碰撞 slug，merge 可能读到/删掉错误目录下的同名文件——根治需要全链路改用路径作 id（较大改动）。**规避**：合并前先核对组内 slug 是否存在跨目录同名文件（`find wiki -name "<slug>.md"` 多于一个结果即碰撞）；这类组先人工处理。
+
 ### `detect_language()` 非拉丁文字阈值过低，几个杂散字符就能误判全书语言
 `_language.py::detect_language()` 的非拉丁脚本判定阈值只是 `max_count >= 2`——只要样本文本里出现 ≥2 个某非拉丁文字的字符，就判定整份文档是那个语言，而英文本身是纯 ASCII、完全不计入 `counts`，等于没有对照基准。实测：《Fundamentals of Radar Signal Processing - 2005 - Richard》扉页有两张伊朗大学图书馆的波斯语/阿拉伯语公章（OCR 出十几个阿拉伯字符），导致各分析/生成 stage（当时含 2.1，现为 2.2/2.4/2.6）全部注入"MANDATORY OUTPUT LANGUAGE: Arabic"，而全书正文 99%+ 是英文——这是和已记录的"São Paulo 陷阱"（`improved-wiki-language-detect-false-positive` 内存条目）同一类假阳性，但触发方式更直接（真实非拉丁文字，不是地名误判）。现有 Greek 分支已有"孤立单字符不算希腊语，需要多字符连续词"的保护（`_has_greek_word_run`），但阿拉伯语等其他非拉丁脚本分支没有对应保护。**当前规避**：生成阶段人工判断源文本主体语言、忽略错误的语言指令即可（本次已验证可行）；项目级也可用 `IMPROVED_WIKI_OUTPUT_LANGUAGE=English` 强制覆盖整本书。**未修复**：给非拉丁脚本分支加类似 Greek 的"需要有意义占比/连续词"保护，风险是可能影响现有中文等双语页面的检测结果，未做（改动前应先补测试用例）。
 
