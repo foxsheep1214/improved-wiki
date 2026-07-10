@@ -188,6 +188,36 @@ PAGES: page1.md, page2.md
 - `([\s\S]*?)` — body is anything (including newlines), non-greedy
 - Requires both `---LINT:` and `---END LINT---` to match — truncation breaks the regex
 
+### 3.1b Single un-batched call vs improved-wiki's batching + `dedup_findings()` (confirmed 2026-07-10 against local NashSU v0.6.0 checkout)
+
+**NashSU has no batching and no deduplication anywhere in the lint pipeline.**
+`runSemanticLint` builds `summaries.join("\n\n")` — every page summary in the
+wiki, concatenated into **one** prompt, sent in **one** `streamChat` call
+(`lint.ts` L356-401). The caller (`lint-view.tsx` `handleRunLint`,
+L88-93) does `all = [...structural, ...semantic]` — a plain array spread,
+no reconciliation of any kind, not even structural-vs-semantic. Grepping
+`dedup`/`Dedup`/`duplicate` across `lib/lint.ts` and
+`components/lint/lint-view.tsx` returns zero matches.
+
+**Improved-wiki must batch** (a wiki that doesn't fit in one call would
+silently truncate NashSU's single-call design), and batching is itself
+already a documented divergence — see §3.3/§5. `dedup_findings()` in
+`wiki-lint-semantic.py` (dedup key: lowercased page + raw_type + first 80
+chars of detail) exists **only because batching creates a problem NashSU
+never has**: each batch's LLM call is blind to what other batches found, so
+the same real-world issue can surface once per batch that happens to see
+both affected pages (e.g. a cross-page contradiction flagged from both
+ends). NashSU's single call has full-wiki context in one shot, so this
+duplication can't occur there in the first place — there was never anything
+to dedup. Likewise the `lint-semantic-<n>` id renumbering after dedup is
+improved-wiki-only bookkeeping: NashSU's ids are assigned client-side by the
+ephemeral Zustand store when items are added, not persisted by `lint.ts`
+itself (see §5).
+
+**Do not read `dedup_findings()` as a NashSU-parity feature.** It is a
+correctness patch for a deviation improved-wiki already made (batching), not
+a port of anything in `lint.ts`.
+
 ### 3.2 Four semantic sub-types
 
 - `contradiction` — two or more pages make conflicting claims
@@ -359,6 +389,7 @@ lint", check these:
 3. **Severity values** — `broken-link` is `warning`; the other two are `info`. Never `error` (`missing-frontmatter` is an improved-wiki-only structural extra, emitted by `wiki-lint.sh`, not part of NashSU's `lint.json`).
 3b. **`term-ambiguity` is an improved-wiki-only semantic extra** — see §1 above. Not part of NashSU's `runSemanticLint` type list.
 3c. **`---LINT:...---` title-group regex intentionally deviates from NashSU's literal source.** NashSU's own regex (`lint.ts` L161-162) uses `[^\n-]+?` for the title capture group, which excludes hyphens — any LLM-generated title containing one (e.g. a model number like "MIL-STD-1553", extremely common in this KB) fails to match at all, silently dropping the whole finding. Confirmed live against a real batch (2026-07-10): 1 of 5 findings lost with the literal-parity regex. `wiki-lint-semantic.py`'s `LINT_BLOCK_REGEX` uses `[^\n]+?` for that group instead — same delimiters, same 4 capture groups, just doesn't choke on a hyphen inside the title. This is a bug-for-bug non-parity by design; don't "fix" it back to match NashSU's literal regex.
+3d. **Batching + `dedup_findings()` + id-renumbering are improved-wiki-only, not NashSU parity** — see §3.1b. NashSU's `runSemanticLint` is one un-batched call over the whole wiki with zero dedup logic anywhere in `lint.ts` or `lint-view.tsx`; improved-wiki must batch to scale, and `dedup_findings()` only exists to clean up the cross-batch duplicate-finding problem that batching itself introduces. Don't cite `dedup_findings()` as evidence of NashSU alignment — it's a patch for improved-wiki's own architecture, unrelated to the app.
 4. **Case-insensitive resolution** — `[[Transformer]]` and `[[transformer]]` resolve the same way.
 5. **Dual indexing** — `[[foo]]` resolves to `entities/foo.md` if that file exists.
 6. **`lint-semantic.json` separate from `lint.json`** — don't merge them; the app's lint view shows them together via the UI but the on-disk state files are separate.
