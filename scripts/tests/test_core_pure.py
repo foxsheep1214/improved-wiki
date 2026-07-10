@@ -61,6 +61,27 @@ class TestConversationPendingNotSwallowed(unittest.TestCase):
         self.assertEqual(caught, [True])
 
 
+class TestComputeChunkTargetsHardCeil(unittest.TestCase):
+    """2026-07-10: hard_ceil is now a parameter (default = ingest's own 64K
+    _TARGET_TOKENS_HARD_CEIL) so other callers (wiki-lint-semantic.py) can
+    request a different ceiling without touching the ingest-tuned constant."""
+
+    def test_default_hard_ceil_matches_ingest_constant(self):
+        target_tokens, _ = _core._compute_chunk_targets(0, 1_000_000)
+        self.assertEqual(target_tokens, _core._TARGET_TOKENS_HARD_CEIL)
+
+    def test_custom_hard_ceil_overrides_default(self):
+        target_tokens, target_chars = _core._compute_chunk_targets(
+            0, 1_000_000, hard_ceil=256_000)
+        self.assertEqual(target_tokens, 256_000)
+        self.assertEqual(target_chars, _core._TARGET_CHARS_HARD_CEIL)
+
+    def test_small_context_still_respects_floor_under_custom_ceil(self):
+        target_tokens, _ = _core._compute_chunk_targets(
+            0, 20_000, hard_ceil=256_000)
+        self.assertEqual(target_tokens, _core._TARGET_TOKENS_MIN)
+
+
 class TestParseSimpleYaml(unittest.TestCase):
     """Fallback YAML parser (used when PyYAML missing or safe_load crashes)."""
 

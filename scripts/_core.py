@@ -297,11 +297,12 @@ _MAX_CHARS_PER_TOKEN = 4            # char ceiling = target_tokens × this (Lati
 _TARGET_CHARS_HARD_CEIL = 768_000
 
 
-def _compute_chunk_targets(source_budget: int, context_size: int) -> tuple[int, int]:
+def _compute_chunk_targets(source_budget: int, context_size: int,
+                           hard_ceil: int = _TARGET_TOKENS_HARD_CEIL) -> tuple[int, int]:
     """Return ``(target_tokens, target_chars_ceiling)``.
 
     ``target_tokens`` — per-chunk budget in TOKENS. Scales with the probed
-    model context window (×0.33) and is capped by ``_TARGET_TOKENS_HARD_CEIL``.
+    model context window (×0.33) and is capped by ``hard_ceil``.
     Decoupled from ``source_budget`` (2026-06-27): each chunk is one analysis
     round-trip whose safe size is bounded by the context window, not the
     per-source digest budget. ``source_budget`` is retained in the signature for
@@ -310,13 +311,18 @@ def _compute_chunk_targets(source_budget: int, context_size: int) -> tuple[int, 
     ``target_chars`` — hard per-chunk char ceiling, large enough that even
     token-sparse text can spend its full token budget.
 
-    ``IMPROVED_WIKI_TARGET_TOKENS_CEIL`` env overrides the 64K default hard
-    ceiling (e.g. 192000 to revert to whole-book single chunks, or 96000 for a
-    middle ground). Unset → default 64K.
+    ``hard_ceil`` defaults to ingest's own ``_TARGET_TOKENS_HARD_CEIL`` (64K)
+    but callers with a different call shape (e.g. wiki-lint-semantic.py's
+    per-batch budget) may pass their own — see that module for why lint uses
+    a larger ceiling than ingest's empirically-tuned one.
+
+    ``IMPROVED_WIKI_TARGET_TOKENS_CEIL`` env overrides whichever ``hard_ceil``
+    was passed (e.g. 192000 to revert ingest to whole-book single chunks, or
+    96000 for a middle ground). Unset → use ``hard_ceil`` as given.
     """
     _ceil_env = os.environ.get("IMPROVED_WIKI_TARGET_TOKENS_CEIL", "").strip()
-    hard_ceil = int(_ceil_env) if _ceil_env.isdigit() else _TARGET_TOKENS_HARD_CEIL
-    tokens_ceil = min(hard_ceil,
+    resolved_hard_ceil = int(_ceil_env) if _ceil_env.isdigit() else hard_ceil
+    tokens_ceil = min(resolved_hard_ceil,
                       max(_TARGET_TOKENS_MIN, int(context_size * _TARGET_TOKENS_CEIL_FRAC)))
     target_tokens = tokens_ceil
     target_chars = min(_TARGET_CHARS_HARD_CEIL, target_tokens * _MAX_CHARS_PER_TOKEN)

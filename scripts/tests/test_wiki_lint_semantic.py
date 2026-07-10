@@ -82,17 +82,31 @@ class TestSemanticLintConversation(unittest.TestCase):
 class TestBatching(unittest.TestCase):
     def test_chunk_batches_small_returns_single(self):
         wls = _load_module()
+        # "p%d.md" (5 chars) + "text" (4 chars) = 9 chars/item x 5 = 45 chars,
+        # comfortably under a 200-char budget.
         summaries = [("p%d.md" % i, "text") for i in range(5)]
-        batches = wls.chunk_batches(summaries, batch_pages=200)
+        batches = wls.chunk_batches(summaries, target_chars=200)
         self.assertEqual(len(batches), 1)
         self.assertEqual(len(batches[0]), 5)
 
     def test_chunk_batches_splits_at_boundary(self):
         wls = _load_module()
+        # Each item is 9 chars; a 27-char budget fits exactly 3 items/batch.
         summaries = [("p%d.md" % i, "text") for i in range(7)]
-        batches = wls.chunk_batches(summaries, batch_pages=3)
+        batches = wls.chunk_batches(summaries, target_chars=27)
         self.assertEqual(len(batches), 3)
         self.assertEqual([len(b) for b in batches], [3, 3, 1])
+
+    def test_chunk_batches_oversized_single_item_gets_own_batch(self):
+        wls = _load_module()
+        summaries = [("a.md", "x" * 500), ("b.md", "short")]
+        batches = wls.chunk_batches(summaries, target_chars=100)
+        self.assertEqual(len(batches), 2)
+        self.assertEqual(len(batches[0]), 1)
+
+    def test_chunk_batches_empty_input_returns_empty(self):
+        wls = _load_module()
+        self.assertEqual(wls.chunk_batches([], target_chars=1000), [])
 
     def test_dedup_findings_collapses_cross_batch_dupes(self):
         wls = _load_module()
@@ -136,12 +150,17 @@ class TestLanguageDirectiveInPrompt(unittest.TestCase):
 
 class TestSemanticLintBatchedE2E(unittest.TestCase):
     def test_two_batches_resume_separately(self):
-        """3 pages, batch size 2 → 2 batches. Round 1: batch 1 pending (101).
-        Answer it; round 2: batch 2 pending (101). Answer it; round 3: both
-        cached → 0, findings merged + deduped + renumbered."""
+        """3 pages (boost/buck/flyback, sorted), a target_chars budget that
+        exactly fits the first two previews (boost+buck) → 2 batches. Round 1:
+        batch 1 pending (101). Answer it; round 2: batch 2 pending (101).
+        Answer it; round 3: both cached → 0, findings merged + deduped +
+        renumbered. Monkeypatches resolve_batch_target_chars (2026-07-10:
+        replaces the old SEMANTIC_BATCH_PAGES page-count knob) with a fixed
+        small budget so the split is deterministic regardless of the real
+        probed/default context size."""
         wls = _load_module()
-        original_batch = wls.SEMANTIC_BATCH_PAGES
-        wls.SEMANTIC_BATCH_PAGES = 2
+        original_resolver = wls.resolve_batch_target_chars
+        wls.resolve_batch_target_chars = lambda state_dir: 156
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             wiki = root / "wiki" / "concepts"
@@ -185,7 +204,7 @@ class TestSemanticLintBatchedE2E(unittest.TestCase):
                 ids = [f["id"] for f in findings]
                 self.assertEqual(len(set(ids)), len(ids))
             finally:
-                wls.SEMANTIC_BATCH_PAGES = original_batch
+                wls.resolve_batch_target_chars = original_resolver
                 sys.argv = old_argv
                 if old_root is None:
                     os.environ.pop("IMPROVED_WIKI_ROOT", None)
@@ -228,6 +247,67 @@ class TestParseLintBlocksHyphenatedTitle(unittest.TestCase):
             [r["page"] for r in results],
             ["Plain title", "SA-2 has no canonical page", "F-16 radar model outdated"],
         )
+
+
+class TestResolveBatchTargetChars(unittest.TestCase):
+    """2026-07-10: batch sizing is now context-derived instead of a fixed
+    SEMANTIC_BATCH_PAGES=200. Covers cache-hit, cache-miss/default, and the
+    lint-specific env override."""
+
+    def _write_cache(self, runtime_dir: Path, model_env: str, context: int, age_s: int = 0):
+        import time
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "probed-context.json").write_text(json.dumps({
+            "model_env": model_env, "context": context,
+            "probed_at": int(time.time()) - age_s,
+        }), encoding="utf-8")
+
+    def test_uses_cached_probe_when_fresh_and_model_matches(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            runtime = Path(t) / ".llm-wiki"
+            self._write_cache(runtime, model_env="", context=1_000_000)
+            old = os.environ.get("ANTHROPIC_MODEL")
+            os.environ.pop("ANTHROPIC_MODEL", None)
+            try:
+                target_chars = wls.resolve_batch_target_chars(runtime)
+                # 1M context x 0.33 = 330K tokens, capped at the 256K lint
+                # ceiling -> target_chars = min(768_000, 256_000*4) = 768_000.
+                self.assertEqual(target_chars, 768_000)
+            finally:
+                if old is not None:
+                    os.environ["ANTHROPIC_MODEL"] = old
+
+    def test_falls_back_to_default_context_when_no_cache(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            runtime = Path(t) / ".llm-wiki"
+            runtime.mkdir(parents=True)
+            target_chars = wls.resolve_batch_target_chars(runtime)
+            from _core import _CONTEXT_SIZE_DEFAULT, _compute_chunk_targets
+            _, expected = _compute_chunk_targets(
+                0, _CONTEXT_SIZE_DEFAULT, hard_ceil=wls._LINT_TARGET_TOKENS_HARD_CEIL)
+            self.assertEqual(target_chars, expected)
+
+    def test_env_override_changes_ceiling(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            runtime = Path(t) / ".llm-wiki"
+            self._write_cache(runtime, model_env="", context=1_000_000)
+            old_model = os.environ.get("ANTHROPIC_MODEL")
+            old_ceil = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL")
+            os.environ.pop("ANTHROPIC_MODEL", None)
+            os.environ["IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL"] = "40000"
+            try:
+                target_chars = wls.resolve_batch_target_chars(runtime)
+                self.assertEqual(target_chars, 160_000)  # 40_000 * 4 chars/token
+            finally:
+                if old_model is not None:
+                    os.environ["ANTHROPIC_MODEL"] = old_model
+                if old_ceil is None:
+                    os.environ.pop("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", None)
+                else:
+                    os.environ["IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL"] = old_ceil
 
 
 class TestCollectSummariesDirExclusion(unittest.TestCase):

@@ -83,12 +83,24 @@ STATE_FILES = {
 SUMMARY_CHARS = 500
 # Concatenated sample for language detection (NashSU: 2000 chars)
 LANG_SAMPLE_CHARS = 2000
-# Batch size: pages per LLM call. A single concatenated call over a 7594-page
-# wiki blows the conversation model's context, so summaries are split into
-# batches. Each batch is one conversation handoff (exit 101 → agent answers →
+# Batch budget: context-derived char ceiling per LLM call (2026-07-10),
+# replacing the former fixed SEMANTIC_BATCH_PAGES=200 page-count split. A
+# single concatenated call over a 7594-page wiki blows the conversation
+# model's context, so summaries are still split into batches — but the split
+# point now scales with the probed model's context window (same formula
+# ingest.py uses for chunk sizing: _core._compute_chunk_targets, target_tokens
+# = min(hard_ceil, max(12K floor, context_size * 0.33))), with a larger hard
+# ceiling than ingest's own 64K. Lint's "skim short summaries and compare"
+# call is lighter per-token than ingest's "deeply extract structured facts
+# from continuous prose" call, so a bigger single-shot batch is a reasonable
+# bet here — even though ingest's own 2026-07-01 A/B test found LARGER
+# single-shot batches hurt *extraction* quality (64K beat a 192K single chunk
+# by +27% concept coverage). Override via IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL
+# if 256K batches prove too coarse for semantic-lint's judgment quality in
+# practice. Each batch is one conversation handoff (exit 101 → agent answers →
 # resume → next batch). The slug is content-hashed, so each batch resumes
 # independently and the loop is idempotent across re-invokes.
-SEMANTIC_BATCH_PAGES = 200
+_LINT_TARGET_TOKENS_HARD_CEIL = 256_000
 
 
 # ── language directive (NashSU parity: _language.detect_language port) ───────────
@@ -96,9 +108,38 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 from _language import build_language_directive  # noqa: E402 (titles, descriptions, PAGES list) MUST be in English."
-from _core import ConversationPending  # noqa: E402
+from _core import ConversationPending, _compute_chunk_targets, _CONTEXT_SIZE_DEFAULT  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
 from _paths import iter_wiki_pages, atomic_write  # noqa: E402
+
+
+def _probe_context_size(state_dir: Path) -> int:
+    """Read ingest's cached context-window probe (.llm-wiki/probed-context.json)
+    if present and fresh; otherwise fall back to _core's conservative default.
+
+    Lint is a standalone tool with no conversation-router registered (that
+    machinery lives in ingest.py), so it cannot itself trigger a fresh probe
+    handoff — it only ever reads the cache ingest already populated. In
+    practice lint is always run after (or alongside) an ingest of the same
+    project, so this is a cache hit in the common case."""
+    from _context_probe import load_cached
+
+    class _ConfigShim:
+        runtime_dir = state_dir
+        llm_model = os.environ.get("ANTHROPIC_MODEL", "")
+
+    cached = load_cached(_ConfigShim())
+    return cached if cached is not None else _CONTEXT_SIZE_DEFAULT
+
+
+def resolve_batch_target_chars(state_dir: Path) -> int:
+    """Per-batch char budget for chunk_batches(), derived from the probed (or
+    cached/default) context window via the shared _core formula."""
+    context_size = _probe_context_size(state_dir)
+    ceil_env = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", "").strip()
+    hard_ceil = int(ceil_env) if ceil_env.isdigit() else _LINT_TARGET_TOKENS_HARD_CEIL
+    _, target_chars = _compute_chunk_targets(0, context_size, hard_ceil=hard_ceil)
+    return target_chars
 
 
 # ── core scan ────────────────────────────────────────────────────────────────
@@ -190,23 +231,37 @@ def build_prompt(summaries: list[tuple[str, str]]) -> tuple[str, str]:
 
 
 def chunk_batches(summaries: list[tuple[str, str]],
-                  batch_pages: int | None = None) -> list[list[tuple[str, str]]]:
-    """Split summaries into batches of at most ``batch_pages`` pages each.
+                  target_chars: int) -> list[list[tuple[str, str]]]:
+    """Split summaries into batches whose cumulative preview length stays
+    within ``target_chars`` each.
 
     Keeping each LLM call bounded lets the semantic lint scale to large wikis
     (a 7594-page HardwareWiki would otherwise produce a single multi-MB
-    prompt). Returns ``[summaries]`` (one batch) when there are fewer pages
-    than the batch size — the common small-wiki case.
-
-    ``batch_pages`` defaults to the module global ``SEMANTIC_BATCH_PAGES``
-    resolved at call time (not def time) so tests can monkeypatch it.
+    prompt). Length-based (not a fixed page count, 2026-07-10): summary
+    lengths are uneven (short stub pages vs long digests), so measuring
+    actual cumulative chars — like ingest.py's real chunker measures actual
+    text rather than assuming an average per-page size — packs batches more
+    evenly than a naive page-count split. A single oversized summary still
+    gets its own batch rather than being split mid-page.
     """
-    if batch_pages is None:
-        batch_pages = SEMANTIC_BATCH_PAGES
-    if batch_pages <= 0 or len(summaries) <= batch_pages:
+    if not summaries:
+        return []
+    if target_chars <= 0:
         return [summaries]
-    return [summaries[i:i + batch_pages]
-            for i in range(0, len(summaries), batch_pages)]
+    batches: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    current_len = 0
+    for path, preview in summaries:
+        item_len = len(path) + len(preview)
+        if current and current_len + item_len > target_chars:
+            batches.append(current)
+            current = []
+            current_len = 0
+        current.append((path, preview))
+        current_len += item_len
+    if current:
+        batches.append(current)
+    return batches
 
 
 def dedup_findings(findings: list[dict]) -> list[dict]:
@@ -272,11 +327,12 @@ def main() -> int:
     print(f"[semantic-lint] Collected {len(summaries)} page summaries")
 
     system_prompt, user_content = build_prompt(summaries)
+    target_chars = resolve_batch_target_chars(state_dir)
 
     if args.dry_run:
-        batches = chunk_batches(summaries)
+        batches = chunk_batches(summaries, target_chars)
         print(f"[semantic-lint] DRY-RUN: {len(summaries)} pages in {len(batches)} batch(es) "
-              f"(batch size {SEMANTIC_BATCH_PAGES})")
+              f"(target_chars={target_chars:,})")
         print(f"[semantic-lint] DRY-RUN: batch 1 would send {len(user_content):,} chars to LLM")
         print(f"  system_prompt: {len(system_prompt):,} chars")
         print(f"  first 500 chars of user_content:\n  {user_content[:500]!r}")
@@ -288,7 +344,8 @@ def main() -> int:
     # loop is safe to re-enter after every 101.
     now_ms = int(time.time() * 1000)
     llm_call = make_conversation_llm_call(state_dir, stage_prefix="semantic-lint")
-    batches = chunk_batches(summaries)
+    print(f"[semantic-lint] batch budget: target_chars={target_chars:,} (context-derived)")
+    batches = chunk_batches(summaries, target_chars)
     findings: list[dict] = []
     for i, batch in enumerate(batches, 1):
         batch_system, batch_user = build_prompt(batch)
