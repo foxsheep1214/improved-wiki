@@ -47,6 +47,29 @@ scripts/ingest.py raw/Book/Book.pdf
 
 Pipelines with multiple LLM calls (chunk analysis, per-chunk generation) use a `tasks.json` manifest in the conversation directory to track pending/completed tasks.
 
+### Reporting stage progress to the user (2026-07-10)
+
+When narrating progress to the user (e.g. "advancing to Stage 2.9"), always pair the
+numeric stage with its Chinese keyword — a bare stage number isn't readable at a
+glance. Fixed mapping, reuse verbatim rather than re-wording each time:
+
+| Stage | 关键词 |
+|---|---|
+| 1.1–1.3 | 提取/OCR/配图 |
+| 2.2 | 分块分析 |
+| 2.3 | 关联检测 |
+| 2.4 | 页面生成 |
+| 2.6 | 源页生成 |
+| 2.7 | 问题生成 |
+| 2.9 | 对比生成 |
+| 3.1/3.2 | 写入 |
+| 3.4 | 质量审查 |
+| 3.5 | 聚合修复 |
+| 3.7 | 嵌入 |
+
+This is a skill-level convention (applies to any agent orchestrating improved-wiki,
+not just one session's personal preference) — user-requested 2026-07-10.
+
 ---
 
 ## Agent Integration Pattern
