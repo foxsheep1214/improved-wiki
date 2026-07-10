@@ -149,15 +149,76 @@ class TestLanguageDirectiveInPrompt(unittest.TestCase):
 
 
 class TestSemanticLintBatchedE2E(unittest.TestCase):
-    def test_two_batches_resume_separately(self):
+    def test_all_pending_batches_emitted_together(self):
         """3 pages (boost/buck/flyback, sorted), a target_chars budget that
-        exactly fits the first two previews (boost+buck) → 2 batches. Round 1:
-        batch 1 pending (101). Answer it; round 2: batch 2 pending (101).
-        Answer it; round 3: both cached → 0, findings merged + deduped +
-        renumbered. Monkeypatches resolve_batch_target_chars (2026-07-10:
-        replaces the old SEMANTIC_BATCH_PAGES page-count knob) with a fixed
-        small budget so the split is deterministic regardless of the real
-        probed/default context size."""
+        exactly fits the first two previews (boost+buck) → 2 batches, BOTH
+        initially uncached. Eager-drain (2026-07-10, mirrors ingest.py Stage
+        2.4's _generate_all_chunks_parallel): round 1 must emit prompt files
+        for ALL uncached batches in a single invocation (not just the first),
+        so the calling agent can dispatch subagents for them in parallel,
+        then return 101 once. Round 2 (after both answered): both cached →
+        0, findings merged + deduped + renumbered. Monkeypatches
+        resolve_batch_target_chars (2026-07-10: replaces the old
+        SEMANTIC_BATCH_PAGES page-count knob) with a fixed small budget so
+        the split is deterministic regardless of the real probed/default
+        context size."""
+        wls = _load_module()
+        original_resolver = wls.resolve_batch_target_chars
+        wls.resolve_batch_target_chars = lambda state_dir: 156
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki" / "concepts"
+            wiki.mkdir(parents=True)
+            for name in ("buck", "boost", "flyback"):
+                (wiki / f"{name}.md").write_text(_page(
+                    f"type: concept\ntitle: {name}\n",
+                    f"# {name}\nA {name} converter.",
+                ), encoding="utf-8")
+
+            old_root = os.environ.get("IMPROVED_WIKI_ROOT")
+            old_argv = sys.argv
+            os.environ["IMPROVED_WIKI_ROOT"] = str(root)
+            sys.argv = ["wiki-lint-semantic.py"]
+            conv_dir = root / ".llm-wiki" / "conversation" / "semantic-lint"
+            try:
+                # Round 1: BOTH batches uncached → both prompts emitted in
+                # this single invocation (the eager-drain guarantee).
+                self.assertEqual(wls.main(), 101)
+                md_pending = [p for p in conv_dir.glob("*.md")
+                              if not p.with_suffix(".txt").exists()]
+                self.assertEqual(len(md_pending), 2)
+                md_pending.sort(key=lambda p: p.name)
+                md_pending[0].with_suffix(".txt").write_text(
+                    "---LINT: suggestion | info | Buck note---\n"
+                    "PAGES: concepts/buck.md\n Buck detail.\n---END LINT---\n",
+                    encoding="utf-8")
+                md_pending[1].with_suffix(".txt").write_text(
+                    "---LINT: suggestion | info | Flyback note---\n"
+                    "PAGES: concepts/flyback.md\n Flyback detail.\n---END LINT---\n",
+                    encoding="utf-8")
+
+                self.assertEqual(wls.main(), 0)
+                findings = json.loads(
+                    (root / ".llm-wiki" / "lint-semantic.json").read_text("utf-8"))
+                self.assertEqual(len(findings), 2)
+                self.assertEqual({f["page"] for f in findings},
+                                 {"Buck note", "Flyback note"})
+                ids = [f["id"] for f in findings]
+                self.assertEqual(len(set(ids)), len(ids))
+            finally:
+                wls.resolve_batch_target_chars = original_resolver
+                sys.argv = old_argv
+                if old_root is None:
+                    os.environ.pop("IMPROVED_WIKI_ROOT", None)
+                else:
+                    os.environ["IMPROVED_WIKI_ROOT"] = old_root
+
+    def test_answering_one_of_two_still_reports_the_other_pending(self):
+        """Same 2-batch setup, but only ONE of the two round-1 prompts gets
+        answered before the next invocation. The drain loop must read the
+        answered batch from cache instantly and still report the other as
+        pending (not silently skip it, not re-emit the already-answered one
+        as pending too)."""
         wls = _load_module()
         original_resolver = wls.resolve_batch_target_chars
         wls.resolve_batch_target_chars = lambda state_dir: 156
@@ -178,31 +239,25 @@ class TestSemanticLintBatchedE2E(unittest.TestCase):
             conv_dir = root / ".llm-wiki" / "conversation" / "semantic-lint"
             try:
                 self.assertEqual(wls.main(), 101)
-                md1 = [p for p in conv_dir.glob("*.md")
-                       if not p.with_suffix(".txt").exists()]
-                self.assertEqual(len(md1), 1)
-                md1[0].with_suffix(".txt").write_text(
-                    "---LINT: suggestion | info | Buck note---\n"
-                    "PAGES: concepts/buck.md\n Buck detail.\n---END LINT---\n",
+                md_pending = sorted(
+                    (p for p in conv_dir.glob("*.md")
+                     if not p.with_suffix(".txt").exists()),
+                    key=lambda p: p.name)
+                self.assertEqual(len(md_pending), 2)
+                md_pending[0].with_suffix(".txt").write_text(
+                    "---LINT: suggestion | info | Only one answered---\n"
+                    "PAGES: concepts/buck.md\n detail.\n---END LINT---\n",
                     encoding="utf-8")
 
+                # Second invocation: the answered one is a cache hit; the
+                # other must still be reported pending, not lost.
                 self.assertEqual(wls.main(), 101)
-                md2 = [p for p in conv_dir.glob("*.md")
-                       if not p.with_suffix(".txt").exists()]
-                self.assertEqual(len(md2), 1)
-                md2[0].with_suffix(".txt").write_text(
-                    "---LINT: suggestion | info | Flyback note---\n"
-                    "PAGES: concepts/flyback.md\n Flyback detail.\n---END LINT---\n",
-                    encoding="utf-8")
-
-                self.assertEqual(wls.main(), 0)
-                findings = json.loads(
-                    (root / ".llm-wiki" / "lint-semantic.json").read_text("utf-8"))
-                self.assertEqual(len(findings), 2)
-                self.assertEqual({f["page"] for f in findings},
-                                 {"Buck note", "Flyback note"})
-                ids = [f["id"] for f in findings]
-                self.assertEqual(len(set(ids)), len(ids))
+                still_pending = [p for p in conv_dir.glob("*.md")
+                                 if not p.with_suffix(".txt").exists()]
+                self.assertEqual(len(still_pending), 1)
+                self.assertEqual(still_pending[0].name, md_pending[1].name)
+                self.assertFalse(
+                    (root / ".llm-wiki" / "lint-semantic.json").exists())
             finally:
                 wls.resolve_batch_target_chars = original_resolver
                 sys.argv = old_argv

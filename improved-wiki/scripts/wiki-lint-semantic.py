@@ -27,13 +27,16 @@ Output schema (one item per finding):
 Config:
   IMPROVED_WIKI_ROOT  project root (default: cwd)
 
-LLM execution: conversation mode only. The semantic
-lint is one LLM call; this script writes a prompt file under
-<runtime>/conversation/semantic-lint/ and raises ConversationPending (exit
-101). The calling agent answers with the current conversation's model, writes
-the result, and re-invokes — the script reads the cached result and writes
-lint-semantic.json. No external LLM API key is needed (text generation is
-conversation-only).
+LLM execution: conversation mode only. The semantic lint runs as one or more
+context-budgeted batches (see resolve_batch_target_chars() below); this
+script writes a prompt file per uncached batch under
+<runtime>/conversation/semantic-lint/ and, once every currently-uncached
+batch's prompt has been emitted, raises ConversationPending (exit 101). The
+calling agent answers each pending prompt (one fresh subagent per prompt,
+answerable in parallel — 2026-07-10) with the current conversation's model,
+writes the results, and re-invokes — the script reads the cached results and
+writes lint-semantic.json once every batch is answered. No external LLM API
+key is needed (text generation is conversation-only).
 
 Usage:
   ./wiki-lint-semantic.py              # scan and write lint-semantic.json
@@ -97,9 +100,12 @@ LANG_SAMPLE_CHARS = 2000
 # single-shot batches hurt *extraction* quality (64K beat a 192K single chunk
 # by +27% concept coverage). Override via IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL
 # if 256K batches prove too coarse for semantic-lint's judgment quality in
-# practice. Each batch is one conversation handoff (exit 101 → agent answers →
-# resume → next batch). The slug is content-hashed, so each batch resumes
-# independently and the loop is idempotent across re-invokes.
+# practice. Each batch is one conversation handoff; a single invocation
+# eager-drains and emits prompts for ALL currently-uncached batches at once
+# (2026-07-10, mirrors ingest.py Stage 2.4's parallel-eager generation) so
+# they can be answered in parallel rather than one round-trip at a time. The
+# slug is content-hashed, so each batch resumes independently and the loop
+# is idempotent across re-invokes.
 _LINT_TARGET_TOKENS_HARD_CEIL = 256_000
 
 
@@ -338,27 +344,43 @@ def main() -> int:
         print(f"  first 500 chars of user_content:\n  {user_content[:500]!r}")
         return 0
 
-    # Conversation mode, batched: each batch is one handoff (write prompt →
-    # exit 101 → agent answers → re-invoke → cache hit → next batch). The
-    # content-hashed slug makes each batch independently resumable, so the
-    # loop is safe to re-enter after every 101.
+    # Conversation mode, batched, eager-drain (2026-07-10; mirrors ingest.py
+    # Stage 2.4's _generate_all_chunks_parallel "eager-inventory + drain"):
+    # an uncached batch's prompt .md is written by llm_call() BEFORE it
+    # raises ConversationPending, so on an uncached batch we catch it and
+    # CONTINUE to the next batch instead of returning immediately — a single
+    # invocation thus emits prompts for ALL currently-uncached batches, and
+    # the calling agent can dispatch one subagent per prompt IN PARALLEL.
+    # Batches are disjoint by page and only deduped once at the end, so there
+    # is no cross-batch ordering dependency to preserve (unlike a rolling
+    # digest). Only after the full pass, if anything is still pending, do we
+    # raise once. The content-hashed slug makes each batch independently
+    # resumable, so the loop is safe to re-enter after every 101.
     now_ms = int(time.time() * 1000)
     llm_call = make_conversation_llm_call(state_dir, stage_prefix="semantic-lint")
     print(f"[semantic-lint] batch budget: target_chars={target_chars:,} (context-derived)")
     batches = chunk_batches(summaries, target_chars)
     findings: list[dict] = []
+    pending = 0
     for i, batch in enumerate(batches, 1):
         batch_system, batch_user = build_prompt(batch)
         try:
             raw = llm_call(batch_system, batch_user)
         except ConversationPending:
+            pending += 1
             print(f"[semantic-lint] Batch {i}/{len(batches)} pending "
-                  f"({len(batch)} pages) — awaiting conversation answer", file=sys.stderr)
-            return 101
+                  f"({len(batch)} pages) — prompt emitted for parallel answering",
+                  file=sys.stderr)
+            continue
         batch_findings = parse_lint_blocks(raw, now_ms)
         findings.extend(batch_findings)
         print(f"[semantic-lint] Batch {i}/{len(batches)}: {len(batch_findings)} finding(s) "
               f"from {len(batch)} pages ({len(raw):,} chars raw)")
+
+    if pending > 0:
+        print(f"[semantic-lint] {pending}/{len(batches)} batch(es) pending — "
+              f"awaiting parallel conversation answers", file=sys.stderr)
+        return 101
 
     findings = dedup_findings(findings)
     # Renumber ids: parse_lint_blocks numbers per-batch from 0, so cross-batch
