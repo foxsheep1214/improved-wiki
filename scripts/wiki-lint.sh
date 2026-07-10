@@ -38,6 +38,14 @@
 #   sweep_reviews.py                 # auto-resolve satisfied review items
 #   cross_source_dedup.py            # cross-source concept dedup
 #   wiki-lint-fix.py --delete-orphans # cascade-delete orphan pages
+#   lint_verify_semantic.py          # improved-wiki-only extra (no NashSU
+#                                     # equivalent): re-verify severity=="warning"
+#                                     # semantic-lint findings against FULL page
+#                                     # content (the semantic pass itself only
+#                                     # sees a 500-char preview per page, batched
+#                                     # blind with no cross-batch memory). Run
+#                                     # after a lint pass, not part of the default
+#                                     # chain — see the module docstring.
 #
 # Exit code:
 #   0 — clean (or with findings but no --strict)
