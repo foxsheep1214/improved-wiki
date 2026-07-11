@@ -377,3 +377,57 @@ class TestLlmJudgeBatching(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHumanGateExclusion(unittest.TestCase):
+    """2026-07-11 (#8): review items with `human_gate: true` frontmatter (e.g.
+    orphan-delete candidates from wiki-lint-fix.py) must NEVER be sent to the
+    LLM judge — the judge only sees page ids + titles, so it cannot know
+    inbound-link state; a human decides these. Mechanical, not prompt-based.
+    """
+
+    def test_human_gated_item_never_reaches_judge(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            (wiki / "concepts" / "lonely.md").write_text(
+                "---\ntype: concept\ntitle: Lonely\n---\n\n# L\nbody",
+                encoding="utf-8")
+            rdir = wiki / "REVIEW" / "suggestion"
+            rdir.mkdir(parents=True)
+            (rdir / "2026-07-10-lint-orphan-delete-concepts-lonely.md").write_text(
+                "---\n"
+                "type: review\n"
+                "review_type: suggestion\n"
+                'title: "Orphan delete candidate: concepts/lonely.md"\n'
+                "created: 2026-07-10\n"
+                "resolved: false\n"
+                "human_gate: true\n"
+                "affected_pages:\n"
+                "  - concepts/lonely.md\n"
+                "---\n\n# Orphan delete candidate: concepts/lonely.md\nbody\n",
+                encoding="utf-8")
+
+            judged_batches = []
+            original = sweep._llm_judge_reviews
+
+            def spy(pending, pages, runtime_dir):
+                judged_batches.append(list(pending))
+                return set()
+
+            sweep._llm_judge_reviews = spy
+            try:
+                result = sweep.sweep_reviews(root, dry_run=True, use_llm=True)
+            finally:
+                sweep._llm_judge_reviews = original
+
+            # The judge was never handed the human-gated item (either no call
+            # at all, or a call whose pool excludes it).
+            for batch in judged_batches:
+                titles = [r.get("title", "") for r in batch]
+                self.assertFalse(
+                    any("Orphan delete candidate" in t for t in titles),
+                    f"human-gated item leaked into judge pool: {titles}")
+            # And it stays pending, not resolved.
+            self.assertEqual(result.get("resolved", 0), 0)

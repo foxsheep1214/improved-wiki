@@ -241,6 +241,52 @@ class TestApplySnapshotFreshness(unittest.TestCase):
             self.assertIn("MERGED-IN-BY-GROUP-ONE.", final)
 
 
+class TestApplySlugCollisionGuard(unittest.TestCase):
+    """2026-07-11: a merge group containing a slug that maps to MULTIPLE files
+    (same basename in different dirs) must be skipped mechanically — the
+    slug-keyed pages_by_slug would silently shadow one file and the merge
+    could read/delete the wrong one. See known-issues.md."""
+
+    def test_colliding_group_skipped_files_untouched(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            (wiki / "entities").mkdir(parents=True)
+            (wiki / "queries").mkdir(parents=True)
+            (wiki / "entities" / "xdup.md").write_text(_page(
+                "type: entity\ntitle: XDup\ntags: []\nrelated: []\nsources: []",
+                "Entity version.",
+            ), encoding="utf-8")
+            (wiki / "queries" / "xdup.md").write_text(_page(
+                "type: query\ntitle: XDup Q\ntags: []\nrelated: []\nsources: []",
+                "Query stub version.",
+            ), encoding="utf-8")
+            (wiki / "entities" / "ypage.md").write_text(_page(
+                "type: entity\ntitle: Y\ntags: []\nrelated: []\nsources: []",
+                "Y body.",
+            ), encoding="utf-8")
+            (wiki / "index.md").write_text("# Index\n", encoding="utf-8")
+
+            merge_calls = []
+
+            def llm_call(system_prompt: str, user_message: str) -> str:
+                if "likely refer to the same" in system_prompt:
+                    return json.dumps({"groups": [
+                        {"slugs": ["xdup", "ypage"], "reason": "r",
+                         "confidence": "high"},
+                    ]})
+                merge_calls.append(user_message)
+                return "---\ntype: entity\ntitle: X\n---\n\nmerged"
+
+            report = ds.run_phase2(root, llm_call, apply=True, today=FIXED_TODAY,
+                                   embedding_prefilter=False)
+            self.assertEqual(report["applied"], [])
+            self.assertEqual(merge_calls, [])  # merge never attempted
+            self.assertTrue((wiki / "entities" / "xdup.md").exists())
+            self.assertTrue((wiki / "queries" / "xdup.md").exists())
+            self.assertTrue((wiki / "entities" / "ypage.md").exists())
+
+
 class TestApplyMergesEagerDrain(unittest.TestCase):
     """2026-07-10: _apply_merges must emit ALL uncached merge prompts in one
     invocation before raising ConversationPending once — not stop at the

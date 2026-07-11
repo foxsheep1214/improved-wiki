@@ -178,6 +178,79 @@ class TestDeleteOrphansEmitReview(unittest.TestCase):
             self.assertIn("concepts/lonely.md", body)
             self.assertIn("--delete-orphans --apply", body)
 
+    def test_orphan_delete_review_item_is_human_gated(self):
+        """The orphan-delete review item must carry human_gate: true so
+        sweep_reviews' LLM judge never auto-resolves it — the judge only sees
+        page ids + titles and cannot know inbound-link state."""
+        import tempfile
+        wlf = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            (wiki / "concepts" / "lonely.md").write_text(
+                "---\ntype: concept\ntitle: Lonely\n---\n\n# L\n[[concepts/other]]",
+                encoding="utf-8")
+            (wiki / "concepts" / "other.md").write_text(
+                "---\ntype: concept\ntitle: Other\n---\n\n# O\nbody",
+                encoding="utf-8")
+            cache = root / "lint-cache.json"
+            cache.write_text(json.dumps([
+                {"type": "orphan", "severity": "info",
+                 "page": "concepts/lonely.md",
+                 "detail": "No other pages link to this page."},
+            ]), encoding="utf-8")
+            old_argv = sys.argv
+            sys.argv = ["wiki-lint-fix.py", "--delete-orphans", "--emit-review",
+                        "--from-cache", str(cache),
+                        "--project-root", str(root), "--wiki-root", str(wiki)]
+            try:
+                wlf.main()
+            finally:
+                sys.argv = old_argv
+            review = list((wiki / "REVIEW" / "suggestion").glob("*orphan-delete*"))[0]
+            self.assertIn("human_gate: true", review.read_text(encoding="utf-8"))
+
+    def test_stale_cache_orphan_reverified_against_current_disk(self):
+        """2026-07-11 (#4): an orphan listed in the cache that has since
+        gained an inbound link (e.g. a --fix-links append in the same lint
+        run) must be dropped from the preview/review/delete set."""
+        import tempfile
+        wlf = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            # 'rescued' has an inbound link NOW (from linker.md), but the
+            # stale cache still lists it as an orphan.
+            (wiki / "concepts" / "rescued.md").write_text(
+                "---\ntype: concept\ntitle: Rescued\n---\n\n# R\n[[concepts/linker]]",
+                encoding="utf-8")
+            (wiki / "concepts" / "linker.md").write_text(
+                "---\ntype: concept\ntitle: Linker\n---\n\n# L\nSee [[concepts/rescued]].",
+                encoding="utf-8")
+            cache = root / "lint-cache.json"
+            cache.write_text(json.dumps([
+                {"type": "orphan", "severity": "info",
+                 "page": "concepts/rescued.md",
+                 "detail": "No other pages link to this page."},
+            ]), encoding="utf-8")
+            old_argv = sys.argv
+            sys.argv = ["wiki-lint-fix.py", "--delete-orphans", "--emit-review",
+                        "--from-cache", str(cache),
+                        "--project-root", str(root), "--wiki-root", str(wiki)]
+            try:
+                rc = wlf.main()
+            finally:
+                sys.argv = old_argv
+            self.assertEqual(rc, 0)
+            # no review item, no deletion — the cached orphan was re-verified
+            # against current disk and dropped.
+            self.assertTrue((wiki / "concepts" / "rescued.md").exists())
+            review_dir = wiki / "REVIEW" / "suggestion"
+            items = list(review_dir.glob("*orphan-delete*")) if review_dir.exists() else []
+            self.assertEqual(items, [])
+
     def test_emit_review_is_idempotent(self):
         import tempfile
         wlf = _load_module()

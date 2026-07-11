@@ -500,24 +500,37 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -
     print("\n[3/3] Applying rule-based matching...")
     rule_resolved, still_pending = _apply_rule_stage(reviews, index)
 
-    # Stage 2: LLM semantic judge on what's left
+    # Stage 2: LLM semantic judge on what's left.
+    # human_gate exclusion (2026-07-11): review items whose frontmatter sets
+    # `human_gate: true` (e.g. orphan-delete candidates from wiki-lint-fix.py)
+    # are NEVER sent to the judge. The judge's prompt only shows page ids +
+    # titles — it cannot see inbound-link state, so any "resolved" verdict on
+    # an orphan-delete item would be a guess; these gates exist precisely so a
+    # human decides. Mechanical guarantee, not prompt-dependent.
+    human_gated = [r for r in still_pending
+                   if str(r.get("frontmatter", {}).get("human_gate", "")).lower()
+                   in ("true", "yes", "1")]
+    judge_pool = [r for r in still_pending if r not in human_gated]
     llm_resolved: List[Dict] = []
-    if use_llm and still_pending:
-        print(f"\n[judge] LLM semantic judge over {len(still_pending)} pending item(s)...")
+    if human_gated:
+        print(f"\n[judge] {len(human_gated)} human-gated item(s) excluded from "
+              f"the LLM judge (human_gate: true — human decision only)")
+    if use_llm and judge_pool:
+        print(f"\n[judge] LLM semantic judge over {len(judge_pool)} pending item(s)...")
         from _paths import detect_runtime_dir
         runtime_dir = detect_runtime_dir(wiki_root)
         pages = _wiki_page_summaries(wiki_dir)
-        resolved_ids = _llm_judge_reviews(still_pending, pages, runtime_dir)
+        resolved_ids = _llm_judge_reviews(judge_pool, pages, runtime_dir)
         if resolved_ids:
             kept_pending: List[Dict] = []
-            for review in still_pending:
+            for review in judge_pool:
                 if review.get("review_id") in resolved_ids:
                     item = dict(review)
                     item["reason"] = "LLM judged resolved by current wiki state"
                     llm_resolved.append(item)
                 else:
                     kept_pending.append(review)
-            still_pending = kept_pending
+            still_pending = kept_pending + human_gated
 
     # Apply resolutions to disk (or dry-run accounting)
     all_resolved = rule_resolved + llm_resolved

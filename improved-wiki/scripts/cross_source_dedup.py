@@ -643,6 +643,22 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
             continue
         pages_by_slug = {_slug_from_path(p): (p, c)
                          for p, c in content_by_path.items()}
+        # Slug-collision guard (2026-07-11): the whole merge path is keyed by
+        # basename slug, so two files with the same basename in different dirs
+        # (e.g. queries/x.md and entities/x.md) silently shadow each other in
+        # pages_by_slug — a merge on such a group could read/delete the WRONG
+        # file. Refuse mechanically instead of relying on a manual pre-check;
+        # see references/known-issues.md (跨目录同名 basename 的 slug 碰撞).
+        slug_counts: dict = {}
+        for p in content_by_path:
+            s = _slug_from_path(p)
+            slug_counts[s] = slug_counts.get(s, 0) + 1
+        colliding = [s for s in g["slugs"] if slug_counts.get(s, 0) > 1]
+        if colliding:
+            print(f"[dedup] SKIP group {g['slugs']}: slug collision — "
+                  f"{colliding} maps to multiple files across dirs; resolve "
+                  f"manually (see known-issues.md)", flush=True)
+            continue
         canonical_slug = g["slugs"][0]
         group_pages = []
         for slug in g["slugs"]:

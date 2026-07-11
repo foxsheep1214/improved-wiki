@@ -600,6 +600,7 @@ created: {date_str}
 resolved: false
 resolved_at: null
 resolved_reason: null
+human_gate: true
 affected_pages:
   - {rel}
 ---
@@ -700,6 +701,20 @@ def main() -> int:
 
     if args.delete_orphans:
         orphan_rels = [str(f.get("page", "")) for f in orphans if f.get("page")]
+        if args.from_cache and orphan_rels:
+            # Re-verify orphanhood against the CURRENT wiki (2026-07-11): the
+            # cache predates any --fix-links appends from the same lint run —
+            # a page rescued by an appended inbound link would otherwise still
+            # be previewed/deleted as an orphan. Detection-only scan is O(n).
+            pages_now = _collect_pages(wiki_dir)
+            current = run_structural_lint(pages_now, with_suggestions=False)
+            still_orphan = {str(f.get("page", "")) for f in current
+                            if f.get("type") == "orphan"}
+            dropped = [r for r in orphan_rels if r not in still_orphan]
+            if dropped:
+                print(f"[lint-fix] {len(dropped)} cached orphan(s) no longer "
+                      f"orphaned on current disk — dropped: {dropped[:5]}")
+            orphan_rels = [r for r in orphan_rels if r in still_orphan]
         mode = "DRY-RUN" if not args.apply else "APPLY"
         print(f"[lint-fix] {mode} (delete-orphans): {len(orphan_rels)} orphan page(s)")
         if not orphan_rels:
