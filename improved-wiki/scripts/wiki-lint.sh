@@ -163,9 +163,43 @@ if ! mkdir "$LINT_LOCKDIR" 2>/dev/null; then
 fi
 echo $$ > "$LINT_LOCKDIR/pid"
 
+# ── Ingest/lint mutual exclusion (2026-07-11) ──
+# Hold the SAME flock ingest.py uses (runtime/ingest.lock, see _core.ProjectLock)
+# for the duration of this lint run. This is real mutual exclusion, not a
+# check: if an ingest is mid-write, lint refuses to start (its fix/dedup/
+# delete stages write to wiki/); if lint is running, a new ingest's
+# lock.acquire() fails with its normal "another ingest may be running"
+# message. NashSU never needs this — it is a single-window desktop app whose
+# UI serializes everything. The holder process keeps the flock's fd open and
+# dies with this script (killed by the EXIT trap; flock auto-releases on
+# process death, so a crashed lint can never leave the lock stuck).
+INGEST_LOCK_FILE="$RUNTIME_DIR/ingest.lock"
+LOCK_FIFO=$(mktemp -u -t wiki-lint-lockfifo-XXXXXX)
+mkfifo "$LOCK_FIFO"
+python3 - "$INGEST_LOCK_FILE" > "$LOCK_FIFO" <<'PYLOCK' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    print("BUSY", flush=True)
+    sys.exit(3)
+print("LOCKED", flush=True)
+while True:
+    time.sleep(3600)
+PYLOCK
+LOCK_HOLDER_PID=$!
+read -r LOCK_STATUS < "$LOCK_FIFO"
+rm -f "$LOCK_FIFO"
+if [ "$LOCK_STATUS" != "LOCKED" ]; then
+  rm -rf "$LINT_LOCKDIR"
+  echo "[lint] An ingest holds the project lock ($INGEST_LOCK_FILE) — refusing to run lint concurrently with an active ingest. Wait for it to finish (or check 'ps' for a stuck OCR; see maintenance-cleanup.md)." >&2
+  exit 1
+fi
+
 # ── Phase 1: Structural lint ──
 LINT_SCRIPT=$(mktemp -t wiki-lint-XXXXXX.py)
-trap "rm -rf '$LINT_LOCKDIR'; rm -f '$LINT_SCRIPT' '$LINT_CACHE.tmp' '$LINT_CACHE.tmp.err'" EXIT
+trap "kill '$LOCK_HOLDER_PID' 2>/dev/null; rm -rf '$LINT_LOCKDIR'; rm -f '$LINT_SCRIPT' '$LINT_CACHE.tmp' '$LINT_CACHE.tmp.err'" EXIT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export SCRIPT_DIR

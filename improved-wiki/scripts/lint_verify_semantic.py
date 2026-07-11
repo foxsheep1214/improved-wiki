@@ -207,7 +207,11 @@ def main(argv: list[str] | None = None) -> int:
     batches = [pending[i:i + VERIFY_BATCH_FINDINGS]
                for i in range(0, len(pending), VERIFY_BATCH_FINDINGS)]
 
+    # Eager-drain (2026-07-11, same pattern as the semantic-lint / dedup
+    # loops): emit ALL uncached batch prompts in one invocation before
+    # returning 101 once, so the calling agent can answer them in parallel.
     verdicts: dict[str, dict] = {}
+    pending_batches = 0
     for i, batch in enumerate(batches, 1):
         all_affected = {rel for f in batch for rel in f.get("affectedPages", [])}
         pages_by_rel = read_affected_pages(wiki_dir, sorted(all_affected))
@@ -215,14 +219,19 @@ def main(argv: list[str] | None = None) -> int:
         try:
             raw = llm_call(system, user)
         except ConversationPending:
+            pending_batches += 1
             print(f"[lint-verify] batch {i}/{len(batches)} pending "
-                  f"({len(batch)} finding(s)) — awaiting conversation answer",
+                  f"({len(batch)} finding(s)) — prompt emitted for parallel answering",
                   file=sys.stderr)
-            return 101
+            continue
         batch_verdicts = parse_verify_blocks(raw)
         verdicts.update(batch_verdicts)
         print(f"[lint-verify] batch {i}/{len(batches)}: "
               f"{len(batch_verdicts)}/{len(batch)} verdict(s) parsed")
+    if pending_batches:
+        print(f"[lint-verify] {pending_batches}/{len(batches)} batch(es) pending "
+              f"— awaiting parallel conversation answers", file=sys.stderr)
+        return 101
 
     lint_dir = runtime / "lint"
     for finding_id, v in verdicts.items():

@@ -365,6 +365,62 @@ class TestResolveBatchTargetChars(unittest.TestCase):
                     os.environ["IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL"] = old_ceil
 
 
+class TestEmitReviewForWarnings(unittest.TestCase):
+    """2026-07-11 (#2): warning-severity semantic findings must be routed
+    into wiki/REVIEW/ so they reach the human-triage + sweep workflow —
+    previously they were a dead end in lint-semantic.json / .llm-wiki/lint/."""
+
+    def test_warning_routed_info_not(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            wiki = Path(t) / "wiki"
+            wiki.mkdir(parents=True)
+            findings = [
+                {"type": "semantic", "severity": "warning",
+                 "page": "MTI pages contradict on SCV figure",
+                 "detail": "[contradiction] Page A says 20 dB, page B says 33 dB.",
+                 "affectedPages": ["concepts/a.md", "concepts/b.md"],
+                 "id": "lint-semantic-0", "createdAt": 0},
+                {"type": "semantic", "severity": "info",
+                 "page": "minor nicety",
+                 "detail": "[suggestion] could add a link",
+                 "affectedPages": None,
+                 "id": "lint-semantic-1", "createdAt": 0},
+                {"type": "semantic", "severity": "warning",
+                 "page": "swerling-models missing",
+                 "detail": "[missing-page] heavily referenced, no page",
+                 "affectedPages": ["concepts/c.md"],
+                 "id": "lint-semantic-2", "createdAt": 0},
+            ]
+            n = wls.emit_review_for_warnings(wiki, findings)
+            self.assertEqual(n, 2)
+            contra = list((wiki / "REVIEW" / "contradiction").glob("semlint-*.md"))
+            self.assertEqual(len(contra), 1)
+            body = contra[0].read_text(encoding="utf-8")
+            self.assertIn("review_type: contradiction", body)
+            self.assertIn("concepts/a.md", body)
+            self.assertIn("resolved: false", body)
+            # missing-page maps to REVIEW/missing-page so the sweep RULE stage
+            # can auto-resolve it once the page exists.
+            missing = list((wiki / "REVIEW" / "missing-page").glob("semlint-*.md"))
+            self.assertEqual(len(missing), 1)
+            # info finding produced nothing.
+            sugg_dir = wiki / "REVIEW" / "suggestion"
+            self.assertFalse(sugg_dir.exists())
+
+    def test_idempotent_rerun_writes_nothing_new(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            wiki = Path(t) / "wiki"
+            wiki.mkdir(parents=True)
+            findings = [{"type": "semantic", "severity": "warning",
+                         "page": "Dup finding",
+                         "detail": "[stale] outdated",
+                         "affectedPages": [], "id": "x", "createdAt": 0}]
+            self.assertEqual(wls.emit_review_for_warnings(wiki, findings), 1)
+            self.assertEqual(wls.emit_review_for_warnings(wiki, findings), 0)
+
+
 class TestCollectSummariesDirExclusion(unittest.TestCase):
     """Regression: derived-artifact dirs (REVIEW/, clusters/, media/, lint/)
     must NOT be fed to the semantic-lint LLM — they are diagnostics this port

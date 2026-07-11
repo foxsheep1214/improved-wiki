@@ -457,7 +457,87 @@ created: {date_str}
 
     if written > 0:
         print(f"[semantic-lint] {written} semantic lint pages → {lint_dir}")
+
+    emit_review_for_warnings(wiki_dir, findings)
     return 0
+
+
+# Map the 5 semantic raw types onto the wiki's review categories. missing-page
+# maps to itself so sweep_reviews' RULE stage can auto-resolve it when the page
+# gets created; contradiction maps to itself (human judgment, judge-eligible);
+# the rest are generic suggestions.
+_REVIEW_TYPE_FOR_RAW = {
+    "contradiction": "contradiction",
+    "missing-page": "missing-page",
+    "stale": "suggestion",
+    "suggestion": "suggestion",
+    "term-ambiguity": "suggestion",
+}
+
+
+def emit_review_for_warnings(wiki_dir: Path, findings: list[dict]) -> int:
+    """Route warning-severity semantic findings into wiki/REVIEW/ (2026-07-11).
+
+    Without this, semantic findings were a dead end: they landed only in
+    lint-semantic.json + .llm-wiki/lint/*.md, which no downstream tool reads
+    and no human necessarily browses — NashSU shows findings in its desktop
+    UI, improved-wiki had no equivalent "a human will see this" surface.
+    Real case: a batch found 22 stale placeholder stubs; the finding could
+    never trigger any action. REVIEW items feed the existing human-triage +
+    sweep workflow. info-severity findings ("nice to have") stay lint-page-
+    only. Idempotent: stable filename per (raw_type, title); existing files
+    are left untouched. Returns the number of items written.
+    """
+    warnings = [f for f in findings if f.get("severity") == "warning"]
+    if not warnings:
+        return 0
+    date_str = time.strftime("%Y-%m-%d")
+    count = 0
+    for f in warnings:
+        detail = f.get("detail", "")
+        m = re.match(r"\[([\w-]+)\]\s*", detail)
+        raw_type = m.group(1) if m else "suggestion"
+        review_type = _REVIEW_TYPE_FOR_RAW.get(raw_type, "suggestion")
+        title = f.get("page", "semantic finding")
+        affected = f.get("affectedPages") or []
+        safe = re.sub(r"[^\w一-鿿\-]", "-", title)[:60]
+        safe = re.sub(r"-{2,}", "-", safe).strip("-") or "finding"
+        review_dir = wiki_dir / "REVIEW" / review_type
+        fpath = review_dir / f"semlint-{raw_type}-{safe}.md"
+        if fpath.exists():
+            continue
+        review_dir.mkdir(parents=True, exist_ok=True)
+        affected_yaml = "\n".join(f"  - {p}" for p in affected) or "  []"
+        body_detail = re.sub(r"^\[[\w-]+\]\s*", "", detail)
+        md = f"""---
+type: review
+review_type: {review_type}
+title: "{title}"
+created: {date_str}
+resolved: false
+resolved_at: null
+resolved_reason: null
+affected_pages:
+{affected_yaml}
+search_queries:
+  - "{title}"
+---
+
+# [{raw_type}] {title}
+
+{body_detail}
+
+(Generated from a warning-severity semantic-lint finding — see
+``.llm-wiki/lint/`` for the full lint page. Consider running
+``lint_verify_semantic.py`` first: it re-checks warning findings against
+FULL page content and records a confirmed/refuted verdict.)
+"""
+        atomic_write(fpath, md)
+        count += 1
+    if count:
+        print(f"[semantic-lint] {count} warning finding(s) routed to wiki/REVIEW/ "
+              f"for human triage")
+    return count
 
 
 if __name__ == "__main__":
