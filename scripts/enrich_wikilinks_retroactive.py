@@ -12,8 +12,10 @@ sparsity), so this tool does only DETERMINISTIC, CORRECT link backfills:
      (`[[sources/<slug>]]`) if not already linked. 5953 no-outlink pages on
      HardwareWiki have a `sources:` field → this alone cuts no-outlinks from
      6367 to ~680, with zero guessing.
-  2. Broken-link auto-fix (--fix-broken): applies the suggestion engine's
-     HIGH-confidence (≥0.74) broken-link corrections (typo → closest page).
+  2. Broken-link auto-fix (--fix-broken): applies broken-link corrections at
+     or above the shared headless auto-rewrite gate
+     (_lint_suggest.BROKEN_LINK_AUTO_REWRITE_MIN_SCORE = 0.9, same as
+     wiki-lint-fix.py); lower-scored suggestions are listed for manual review.
      O(n²) over the wiki — slow on large wikis; skip unless needed.
   3. Mention backlink (--mention-orphans): the deterministic core of NashSU
      enrich-wikilinks.ts — a page whose BODY literally mentions an orphan
@@ -47,7 +49,8 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from _frontmatter import WIKILINK_RE as _WIKILINK_RE  # noqa: E402
 from _frontmatter_array import parse_frontmatter_array  # noqa: E402
-from _paths import iter_wiki_pages, WIKI_ARTIFACT_DIRS  # noqa: E402
+from _paths import iter_wiki_pages, WIKI_ARTIFACT_DIRS, atomic_write  # noqa: E402
+from _lint_suggest import BROKEN_LINK_AUTO_REWRITE_MIN_SCORE  # noqa: E402
 from pathlib import PurePosixPath  # noqa: E402
 
 
@@ -125,7 +128,11 @@ def scan_wiki(wiki_dir: Path):
 
 
 def fix_broken_links(wiki_dir: Path, apply: bool):
-    """Apply high-confidence broken-link suggestions (≥0.74) across the wiki.
+    """Apply broken-link suggestions at or above the shared headless
+    auto-rewrite gate (_lint_suggest.BROKEN_LINK_AUTO_REWRITE_MIN_SCORE, 0.9 —
+    same threshold wiki-lint-fix.py enforces; the old local ≥0.74 let
+    contains-tier/fuzzy matches rewrite unattended). Suggestions below the
+    gate are PRINTED for manual handling, never rewritten.
 
     O(n²) — slow on large wikis. Returns (n_fixed_pages, n_fixed_links).
     """
@@ -136,7 +143,20 @@ def fix_broken_links(wiki_dir: Path, apply: bool):
     # pages never get rewritten here.
     pages = list(iter_wiki_pages(wiki_dir, anchor_files=("index.md", "log.md")))
     findings = run_structural_lint(pages, with_suggestions=True)
-    broken = [f for f in findings if f["type"] == "broken-link" and f.get("suggested_target")]
+    suggested = [f for f in findings
+                 if f["type"] == "broken-link" and f.get("suggested_target")]
+    # Gate: a missing score (older engine output) is treated conservatively
+    # as below-gate — no unattended rewrite.
+    broken = [f for f in suggested
+              if (f.get("suggested_score") or 0) >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE]
+    below_gate = [f for f in suggested if f not in broken]
+    if below_gate:
+        print(f"  [fix-broken] {len(below_gate)} suggestion(s) below the "
+              f"auto-rewrite gate ({BROKEN_LINK_AUTO_REWRITE_MIN_SCORE}) — "
+              f"left for manual handling:")
+        for f in below_gate:
+            print(f"    {f['page']}: [[{f['broken_target']}]] → "
+                  f"[[{f['suggested_target']}]] (score={f.get('suggested_score')})")
     pages_by_rel = {p[0]: wiki_dir / p[0] for p in pages}
     fixed_pages = 0
     fixed_links = 0
@@ -159,7 +179,7 @@ def fix_broken_links(wiki_dir: Path, apply: bool):
                 changed = True
                 fixed_links += n
         if changed and apply:
-            p.write_text(text, encoding="utf-8")
+            atomic_write(p, text)
             fixed_pages += 1
     return fixed_pages, fixed_links
 
@@ -238,7 +258,7 @@ def mention_backlink_orphans(wiki_dir: Path, apply: bool):
             n_pages += 1
             n_links += added
             if apply:
-                (wiki_dir / src_rel).write_text(new, encoding="utf-8")
+                atomic_write(wiki_dir / src_rel, new)
     solved = len({s for slugs in plan.values() for s in slugs})
     return n_pages, n_links, solved
 
@@ -268,7 +288,7 @@ def main() -> int:
         if pages_changed <= 10:
             print(f"  {path.relative_to(root)} (+{n} source link)")
         if args.apply:
-            path.write_text(new_content, encoding="utf-8")
+            atomic_write(path, new_content)
     if pages_changed > 10:
         print(f"  ... and {pages_changed - 10} more")
     print(f"\n[source-link backfill · {mode}] {pages_changed} page(s), +{links_added} link(s)")

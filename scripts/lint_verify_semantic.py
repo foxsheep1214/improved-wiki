@@ -113,7 +113,9 @@ def build_verify_prompt(batch: list[dict], pages_by_rel: dict[str, str | None]) 
         detail = re.sub(r"^\[[\w-]+\]\s*", "", f.get("detail", ""))
         pages_text = "\n\n".join(
             f"#### {rel}\n{content if content is not None else '(page not found on disk)'}"
-            for rel in f.get("affectedPages", [])
+            # `or []`: a finding may carry affectedPages: null — .get's default
+            # only covers a MISSING key, not an explicit null.
+            for rel in (f.get("affectedPages") or [])
             for content in [pages_by_rel.get(rel)]
         )
         parts.append(
@@ -213,7 +215,7 @@ def main(argv: list[str] | None = None) -> int:
     verdicts: dict[str, dict] = {}
     pending_batches = 0
     for i, batch in enumerate(batches, 1):
-        all_affected = {rel for f in batch for rel in f.get("affectedPages", [])}
+        all_affected = {rel for f in batch for rel in (f.get("affectedPages") or [])}
         pages_by_rel = read_affected_pages(wiki_dir, sorted(all_affected))
         system, user = build_verify_prompt(batch, pages_by_rel)
         try:

@@ -16,7 +16,6 @@ always call their configured HTTP API directly regardless of this module.
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -124,7 +123,15 @@ def conversation_handoff(
 
     if result_file.exists():
         response = result_file.read_text(encoding="utf-8")
-        if stale_check is not None and stale_check(response, prompt_text):
+        # An empty/whitespace-only result is never a valid answer (an agent
+        # touched the file without writing, or a write was torn) — treat it as
+        # stale on EVERY handoff path (router and sweep alike): delete and
+        # re-prompt rather than returning "" into a stage parser.
+        if not response.strip():
+            print(f"[conv:{tag}] Result file is empty — treating as stale, regenerating",
+                  flush=True)
+            result_file.unlink(missing_ok=True)
+        elif stale_check is not None and stale_check(response, prompt_text):
             print(f"[conv:{tag}] Result appears stale — regenerating", flush=True)
             result_file.unlink(missing_ok=True)
         else:

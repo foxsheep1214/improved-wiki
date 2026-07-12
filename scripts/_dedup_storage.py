@@ -15,7 +15,10 @@ the project's existing ``{"not_duplicates": [[slug, slug], ...]}`` envelope
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import os
+import sys
 from pathlib import Path
 
 from _paths import atomic_write
@@ -28,19 +31,31 @@ def whitelist_path(runtime_dir: Path) -> Path:
     return runtime_dir / WHITELIST_FILE
 
 
+def _warn_corrupt(path: Path, why: str) -> None:
+    print(f"[dedup] WARNING: not-duplicates whitelist unreadable "
+          f"({path}: {why}) — proceeding with an EMPTY whitelist. "
+          f"Every previously-marked not-duplicate pair is unprotected: the "
+          f"detector may re-suggest (and auto-apply may re-merge) pairs a "
+          f"human already rejected. Fix or delete the file.", file=sys.stderr)
+
+
 def load_not_duplicates(runtime_dir: Path) -> List[List[str]]:
     """Read whitelisted not-duplicate pairs. Mirrors NashSU loadNotDuplicates:
-    best-effort — returns [] on any read/parse error. Accepts both the
-    ``{"not_duplicates": [...]}`` envelope and a bare array."""
+    best-effort — returns [] on any read/parse error, but LOUDLY (2026-07-12):
+    a raise here would block the detector read path, so we warn instead, and
+    the warning spells out the consequence (whitelist protection is off).
+    Accepts both the ``{"not_duplicates": [...]}`` envelope and a bare array."""
     path = whitelist_path(runtime_dir)
     if not path.exists():
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as ex:
+        _warn_corrupt(path, str(ex))
         return []
     raw = data.get("not_duplicates", []) if isinstance(data, dict) else data
     if not isinstance(raw, list):
+        _warn_corrupt(path, f"top level must be a list, got {type(raw).__name__}")
         return []
     out: List[List[str]] = []
     for group in raw:
@@ -72,14 +87,29 @@ def add_not_duplicate(runtime_dir: Path, slugs: List[str]) -> bool:
     """Add a group to the whitelist. Idempotent — if the same group (any order,
     any casing) is already present, this is a no-op. Mirrors NashSU
     addNotDuplicate. Returns True if a new entry was written, False if it was
-    already present (or fewer than 2 slugs)."""
+    already present (or fewer than 2 slugs).
+
+    The load→append→save sequence runs under an exclusive flock (2026-07-12)
+    so two concurrent writers can't interleave and drop each other's entry
+    (the atomic_write in save only protects against torn writes, not
+    lost-update races)."""
     if len(slugs) < 2:
         return False
-    groups = load_not_duplicates(runtime_dir)
-    new_key = _canonical_key(slugs)
-    for existing in groups:
-        if _canonical_key(existing) == new_key:
-            return False  # already there
-    groups.append(sorted(slugs))
-    save_not_duplicates(runtime_dir, groups)
-    return True
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = whitelist_path(runtime_dir).with_name(WHITELIST_FILE + ".lock")
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        groups = load_not_duplicates(runtime_dir)
+        new_key = _canonical_key(slugs)
+        for existing in groups:
+            if _canonical_key(existing) == new_key:
+                return False  # already there
+        groups.append(sorted(slugs))
+        save_not_duplicates(runtime_dir, groups)
+        return True
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)

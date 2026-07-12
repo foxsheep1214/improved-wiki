@@ -448,6 +448,7 @@ def _stage_2_2_build_prompt(
     accumulated_digest: str = "",
     overlap_before: str = "",
     heading_path: str = "",
+    existing_slugs: list | None = None,
 ) -> str:
     """Build the prompt for Stage 2.2: Chunk Analysis.
 
@@ -461,6 +462,14 @@ def _stage_2_2_build_prompt(
 
     If heading_path is provided, it tells the LLM which chapter/section
     hierarchy this chunk belongs to (NashSU parity: chunk.headingPath).
+
+    ``existing_slugs`` is the per-book SNAPSHOT of existing wiki slugs taken
+    when the book first entered Stage 2.2 (persisted under
+    "slugs_snapshot_2_2" in progress by _ingest_chunks). 2.2 is contractually
+    wiki-independent; a live list_existing_slugs() read here made the prompt
+    hash drift while a parallel batch book wrote wiki pages → conversation
+    cache misses on every resume. None falls back to a live read (legacy
+    callers/tests only — the pipeline always passes the snapshot).
     """
     if accumulated_digest:
         # Sequential mode: use accumulated digest from previous chunks
@@ -485,8 +494,9 @@ def _stage_2_2_build_prompt(
     # and an interim dynamic cap (target_chars) predate this parity decision.
     if len(digest_str) > _DIGEST_PROMPT_CAP:
         digest_str = digest_str[:_DIGEST_PROMPT_CAP] + "\n... (truncated)"
-    existing_slugs = _stage_2_2_cap_existing_slugs(
-        list_existing_slugs(config), chunk_text)
+    if existing_slugs is None:
+        existing_slugs = list_existing_slugs(config)
+    existing_slugs = _stage_2_2_cap_existing_slugs(list(existing_slugs), chunk_text)
 
     template_section = _stage_2_2_build_template_section(template, file_path, max_chars=2000)
 
@@ -730,6 +740,12 @@ updated_global_digest: |
 """
 
 
+class _YamlNotDictError(RuntimeError):
+    """Stage 2.2 agent answered with YAML that parses to a non-dict (list /
+    plain text). Treated as a parse failure: retried like a transient error,
+    raised when retries are exhausted (no-silent-fallback)."""
+
+
 def _stage_2_2_chunk_retries() -> int:
     """Max attempts per chunk (1 initial + N retries). Default 2 retries → 3 total attempts."""
     env = os.environ.get("LLM_CHUNK_RETRIES", "")
@@ -756,6 +772,7 @@ def _stage_2_2_analyze_chunk(
     template: str = "",
     max_retries: int = 2,
     verbose: bool = False,
+    existing_slugs: list | None = None,
 ) -> dict:
     """Analyze a single chunk.
 
@@ -765,12 +782,15 @@ def _stage_2_2_analyze_chunk(
     Returns analysis dict with keys: concepts_found, entities_found, claims,
     formulas, connections_to_existing_wiki, digest_updates, plus _chunk_index,
     _chunk_size, _attempts.
-    On transient LLM failure: returns dict with chunk_index + error key.
+    On failure (transient retries exhausted, or a non-retryable error):
+    raises RuntimeError — no error-dict sentinel (no-silent-fallback; the
+    cached prior chunks make a resume cheap).
     """
     prompt = _stage_2_2_build_prompt(
         chunk, chunk_idx, chunk_total, global_digest, file_path, config,
         template=template, accumulated_digest=accumulated_digest,
         overlap_before=overlap_before, heading_path=heading_path,
+        existing_slugs=existing_slugs,
     )
 
     for attempt in range(1 + max_retries):
@@ -782,6 +802,10 @@ def _stage_2_2_analyze_chunk(
             response, stop_reason = call_anthropic_protocol(
                 prompt, config, max_tokens=config.compute_max_tokens(8192))
             analysis = parse_yaml_block(response)
+            if not isinstance(analysis, dict):
+                raise _YamlNotDictError(
+                    f"chunk {chunk_idx+1}/{chunk_total}: parse_yaml_block returned "
+                    f"{type(analysis).__name__}, expected a YAML mapping (dict)")
             analysis["_chunk_index"] = chunk_idx + 1
             analysis["_chunk_size"] = len(chunk)
             analysis["_attempts"] = attempt + 1
@@ -796,7 +820,8 @@ def _stage_2_2_analyze_chunk(
             break  # success — exit retry loop
 
         except Exception as e:
-            if attempt < max_retries and _is_retryable_exception(e):
+            if attempt < max_retries and (
+                    _is_retryable_exception(e) or isinstance(e, _YamlNotDictError)):
                 _record_rate_limit()
                 wait = _retry_jitter(2.0, attempt)
                 err_label = type(e).__name__
@@ -805,10 +830,12 @@ def _stage_2_2_analyze_chunk(
                 time.sleep(wait)
                 continue
             print(f"  [chunk {chunk_idx+1}/{chunk_total}] analyze FAILED: {e}")
-            return {
-                "chunk_index": chunk_idx + 1, "error": str(e),
-                "chunk_text_length": len(chunk), "_attempts": 1 + max_retries,
-            }
+            # No error-dict sentinel: a failed chunk analysis must PAUSE the
+            # ingest (no-silent-fallback). Prior chunks are cached, so a
+            # resume after the transient clears is cheap.
+            raise RuntimeError(
+                f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total} analysis failed "
+                f"after {attempt+1} attempt(s): {type(e).__name__}: {e}") from e
 
     return analysis
 

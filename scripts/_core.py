@@ -106,12 +106,6 @@ def record_rate_limit() -> None:
         _RATE_LIMIT_HIT_AT = time.time()
 
 
-def rate_limit_cooldown_remaining() -> float:
-    with _RLOCK:
-        elapsed = time.time() - _RATE_LIMIT_HIT_AT
-        return max(0.0, 60.0 - elapsed)
-
-
 class ConversationPending(BaseException):
     """Raised when a prompt is written to disk and awaits the calling agent.
 
@@ -338,14 +332,10 @@ class Config:
     cache_path: Path
     progress_dir: Path
     extract_tmp_dir: Path
-    llm_base_url: str
     llm_model: str
-    llm_api_key: str
-    llm_protocol: str
     caption_api_key: str
     caption_base_url: str
     caption_model: str
-    chunk_size: int
     chunk_overlap: int
     source_budget: int
     target_chars: int
@@ -383,10 +373,7 @@ class Config:
             cache_path=runtime_dir / "ingest-cache.json",
             progress_dir=runtime_dir / "ingest-progress",
             extract_tmp_dir=runtime_dir / "extract-tmp",
-            llm_base_url=provider["base_url"],
             llm_model=provider["model"],
-            llm_api_key=provider["api_key"],
-            llm_protocol=provider.get("protocol", "anthropic"),
             caption_api_key=caption["api_key"],
             caption_base_url=caption["base_url"],
             caption_model=caption["model"],
@@ -395,7 +382,6 @@ class Config:
             caption_fallback_base_url=(caption.get("fallback") or {}).get("base_url", ""),
             caption_fallback_model=(caption.get("fallback") or {}).get("model", ""),
             caption_fallback_protocol=(caption.get("fallback") or {}).get("protocol", ""),
-            chunk_size=300_000,
             chunk_overlap=3_000,
             source_budget=source_budget,
             target_chars=target_chars,
@@ -423,28 +409,6 @@ class Config:
         print(f"[config] probed context={context_size:,} → "
               f"source_budget={self.source_budget:,} target_tokens={self.target_tokens:,} "
               f"target_chars≤{self.target_chars:,}")
-
-    def compute_source_budget(self, stable_length: int = 50_000) -> int:
-        """NashSU-aligned: per-source budget from context window."""
-        cs = self.context_size or _CONTEXT_SIZE_DEFAULT
-        response_reserve = int(cs * _RESPONSE_RESERVE_FRAC)
-        stable_reserve = min(int(cs * _STABLE_RESERVE_FRAC), max(_STABLE_RESERVE_MIN, stable_length))
-        instruction_reserve = max(_INSTRUCTION_RESERVE_MIN, int(cs * _INSTRUCTION_RESERVE_FRAC))
-        available = cs - response_reserve - stable_reserve - instruction_reserve
-        upper = min(_SOURCE_BUDGET_MAX, max(_SOURCE_BUDGET_MIN, int(cs * _SOURCE_BUDGET_FRAC)))
-        return max(_SOURCE_BUDGET_MIN, min(available, upper))
-
-    def compute_target_tokens(self, stable_length: int = 50_000) -> int:
-        """Per-source chunk token budget (token-first; scales with context)."""
-        sb = self.compute_source_budget(stable_length)
-        cs = self.context_size or _CONTEXT_SIZE_DEFAULT
-        return _compute_chunk_targets(sb, cs)[0]
-
-    def compute_target_chars(self, stable_length: int = 50_000) -> int:
-        """Per-source hard char ceiling derived from the token budget."""
-        sb = self.compute_source_budget(stable_length)
-        cs = self.context_size or _CONTEXT_SIZE_DEFAULT
-        return _compute_chunk_targets(sb, cs)[1]
 
     def compute_max_tokens(self, base_tokens: int = 16384) -> int:
         env_override = os.environ.get("LLM_MAX_TOKENS")
@@ -566,9 +530,7 @@ def load_cache(config: Config) -> dict:
 
 def save_cache(config: Config, cache: dict) -> None:
     config.cache_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = config.cache_path.with_suffix(config.cache_path.suffix + ".tmp")
-    tmp.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.rename(config.cache_path)
+    atomic_write(config.cache_path, json.dumps(cache, ensure_ascii=False, indent=2))
 
 
 # ── Checkpoint / Resume ──
@@ -585,7 +547,15 @@ def progress_path(config: Config, source_hash: str) -> Path:
 def load_progress(config: Config, source_hash: str) -> dict | None:
     pp = progress_path(config, source_hash)
     if pp.exists():
-        return json.loads(pp.read_text(encoding="utf-8"))
+        try:
+            return json.loads(pp.read_text(encoding="utf-8"))
+        except Exception as e:
+            # Corrupted artifact cache is not a silent reset — warn loudly so
+            # the user knows why artifacts are being re-derived (policy
+            # 2026-06-24; mirrors load_cache / load_stages).
+            print(f"⚠️  [progress] {pp} corrupted ({type(e).__name__}: {e}) "
+                  f"— discarding artifact cache, will re-derive.")
+            return None
     return None
 
 
@@ -643,9 +613,37 @@ def save_progress(config: Config, source_hash: str, data: dict) -> None:
                 existing = {}
         existing.update(data)
         existing["_updated_at"] = int(time.time() * 1000)
-        tmp = pp.with_suffix(".tmp")
-        tmp.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.rename(pp)
+        atomic_write(pp, json.dumps(existing, ensure_ascii=False, indent=2))
+
+
+def delete_progress_keys(config: Config, source_hash: str, keys: list[str]) -> None:
+    """Remove artifact keys from the progress store (true deletion).
+
+    ``save_progress`` is merge-write by design (it only ever ADDS/overwrites the
+    keys it is given), so it cannot express "this artifact no longer exists" —
+    e.g. invalidating a cached ``chunk_analyses`` so a stage re-derives it.
+    This is the sanctioned way to delete: under the same per-source lock
+    discipline as ``save_progress`` (``_progress_lock``), load the current
+    artifacts, ``del`` each requested key (missing keys are ignored), and
+    atomically write the result back.
+
+    A corrupted progress file gets the standard treatment (loud warning +
+    reset to empty — mirrors ``save_progress``); a missing file is a no-op.
+    """
+    with _progress_lock(config, source_hash):
+        pp = progress_path(config, source_hash)
+        if not pp.exists():
+            return
+        try:
+            existing = json.loads(pp.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"⚠️  [progress] {pp} corrupted ({type(e).__name__}: {e}) "
+                  f"— discarding artifact cache, will rebuild from empty.")
+            existing = {}
+        for k in keys:
+            existing.pop(k, None)
+        existing["_updated_at"] = int(time.time() * 1000)
+        atomic_write(pp, json.dumps(existing, ensure_ascii=False, indent=2))
 
 
 def clear_progress(config: Config, source_hash: str) -> None:
@@ -688,9 +686,7 @@ def mark_stage_done(config: Config, source_hash: str, stage: str,
         if payload:
             stages[f"{stage}__payload"] = payload
         sp = stages_path(config, source_hash)
-        tmp = sp.with_suffix(".tmp")
-        tmp.write_text(json.dumps(stages, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.rename(sp)
+        atomic_write(sp, json.dumps(stages, ensure_ascii=False, indent=2))
 
 
 def get_stage_payload(config: Config, source_hash: str, stage: str) -> dict:
@@ -713,9 +709,7 @@ def unmark_stage_done(config: Config, source_hash: str, stage: str) -> None:
         stages.pop(stage, None)
         stages.pop(f"{stage}__payload", None)
         sp = stages_path(config, source_hash)
-        tmp = sp.with_suffix(".tmp")
-        tmp.write_text(json.dumps(stages, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.rename(sp)
+        atomic_write(sp, json.dumps(stages, ensure_ascii=False, indent=2))
 
 
 def is_stage_done(config: Config, source_hash: str, stage: str) -> bool:
@@ -1110,8 +1104,9 @@ def parse_yaml_block(response: str) -> dict:
         return yaml.safe_load(yaml_text) or {}
     except ImportError:
         return parse_simple_yaml(yaml_text)
-    except Exception:
-        print(f"[parse] yaml.safe_load failed — falling back to simple parser")
+    except Exception as e:
+        print(f"[parse] yaml.safe_load failed ({type(e).__name__}: {e}) "
+              f"— falling back to simple parser")
         return parse_simple_yaml(yaml_text)
 
 

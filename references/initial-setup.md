@@ -158,25 +158,16 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 
 ## Performance budget
 
-For a typical 300-page book with full text layer:
+Current-magnitude expectations (实测口径见 `references/batch-parallel-prefetch.md` 的批量数据)：
 
 | Stage | Expected time |
 |---|---|
 | Hash check | <1s |
-| minerU text extract (API path, text-layer PDF) | minutes, not seconds — dominated by local minerU server startup/model load, not page count |
-| LLM Analysis call (conversation mode) | 30-90s (current model, per-chunk) |
-| LLM Generation call (conversation mode) | 60-180s (this is the big one) |
+| minerU text extract (API path, text-layer PDF) | minutes — dominated by local minerU server startup/model load, not page count |
+| minerU VLM OCR (scanned, ~300p) | 30-60 min (per [来源: mineru-document-parsing] skill gotcha #21: 1.2B VLM is slow on 16GB machines) |
+| LLM stages (2.2 chunk analysis + 2.4 generation + spine, conversation mode) | tens of minutes — per-handoff subagent round-trips dominate; a long multi-chunk book's spine can reach ~2h cumulative LLM latency (RadarWiki 实测 125 min, see `batch-parallel-prefetch.md`) |
 | File writes | <1s |
-| **Total** | ~2-4 min per book |
-
-For a scanned 300-page book:
-
-| Stage | Expected time |
-|---|---|
-| Hash check | <1s |
-| minerU VLM OCR | 30-60 min (per [来源: mineru-document-parsing] skill gotcha #21: 1.2B VLM is slow on 16GB machines) |
-| LLM Analysis + Generation | 2-4 min |
-| **Total** | ~30-65 min per book |
+| **Total** | ~10-30+ min per book typical; long or scanned books run to multiple hours |
 
 Plan accordingly. The cron at 02:00 daily will only have time to process 1-2 scanned books per night.
 
@@ -185,5 +176,5 @@ Plan accordingly. The cron at 02:00 daily will only have time to process 1-2 sca
 ## See also
 
 - `SKILL.md` — End-to-end pipeline reference
-- `references/ingest-stages-mandatory.md` — ingest stage checklist (16 numbered stages in 4 Phases (0-3))
+- `references/ingest-stages-mandatory.md` — ingest stage checklist (15 numbered stages in 4 Phases (0-3))
 - `references/cron-installation.md` — How to install the cron job, with crontab snippets

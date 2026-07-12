@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -204,20 +205,39 @@ def _build_detector_user_message(summaries: list[EntitySummary]) -> str:
     )
 
 
+def _warn_unparseable(reason: str, raw: str) -> None:
+    """Loud stderr note on an unparseable detector answer (2026-07-12). The
+    answer is already persisted by the conversation cache, so silently
+    returning [] would permanently skip these candidates: every re-invoke
+    replays the same cached bad answer. Tell the operator how to force a
+    re-answer instead of leaving a silent dedup gap."""
+    preview = raw.strip().replace("\n", " ")[:160]
+    print(f"[dedup] WARNING: detector answer unparseable ({reason}); treating "
+          f"as 'no duplicates' for this batch. Answer starts: {preview!r}. "
+          f"NOTE: the bad answer is cached by the conversation cache — delete "
+          f"the matching answer file under <runtime>/conversation/dedup/ and "
+          f"re-invoke to get a fresh answer.", file=sys.stderr)
+
+
 def parse_detector_response(raw: str) -> list[dict]:
     """Tolerant JSON extraction: strips code fences / preamble, pulls the first
-    balanced {...} block. Returns [] on any failure."""
+    balanced {...} block. Returns [] on any failure (with a stderr warning —
+    see _warn_unparseable)."""
     json_text = _extract_first_json_object(raw)
     if not json_text:
+        _warn_unparseable("no JSON object found", raw)
         return []
     try:
         parsed = json.loads(json_text)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as ex:
+        _warn_unparseable(f"invalid JSON: {ex}", raw)
         return []
     if not isinstance(parsed, dict):
+        _warn_unparseable("top level is not an object", raw)
         return []
     groups_raw = parsed.get("groups")
     if not isinstance(groups_raw, list):
+        _warn_unparseable("missing/invalid 'groups' array", raw)
         return []
 
     out: list[dict] = []

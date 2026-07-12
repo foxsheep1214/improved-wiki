@@ -380,3 +380,25 @@ def test_build_writes_outputs(wiki, tmp_path):
     assert "surprisingConnections" in data
     assert "gaps" in data
     assert (wiki_dir / "REVIEW" / "knowledge-gaps.md").exists()
+
+
+# --- write_clusters: stale cluster files cleared (2026-07-12) ----------------
+
+
+def test_write_clusters_removes_stale_cluster_files(wiki, tmp_path):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "a", body_links=["b"])
+    _write_page(wiki_dir, "b", body_links=["a"])
+    pages, lg, g = _build(root)
+    communities = graph.detect_communities(g, lg)
+    clusters_dir = wiki_dir / "clusters"
+    clusters_dir.mkdir()
+    # A leftover from a previous, larger run — and a non-cluster file that
+    # must be preserved (only cluster-NNN.md files are cleared).
+    (clusters_dir / "cluster-099.md").write_text("stale\n", encoding="utf-8")
+    (clusters_dir / "notes.md").write_text("keep me\n", encoding="utf-8")
+    graph.write_clusters(clusters_dir, communities, pages)
+    assert not (clusters_dir / "cluster-099.md").exists(), "stale cluster page must be removed"
+    assert (clusters_dir / "notes.md").exists(), "non-cluster files must survive"
+    written = sorted(p.name for p in clusters_dir.glob("cluster-*.md"))
+    assert len(written) == len([c for c in communities if len(c.nodes) >= 2])

@@ -41,8 +41,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -53,54 +53,18 @@ from pathlib import Path
 from _core import (
     Config, ConversationPending, PrepareStopAfter,
     set_current_file as _set_current_file,
-    get_current_file as _get_current_file,
-    file_tag as _file_tag,
-    stage_begin as _stage_begin,
-    stage_end as _stage_end,
-    heartbeat as _heartbeat,
-    llm_call_done as _llm_call_done,
-    record_rate_limit as _record_rate_limit,
-    rate_limit_cooldown_remaining as _rate_limit_cooldown_remaining,
-    load_provider_config as _load_provider_config,
-    load_caption_provider as _load_caption_provider,
-    str_distance as _str_distance,
-    detect_template_type, load_template,
-    file_sha256, load_cache, save_cache,
-    progress_path, load_progress, save_progress, clear_progress,
-    load_stages, mark_stage_done, is_stage_done, get_stage_payload,
+    detect_template_type,
+    file_sha256,
+    mark_stage_done, is_stage_done,
     ProjectLock,
     BATCH_MAX_CONCURRENT,
-    list_existing_slugs,
-    parse_yaml_block, parse_simple_yaml, parse_file_blocks,
-    FOLDER_TO_TEMPLATE,
-    is_safe_ingest_path,
 )
-from _stage_1_extract import (
-    stage_1_1_extract_text,
-    stage_1_2_extract_images,
-    _stage_1_2_extract_from_mineru,
-    stage_1_3_caption_images,
-    _stage_1_1_detect_pdf_type,
-    CAPTION_MAX_WORKERS,
-)
+from _paths import atomic_write
+from _stage_1_extract import _stage_1_1_detect_pdf_type
 from _stage_1_1_scanned import MINERU_CHUNK_SIZE
-from _stage_2_analyze import (
-    _stage_2_2_analyze_chunk,
-    _stage_2_2_chunk_retries,
-    _stage_2_2_resolve_chunk_heading_path,
-)
-from _stage_2_4_generation import (
-    _stage_2_4_build_prompt,
-    stage_2_4_generate_chunk,
-    _stage_2_4_extract_names,
-    _stage_2_4_per_concept_fallback,
-)
 from _source_filter import is_sensitive_config_source_file
 from _stage_3_write import (
-    stage_3_1_write_wiki_file, stage_3_5_aggregate_repair,
-    _stage_3_1_canonicalize_sources_field, _stage_3_1_stamp_frontmatter_dates,
-    _stage_3_1_auto_correct_wiki_path, _stage_3_1_contains_cjk, _stage_3_1_make_cjk_slug,
-    _stage_3_1_backup_existing_page,
+    _stage_3_1_auto_correct_wiki_path,  # noqa: F401  (referenced in _finalize_book docstring)
 )
 from _stage_3_7_embed import stage_3_7_embed_new_pages
 from _watch import ingest_watch
@@ -274,17 +238,25 @@ def _bg_state_path(config: Config) -> Path:
 
 
 def _load_bg_state(config: Config) -> dict:
+    p = _bg_state_path(config)
+    if not p.exists():
+        return {}
     try:
-        return json.loads(_bg_state_path(config).read_text(encoding="utf-8"))
-    except Exception:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        # Corrupted state is not a silent reset — warn loudly so a re-launched
+        # bg extract (stale pid tracking lost) is explainable (policy 2026-06-24).
+        print(f"⚠️  [batch] {p} corrupted ({type(e).__name__}: {e}) "
+              f"— resetting bg-extract state.", flush=True)
         return {}
 
 
 def _save_bg_state(config: Config, state: dict) -> None:
     try:
-        _bg_state_path(config).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    except OSError:
-        pass
+        atomic_write(_bg_state_path(config), json.dumps(state, ensure_ascii=False))
+    except OSError as e:
+        print(f"⚠️  [batch] failed to write bg-extract state {_bg_state_path(config)} "
+              f"({type(e).__name__}: {e}) — bg pid tracking may be stale on resume.", flush=True)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -317,22 +289,37 @@ def _launch_bg_extract(file: Path, config: Config, state: dict) -> None:
            "--stop-after-stage", "0", "--no-project-lock", str(file)]
     try:
         log = open(log_path, "w", encoding="utf-8")
-    except OSError:
+    except OSError as e:
+        print(f"⚠️  [batch] could not open bg-extract log {log_path} "
+              f"({type(e).__name__}: {e}) — bg output discarded (DEVNULL).", flush=True)
         log = subprocess.DEVNULL
     proc = subprocess.Popen(cmd, cwd=str(config.wiki_root),
                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    if log is not subprocess.DEVNULL:
+        log.close()  # the child holds its own copy of the fd
     state[h] = {"pid": proc.pid, "file": file.name}
     _save_bg_state(config, state)
     print(f"[batch] bg extract launched (pid {proc.pid}) — {file.name}", flush=True)
 
 
-def _wait_extract_done(config: Config, h: str, timeout: int = 7200) -> bool:
+def _wait_extract_done(config: Config, h: str, bg_pid: int = 0,
+                       timeout: int = 7200) -> bool:
     """Block until Phase 0/1 (stage_1_3_done) is cached for this book. The bg
-    subprocess does the extraction; this just polls the stage marker."""
+    subprocess does the extraction; this just polls the stage marker.
+
+    If ``bg_pid`` is given and that process dies without setting the marker,
+    return False immediately (after one final marker check, in case it finished
+    right before exiting) instead of burning the full timeout."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if is_stage_done(config, h, "stage_1_3_done"):
             return True
+        if bg_pid and not _pid_alive(bg_pid):
+            done = is_stage_done(config, h, "stage_1_3_done")
+            if not done:
+                print(f"[batch] bg extract (pid {bg_pid}) died before completing "
+                      f"Phase 0/1", flush=True)
+            return done
         time.sleep(5)
     return is_stage_done(config, h, "stage_1_3_done")
 
@@ -403,8 +390,19 @@ def batch_ingest(
             # (overlapped with the prior book's spine).
             if not is_stage_done(config, h, "stage_1_3_done"):
                 print(f"[batch] waiting for bg extract (Phase 0/1) — {f.name}", flush=True)
-                if not _wait_extract_done(config, h):
-                    print(f"[batch] bg extract timed out — falling back to sync — {f.name}", flush=True)
+                bg_pid = bg_state.get(h, {}).get("pid", 0)
+                if not _wait_extract_done(config, h, bg_pid=bg_pid):
+                    # Before falling back to a synchronous extraction, kill a
+                    # still-alive (timed-out) bg process so the two don't race
+                    # on the extract flock/artifacts.
+                    if bg_pid and _pid_alive(bg_pid):
+                        print(f"[batch] killing timed-out bg extract (pid {bg_pid}) "
+                              f"before sync fallback — {f.name}", flush=True)
+                        try:
+                            os.kill(bg_pid, signal.SIGTERM)
+                        except OSError as e:
+                            print(f"⚠️  [batch] could not kill pid {bg_pid}: {e}", flush=True)
+                    print(f"[batch] bg extract unavailable — falling back to sync — {f.name}", flush=True)
 
             # Pipeline: this book's Phase 0/1 is done — launch the NEXT book's bg
             # extract now so it runs (flock-serialized, in spine order) during this
@@ -425,9 +423,21 @@ def batch_ingest(
                 raise  # LLM handoff in 2.1/2.2 — agent answers + re-invokes
 
             # Spine: 2.3+ (Phase 0/1/2.1/2.2 cached). Wiki-dependent, strictly serial.
-            prepared = _do_prepare(f, config, template_override, verbose)
+            try:
+                prepared = _do_prepare(f, config, template_override, verbose)
+            except PrepareStopAfter as stop:
+                # --stop-after-stage matched a Stage-0..2 boundary for THIS book.
+                # Without this catch the (BaseException) signal escaped the batch
+                # loop and crashed the whole run at top level; convert it to a
+                # clean per-book stop so the remaining books still process.
+                print(f"[batch] {i}/{total_books} stopped after stage {stop.stage} "
+                      f"(--stop-after-stage) — {f.name}", flush=True)
+                results.append({"status": "skipped", "raw_file": str(f),
+                                "stopped_after": stop.stage})
+                continue
             if prepared is None:
                 print(f"[batch] {i}/{total_books} skipped (already complete) — {f.name}", flush=True)
+                results.append({"status": "skipped", "raw_file": str(f)})
                 continue
             try:
                 result = _do_write(prepared, verbose=verbose)
@@ -437,6 +447,9 @@ def batch_ingest(
                 print(f"[batch] {i}/{total_books} FAILED for {f.name}: {e}", flush=True)
                 traceback.print_exc()
                 continue
+            # _do_write's result dict has no raw_file — stamp it so the --watch
+            # queue bookkeeping can pair results back to queue entries.
+            result["raw_file"] = str(f)
             results.append(result)
             # Per-book finalization (embeddings + completion marker).
             if result.get("status") == "ok":
@@ -451,7 +464,9 @@ def batch_ingest(
     finally:
         lock.release()
 
-    ok = sum(1 for r in results if r.get("status") == "ok")
+    # "skipped" (already complete / clean --stop-after-stage) counts as success,
+    # matching the single-book path's `status in ("ok", "skipped")` exit logic.
+    ok = sum(1 for r in results if r.get("status") in ("ok", "skipped"))
     print(f"\n{'='*60}")
     print(f"Batch complete: {ok}/{len(results)} books processed successfully")
     print(f"{'='*60}")
@@ -617,6 +632,22 @@ def main() -> int:
             return 1
         raw_files.append(rf)
 
+    if args.no_project_lock:
+        # Detached bg-extract subprocess (Phase 0/1 only): a probe-cache miss
+        # here would write a conversation handoff that no agent ever answers —
+        # the process is detached (start_new_session), so exit 101 is invisible
+        # and the prompt file just rots. Fail fast with a non-zero exit instead;
+        # the batch coordinator's dead-process detection (_wait_extract_done)
+        # then falls back to a synchronous extraction in the foreground process,
+        # where the probe handoff CAN be answered.
+        from _context_probe import load_cached
+        if load_cached(config) is None:
+            print("ERROR: context-probe cache miss in a --no-project-lock bg extract "
+                  "subprocess — refusing to emit an unanswerable conversation handoff "
+                  "from a detached process. The coordinating ingest will extract "
+                  "synchronously instead.", file=sys.stderr)
+            return 1
+
     try:
         _probe_and_apply_context(config)
     except ConversationPending:
@@ -636,7 +667,7 @@ def main() -> int:
             # The agent answers it and re-invokes to resume. Same contract as the
             # single-book path below.
             return 101
-        ok = sum(1 for r in results if r.get("status") == "ok")
+        ok = sum(1 for r in results if r.get("status") in ("ok", "skipped"))
         return 0 if ok == len(results) else 1
 
     # Single-book mode
@@ -687,11 +718,13 @@ def main() -> int:
         print(f"\nResult: {result}")
         return 0 if result["status"] in ("ok", "skipped") else 1
     except ConversationPending:
+        # Release + exit 101 — same contract as batch_ingest's try/finally: the
+        # flock would drop on process exit anyway, and the re-invoke after the
+        # handoff re-acquires it cleanly.
         return 101
-    except Exception:
-        lock.release()
-        raise
-    else:
+    finally:
+        # The old `try/except/else` shape leaked the lock on the normal path:
+        # the try block always returns, so `else: lock.release()` never ran.
         lock.release()
 
 

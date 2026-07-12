@@ -21,6 +21,7 @@ from pathlib import Path
 
 from _core import Config
 from _llm_api import conversation_handoff, set_conversation_router
+from _paths import atomic_write
 
 
 def call_anthropic_protocol(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
@@ -123,15 +124,18 @@ def _load_task_manifest(config: Config) -> dict:
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            # Corrupted manifest is not a silent reset — warn loudly so the
+            # user knows why pending-task reporting restarted (policy 2026-06-24).
+            print(f"⚠️  [conversation] {p} corrupted ({type(e).__name__}: {e}) "
+                  f"— resetting task manifest.", flush=True)
     return {"pending": [], "completed": []}
 
 
 def _save_task_manifest(config: Config, manifest: dict) -> None:
     p = _task_manifest_path(config)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write(p, json.dumps(manifest, ensure_ascii=False, indent=2))
 
 
 def _mark_task_pending(config: Config, slug: str) -> None:

@@ -43,6 +43,8 @@ from _lint_suggest import (  # noqa: E402
     run_structural_lint,
     ANCHOR_FILES as _ANCHOR_FILES,
     AGGREGATE_FILES as _AGGREGATE_FILES,
+    STATE_FILES as _STATE_FILES,
+    BROKEN_LINK_AUTO_REWRITE_MIN_SCORE,
 )
 from _lint_fixes import (  # noqa: E402
     append_wikilink,
@@ -51,7 +53,7 @@ from _lint_fixes import (  # noqa: E402
     stub_relative_path_from_broken_target,
     build_deleted_keys,
     clean_index_listing,
-    extract_frontmatter_title,
+    extract_title_anywhere,
     normalize_wiki_ref_key,
     strip_deleted_wikilinks,
 )
@@ -64,33 +66,20 @@ from _paths import iter_wiki_pages, atomic_write as _atomic_write  # noqa: E402
 # Scan universe = NashSU {index, log} (overview/schema stay valid link targets,
 # their outlinks count). The engine exempts aggregates from findings, so the
 # fixer never gets an overview/schema finding to apply; _AGGREGATE_FILES is the
-# extra write-guard used on the --from-cache path below. + state + lint/REVIEW/media.
-_STATE_FILES = {
-    "lint-cache.json", "ingest-cache.json", "ingest-queue.json",
-    "review.json", "review-suggestions.json", "embed-cache.json",
-    "lint-semantic.json", "dedup-report.json",
-}
+# extra write-guard used on the --from-cache path below. + state (shared
+# _lint_suggest.STATE_FILES) + lint/REVIEW/media.
 def _collect_pages(wiki_dir: Path) -> list[tuple[str, str]]:
     return list(iter_wiki_pages(
         wiki_dir, anchor_files=_ANCHOR_FILES, state_files=_STATE_FILES,
     ))
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.replace(path)
-
-
-# Headless auto-rewrite gate (2026-07-10, user-approved lint hardening): only
-# exact (1.0) / same-basename (0.96) tier suggestions are rewritten without a
-# human. Contains-tier (0.82) and fuzzy-Levenshtein suggestions go to
-# REVIEW/suggestion instead — string-similar is not meaning-similar, and a
-# headless batch multiplies one bad suggestion (real incident class: the
-# substring 脉冲压缩 auto-linked across 10+ pages to the narrower
-# 脉冲压缩与MTI组合 page). NashSU has no such gate because its Fix is
-# human-clicked per item; this gate restores that judgment for the batch path.
-BROKEN_LINK_AUTO_REWRITE_MIN_SCORE = 0.9
+# BROKEN_LINK_AUTO_REWRITE_MIN_SCORE (imported from _lint_suggest, 2026-07-12):
+# the headless auto-rewrite gate — only exact/same-basename tier suggestions
+# are rewritten without a human; contains-tier and fuzzy matches go to
+# REVIEW/suggestion instead (real incident class: the substring 脉冲压缩
+# auto-linked across 10+ pages to the narrower 脉冲压缩与MTI组合 page).
+# NashSU has no such gate because its Fix is human-clicked per item.
 
 
 def plan_fixes(findings: list[dict]) -> list[dict]:
@@ -292,7 +281,7 @@ def cascade_delete_orphans(
             continue
         title = ""
         try:
-            title = extract_frontmatter_title(full.read_text(encoding="utf-8"))
+            title = extract_title_anywhere(full.read_text(encoding="utf-8"))
         except OSError:
             pass
         slug = full.stem  # getFileStem equivalent

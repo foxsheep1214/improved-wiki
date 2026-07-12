@@ -117,28 +117,6 @@ def _stage_2_6_main_arguments_count(response: str) -> int:
     return len(re.findall(r"^(?:-|\*|\d+\.)\s+\S", section, re.MULTILINE))
 
 
-# Evidence-anchor quality check (C1, 2026-07-08): verify that Main Arguments
-# claims cite SPECIFIC source-text anchors (§X.X, 式(N), Figure N, Table N),
-# not just generic chapter references ("Ch.7"). Generic evidence like "Ch.3"
-# or "this section" is a sign the agent didn't read the source text deeply.
-_STAGE_2_6_EVIDENCE_ANCHOR_RE = re.compile(
-    r"(?:§|Section\s|式\s*\(|Eq\.?\s*\(|Equation\s|Figure\s|Fig\.?\s|图\s|Table\s|表\s)"
-    r"[\d.\-]+",
-    re.IGNORECASE,
-)
-
-
-def _stage_2_6_validate_evidence_quality(response: str) -> None:
-    """Diagnostic only (2026-07-08): was a hard gate checking that Main
-    Arguments claims have specific evidence anchors. Removed as a hard gate
-    because the root cause (context-accumulation-driven attention drift) is
-    now prevented structurally by per-chunk subagent isolation — see
-    references/delegate-mode.md L4 revision. Kept as a silent no-op so
-    existing call sites don't break; the prompt still requests evidence
-    anchors as guidance."""
-    return
-
-
 def _stage_2_6_validate_main_arguments(response: str, outline) -> None:
     """Post-generation stage validator (A9): warn — never raise — when the
     claim ledger has fewer entries than technical chapters (coverage target:
@@ -298,7 +276,6 @@ def stage_2_6_source_page(
         digest_str = digest_str[:24000] + "\n... (truncated)"
 
     outline = global_digest.get("outline", [])
-    key_claims = global_digest.get("key_claims", [])
     key_concepts = global_digest.get("key_concepts", [])
     key_entities = global_digest.get("key_entities", [])
 
@@ -465,7 +442,7 @@ Which wiki pages should be created or updated based on this source? What should 
         f"# Linkable pages\n{linkable_str}\n"
     )
 
-    # P1 parity with Stage 2.4/2.7/2.9 (2026-06-27): ground the summary/TOC/
+    # P1 parity with Stage 2.4/2.9 (2026-06-27): ground the summary/TOC/
     # takeaways in the raw source (trimmed to budget) so the page uses the source's
     # own wording, formulas, numbers, and chapter structure — not training memory.
     if source_context.strip():
@@ -625,7 +602,6 @@ venue: {venue_yaml}
         related_fallback=(_gen_c + _gen_e),
     )
     _stage_2_6_validate_main_arguments(response, outline)
-    _stage_2_6_validate_evidence_quality(response)
     _stage_2_6_validate_required_sections(response, source_kind)
     if verbose:
         print(f"[stage 2.6] Source page generated ({len(response):,} chars, stop={stop_reason})")

@@ -76,7 +76,9 @@ def _extract_pdf_snippet(pdf_path: Path, query: str, max_chars: int = 300) -> st
                 snippet = text[start:end].replace("\n", " ").strip()
                 return snippet[:max_chars]
         return "(PDF content match — open file to view context)"
-    except (subprocess.TimeoutExpired, Exception):
+    except Exception as e:
+        print(f"[search-local] pdftotext snippet failed for {pdf_path.name} "
+              f"({type(e).__name__}) — returning generic snippet", file=sys.stderr)
         return "(PDF content match — open file to view context)"
 
 
@@ -109,7 +111,9 @@ def _search_raw_mdfind(raw_dir: Path, query: str, top: int) -> list[dict]:
                 "path": str(path),
             })
         return out
-    except (subprocess.TimeoutExpired, Exception):
+    except Exception as e:
+        print(f"[search-local] mdfind failed ({type(e).__name__}: {e}) — "
+              f"falling back to ripgrep sidecar search", file=sys.stderr)
         return []
 
 
@@ -144,7 +148,10 @@ def _search_raw_ripgrep(raw_dir: Path, query: str, top: int) -> list[dict]:
                 "path": str(path),
             })
         return out
-    except (subprocess.TimeoutExpired, Exception):
+    except Exception as e:
+        print(f"[search-local] ripgrep sidecar search failed "
+              f"({type(e).__name__}: {e}) — raw/ results unavailable",
+              file=sys.stderr)
         return []
 
 

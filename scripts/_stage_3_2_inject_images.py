@@ -42,6 +42,14 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
         images = m.get("images", [])
         # Filter out legacy page-render entries (pre-2026-06-19 ingests)
         images = [i for i in images if i.get("source") != "page-render"]
+        # Manifest schema guard: every entry must carry page + filename (the
+        # grouping/caption code below indexes them directly). A malformed
+        # manifest fails loud with its path instead of a bare KeyError.
+        for img in images:
+            if "page" not in img or "filename" not in img:
+                raise RuntimeError(
+                    f"[stage 3.2] malformed image entry in {source_path_to_read}: "
+                    f"missing 'page'/'filename' — entry: {img}")
         if images:
             is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
             section = f"## Embedded Images\n\n"

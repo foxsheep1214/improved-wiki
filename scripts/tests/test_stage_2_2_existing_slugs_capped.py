@@ -32,9 +32,9 @@ def _cfg(tmp: Path) -> _core.Config:
         wiki_root=tmp, raw_root=tmp / "raw", wiki_dir=tmp / "wiki",
         runtime_dir=tmp / "rt", cache_path=tmp / "rt" / "c.json",
         progress_dir=tmp / "rt" / "p", extract_tmp_dir=tmp / "rt" / "e",
-        llm_base_url="x", llm_model="m", llm_api_key="", llm_protocol="anthropic",
+        llm_model="m",
         caption_api_key="", caption_base_url="x", caption_model="c",
-        chunk_size=60000, chunk_overlap=3000, source_budget=100000,
+        chunk_overlap=3000, source_budget=100000,
         target_chars=256000, target_tokens=192000, max_tokens=8192,
         conversation_prefix="ab12cd34",
     )

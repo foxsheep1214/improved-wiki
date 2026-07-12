@@ -37,6 +37,8 @@ __all__ = [
     "extract_wikilinks",
     "ANCHOR_FILES",
     "AGGREGATE_FILES",
+    "STATE_FILES",
+    "BROKEN_LINK_AUTO_REWRITE_MIN_SCORE",
 ]
 
 # Link-target UNIVERSE exclusion — NashSU runStructuralLint parity (lint.ts:161
@@ -55,6 +57,28 @@ ANCHOR_FILES = {"index.md", "log.md"}
 # literals in sync. (schema.md now lives at the project root like NashSU, so
 # wiki/ scans won't see it; it stays listed here as a defensive/legacy guard.)
 AGGREGATE_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
+
+# Runtime/state filenames that must never be scanned as wiki pages. Shared
+# constant (2026-07-12): wiki-lint-fix.py, validate_ingest.py,
+# wiki-lint-semantic.py and wiki-lint.sh's embedded scan each carried a
+# drifted local copy — this is the union of all of them. Extra names are
+# harmless for any one consumer (skipping a state file that could never
+# appear is a no-op), missing names are not.
+STATE_FILES = {
+    "lint-cache.json", "lint.json", "lint-semantic.json",
+    "ingest-cache.json", "ingest-queue.json", "ingest-lock",
+    "lint-lock", "lint.lock",
+    "review.json", "review-suggestions.json",
+    "embed-cache.json", "dedup-report.json",
+}
+
+# Headless auto-rewrite gate (2026-07-10, user-approved lint hardening): only
+# exact (1.0) / same-basename (0.96) tier suggestions may be rewritten without
+# a human — contains-tier (0.82) and fuzzy-Levenshtein suggestions go to
+# review instead (string-similar is not meaning-similar; a headless batch
+# multiplies one bad suggestion). Shared here (2026-07-12) so wiki-lint-fix.py
+# and enrich_wikilinks_retroactive.py apply the SAME threshold.
+BROKEN_LINK_AUTO_REWRITE_MIN_SCORE = 0.9
 
 BROKEN_LINK_SUGGESTION_MIN_SCORE = 0.74
 RELATED_PAGE_SUGGESTION_MIN_SCORE = 0.08

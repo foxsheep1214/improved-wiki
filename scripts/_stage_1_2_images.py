@@ -179,7 +179,6 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
 
     # Save images and build metadata
     saved: list[dict] = []
-    img_counter: dict[int, int] = {}
 
     for page_num in sorted(page_figs):
         for img_name in page_figs[page_num]:
@@ -207,7 +206,8 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
             if not out_path.exists():
                 try:
                     out_path.write_bytes(raw_bytes)
-                except Exception:
+                except Exception as e:
+                    print(f"[mineru-figures] failed to save {filename}: {e} — skipped")
                     continue
 
             # Get dimensions if possible; drop true noise (1x1/2x2 artifacts).
@@ -266,7 +266,6 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
     Uses Python stdlib zipfile — no external deps needed.
     """
     import zipfile as _zf
-    import io as _io
 
     fmt = raw_file.suffix.lower().lstrip(".")
     print(f"[stage 1.2] Extracting embedded images from {fmt.upper()}...")
@@ -300,7 +299,6 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
                 # Determine page context if available (from slide/word numbering)
                 # PPTX: ppt/slides/slideN.xml → N; DOCX: no direct page mapping
                 page = 0
-                rel_parts = name.split("/")
                 # For PPTX, try to extract slide number from parent dir structure
                 if fmt == "pptx":
                     # Images are in ppt/media/, referenced from ppt/slides/slideN.xml
@@ -309,12 +307,17 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
 
                 filename = Path(name).name
                 out_path = media_dir / filename
-                # Avoid overwriting: append hash prefix if collision
+                # Name collision (e.g. prior run): reuse the existing file when
+                # its content is identical; only fork to a hash-suffixed name
+                # when the bytes actually differ.
                 if out_path.exists():
-                    stem, ext2 = out_path.stem, out_path.suffix
-                    out_path = media_dir / f"{stem}_{fhash[:6]}{ext2}"
+                    existing_hash = hashlib.sha256(out_path.read_bytes()).hexdigest()
+                    if existing_hash != fhash:
+                        stem, ext2 = out_path.stem, out_path.suffix
+                        out_path = media_dir / f"{stem}_{fhash[:6]}{ext2}"
 
-                out_path.write_bytes(data)
+                if not out_path.exists():
+                    out_path.write_bytes(data)
 
                 all_images.append({
                     "filename": out_path.name,
@@ -325,17 +328,14 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
                 })
 
     except Exception as e:
-        print(f"[stage 1.2] {fmt.upper()} image extraction failed: {e}")
-        return {"count": 0, "error": str(e)}
+        # No-silent-fallback: callers don't check an "error" key, so returning
+        # an error dict was a silent degrade (0 images, pipeline continues).
+        # Raise loudly instead — mirrors the office TEXT path in
+        # _stage_1_extract.py.
+        raise RuntimeError(f"Failed to extract images from {raw_file.name}: {e}")
 
-    # Write manifest
-    manifest_data = {
-        "source": str(raw_file),
-        "format": fmt,
-        "total_images": len(all_images),
-        "images": all_images,
-    }
-    manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Write manifest (atomic tmp+rename via the shared v2 writer)
+    _stage_1_2_write_manifest(manifest_path, fmt, raw_file, all_images)
     print(f"[stage 1.2] {fmt.upper()}: {len(all_images)} images → {media_dir}")
     return {"count": len(all_images), "media_dir": str(media_dir),
             "manifest": str(manifest_path), "images": all_images}

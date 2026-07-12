@@ -21,7 +21,10 @@ from _frontmatter import (  # noqa: E402
     parse_frontmatter,
     write_frontmatter,
     merge_array_fields_into_content,
+    merge_page_content,
+    lock_fields,
 )
+from _frontmatter_array import parse_frontmatter_array  # noqa: E402
 
 
 class TestParseFrontmatterFallback(unittest.TestCase):
@@ -79,6 +82,41 @@ class TestMergeArrayFieldsBlockStyle(unittest.TestCase):
         self.assertIn("alpha", out)
         self.assertIn("beta", out)
         self.assertIn("gamma", out)
+
+
+class TestBlockArrayRoundTripPaths(unittest.TestCase):
+    """Block-style arrays must survive the naive parse→write round-trips
+    (merge fast path 4 and lock_fields) via normalize_block_arrays."""
+
+    def test_fast_path_4_preserves_block_related(self):
+        # Existing page: enriched body (extra [[wikilink]] markup only).
+        existing = (
+            "---\ntype: concept\ntitle: Foo\nrelated: [\"concepts/x\"]\n---\n\n"
+            "See [[concepts/ohms-law|ohms law]] for details.\n"
+        )
+        # New page: same body de-linked, block-style related.
+        new = (
+            "---\ntype: concept\ntitle: Foo\nrelated:\n  - concepts/y\n---\n\n"
+            "See ohms law for details.\n"
+        )
+        out = merge_page_content(new, existing, merger_fn=None)
+        # Fast path 4 fired (enriched body kept)...
+        self.assertIn("[[concepts/ohms-law|ohms law]]", out)
+        # ...and the block-style related was NOT silently emptied.
+        self.assertEqual(
+            sorted(parse_frontmatter_array(out, "related")),
+            ["concepts/x", "concepts/y"])
+
+    def test_lock_fields_preserves_block_related(self):
+        content = (
+            "---\ntype: concept\ntitle: New Title\n"
+            "related:\n  - concepts/a\n  - concepts/b\n---\n\nbody\n"
+        )
+        out = lock_fields(content, {"title": "Locked Title"})
+        self.assertIn("Locked Title", out)
+        self.assertEqual(
+            parse_frontmatter_array(out, "related"),
+            ["concepts/a", "concepts/b"])
 
 
 if __name__ == "__main__":

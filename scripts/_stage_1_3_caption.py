@@ -544,6 +544,33 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
 # Per-image VLM call (one image, one call, plain-text reply)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _stage_1_3_vlm_post_json(url: str, body: bytes, headers: dict,
+                             extract_text) -> tuple[str | None, str | None]:
+    """Shared 3-attempt retry shell for one VLM HTTP call.
+
+    POSTs ``body`` to ``url``, parses the JSON response, and applies
+    ``extract_text(data)`` (protocol-specific callback) to pull the caption
+    text. Transient failures retry with exponential backoff. Returns
+    (text, None) on success, (None, last_err) on exhaustion.
+    """
+    import urllib.request
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                data = json.loads(resp.read())
+            text = extract_text(data)
+            if text:
+                return text, None
+            last_err = "empty VLM response"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+        if attempt < 2:
+            time.sleep(2 ** attempt)
+    return None, last_err
+
+
 def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
                                  ctx_map: dict[str, dict]) -> tuple[str | None, str | None]:
     """Caption a single image against ONE provider with one VLM call.
@@ -554,9 +581,11 @@ def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
 
     On a transient API failure, retries up to 3 times. A final failure is
     surfaced as an error string so the caller can decide (placeholder vs
-    systemic pause); it does NOT silently write a degraded caption.
+    systemic pause); it does NOT silently write a degraded caption. A corrupt
+    image file (preprocessing failure) is surfaced with a ``corrupt-image:``
+    error prefix — callers classify it separately (no fallback provider
+    attempt, no circuit-breaker count).
     """
-    import urllib.request, urllib.error
     if "path" in img and img["path"]:
         img_path = Path(img["path"])
         if not img_path.is_absolute():
@@ -566,7 +595,10 @@ def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
     if not img_path.exists():
         return None, f"missing image file: {img.get('filename')}"
 
-    img_data = _stage_1_3_preprocess_image(img_path)
+    try:
+        img_data = _stage_1_3_preprocess_image(img_path)
+    except Exception as e:
+        return None, f"corrupt-image: {type(e).__name__}: {e}"
     ext = img_path.suffix.lstrip(".").lower()
     media_type = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext}"
 
@@ -604,24 +636,14 @@ def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
         if provider["api_key"]:
             headers["Authorization"] = f"Bearer {provider['api_key']}"
 
-        last_err = None
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-                with urllib.request.urlopen(req, timeout=180) as resp:
-                    data = json.loads(resp.read())
-                choices = data.get("choices", [])
-                if choices:
-                    msg = choices[0].get("message", {})
-                    text = (msg.get("content") or "").strip()
-                    if text:
-                        return text, None
-                last_err = "empty VLM response"
-            except Exception as e:
-                last_err = f"{type(e).__name__}: {e}"
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-        return None, last_err
+        def _extract_openai(data: dict) -> str:
+            choices = data.get("choices", [])
+            if not choices:
+                return ""
+            msg = choices[0].get("message", {})
+            return (msg.get("content") or "").strip()
+
+        return _stage_1_3_vlm_post_json(url, body, headers, _extract_openai)
 
     # Default: Anthropic Messages API
     content = [
@@ -636,27 +658,17 @@ def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
         "messages": [{"role": "user", "content": content}],
         "temperature": 0,
     }).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": provider["api_key"],
+        "anthropic-version": "2023-06-01",
+    }
 
-    last_err = None
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, data=body, method="POST", headers={
-                "Content-Type": "application/json",
-                "x-api-key": provider["api_key"],
-                "anthropic-version": "2023-06-01",
-            })
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                data = json.loads(resp.read())
-            text = "".join(c["text"] for c in data.get("content", [])
-                           if c.get("type") == "text").strip()
-            if text:
-                return text, None
-            last_err = "empty VLM response"
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-        if attempt < 2:
-            time.sleep(2 ** attempt)
-    return None, last_err
+    def _extract_anthropic(data: dict) -> str:
+        return "".join(c["text"] for c in data.get("content", [])
+                       if c.get("type") == "text").strip()
+
+    return _stage_1_3_vlm_post_json(url, body, headers, _extract_anthropic)
 
 
 def _stage_1_3_provider_bundles(config: Config) -> list[tuple[str, dict]]:
@@ -712,6 +724,10 @@ def _stage_1_3_caption_one_image_with_failover(
         if caption:
             return caption, None, label
         last_err = err
+        if err and err.startswith("corrupt-image:"):
+            # The image file itself is unreadable — no provider can fix that.
+            # Don't burn fallback-provider attempts on it.
+            return None, err, label
         if i < len(bundles) - 1:
             print(f"    [caption] {img['filename']}: {label} ({provider['model']}) "
                   f"failed ({err}) — trying fallback ({bundles[i+1][1]['model']})...")
@@ -792,22 +808,34 @@ def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir:
                 if _stage_1_3_is_caption_failed(cap_text):
                     cap_text = (f"[待重试] 图片 {img['filename']}，"
                                 f"尺寸 {img.get('width','?')}×{img.get('height','?')}")
-                (media_dir / (img["filename"] + ".caption.txt")).write_text(
-                    cap_text, encoding="utf-8")
+                atomic_write(media_dir / (img["filename"] + ".caption.txt"), cap_text)
                 captioned += 1
                 tag = " (fallback)" if used == "fallback" else ""
                 if used == "fallback":
                     fallback_used += 1
                 print(f"  [{done}/{len(pending)}] {img['filename']} ✓{tag}")
+            elif err and err.startswith("corrupt-image:"):
+                # Corrupt/unreadable image file — a VLM retry can never fix it.
+                # Write a permanent skip marker (NOT [待重试], so later rounds /
+                # runs don't re-try it) and keep it out of the provider circuit
+                # breaker: the providers are fine, the image is not.
+                marker = f"[图片损坏，跳过 VLM 描述] {img['filename']} — {err}"
+                atomic_write(media_dir / (img["filename"] + ".caption.txt"), marker)
+                print(f"  [{done}/{len(pending)}] {img['filename']} ✗ corrupt image, "
+                      f"skipped: {err}")
             else:
                 consecutive_fail += 1
                 placeholder = (f"[待重试] 图片 {img['filename']}，"
                                f"尺寸 {img.get('width','?')}×{img.get('height','?')} "
                                f"— {err}")
-                (media_dir / (img["filename"] + ".caption.txt")).write_text(
-                    placeholder, encoding="utf-8")
+                atomic_write(media_dir / (img["filename"] + ".caption.txt"), placeholder)
                 print(f"  [{done}/{len(pending)}] {img['filename']} ✗ {err}")
                 if consecutive_fail >= CONSECUTIVE_FAIL_PAUSE:
+                    # Cancel queued futures so the circuit breaker propagates
+                    # NOW — otherwise the with-block shutdown would wait for
+                    # every queued image to burn through its full retry stack
+                    # against a provider that is already known to be down.
+                    executor.shutdown(wait=False, cancel_futures=True)
                     raise RuntimeError(
                         f"Caption VLM failed {consecutive_fail} images in a row "
                         f"(last: {err}). All configured providers exhausted — the "

@@ -51,11 +51,6 @@ def extract_frontmatter_title(content: str) -> str:
     return ""
 
 
-def extract_wikilinks(content: str) -> list:
-    """Return all wikilink targets from [[target]] / [[target|display]]."""
-    return [m.group(1).strip() for m in WIKILINK_RE.finditer(content)]
-
-
 def _strip_leading_code_fence(content: str) -> str:
     """Read-time fallback: if the whole doc is wrapped in a leading
     ```yaml/```md/```markdown fence, strip the opening fence (and a matching
@@ -195,27 +190,6 @@ def strip_embedded_images_section(body: str) -> str:
     return body[:idx].rstrip()
 
 
-def union_arrays(new_fm: dict, existing_fm: dict) -> dict:
-    """Union array fields from both frontmatters. Keeps all other fields from new_fm."""
-    merged = dict(new_fm)
-    for field in UNION_FIELDS:
-        new_vals = new_fm.get(field, [])
-        old_vals = existing_fm.get(field, [])
-        if not isinstance(new_vals, list):
-            new_vals = [new_vals] if new_vals else []
-        if not isinstance(old_vals, list):
-            old_vals = [old_vals] if old_vals else []
-        seen = set()
-        union = []
-        for v in old_vals + new_vals:
-            key = str(v).lower().strip('"').strip("'")
-            if key not in seen:
-                seen.add(key)
-                union.append(v)
-        merged[field] = union
-    return merged
-
-
 def merge_array_fields_into_content(new_content: str, existing_content: str) -> str:
     """Union frontmatter array fields (sources/tags/related) from both contents.
 
@@ -230,7 +204,14 @@ def merge_array_fields_into_content(new_content: str, existing_content: str) -> 
 
 
 def lock_fields(content: str, reference_fm: dict) -> str:
-    """Force LOCKED_FIELDS back to reference values."""
+    """Force LOCKED_FIELDS back to reference values.
+
+    Block-style arrays are normalized to inline first: this function does a
+    naive parse→write round-trip, which would otherwise silently empty a
+    block-form tags/related/sources array.
+    """
+    from _frontmatter_array import normalize_block_arrays
+    content = normalize_block_arrays(content)
     fm, body = parse_frontmatter(content)
     for field in LOCKED_FIELDS:
         if field in reference_fm and reference_fm[field]:
@@ -264,8 +245,13 @@ def merge_page_content(
     if new_content == existing_content:
         return existing_content
 
-    # Layer 1: union array fields
-    array_merged = merge_array_fields_into_content(new_content, existing_content)
+    # Layer 1: union array fields. Normalize block-style arrays to inline
+    # right away: fast path 4 below (and layer 3 via lock_fields) round-trips
+    # the content through the naive parse_frontmatter → write_frontmatter,
+    # which silently empties block-form tags/related/sources.
+    from _frontmatter_array import normalize_block_arrays
+    array_merged = normalize_block_arrays(
+        merge_array_fields_into_content(new_content, existing_content))
 
     # Fast path 3: bodies identical (only frontmatter arrays differed)
     # Strip the auto-injected ## Embedded Images section first: it is an
@@ -320,11 +306,11 @@ def merge_page_content(
     # page body, keeping only frontmatter array unions (found 2026-07-09 via
     # a live re-ingest: the body was byte-identical to the pre-re-ingest
     # version despite a fresh, substantially different LLM-generated body).
-    _new_type = parse_frontmatter(new_content)[0].get("type")
-    if (_new_type != "source"
-            and _src_set(parse_frontmatter(existing_content)[0]).issuperset(
-                _src_set(parse_frontmatter(new_content)[0]))
-            and _src_set(parse_frontmatter(new_content)[0])):
+    _new_fm = parse_frontmatter(new_content)[0]
+    _new_srcs = _src_set(_new_fm)
+    if (_new_fm.get("type") != "source"
+            and _src_set(parse_frontmatter(existing_content)[0]).issuperset(_new_srcs)
+            and _new_srcs):
         # Keep the existing (already-merged) body; union frontmatter arrays.
         return merge_array_fields_into_content(existing_content, new_content)
 

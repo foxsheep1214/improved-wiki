@@ -20,14 +20,13 @@ wiki/
 ├── findings/      # type: finding    — 研究发现
 ├── thesis/        # type: thesis     — 工作假说
 ├── methodology/   # type: methodology — 方法论（NashSU 支持的顶级 type）
-├── media/         # 提取的图片 (镜像 raw/ 结构: book/<slug>/ 等)
+├── media/         # 提取的图片 (镜像 raw/ 结构: <type>/<stem>/，如 Book/Foo/)
 ├── REVIEW/        # pipeline↔人类握手点 (improved-wiki 扩展)
 │   ├── confirm/       # 需要确认的可疑内容
 │   ├── suggestion/     # 改进建议
 │   ├── missing-page/   # 缺少的重要页面
 │   ├── contradiction/  # 内容矛盾
 │   └── duplicate/      # 重复内容
-├── lint/          # lint findings (improved-wiki 扩展)
 ├── index.md       # 聚合页：索引
 ├── overview.md    # 聚合页：概述
 └── log.md         # 聚合页：变更日志
@@ -257,7 +256,7 @@ p<NNNN>-mineru_<md5前8>.<ext>
 p0007-mineru_a1b2c3d4.png.caption.txt
 ```
 
-每图一个 `.caption.txt`，长度 ≥ 20 字符。VLM 生成，中文优先。
+每图一个 `.caption.txt`，长度 ≥ 20 字符。VLM 生成，与源文本同语言（NashSU `captionImage` parity）。
 
 ### 5.4 Manifest
 

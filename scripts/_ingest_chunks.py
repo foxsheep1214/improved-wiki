@@ -15,9 +15,11 @@ from _core import (
     mark_stage_done,
     unmark_stage_done,
     save_progress,
+    list_existing_slugs,
     slugify,
     PrepareStopAfter,
 )
+from _stage_2_base import file_block_slug
 from _stage_2_analyze import (
     _stage_2_1_chunk_text,
     _stage_2_2_analyze_chunk,
@@ -49,12 +51,15 @@ def _parse_accumulated_to_dict(accumulated) -> dict:
         return {}
     try:
         import json as _j
-        return _j.loads(s)
+        parsed = _j.loads(s)
+        if isinstance(parsed, dict):
+            return parsed
     except Exception:
         pass
     try:
         import yaml as _y
-        return _y.safe_load(s) or {}
+        parsed = _y.safe_load(s)
+        return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
 
@@ -63,6 +68,7 @@ def _analyze_all_chunks(
     chunk_meta: list, global_digest: dict, accumulated_digest: str,
     raw_file: Path, config: Config, template_content: str,
     chunk_total: int, t_start: float, verbose: bool,
+    existing_slugs: list | None = None,
 ) -> list:
     """Stage 2.2: analyze all chunks, serially.
 
@@ -71,6 +77,10 @@ def _analyze_all_chunks(
     Conversation mode is the only text-gen path, so there is no parallel
     branch: every call is a manual round-trip, which is inherently serial.
     Returns chunk_analyses indexed by chunk order.
+
+    ``existing_slugs`` is this book's persisted 2.2 snapshot (see
+    _run_chunk_pipeline) so every chunk prompt is built from the SAME frozen
+    slug list \u2014 wiki-independent, prompt-hash stable across resumes.
     """
     chunk_analyses: list = []
 
@@ -78,7 +88,8 @@ def _analyze_all_chunks(
         ca = _stage_2_2_analyze_chunk(
             chunk, i, chunk_total, global_digest, accumulated_digest,
             overlap_before, heading_path, raw_file, config, template_content,
-            max_retries=_stage_2_2_chunk_retries(), verbose=verbose)
+            max_retries=_stage_2_2_chunk_retries(), verbose=verbose,
+            existing_slugs=existing_slugs)
         chunk_analyses.append(ca)
         updated = ca.get("updated_global_digest", "")
         if isinstance(updated, str) and len(updated.strip()) > 50:
@@ -173,15 +184,16 @@ def _generate_all_chunks(
         )
         all_file_blocks.extend(blocks)
         for path, _ in blocks:
-            slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+            slug = file_block_slug(path)
             if slug not in generated_slugs:
                 generated_slugs.append(slug)
         print(f"  [generate] {i + 1}/{chunk_total} [per-chunk, grounded]")
     print(f"  [generate] {chunk_total}/{chunk_total} per-chunk grounded done "
           f"[{time.time() - t_start:.0f}s]")
-    # No single stop_reason for the per-chunk path; gaps fall to the caller's
-    # zero-block per-concept fallback. Smaller per-chunk scope makes mid-chunk
-    # truncation unlikely, and each concept is already source-grounded.
+    # No single stop_reason for the per-chunk path. Since 2026-07-12 a failed
+    # chunk RAISES inside stage_2_4_generate_chunk (no []-sentinel), so there
+    # is no silent partial-failure gap here; the caller's per-concept fallback
+    # remains for the legitimate zero-block outcome and single-shot truncation.
     return all_file_blocks, generated_slugs, None
 
 
@@ -248,7 +260,7 @@ def _generate_all_chunks_parallel(
             continue
         all_file_blocks.extend(blocks)
         for path, _ in blocks:
-            slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+            slug = file_block_slug(path)
             if slug not in generated_slugs:
                 generated_slugs.append(slug)
         print(f"  [generate] {i + 1}/{chunk_total} [parallel-eager, grounded]")
@@ -364,9 +376,21 @@ def _run_chunk_pipeline(
     # updated_global_digest. No whole-book prior.
     accumulated_digest = ""
 
+    # Existing-slugs SNAPSHOT (2026-07-12): freeze the wiki slug list ONCE per
+    # book on first entry into 2.2 and persist it, so every chunk prompt (and
+    # every resume) is built from the same list. A live list_existing_slugs()
+    # read per prompt violated 2.2's wiki-independent contract: in batch mode
+    # a parallel book's wiki writes drifted the prompt hash → conversation
+    # cache misses on every resume.
+    slugs_snapshot = (progress or {}).get("slugs_snapshot_2_2")
+    if slugs_snapshot is None:
+        slugs_snapshot = sorted(list_existing_slugs(config))
+        save_progress(config, _h, {"slugs_snapshot_2_2": slugs_snapshot})
+
     chunk_analyses, accumulated_digest = _analyze_all_chunks(
         chunk_meta, global_digest, accumulated_digest, raw_file, config,
-        template_content, chunk_total, t_start, verbose)
+        template_content, chunk_total, t_start, verbose,
+        existing_slugs=slugs_snapshot)
 
     # Persist 2.2 on its own + mark stage_2_2_done so a prefetch (analyze_only)
     # can stop here and the later spine run restores chunk_analyses without
@@ -527,7 +551,7 @@ def _generate_from_analyses(
             len(concept_blocks) / max(len(unique_concepts), 1), 2)
         analysis["method"] = "analyze\u2192associate\u2192generate+fallback"
         for path, _ in fa_concept_entity:
-            s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+            s = file_block_slug(path)
             if s not in generated_slugs:
                 generated_slugs.append(s)
 

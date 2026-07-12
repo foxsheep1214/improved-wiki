@@ -113,5 +113,17 @@ class TestEvidenceCheck(unittest.TestCase):
             self.assertTrue(ok, msg)
 
 
+
+class TestChunkNumTolerance(unittest.TestCase):
+    """2026-07-12: a glob-matched file without a numeric chunk index must not
+    crash the sort key (re.search(...).group on None)."""
+
+    def test_numeric_name(self):
+        self.assertEqual(qc_stage22._chunk_num(Path("Stage-2-2-Chunk-7.txt")), 7)
+
+    def test_non_numeric_name_returns_none(self):
+        self.assertIsNone(qc_stage22._chunk_num(Path("Stage-2-2-Chunk-copy.txt")))
+
+
 if __name__ == "__main__":
     unittest.main()

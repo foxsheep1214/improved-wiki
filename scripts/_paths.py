@@ -79,7 +79,7 @@ def detect_runtime_dir(wiki_root: Path) -> Path:
 
 def _migrate_iwiki_runtime(iwiki: Path, llm_wiki: Path) -> None:
     """Migrate .iwiki-runtime/ contents → .llm-wiki/, then remove old dir."""
-    import shutil, sys
+    import sys
     llm_wiki.mkdir(parents=True, exist_ok=True)
     count = 0
     for src in sorted(iwiki.iterdir()):
@@ -100,8 +100,9 @@ def _migrate_iwiki_runtime(iwiki: Path, llm_wiki: Path) -> None:
                 else:
                     src.rename(dst)
             count += 1
-        except OSError:
-            pass
+        except OSError as e:
+            print(f"[_paths] Failed to migrate {src} → .llm-wiki/ "
+                  f"({type(e).__name__}: {e}) — left in place.", file=sys.stderr)
     # Remove old dir if empty (or force remove after migration attempt)
     try:
         iwiki.rmdir()

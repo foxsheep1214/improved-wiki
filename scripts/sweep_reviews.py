@@ -48,6 +48,7 @@ from _frontmatter import (  # noqa: E402
     parse_frontmatter as _parse_frontmatter_shared,
     extract_frontmatter_title,
 )
+from _paths import atomic_write  # noqa: E402
 
 # ── LLM judge constants (verbatim from NashSU sweep-reviews.ts) ──────────────
 JUDGE_BATCH_SIZE = 40
@@ -404,9 +405,13 @@ def _resolve_review(review: Dict, reason: str, dry_run: bool = True) -> bool:
                 new_lines.append(f'resolved_reason: "{reason}"')
             new_content = "---\n" + "\n".join(new_lines) + "\n---" + body
             try:
-                path.write_text(new_content, encoding="utf-8")
+                atomic_write(path, new_content)
                 return True
-            except Exception:
+            except Exception as ex:
+                # Loud failure (2026-07-12): a silently-failed resolved flip
+                # means the item re-appears pending forever with no clue why.
+                print(f"  x Failed to write resolved flip to {path}: "
+                      f"{type(ex).__name__}: {ex}", file=sys.stderr)
                 return False
     return False
 

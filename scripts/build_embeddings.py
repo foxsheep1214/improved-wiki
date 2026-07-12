@@ -12,7 +12,8 @@ Env vars:
   EMBEDDING_BASE_URL   — default http://127.0.0.1:11434/v1
   EMBEDDING_MODEL      — default bge-m3 (1024d). Use nomic-embed-text (768d) for English.
   EMBEDDING_API_KEY    — default "" (not needed for local Ollama)
-  EMBEDDING_DIMENSIONS — auto-detected from first embedding if unset
+  (Vector dimension is always probed from the first returned embedding —
+   there is no EMBEDDING_DIMENSIONS override.)
 
 Commands:
   embed   — chunk all wiki pages + embed + write LanceDB
@@ -29,22 +30,30 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _frontmatter import TITLE_LINE_RE  # noqa: E402
+from _paths import atomic_write  # noqa: E402
 import lancedb
 
 
 # ── Embedding backend ──────────────────────────────────────────────
 
 def get_embed_config():
+    """Resolve (base_url, model, api_key) from env.
+
+    The vector dimension is NOT configured here: it is probed from the first
+    embedding the endpoint returns (see cmd_embed's "Detected dims" line).
+    The former EMBEDDING_DIMENSIONS env var was a no-op and has been removed
+    (2026-07-12)."""
     base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
     model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
     api_key = os.environ.get("EMBEDDING_API_KEY", "")
-    dims_str = os.environ.get("EMBEDDING_DIMENSIONS", "")
-    dims = int(dims_str) if dims_str else None
-    return base_url, model, api_key, dims
+    return base_url, model, api_key
 
 
-def embed_texts(texts, base_url, model, api_key):
-    """Call OpenAI-compatible /v1/embeddings. Returns list[list[float]]."""
+def embed_texts(texts, base_url, model, api_key, timeout=120):
+    """Call OpenAI-compatible /v1/embeddings. Returns list[list[float]].
+
+    ``timeout`` is the per-request cap in seconds (default 120 preserves the
+    historical behavior; _dedup_embedding passes its own bounded value)."""
     url = f"{base_url.rstrip('/')}/embeddings"
     out = []
     BATCH = 16
@@ -58,7 +67,7 @@ def embed_texts(texts, base_url, model, api_key):
         req = urllib.request.Request(url, data=body, headers=headers, method="POST")
         for retry in range(3):
             try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
                     result = json.loads(resp.read().decode("utf-8"))
                     data = result.get("data", [])
                     vecs = [item["embedding"] for item in data]
@@ -154,7 +163,11 @@ def collect_pages():
                 page_id = rel_path[:-3].replace(os.sep, "/")
                 try:
                     content = open(path, encoding="utf-8").read()
-                except Exception:
+                except Exception as e:
+                    # A skipped page silently disappears from the embedding
+                    # index — say so instead of dropping it without a trace.
+                    print(f"  ⚠ skipping unreadable page {rel_path}: "
+                          f"{type(e).__name__}: {e}")
                     continue
                 if content.startswith("---"):
                     end = content.find("\n---", 3)
@@ -206,7 +219,14 @@ def cmd_embed():
 
     cache = {}
     if os.path.exists(EMBED_CACHE):
-        cache = json.load(open(EMBED_CACHE))
+        try:
+            cache = json.load(open(EMBED_CACHE))
+        except (ValueError, OSError) as e:
+            # Corrupt cache = full re-embed, not a crash. Loud so the operator
+            # knows why this run suddenly embeds everything from scratch.
+            print(f"⚠ embed-cache.json unreadable ({type(e).__name__}: {e}) — "
+                  f"resetting to an empty cache; ALL chunks will re-embed.")
+            cache = {}
 
     to_embed = [c for c in chunks if c["text_sha16"] not in cache]
     print(f"To embed (uncached): {len(to_embed)}")
@@ -234,8 +254,7 @@ def cmd_embed():
                 print(f"  Detected dims: {dim}")
             for c, v in zip(sl, vecs):
                 cache[c["text_sha16"]] = v
-            with open(EMBED_CACHE, "w") as f:
-                json.dump(cache, f)
+            atomic_write(EMBED_CACHE, json.dumps(cache))
             done += len(sl)
             print(f"  Embedded {done}/{len(to_embed)} (cache {len(cache)} entries)")
         print(f"  Embed time: {time.time() - t0:.1f}s")
@@ -301,7 +320,7 @@ def _init_cli():
     """Parse CLI args + initialize embed globals. Call ONLY from __main__ — not at
     import time (see the note above the chunking section)."""
     global ARGS, ROOT, WIKI, RUNTIME_DIR, LANCE_DIR, EMBED_CACHE, MAX_CHARS
-    global BASE_URL, MODEL, API_KEY, DIMS
+    global BASE_URL, MODEL, API_KEY
     ARGS = parse_args()
     ROOT = ARGS.project
     WIKI = f"{ROOT}/wiki"
@@ -313,7 +332,7 @@ def _init_cli():
     LANCE_DIR = f"{RUNTIME_DIR}/lancedb"
     EMBED_CACHE = f"{RUNTIME_DIR}/embed-cache.json"
     MAX_CHARS = ARGS.max_chars
-    BASE_URL, MODEL, API_KEY, DIMS = get_embed_config()
+    BASE_URL, MODEL, API_KEY = get_embed_config()
     if ARGS.model:
         MODEL = ARGS.model
     if ARGS.base_url:

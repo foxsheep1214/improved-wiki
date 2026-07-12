@@ -994,6 +994,18 @@ def write_knowledge_gaps(out: Path, gaps: list[KnowledgeGap], pages: dict[str, P
 def write_clusters(clusters_dir: Path, communities: list[Community],
                    pages: dict[str, Page]) -> None:
     clusters_dir.mkdir(parents=True, exist_ok=True)
+    # Clear the previous run's cluster pages first (2026-07-12): community ids
+    # are not stable across runs, so a shrinking community count would leave
+    # stale cluster-NNN.md files behind, listing members that may no longer
+    # exist. Only files matching our own cluster-NNN.md pattern are removed.
+    _cluster_file_re = re.compile(r"^cluster-\d{3}\.md$")
+    for old in clusters_dir.glob("cluster-*.md"):
+        if _cluster_file_re.match(old.name):
+            try:
+                old.unlink()
+            except OSError as exc:
+                print(f"[graph] warn: could not remove stale {old.name}: {exc}",
+                      file=sys.stderr)
     for c in communities:
         if len(c.nodes) < 2:
             continue

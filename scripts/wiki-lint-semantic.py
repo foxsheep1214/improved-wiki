@@ -70,14 +70,8 @@ LINT_BLOCK_REGEX = re.compile(
 
 # NashSU parity: only log.md excluded from semantic lint (lint.ts L188)
 ANCHOR_FILES = {"log.md"}
-STATE_FILES = {
-    "lint-cache.json", "lint.json",
-    "ingest-cache.json",
-    "ingest-queue.json",
-    "ingest-lock",
-    "lint-lock", "lint.lock",
-    "lint-semantic.json",  # don't lint our own output
-}
+# STATE_FILES (incl. lint-semantic.json — don't lint our own output) is the
+# shared _lint_suggest.STATE_FILES, imported below after the sys.path setup.
 # Derived-artifact dirs (lint/REVIEW/clusters/media) must never be fed to the
 # semantic-lint LLM — shared guard; see _paths.WIKI_ARTIFACT_DIRS for the
 # rationale (the literal NashSU port `f.name !== "log.md"` is faithless here).
@@ -117,6 +111,7 @@ from _language import build_language_directive  # noqa: E402 (titles, descriptio
 from _core import ConversationPending, _compute_chunk_targets, _CONTEXT_SIZE_DEFAULT  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
 from _paths import iter_wiki_pages, atomic_write  # noqa: E402
+from _lint_suggest import STATE_FILES  # noqa: E402
 
 
 def _probe_context_size(state_dir: Path) -> int:

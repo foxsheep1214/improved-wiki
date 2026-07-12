@@ -115,7 +115,6 @@ SEMANTIC_TOKENS=""
 for arg in "$@"; do
   case $arg in
     --verbose|-v) VERBOSE=true ;;
-    --summary)    SUMMARY=true ;;
     --strict)     STRICT=true ;;
     --semantic)   SEMANTIC=true ;;
     --no-semantic) SEMANTIC=false ;;
@@ -161,6 +160,11 @@ if ! mkdir "$LINT_LOCKDIR" 2>/dev/null; then
   rm -rf "$LINT_LOCKDIR"
   mkdir "$LINT_LOCKDIR" 2>/dev/null || { echo "[lint] Lock reclaim failed, exiting." >&2; exit 0; }
 fi
+# Install the cleanup trap IMMEDIATELY after winning the mkdir lock
+# (2026-07-12): any exit between winning the lock and a later trap install
+# used to orphan the lockdir. The trap is extended below as further
+# resources (flock holder, temp script) come into existence.
+trap "rm -rf '$LINT_LOCKDIR'" EXIT
 echo $$ > "$LINT_LOCKDIR/pid"
 
 # ── Ingest/lint mutual exclusion (2026-07-11) ──
@@ -171,12 +175,14 @@ echo $$ > "$LINT_LOCKDIR/pid"
 # lock.acquire() fails with its normal "another ingest may be running"
 # message. NashSU never needs this — it is a single-window desktop app whose
 # UI serializes everything. The holder process keeps the flock's fd open and
-# dies with this script (killed by the EXIT trap; flock auto-releases on
-# process death, so a crashed lint can never leave the lock stuck).
+# dies with this script: normally killed by the EXIT trap, and as a backstop
+# it watches for parent death itself (2026-07-12) — if this script is killed
+# hard (SIGKILL, no trap), the holder gets reparented, notices getppid()
+# changed, and exits, releasing the flock instead of sleeping on it forever.
 INGEST_LOCK_FILE="$RUNTIME_DIR/ingest.lock"
 LOCK_FIFO=$(mktemp -u -t wiki-lint-lockfifo-XXXXXX)
 mkfifo "$LOCK_FIFO"
-python3 - "$INGEST_LOCK_FILE" > "$LOCK_FIFO" <<'PYLOCK' &
+python3 - "$INGEST_LOCK_FILE" "$$" > "$LOCK_FIFO" <<'PYLOCK' &
 import fcntl, os, sys, time
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
 try:
@@ -185,14 +191,27 @@ except BlockingIOError:
     print("BUSY", flush=True)
     sys.exit(3)
 print("LOCKED", flush=True)
+# Parent-death watchdog: exit (auto-releasing the flock) as soon as the
+# launching lint script (pid passed as argv[2] — NOT getppid(), which races
+# with reparenting when the parent dies early) is gone. kill(pid, 0) only
+# probes existence.
+_parent = int(sys.argv[2])
 while True:
-    time.sleep(3600)
+    try:
+        os.kill(_parent, 0)
+    except OSError:
+        sys.exit(0)
+    time.sleep(2)
 PYLOCK
 LOCK_HOLDER_PID=$!
+# Drop the holder from the job table so the EXIT-trap kill doesn't emit a
+# noisy "Terminated" job notice (with the whole heredoc) on every clean exit.
+disown "$LOCK_HOLDER_PID" 2>/dev/null || true
 read -r LOCK_STATUS < "$LOCK_FIFO"
 rm -f "$LOCK_FIFO"
+# Extend the trap to also kill the holder (lockdir cleanup already trapped).
+trap "kill '$LOCK_HOLDER_PID' 2>/dev/null; rm -rf '$LINT_LOCKDIR'" EXIT
 if [ "$LOCK_STATUS" != "LOCKED" ]; then
-  rm -rf "$LINT_LOCKDIR"
   echo "[lint] An ingest holds the project lock ($INGEST_LOCK_FILE) — refusing to run lint concurrently with an active ingest. Wait for it to finish (or check 'ps' for a stuck OCR; see maintenance-cleanup.md)." >&2
   exit 1
 fi
@@ -218,10 +237,10 @@ wiki_dir = Path(os.environ["WIKI_DIR"])
 findings: list[dict] = []
 now_ms = int(time.time() * 1000)
 
-STATE_SKIP = {"lint-cache.json", "ingest-cache.json", "ingest-queue.json", "ingest-lock"}
-ANCHOR_FILES = {"index.md", "log.md"}
-AGGREGATE_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
-SKIP_DIRS = {"lint", "REVIEW", "clusters", "media"}
+# Shared constants (2026-07-12) — this embedded scan used to carry literal
+# copies that drifted from the python-side sets.
+from _lint_suggest import ANCHOR_FILES, AGGREGATE_FILES, STATE_FILES as STATE_SKIP
+from _paths import WIKI_ARTIFACT_DIRS as SKIP_DIRS
 
 pages: dict[str, Path] = {}
 for path in sorted(wiki_dir.rglob("*.md")):
@@ -369,7 +388,6 @@ fi
 
 # ── Phase 2: Semantic lint (NashSU parity: always runs) ──
 if [ "$SEMANTIC" = true ]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   SEM_ARGS=()
   [ -n "$SEMANTIC_LIMIT" ]  && SEM_ARGS+=(--limit "$SEMANTIC_LIMIT")
   [ -n "$SEMANTIC_TOKENS" ] && \
@@ -437,8 +455,12 @@ fi
 if [ "$AUTO_FIX" = true ]; then
   echo "[lint] Auto-fix: repairing missing-frontmatter..."
   TIMESTAMP=$(date +%Y-%m-%d)
+  # Progress lines go to stderr; stdout carries ONLY the final count, so
+  # $FIXED can't be a multi-line blob (2026-07-12). Writes are atomic.
   FIXED=$(python3 << PYEOF
-import json, re, pathlib, os
+import json, re, pathlib, os, sys
+sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
+from _paths import atomic_write
 with open('${LINT_CACHE}', 'r') as fh:
     cache = json.load(fh)
 wiki_dir = pathlib.Path('${WIKI_DIR}')
@@ -458,12 +480,21 @@ for f in items:
             DIR_TYPE = {'entities':'entity','concepts':'concept','sources':'source','queries':'query','comparisons':'comparison','synthesis':'synthesis','findings':'finding','thesis':'thesis','methodology':'methodology'}
             ptype = DIR_TYPE.get(page_rel.split('/')[0], 'concept')
             fm = f'---\ntype: {ptype}\ntitle: "{path.stem}"\ncreated: ${TIMESTAMP}\nupdated: ${TIMESTAMP}\ntags: []\nrelated: []\n---\n\n'
-            path.write_text(fm + text, encoding='utf-8')
+            atomic_write(path, fm + text)
             fixed += 1
-            print(f"  fixed missing-frontmatter: {page_rel}")
+            print(f"  fixed missing-frontmatter: {page_rel}", file=sys.stderr)
 print(fixed)
 PYEOF
 )
+  fix_rc=$?
+  if [ "$fix_rc" -ne 0 ]; then
+    echo "[lint] Auto-fix: python exited $fix_rc, continuing" >&2
+  fi
+  case "$FIXED" in
+    ''|*[!0-9]*)
+      echo "[lint] Auto-fix: unexpected count output '${FIXED}' — treating as 0" >&2
+      FIXED=0 ;;
+  esac
   echo "[lint] Auto-fix: repaired $FIXED issues"
 fi
 
@@ -473,6 +504,10 @@ if [ "$FIX_LINKS" = true ]; then
   python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply --no-stub \
     --from-cache "$LINT_CACHE" \
     --project-root "$WIKI_ROOT"
+  fixlinks_rc=$?
+  if [ "$fixlinks_rc" -ne 0 ]; then
+    echo "[lint] --fix-links: sub-script exited $fixlinks_rc, continuing" >&2
+  fi
 fi
 
 # ── Opt-in: Review sweep (via --all; NashSU sweep-reviews.ts parity) ──
@@ -516,6 +551,10 @@ if [ "$DELETE_ORPHANS" = true ]; then
   python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans --emit-review \
     --from-cache "$LINT_CACHE" \
     --project-root "$WIKI_ROOT"
+  delorph_rc=$?
+  if [ "$delorph_rc" -ne 0 ]; then
+    echo "[lint] --delete-orphans: sub-script exited $delorph_rc, continuing" >&2
+  fi
 fi
 
 exit 0

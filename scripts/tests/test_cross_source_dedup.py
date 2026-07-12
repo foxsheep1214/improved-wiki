@@ -980,5 +980,43 @@ class TestNoLLM(unittest.TestCase):
             self.assertEqual(rc, 2)
 
 
+
+class TestWhitelistCorruptRaises(unittest.TestCase):
+    """2026-07-12: a corrupt --whitelist file raises RuntimeError instead of
+    silently returning [] (auto-apply would merge protected pairs)."""
+
+    def test_invalid_json_raises(self):
+        with tempfile.TemporaryDirectory() as t:
+            wl = Path(t) / "wl.json"
+            wl.write_text("{not json", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                ds.load_whitelist(wl)
+
+    def test_non_list_top_level_raises(self):
+        with tempfile.TemporaryDirectory() as t:
+            wl = Path(t) / "wl.json"
+            wl.write_text(json.dumps({"not_duplicates": "oops"}), encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                ds.load_whitelist(wl)
+
+    def test_missing_file_still_skipped(self):
+        self.assertEqual(ds.load_whitelist(Path("/nonexistent/wl.json")), [])
+
+
+class TestStorageCorruptWhitelistWarnsNotRaises(unittest.TestCase):
+    """The runtime whitelist READ path stays best-effort (warn + []) so a
+    corrupt file can't block the detector — but it must be loud."""
+
+    def test_corrupt_runtime_whitelist_returns_empty_with_warning(self):
+        with tempfile.TemporaryDirectory() as t:
+            rt = Path(t)
+            (rt / dstore.WHITELIST_FILE).write_text("{corrupt", encoding="utf-8")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                out = dstore.load_not_duplicates(rt)
+            self.assertEqual(out, [])
+            self.assertIn("WARNING", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

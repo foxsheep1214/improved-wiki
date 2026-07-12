@@ -13,7 +13,6 @@ accidentally passing a config file.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from urllib.parse import unquote  # noqa: F401  (reserved for future file:// paths)
 
 HIDDEN_SOURCE_ENTRY_NAMES = frozenset({".cache", ".DS_Store"})
