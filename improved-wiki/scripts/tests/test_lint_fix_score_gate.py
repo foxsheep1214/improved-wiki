@@ -172,7 +172,7 @@ class TestDeleteOrphansEmitReview(unittest.TestCase):
             self.assertTrue(orphan.exists())
             # ...but a review item was actually written (that is the point of
             # --emit-review: the preview's actionable output).
-            review_files = list((wiki / "REVIEW" / "suggestion").glob("*orphan-delete*"))
+            review_files = list((wiki / "REVIEW" / "orphan").glob("*orphan-delete*"))
             self.assertEqual(len(review_files), 1)
             body = review_files[0].read_text(encoding="utf-8")
             self.assertIn("concepts/lonely.md", body)
@@ -208,7 +208,7 @@ class TestDeleteOrphansEmitReview(unittest.TestCase):
                 wlf.main()
             finally:
                 sys.argv = old_argv
-            review = list((wiki / "REVIEW" / "suggestion").glob("*orphan-delete*"))[0]
+            review = list((wiki / "REVIEW" / "orphan").glob("*orphan-delete*"))[0]
             self.assertIn("human_gate: true", review.read_text(encoding="utf-8"))
 
     def test_stale_cache_orphan_reverified_against_current_disk(self):
@@ -247,7 +247,7 @@ class TestDeleteOrphansEmitReview(unittest.TestCase):
             # no review item, no deletion — the cached orphan was re-verified
             # against current disk and dropped.
             self.assertTrue((wiki / "concepts" / "rescued.md").exists())
-            review_dir = wiki / "REVIEW" / "suggestion"
+            review_dir = wiki / "REVIEW" / "orphan"
             items = list(review_dir.glob("*orphan-delete*")) if review_dir.exists() else []
             self.assertEqual(items, [])
 
@@ -283,7 +283,7 @@ class TestDeleteOrphansEmitReview(unittest.TestCase):
                 wlf.main()
             finally:
                 sys.argv = old_argv
-            review_files = list((wiki / "REVIEW" / "suggestion").glob("*orphan-delete*"))
+            review_files = list((wiki / "REVIEW" / "orphan").glob("*orphan-delete*"))
             self.assertEqual(len(review_files), 1)
 
 

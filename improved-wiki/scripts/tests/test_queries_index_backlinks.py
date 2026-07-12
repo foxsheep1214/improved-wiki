@@ -1,27 +1,25 @@
-"""Tests for the A7 backlink fixes (audit H5, 2026-07-02).
+"""Tests for the A7 comparison backlink fix (audit H5, 2026-07-02).
 
-queries and comparisons were zero-inlink islands: 2.9 runs after the 2.6
-source page so nothing linked the comparison pages, and queries/index.md was
-a lint stub. Covers stage_2_9_append_source_backlinks (source page gets a
-`## Comparisons` section while blocks are in memory) and
-_stage_2_7_queries_index_block (real queries/index.md listing block —
-created when missing/stub, appended otherwise). No network.
+comparisons were zero-inlink islands: 2.9 runs after the 2.6 source page so
+nothing linked the comparison pages. Covers stage_2_9_append_source_backlinks
+(source page gets a `## Comparisons` section while blocks are in memory).
+No network.
+
+(The former TestQueriesIndexBlock class was removed 2026-07-12 with Stage 2.7
+— ingest no longer generates query pages or maintains queries/index.md.)
 
 Run:  python3 scripts/tests/test_queries_index_backlinks.py
 """
 from __future__ import annotations
 
 import sys
-import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import _ingest_prepare as prep  # noqa: E402
 from _stage_2_9_comparison import stage_2_9_append_source_backlinks  # noqa: E402
 
 _SOURCE_BLOCK = ("sources/book.md", '---\ntype: source\ntitle: "Book"\n---\n\n# Book\n\nbody\n')
@@ -56,63 +54,6 @@ class TestComparisonSourceBacklinks(unittest.TestCase):
         comp = ("comparisons/x-vs-y.md", "no frontmatter body")
         result = stage_2_9_append_source_backlinks([_SOURCE_BLOCK, comp], [comp])
         self.assertIn("- [[comparisons/x-vs-y]] — x-vs-y", dict(result)["sources/book.md"])
-
-
-_Q1 = ("queries/why-x.md", '---\ntype: query\ntitle: "Why X?"\n---\nbody')
-_Q2 = ("wiki/queries/how-y.md", '---\ntype: query\ntitle: "How Y?"\n---\nbody')
-
-_LINT_STUB = ('---\ntype: query\ntitle: "index"\ntags: [stub, lint]\nrelated: []\n'
-              'sources: []\n---\n\n# index\n\nCreated by Wiki Lint as a placeholder.\n')
-
-
-class TestQueriesIndexBlock(unittest.TestCase):
-    def _config(self, tmp):
-        return SimpleNamespace(wiki_dir=Path(tmp))
-
-    def test_creates_fresh_index_when_missing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            block = prep._stage_2_7_queries_index_block([_Q1, _Q2], self._config(tmp))
-        self.assertIsNotNone(block)
-        path, content = block
-        self.assertEqual(path, "queries/index.md")
-        self.assertIn("# Queries Index", content)
-        self.assertIn("- [[queries/why-x]] — Why X?", content)
-        self.assertIn("- [[queries/how-y]] — How Y?", content)
-
-    def test_replaces_lint_stub(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            qdir = Path(tmp) / "queries"
-            qdir.mkdir(parents=True)
-            (qdir / "index.md").write_text(_LINT_STUB, encoding="utf-8")
-            _, content = prep._stage_2_7_queries_index_block([_Q1], self._config(tmp))
-        self.assertNotIn("stub", content)
-        self.assertIn("# Queries Index", content)
-        self.assertIn("- [[queries/why-x]] — Why X?", content)
-
-    def test_appends_only_new_slugs_to_real_index(self):
-        existing = "# Queries Index\n\n- [[queries/why-x]] — Why X?\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            qdir = Path(tmp) / "queries"
-            qdir.mkdir(parents=True)
-            (qdir / "index.md").write_text(existing, encoding="utf-8")
-            _, content = prep._stage_2_7_queries_index_block([_Q1, _Q2], self._config(tmp))
-        self.assertEqual(content.count("[[queries/why-x]]"), 1)
-        self.assertIn("- [[queries/how-y]] — How Y?", content)
-
-    def test_returns_none_when_all_already_listed(self):
-        existing = "# Queries Index\n\n- [[queries/why-x]] — Why X?\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            qdir = Path(tmp) / "queries"
-            qdir.mkdir(parents=True)
-            (qdir / "index.md").write_text(existing, encoding="utf-8")
-            block = prep._stage_2_7_queries_index_block([_Q1], self._config(tmp))
-        self.assertIsNone(block)
-
-    def test_returns_none_without_query_blocks(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            block = prep._stage_2_7_queries_index_block(
-                [("concepts/a.md", "x"), ("queries/index.md", "y")], self._config(tmp))
-        self.assertIsNone(block)
 
 
 if __name__ == "__main__":

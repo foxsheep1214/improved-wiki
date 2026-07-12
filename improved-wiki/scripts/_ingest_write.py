@@ -181,7 +181,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     stage_1_2_result = prepared["stage_1_2_result"]
     stage_1_3_result = prepared["stage_1_3_result"]
     template_name = prepared["template_name"]
-    query_count = prepared.get("query_count", 0)
     comp_count = prepared.get("comp_count", 0)
 
     print(f"\n=== [write] {raw_file.name} ===")
@@ -512,11 +511,10 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         rel = str(raw_file)
     # Stage stats: derive page counts from review_blocks (the real on-disk set)
     # and take the max against any in-memory analysis/params, so a write_phase
-    # resume — where file_blocks/analysis/query_count are empty — records the
+    # resume — where file_blocks/analysis are empty — records the
     # true counts instead of overwriting the cache entry with zeros.
     _n_concepts = sum(1 for p, _ in review_blocks if "concepts/" in p)
     _n_entities = sum(1 for p, _ in review_blocks if "entities/" in p)
-    _n_queries = sum(1 for p, _ in review_blocks if "queries/" in p)
     _n_comps = sum(1 for p, _ in review_blocks if "comparisons/" in p)
     _n_blocks = max(len(file_blocks), len(review_blocks))
     cache = load_cache(config)
@@ -552,7 +550,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         "images_extracted": stage_1_2_result.get("count", 0),
         "images_captioned": _total_captioned,
         "images_injected": stage_3_2_result.get("injected", 0),
-        "queries_generated": max(query_count, _n_queries),
         "comparisons_generated": max(comp_count, _n_comps),
         "review_items": stage_3_4_result.get("items", 0),
     }

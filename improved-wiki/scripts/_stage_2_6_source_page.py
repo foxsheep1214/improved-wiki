@@ -633,6 +633,3 @@ venue: {venue_yaml}
         print(f"[stage 2.6] Source page ready ({len(response):,} chars)")
 
     return response, stop_reason
-
-
-# ---------- Stage 2.7: Query generation ----------

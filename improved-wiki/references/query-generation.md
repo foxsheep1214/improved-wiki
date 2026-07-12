@@ -1,132 +1,56 @@
-# Stage 2.7 · Query Auto-Generation
+# Stage 2.7 · Query Auto-Generation — RETIRED (2026-07-12)
 
-> 从单本书的分析结果中，识别「这本书提出了但自己没回答的开放问题」，生成 `type: query` 页面。单源即可生成，无需跨源上下文。
+> **本阶段已整体移除**（NashSU parity 裁定，2026-07-12）。本文件保留为墓碑，
+> 防止旧记忆/旧文档引用时误判功能仍在。
 
-## 阶段契约（与代码一致）
+## 为什么移除
 
-| 属性 | 值 |
-|------|-----|
-| 入口函数 | `stage_2_7_query_generation()`（`scripts/_stage_2_7_query_generation.py`） |
-| prompt 构建 | `_stage_2_7_build_prompt()`（同文件，**唯一真相源**） |
-| 执行位置 | `_ingest_prepare.py::_do_prepare`，顺序：2.6 源页生成 → **2.7 query**（生成 + 跨源 query 解析收尾，原 2.8 已并入；候选按 embedding 相似度取 top-k **全部**交 LLM judge，一次批量 handoff，**无 cosine 门槛**——`RESOLVE_COSINE_THRESHOLD=0.70` 仅用于标记写回 `cross_refs` 的结论；无回退） |
-| 输入 | `global_digest`、`chunk_analyses`（取 claims）、`file_blocks`（取已生成 concept/entity 标题）、`raw_file`、`config` |
-| 输出 | `(query_blocks, raw_response)`；query_blocks 并入 `file_blocks`，由 Stage 3.1/3.2 统一写盘 |
-| LLM 调用 | 单次，`max_tokens = config.compute_max_tokens(4096)` |
-| 产物 | 0-5 个 `wiki/queries/<slug>.md`，或 `---QUERIES: 0---` 标记 |
+NashSU 的 ingest **从不生成 query 页**——其生成清单只有 source summary /
+entities / concepts / index / log / overview + REVIEW 块。NashSU 中
+`wiki/queries/` = "保存的聊天回答 + 研究"（README 原文），页面只来自用户主动行为：
 
-### 跳过条件（两个，任一命中即跳过）
+1. **Deep Research** 结果（`deep-research.ts` → `wiki/queries/`）
+2. **保存聊天回答**（`chat-message.tsx` save 路径）
+3. **人工触发的 lint 断链 stub**（`lint-view.tsx` 单条 Fix / 勾选 Batch Fix）
 
-1. **源类型为 `datasheet` 或 `standard`** —— 纯事实罗列（参数表、规范条文），不产生有意义的开放问题。判据：`detect_template_type(file_path, config)`。
-2. **本次未生成任何 concept** —— `file_blocks` 中没有 `concepts/` 前缀的块。无概念则无从提问。
+improved-wiki 的 Stage 2.7（每本书自动生成 0-5 个"开放问题" query 页 +
+跨源 query 解析收尾 + queries/index.md 维护）是无 NashSU 对应物的扩展通道，
+产出的是**没有答案的空问题页**；NashSU 链路里 query 页诞生时就带着研究成果。
 
----
+## 信号去哪了
 
-## 设计原理
-
-query 页面是知识演化链中「从已知到未知」的第一跳：把书中**隐含的认知边界**显式化为可追问的问题。
-
-它在单书 ingest 阶段即可生成——只依赖本书的 digest + 已生成的 concept/entity + chunk 论断，不需要其他源。
-
----
-
-## 什么是好的 query？
-
-三个条件同时满足：
-
-1. **有根据（grounded）** — 源于书中具体内容（论断、案例、数据），不是凭空好奇
-2. **可探索（explorable）** — 能通过阅读更多资料、实验或深入分析推进
-3. **有边界（bounded）** — 足够具体，有明确探索方向
-
-### 反面示例（不生成）
-
-| 问题 | 为什么不好 |
-|------|-----------|
-| "什么是电压？" | 书中已完整回答 |
-| "如何学好硬件设计？" | 太宽泛，没有边界 |
-| "未来 AI 会取代硬件工程师吗？" | 与本书无关 |
-
-### 正面示例（来自 HardwareWiki 已有 query）
-
-| 问题 | 为什么好 |
-|------|---------|
-| "IPD 流程的核心价值是什么？" | 书中介绍了 IPD 但价值评估分散在各章 |
-| "技术先进 vs 商业成功的平衡点在哪里？" | 书中给了案例但没给出通用框架 |
-| "硬件流程中的需求变更如何管理？" | 书中提了原则但没给可操作 checklist |
-
----
-
-## Prompt 结构
-
-> ⚠️ **不在本文件复制 prompt 全文**。真实 prompt 由 `_stage_2_7_build_prompt()` 在运行时构建，以代码为准。历史上本文件曾内嵌一份中文 prose 模板，与代码的英文 prompt 长期漂移不一致——已于 2026-06-22 移除。
-
-代码构建的 prompt 包含以下 section（按顺序）：
-
-| Section | 内容 | 上限 |
-|---------|------|------|
-| `# Role` | 设定：刚为一本书生成完 source/concept/entity 页面 | — |
-| `# Book Context` | 标题、规范 source 路径、Global Digest（YAML） | digest ≤3000 字符（超出截断） |
-| `# Generated Concepts` | 本次生成的 concept 标题列表 | ≤80 |
-| `# Generated Entities` | 本次生成的 entity 标题列表 | ≤40 |
-| `# Key Claims` | 从 `chunk_analyses[].claims` 汇总 | ≤30 |
-| `# Existing Wiki Pages` | 现有 slug（避免引用不存在的页面） | ≤200 |
-| `# Task` + `# Output Format` + `# Constraints` | 任务说明 + FILE block 格式 + 约束 | — |
-
-### 输出 schema（FILE block）
+"本书提出了值得研究的开放问题"这个信号**没有丢失**，改走 NashSU 原生通道：
 
 ```
----FILE:wiki/queries/{slug}.md---
----
-type: query
-title: "{以 ? 或 ？ 结尾的完整问题}"
-tags: [{2-4 个标签}]
-related: [{2-4 个 wikilink stem，仅限本次生成的 concept/entity}]
-sources: ["raw/{相对路径}"]
-created: {today}
-updated: {today}
----
-
-# {问题标题}
-## Background        — 2-3 句：问题由书中哪段内容引出
-## Clues from the Book — 书中已有的部分答案/数据/案例，每条标章节来源
-## To Explore        — 书中未答的 2-4 个具体子问题
-## See Also          — [[相关概念页]] — 关系说明
----END FILE---
+ingest → Stage 3.4 REVIEW suggestion item（研究问题 + search_queries）
+       → /improved-wiki process-reviews 人工裁决
+           [Deep Research] → 研究结果落成 query 页（带答案）
+           [Create Page]   → 手动建页
+           [Skip]          → 关闭
 ```
 
-无值得独立成页的问题时，输出：`---QUERIES: 0---` … `---END QUERIES---`。
+Stage 3.4 的 suggestion 定义已同步扩充为 NashSU 措辞（"a research question,
+source type, or comparison that would materially improve the wiki"）。
 
-### 约束（代码内强制）
+## 移除清单（代码考古用）
 
-- `slug`：**源文语言**（2026-07-02 裁决：中文书→中文 slug，英文书→英文 kebab-case；英文术语进 title 不进 slug，约定俗成缩写 mti/cfar/dds 例外；禁止中英双拼），3-6 个词
-- `title`：完整疑问句，以 `?` 或 `？` 结尾
-- `related`：**仅**本次 ingest 生成的 concept/entity stem
-- `sources`：仅当前这本书
-- 每个 query body ≥200 字符（不含 frontmatter）
-- 直接以 `---FILE:` 或 `---QUERIES:` 开头，无前言
+- `_stage_2_7_query_generation.py` / `_query_resolve_cross_source.py` — 删除
+- `_ingest_prepare.py` — 2.7 调用 + 跨源解析 + `_stage_2_7_queries_index_block`
+  + `query_count`/`query_resolutions` 缓存字段
+- `_ingest_write.py` — `queries_generated` 统计
+- `validate_ingest.py` — Stage 2.7 校验段
+- 测试：`test_stage_2_7_skip.py` / `test_query_resolve_cross_source.py` /
+  `test_query_digest_packer.py` 删除；`test_queries_index_backlinks.py` /
+  `test_design_rulings_20260702.py` / `test_stratified_grounding.py` 修剪
+- `stage_2_9_done` resume marker 名称保留（缓存兼容）
 
----
+## 现在 query 页的三个来源
 
-## go / no-go 判断
+| 来源 | 文档 |
+|------|------|
+| Deep Research | `references/deep-research.md` |
+| 保存聊天回答 | `references/save-chat-to-wiki.md` |
+| Review 裁决（Deep Research / Create Page） | `references/process-reviews.md` |
 
-- **go**：生成 0-5 个 query FILE block，或输出 `---QUERIES: 0---` 标记
-- **no-go**：既无 query block 也无 `---QUERIES: 0---` 标记 → 2.7 未完成，重跑
-- 每个 query frontmatter 含 `type: query` + `title:` + `sources:` 三必填字段
-- 每个 query body ≥200 字符
-
----
-
-## 验证命令
-
-```bash
-# 本次 ingest 生成的 query 页数
-ls wiki/queries/*.md 2>/dev/null | wc -l
-
-# query 页面结构完整性
-for f in wiki/queries/*.md; do
-  grep -q "type: query"        "$f" || echo "MISSING TYPE: $f"
-  grep -q "## Background"       "$f" || echo "MISSING BACKGROUND: $f"
-  grep -q "## To Explore"      "$f" || echo "MISSING EXPLORE: $f"
-done
-```
-
----
+已存在的 ingest 生成 query 页（RadarWiki/HardwareWiki 存量）保留不动——
+它们是内容，不是机制。

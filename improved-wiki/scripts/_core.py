@@ -306,7 +306,7 @@ def _compute_chunk_targets(source_budget: int, context_size: int,
     Decoupled from ``source_budget`` (2026-06-27): each chunk is one analysis
     round-trip whose safe size is bounded by the context window, not the
     per-source digest budget. ``source_budget`` is retained in the signature for
-    call-site compatibility and still governs the 2.7/2.9 source-grounding
+    call-site compatibility and still governs the 2.9 source-grounding
     slice and the Stage 3.5 index/overview size caps.
     ``target_chars`` — hard per-chunk char ceiling, large enough that even
     token-sparse text can spend its full token budget.

@@ -1,7 +1,8 @@
 """Audit 2026-07-02 section D design rulings (user-decided).
 
   D1 — slug language = source-text language: rule injected into BOTH Stage 2.4
-       generation prompts and the Stage 2.7 query constraint.
+       generation prompts. (The Stage 2.7 query-constraint case was removed
+       2026-07-12 with Stage 2.7 itself — NashSU parity.)
   D2 — book-level granularity switch: Stage 2.2 injects a COARSE directive
        ONLY when Stage 2.1 classified book_meta.granularity == "manual".
   D4 — figure references link to the book's source page (never bare numbers).
@@ -23,7 +24,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _core  # noqa: E402
 import _language  # noqa: E402
 import _stage_2_4_generation as gen  # noqa: E402
-import _stage_2_7_query_generation as qgen  # noqa: E402
 import _stage_2_9_comparison as comp  # noqa: E402
 import _stage_2_analyze as analyze  # noqa: E402
 
@@ -92,21 +92,6 @@ class TestD1D4GenerationRules(unittest.TestCase):
             slug = gen._source_page_slug(Path("/elsewhere/foo.pdf"), cfg)
 
             self.assertEqual(slug, "sources/foo")
-
-
-class TestD1QueryConstraint(unittest.TestCase):
-    def test_query_prompt_uses_source_language_slug_constraint(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-            (cfg.raw_root / "Book").mkdir(parents=True, exist_ok=True)
-            file_path = cfg.raw_root / "Book" / "book.pdf"
-
-            prompt = qgen._stage_2_7_build_prompt(
-                {"book_meta": {"title": "t"}}, ["concept-a"], [], [], file_path, cfg)
-
-            self.assertNotIn("slug: English kebab-case", prompt)
-            self.assertIn("SOURCE-language slug", prompt)
-            self.assertIn("中英双拼", prompt)
 
 
 class TestD2GranularitySwitch(unittest.TestCase):

@@ -1,9 +1,11 @@
 """Tests for the A6 big-book grounding de-bias (audit H2, 2026-07-02).
 
-Covers the stratified per-chapter source sampler used for Stage 2.7/2.9
-grounding (_ingest_prepare), the per-chunk uniform claims quota (Stage 2.7),
-the chapter-scaled comparison cap and the max_tokens truncation retry
-(Stage 2.9). No network — the LLM call is spied.
+Covers the stratified per-chapter source sampler used for Stage 2.9
+grounding (_ingest_prepare), the chapter-scaled comparison cap and the
+max_tokens truncation retry (Stage 2.9). No network — the LLM call is spied.
+
+(The per-chunk claims-quota case was removed 2026-07-12 with Stage 2.7 —
+NashSU parity.)
 
 Run:  python3 scripts/tests/test_stratified_grounding.py
 """
@@ -19,7 +21,6 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _ingest_prepare as prep  # noqa: E402
-import _stage_2_7_query_generation as q27  # noqa: E402
 import _stage_2_9_comparison as c29  # noqa: E402
 
 
@@ -74,31 +75,6 @@ class TestStratifiedSourceSample(unittest.TestCase):
         text = _book(50)
         sample = prep._stratified_source_sample(text, 30)
         self.assertEqual(sample, text[:30])
-
-
-class TestClaimsPerChunkQuota(unittest.TestCase):
-    def test_round_robin_covers_all_chunks(self):
-        chunk_analyses = [
-            {"claims": [f"c1-{i}" for i in range(40)]},  # old [:30] took ONLY these
-            {"claims": [f"c2-{i}" for i in range(40)]},
-            {"claims": ["c3-0"]},
-        ]
-        sampled = q27._stage_2_7_sample_claims(chunk_analyses, limit=30)
-        self.assertEqual(len(sampled), 30)
-        self.assertIn("c1-0", sampled)
-        self.assertIn("c2-0", sampled)
-        self.assertIn("c3-0", sampled)
-        # Round-robin: first three picks are each chunk's head claim.
-        self.assertEqual(sampled[:3], ["c1-0", "c2-0", "c3-0"])
-
-    def test_fewer_claims_than_limit_returns_all(self):
-        chunk_analyses = [{"claims": ["a", "b"]}, {"claims": ["c"]}]
-        self.assertEqual(sorted(q27._stage_2_7_sample_claims(chunk_analyses, limit=30)),
-                         ["a", "b", "c"])
-
-    def test_tolerates_malformed_chunks(self):
-        chunk_analyses = [{"claims": "not-a-list"}, "not-a-dict", {}, {"claims": ["ok"]}]
-        self.assertEqual(q27._stage_2_7_sample_claims(chunk_analyses), ["ok"])
 
 
 class TestComparisonCap(unittest.TestCase):

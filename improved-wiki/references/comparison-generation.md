@@ -10,7 +10,7 @@
 |------|-----|
 | 入口函数 | `stage_2_9_comparison_generation()`（`scripts/_stage_2_9_comparison.py`） |
 | prompt 构建 | `_stage_2_9_build_prompt_in_source()` —— **唯一真相源** |
-| 执行位置 | `_ingest_prepare.py::_do_prepare`，顺序：2.7 query（含跨源解析收尾，原 2.8）→ **2.9 comparison**（Phase 2 最后一步） |
+| 执行位置 | `_ingest_prepare.py::_do_prepare`，顺序：2.6 源页 → **2.9 comparison**（Phase 2 最后一步；原居中的 2.7 已于 2026-07-12 移除） |
 | 输入 | `global_digest`、`chunk_analyses`、`file_blocks`（取已生成 concept/entity 标题）、`raw_file`、`config` |
 | 输出 | `(comparison_blocks, raw_response)`；blocks 并入 `file_blocks`，由 Stage 3.1/3.2 统一写盘 |
 | 跳过条件 | 本次 concept **和** entity 都为空（纯 stub source），或 concept 数 <2（无对比对）时整体跳过 |

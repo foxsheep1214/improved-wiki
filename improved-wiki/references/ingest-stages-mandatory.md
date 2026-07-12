@@ -1,15 +1,15 @@
 ---
 name: improved-wiki
-description: "强制 Ingest Stage 清单——improved-wiki 流水线的 16 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
+description: "强制 Ingest Stage 清单——improved-wiki 流水线的 15 个 active Stage（含 Phase 0 前置门）+ Lint + Graph 规范，每 Stage 含作用/产物/go-no-go。用于约束 ingest 时不漏步。"
 tags: [ingest, mandatory, pipeline]
 related: [SKILL.md, known-issues, scanned-pdf-ocr-pipeline, image-caption-strategy]
 ---
 
 # 强制 Ingest Stage 清单
 
-improved-wiki 流水线 = **16 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾、跨源 query 解析原 2.8 并入 2.7 收尾，功能保留、编号退休）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
+improved-wiki 流水线 = **15 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾，功能保留、编号退休；Stage 2.7 query 生成 + 跨源解析已于 2026-07-12 整体移除，对齐 NashSU）。编号与 `ingest.py` 代码一致，**编号即执行顺序**。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
 
-**执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 串行调度，agent 只答 prompt、无法跳过任何 stage（2.7/2.9 的跳过条件也是代码内置判断）。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。唯一仍靠 agent 自觉的规则：不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。（Stage 0.1 命名检查已于 2026-07-08 接入 `_do_prepare`——每个候选文件在 0.2 去重前自动过 `stage_0_1_check_file`，违规或项目无命名规则即 raise。）
+**执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 串行调度，agent 只答 prompt、无法跳过任何 stage（2.9 的跳过条件也是代码内置判断）。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。唯一仍靠 agent 自觉的规则：不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。（Stage 0.1 命名检查已于 2026-07-08 接入 `_do_prepare`——每个候选文件在 0.2 去重前自动过 `stage_0_1_check_file`，违规或项目无命名规则即 raise。）
 
 > **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。完整政策见 SKILL.md「No-silent-fallback policy」段。唯一例外：cache/stage-progress 状态文件损坏 → 告警+重置。
 
@@ -27,7 +27,7 @@ improved-wiki 流水线 = **16 个 active Stage（含 Phase 0 前置门，跨 4 
 | 2.3 | `stage_2_3_*`（`_stage_2_3_incremental.py`） | 已存在 wiki 关联检测（在 2.2 与 2.4 之间，读 wiki） |
 | 2.4 | `_stage_2_4_generate_*` + `_dedup_intra_source.py` | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发）+ 源内概念去重收尾（embedding 语义初筛 cosine≥0.82 + LLM 确认，多 chunk；无回退） |
 | 2.6 | `stage_2_6_source_page` | 源页生成（源索引；2.4 之后） |
-| 2.7 | `stage_2_7_query_generation` + `_query_resolve_cross_source.py` | 问题生成 + 跨源 query 解析（候选 top-k **全部**交 LLM judge，一次批量 handoff，无 cosine 门槛；`RESOLVE_COSINE_THRESHOLD=0.70` 仅标记 `cross_refs`；无回退） |
+| 2.7 | _(已移除，对齐 NashSU，2026-07-12)_ | 原问题生成 + 跨源 query 解析（信号改走 3.4 REVIEW suggestion → process-reviews） |
 | 2.9 | `stage_2_9_comparison_generation` | 源内对比生成 |
 | 3.1 | `stage_3_1_write_wiki_file` | 文件写盘（含同名 slug 三层 page-merge，NashSU parity） |
 | 3.2 | `stage_3_2_inject_images` | 图片注入 source 页 |
@@ -94,11 +94,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.1 · Global Digest（已移除，对齐 NashSU，2026-07-08）
 - **原作用**：整本单次 LLM → 6 块结构化 YAML digest，作 2.2 逐 chunk 分析的整本先验。
 - **为什么去掉**：NashSU 的 globalDigest 是逐 chunk **过程中滚动产生**（初始空，每 chunk 产出 "Updated Global Digest" 合并），**无独立整本 digest 先验**。improved-wiki 2.2 已有滚动机制（`updated_global_digest` → `accumulated_digest`），原 2.1 只给 accumulated 种子。去掉 2.1 后 2.2 纯滚动（初始空），对齐 NashSU。
-- **影响**：2.4/2.6/2.7/2.9 的 `global_digest` 数据源从 2.1 改为 2.2 滚动最终值（`_run_chunk_pipeline` 返回 5 元组含 `global_digest`）。`stage_2_1_done` marker 去掉（已消化书 stages.json 残留无害，代码不再读）。`_verify_stage_2_1_digest` 迁移到 2.2 完成后校验滚动最终 digest。`_stage_2_1_global_digest` / `_stage_2_1_build_prompt` 已作为 dead code 清理；`_stage_2_1_chunk_text`（切块函数）保留供 2.2 用。
+- **影响**：2.4/2.6/2.9 的 `global_digest` 数据源从 2.1 改为 2.2 滚动最终值（`_run_chunk_pipeline` 返回 5 元组含 `global_digest`）。`stage_2_1_done` marker 去掉（已消化书 stages.json 残留无害，代码不再读）。`_verify_stage_2_1_digest` 迁移到 2.2 完成后校验滚动最终 digest。`_stage_2_1_global_digest` / `_stage_2_1_build_prompt` 已作为 dead code 清理；`_stage_2_1_chunk_text`（切块函数）保留供 2.2 用。
 
 ### Stage 2.2 · Chunk Analysis
 - **作用**：对源文本切块分析。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`source_quotes`/`formulas`/`connections_to_existing_wiki`/`schema_typed_candidates`/`updated_global_digest`。
-- **NashSU 对齐（2026-07-08）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 2.4/2.6/2.7/2.9。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），首 chunk 建立 book_meta+outline。
+- **NashSU 对齐（2026-07-08）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 2.4/2.6/2.9。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），首 chunk 建立 book_meta+outline。
 - **NashSU 对齐 · digest 传递量与颗粒度（2026-07-09 用户裁定）**：chunk→chunk 传递的 digest 是**紧凑连续性台账，不是档案**——对齐 NashSU `ingest.ts` 的 `LONG_SOURCE_DIGEST_MAX = 15_000` 固定上限（`_stage_2_analyze.py::_DIGEST_PROMPT_CAP`，刻意**不**随模型 context 缩放；chunk 大小才缩放）+ "compact document-level digest" 指令。规则：先前所有 concept/entity 的**名字必须存活**（供后续 chunk 去重/关联），但每条压成一行短语，禁止逐字累积完整定义/key_details。详细内容不经 digest 传递——每个 chunk 的完整分析（concepts_found/claims/formulas）单独持久化在 `chunk_analyses`，2.4 逐 chunk 生成用各自 chunk 的全量分析，2.6 的 Main Arguments 用全书 `chunk_claims`、Key Concepts/Entities 清单用 2.4 实际生成的 slug 全集，均不依赖 digest 的详细度。此前 6K→24K→动态 target_chars 三版上限均为该裁定之前的过渡方案，已废除。
 - **per-handoff subagent 隔离**：每 chunk fresh subagent 答单 chunk（7/8 事故政策；当晚扩展为**所有** LLM handoff 均派 fresh subagent、主对话只编排，见 `delegate-mode.md` L4）。
 - **existing-slugs 相关性 cap（2026-07-09）**：chunk prompt 里的已有 wiki 页清单不再全量嵌入（6253 页曾产生单行 259KB×每 chunk，撑爆答题 subagent 的 Read），按"slug token 在本 chunk 文本中的包含率"排序取前 `_EXISTING_SLUGS_CAP=1000`（≈40K 字符，对齐 NashSU index 40K trim；2.4/2.6 早有同类 cap）。确定性排序，prompt 哈希跨 resume 稳定。
@@ -114,11 +114,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：`stages.file_blocks_generated ≥ 1`；source page FILE block 存在；概念页路径在 `wiki/concepts/` 下。
 - **completion path**：单遍生成产出 0 concept（或单发被截断）→ per-concept 生成（每 concept 一次 LLM 调用）补齐缺口。
 
-### Stage 2.7 · Query Auto-Generation + Cross-source Resolution
-- **作用**：基于 2.4 的 concept/entity，识别书中提出但未完全解答的开放问题，生成 `wiki/queries/<slug>.md`。详见 `query-generation.md`。
-- **跳过条件**：source 类型为 `datasheet`/`standard`（纯事实罗列）。
-- **go/no-go**：0-5 个 query FILE block 或 `---QUERIES: 0---` 标记；每个 query frontmatter 含 `type: query`+`title:`+`sources:`。
-- **子步骤（生成后收尾）· 跨源 query 解析**（原 Stage 2.8，已并入 2.7）：对刚生成的 query 检索 wiki 已有页面是否已回答。用 embedding 相似度对候选（query 标题/正文 ↔ 已有 concept/entity 页向量，取代旧的标题词级 Jaccard）排序取 top-k，**全部**交 LLM judge（一次批量 handoff，一 query 一 verdict 行；**无 cosine 门槛**——`RESOLVE_COSINE_THRESHOLD=0.70` 仅用于标记写回 `cross_refs` 的结论，缺失/不可解析 verdict → kept 并 loud warn）；已答 → 关闭删除，未答/不确定一律 kept。**无回退**：embedding stack 不可用则 `raise` 暂停。**空 wiki**（无已有页可比）→ 全部 kept 且**不 embed**（真 no-op，非回退）。跳过条件：2.7 无 query。go/no-go：`query_resolutions` 已记录（可为 `[]`）。
+### Stage 2.7 · Query Auto-Generation（已移除，对齐 NashSU，2026-07-12）
+- **原作用**：基于 2.4 的 concept/entity 生成 0-5 个开放问题 query 页 + 跨源 query 解析收尾（原 2.8）+ queries/index.md 维护。
+- **为什么去掉**：NashSU 的 ingest 从不生成 query 页（生成清单只有 source/entities/concepts/index/log/overview + REVIEW 块）；NashSU 中 `queries/` = 保存的聊天回答 + 深度研究结果，只来自用户主动行为。
+- **信号去向**："本书提出但未回答的研究问题"由 Stage 3.4 的 REVIEW `suggestion` item（含 `search_queries`）承接，经 `/improved-wiki process-reviews` 人工裁决（Deep Research → query 页带答案落地 / Create Page / Skip）。详见 `query-generation.md`（墓碑）与 `process-reviews.md`。
+- **影响**：`stage_2_9_done` resume marker 名称保留（缓存兼容）；`queries_generated` 缓存统计移除；已存在的 query 页保留不动。
 
 ### Stage 2.9 · Comparison Auto-Generation（源内）
 - **作用**：源内概念对比（两个高度相关概念 → 对比页，对比维度 ≥4，至多 2 页）。详见 `comparison-generation.md`。
@@ -164,27 +164,27 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## 强制顺序与依赖
 
 ```
-0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.2 → 2.3 → 2.4 → 2.6 → 2.7 → 2.9
+0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.2 → 2.3 → 2.4 → 2.6 → 2.9
      → 3.1 → 3.2 → 3.4 → 3.5 → 3.7
 
 （1.2→1.3 是 image pipeline（1.3 依赖 1.2 输出，串行；1.3 内部 caption 派发 ×4 线程）。
    原先与 image pipeline 并行的 Stage 2.1 已于 2026-07-08 移除。
-   2.4 含源内去重收尾[原 2.5]；2.7 含跨源 query 解析收尾[原 2.8]）
+   2.4 含源内去重收尾[原 2.5]；Stage 2.7 已于 2026-07-12 移除）
 ```
 
 关键依赖：
 - 1.2 先于 1.3（先有图才能 caption）；1.2/1.3 先于 3.2（注入图引用）
 - 2.2 对所有源运行（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
 - 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.4 生成后收尾跑源内去重（原 2.5，单 chunk 跳过）；2.6 源页在 2.4 之后
-- Phase 2 全在内存（2.3→2.4→2.6→2.7→2.9 串行），产出统一由 3.1 写盘
-- 2.7 conditional（datasheet/standard 跳过 query 生成）；2.7 跨源解析收尾 conditional（无 query 或 wiki 空跳过，原 2.8）；2.9 conditional（无 concept 或 concept <2 跳过）
+- Phase 2 全在内存（2.3→2.4→2.6→2.9 串行），产出统一由 3.1 写盘
+- 2.9 conditional（无 concept 或 concept <2 跳过）
 - **3.1 写盘时同名 slug 走 page-merge**（NashSU parity）
 - 3.4 在已写盘文件上运行；3.5 在所有页面写盘后
 - 3.7 强制（缺 stack 暂停），是**最后一个 stage**；之后 `_finalize_book` 置完成标记
 
 ## Resume marker 粒度 ≠ stage 编号
 
-上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点；`stage_2_1_done` 已随 Stage 2.1 于 2026-07-08 移除——存量 stages.json 里残留的该 key 无害，代码不再读）、`stage_2_3_done`（覆盖 2.3+2.4）、`stage_2_9_done`（覆盖 2.5/2.6/2.7/2.8/2.9 整段）、`write_loop_done`、`write_phase`、`ingested`（`ingest.py::_finalize_book` 所置的整书完成标记，非某个 stage 模块自己的标记；2026-07-08 从 `stage_4_1` 改名）。崩溃恢复是从**段边界**重启，不是逐 stage、逐 chunk。
+上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点；`stage_2_1_done` 已随 Stage 2.1 于 2026-07-08 移除——存量 stages.json 里残留的该 key 无害，代码不再读）、`stage_2_3_done`（覆盖 2.3+2.4）、`stage_2_9_done`（覆盖 2.5/2.6/2.9 整段；名称在 2.7 移除后保留不变，缓存兼容）、`write_loop_done`、`write_phase`、`ingested`（`ingest.py::_finalize_book` 所置的整书完成标记，非某个 stage 模块自己的标记；2026-07-08 从 `stage_4_1` 改名）。崩溃恢复是从**段边界**重启，不是逐 stage、逐 chunk。
 
 **对未来"合并/拆分 stage"讨论的含义**：任何编号调整默认只是文档层 renumber-only，代码与 marker 不动；但有两条**载荷性边界**碰了就坏，不能移动：
 1. `stage_2_2_done | stage_2_3_done` —— wiki-独立/依赖分界；批量 prefetch 靠在这里精确停住（`raise PrepareStopAfter("1.5")`）才能让下一本书的 prefetch 并行跑。

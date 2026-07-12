@@ -148,7 +148,7 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
 
     system_prompt = f"""你是 {config.wiki_root.name} 的 review agent。审阅当前 wiki 内容，找出 5 类可疑项：
 1. confirm（需要人工确认）：数字、术语、矛盾点
-2. suggestion（改进建议）：内容不完整、应补充、可加链接
+2. suggestion（研究建议）：本源提出但未回答的研究问题、值得寻找的相关资料/来源、值得探索的连接或对比、内容不完整应补充（NashSU: "a research question, source type, or comparison that would materially improve the wiki"）
 3. missing-page（缺页）：[[wikilink]] 指向不存在的页面
 4. contradiction（页面间矛盾）
 5. duplicate（内容重复）

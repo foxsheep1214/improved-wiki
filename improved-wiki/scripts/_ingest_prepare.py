@@ -27,11 +27,8 @@ from _stage_1_extract import (
     _stage_1_2_extract_from_mineru,
     stage_1_3_caption_images,
 )
-from _frontmatter import extract_frontmatter_title
-from _frontmatter_array import parse_frontmatter_array
 from _stage_1_3_caption import _stage_1_3_inline_captions
 from _stage_2_6_source_page import stage_2_6_source_page
-from _stage_2_7_query_generation import stage_2_7_query_generation
 from _stage_2_9_comparison import (
     stage_2_9_comparison_generation,
     stage_2_9_append_source_backlinks,
@@ -46,8 +43,8 @@ from _ingest_chunks import _run_chunk_pipeline
 from normalize_raw_names import stage_0_1_check_file
 
 # ── A6 (audit H2): big-book grounding de-bias ──
-# 2.7/2.9 grounding was `extracted_text[:source_budget]` — a pure front
-# prefix, so a 1.55M-char book fed only its first ~19% and every query /
+# 2.9 grounding was `extracted_text[:source_budget]` — a pure front
+# prefix, so a 1.55M-char book fed only its first ~19% and every
 # comparison skewed to the early chapters. Sample per-chapter heads instead.
 try:
     from _stage_2_analyze import _CHAPTER_ANCHOR_RE
@@ -86,44 +83,6 @@ def _stratified_source_sample(text: str, budget: int) -> str:
         return text[:budget]
     sample = _CHAPTER_SAMPLE_SEP.join(ch[:per_chapter] for ch in chapters)
     return sample[:budget]
-
-
-def _stage_2_7_queries_index_block(file_blocks: list, config: Config) -> tuple[str, str] | None:
-    """A7 (audit H5): queries/ had no real index — lint left a `tags: [stub]`
-    placeholder and no page linked the query pages. Build a queries/index.md
-    listing block (Stage 3.1 overwrites listing pages, no merge) appending
-    this ingest's surviving query slugs to the on-disk index, creating it
-    when missing or still a lint stub. Returns None when nothing to add."""
-    entries = []
-    for path, content in file_blocks:
-        norm = path[len("wiki/"):] if path.startswith("wiki/") else path
-        if not norm.startswith("queries/"):
-            continue
-        stem = Path(norm).stem
-        if stem == "index":
-            continue
-        entries.append((stem, extract_frontmatter_title(content) or stem))
-    if not entries:
-        return None
-
-    index_path = config.wiki_dir / "queries" / "index.md"
-    existing = ""
-    if index_path.is_file():
-        try:
-            existing = index_path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            existing = ""
-    is_stub = bool(existing) and "stub" in parse_frontmatter_array(existing, "tags")
-    if not existing or is_stub:
-        # No frontmatter — matches the root index.md listing-page convention.
-        existing = "# Queries Index\n\nOpen questions raised by ingested sources.\n"
-    new_lines = [f"- [[queries/{stem}]] — {title}"
-                 for stem, title in entries
-                 if f"[[queries/{stem}]]" not in existing]
-    if not new_lines:
-        return None
-    return ("queries/index.md",
-            existing.rstrip("\n") + "\n\n" + "\n".join(new_lines) + "\n")
 
 
 def _prepare_source_page(
@@ -282,10 +241,10 @@ def _do_prepare(
                 "chunk_analyses": [], "analysis": {},
                 "file_blocks": [], "stage_1_2_result": stage_1_2_result,
                 "stage_1_3_result": stage_1_3_result, "template_name": template_name,
-                "query_count": 0, "comp_count": 0,
+                "comp_count": 0,
                 "concept_merge_stats": (0, 0), "dedup_was_run": False,
                 "incremental_associations": {},
-                "query_resolutions": {}, "enrich_enabled": False,
+                "enrich_enabled": False,
             }
 
         # Stage 0: Text extraction
@@ -382,7 +341,7 @@ def _do_prepare(
             raise PrepareStopAfter("0")
 
         # 2.1 removed: global_digest starts empty; Stage 2.2 rolls it up and
-        # returns the final rolled-up dict (consumed by 2.4/2.6/2.7/2.9).
+        # returns the final rolled-up dict (consumed by 2.4/2.6/2.9).
         global_digest = {}
 
         # Stage 1.3 → 2 inline (NashSU ingest.ts Step 0.6 parity): rewrite
@@ -436,31 +395,30 @@ def _do_prepare(
                   f"clean exit (--stop-after-stage=2)")
             raise PrepareStopAfter("2")
 
-        # ── Generation tail (2.4 收尾→2.9): dedup → source page → queries → resolve → comparisons ──
-        # Cached as ONE segment under stage_2_9_done. 2.8 (LLM judge) and 2.9
-        # (LLM comparison generation) can fire ConversationPending; without this
-        # cache a resume would re-run the whole tail from 2.5. On cache hit,
-        # restore the tail outputs from the artifact store and skip the segment.
+        # ── Generation tail (2.4 收尾→2.9): dedup → source page → comparisons ──
+        # Cached as ONE segment under stage_2_9_done (marker name kept for
+        # resume-cache compatibility). 2.9 (LLM comparison generation) can fire
+        # ConversationPending; without this cache a resume would re-run the
+        # whole tail from 2.5. On cache hit, restore the tail outputs from the
+        # artifact store and skip the segment.
         #
         # Same guard as the 2.3 cache path: this segment must have persisted a
         # ``file_blocks`` artifact (it always does — see save_progress below).
         # If the marker is set but the artifact is missing (old/partial cache),
         # honoring it would skip the entire 2.5–2.9 tail with whatever
-        # file_blocks happens to be in scope — dropping source page / queries /
+        # file_blocks happens to be in scope — dropping source page /
         # comparisons. Invalidate and re-run the tail instead.
         _tail_cached = (is_stage_done(config, h, "stage_2_9_done")
                         and (progress or {}).get("file_blocks") is not None)
         if is_stage_done(config, h, "stage_2_9_done") and not _tail_cached:
             print("  [stage 2.5–2.9] ⚠️  stage_2_9_done set but no persisted "
                   "file_blocks artifact — invalidating marker and re-running "
-                  "the 2.5–2.9 tail (prevents silent query/comparison loss).")
+                  "the 2.5–2.9 tail (prevents silent comparison loss).")
             from _core import unmark_stage_done
             unmark_stage_done(config, h, "stage_2_9_done")
         if _tail_cached:
             _pcache = progress or {}
             file_blocks = _pcache.get("file_blocks", file_blocks)
-            query_resolutions = _pcache.get("query_resolutions", {})
-            query_count = _pcache.get("query_count", 0)
             comp_count = _pcache.get("comp_count", 0)
             concept_count_before, concept_count_after = _pcache.get(
                 "concept_merge_stats", (0, 0))
@@ -479,7 +437,7 @@ def _do_prepare(
             concept_count_before = _stage_2_5["concept_count_before"]
             concept_count_after = _stage_2_5["concept_count_after"]
 
-            # Source grounding shared by 2.6/2.7/2.9 (P1): raw source trimmed to
+            # Source grounding shared by 2.6/2.9 (P1): raw source trimmed to
             # the model-sized budget. Whole-book synthesis calls, so a budgeted
             # excerpt is the right analog (cf. the single-chunk 2.4 path).
             _src_grounding = (extracted_text or "")[: config.source_budget]
@@ -497,40 +455,19 @@ def _do_prepare(
                               for c in (ca.get("claims") or [])])
             _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
 
-            # A6 (audit H2): 2.7/2.9 use a stratified per-chapter sample, not
+            # A6 (audit H2): 2.9 uses a stratified per-chapter sample, not
             # the front prefix — 2.6 keeps the prefix (the audit targets
-            # query/comparison covering, not the source page digest).
+            # comparison covering, not the source page digest).
             _q29_source = _stratified_source_sample(
                 extracted_text or "", config.source_budget)
             _chapter_count = len(_CHAPTER_ANCHOR_RE.findall(extracted_text or ""))
 
-            # ── Stage 2.7: Query generation ──
-            query_blocks, _ = stage_2_7_query_generation(
-                global_digest, chunk_analyses, file_blocks, raw_file, config,
-                template=template_content, template_name=template_name, verbose=verbose,
-                source_context=_q29_source,
-            )
-            # Stage 2.7 closing sub-step: cross-source query resolution (former
-            # standalone Stage 2.8; folded into 2.7). Embedding prefilter matches
-            # each new query against existing concept/entity pages; LLM judge
-            # closes queries already answered elsewhere, defaults to "kept".
-            # no-fallback: a missing embedding stack raises here (clean re-run —
-            # stage_2_9_done is set only after the whole tail succeeds).
-            if query_blocks:
-                file_blocks = list(file_blocks) + query_blocks
-                from _query_resolve_cross_source import (query_resolve_cross_source,
-                                                       _query_resolve_update_file_blocks_after_resolution,
-                                                       _query_resolve_apply_cross_refs)
-                query_resolutions = query_resolve_cross_source(file_blocks, config.wiki_dir, config)
-                if any(r["status"] == "closed" for r in query_resolutions.values()):
-                    before_q = len(file_blocks)
-                    file_blocks = _query_resolve_update_file_blocks_after_resolution(file_blocks, query_resolutions)
-                    print(f"  [stage 2.7] Removed {before_q - len(file_blocks)} closed query block(s)")
-                # A3: write resolve conclusions into kept query frontmatter
-                # (cross_refs) instead of leaving them only in the progress cache.
-                file_blocks = _query_resolve_apply_cross_refs(file_blocks, query_resolutions)
-            else:
-                query_resolutions = {}
+            # (Stage 2.7 query generation + cross-source query resolution
+            # removed 2026-07-12 for NashSU parity: NashSU's ingest never
+            # generates query pages — wiki/queries/ is fed only by deep
+            # research, saved chat answers, and human-triggered lint stubs.
+            # The "open question worth researching" signal flows through
+            # Stage 3.4 REVIEW suggestion items (with search_queries).)
 
             # ── Stage 2.9: Comparison generation ──
             comp_blocks, _ = stage_2_9_comparison_generation(
@@ -545,22 +482,12 @@ def _do_prepare(
                 # (2.9 runs after 2.6 — without this they stay an inlink island).
                 file_blocks = stage_2_9_append_source_backlinks(file_blocks, comp_blocks)
 
-            # A7: refresh the real queries/index.md with this ingest's kept
-            # queries, while the blocks are still in memory.
-            _qidx_block = _stage_2_7_queries_index_block(file_blocks, config)
-            if _qidx_block:
-                file_blocks = list(file_blocks) + [_qidx_block]
-                print("  [stage 2.7] queries/index.md listing block appended")
-
-            query_count = len(query_blocks)
             comp_count = len(comp_blocks)
 
-            # Persist tail outputs + mark the segment done so a 2.8/2.9
+            # Persist tail outputs + mark the segment done so a 2.9
             # ConversationPending resume restores instead of re-running.
             save_progress(config, h, {
                 "file_blocks": file_blocks,
-                "query_resolutions": query_resolutions,
-                "query_count": query_count,
                 "comp_count": comp_count,
                 "concept_merge_stats": (concept_count_before, concept_count_after),
                 "dedup_was_run": dedup_was_run,
@@ -580,12 +507,10 @@ def _do_prepare(
             "stage_1_2_result": stage_1_2_result,
             "stage_1_3_result": stage_1_3_result,
             "template_name": template_name,
-            "query_count": query_count,
             "comp_count": comp_count,
             "concept_merge_stats": (concept_count_before, concept_count_after),
             "dedup_was_run": dedup_was_run,
             "incremental_associations": incremental_associations,
-            "query_resolutions": query_resolutions,
             "enrich_enabled": getattr(config, "enrich_enabled", True),
         }
     except Exception as e:

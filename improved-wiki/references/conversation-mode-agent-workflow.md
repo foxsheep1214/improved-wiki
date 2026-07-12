@@ -29,7 +29,6 @@ Each step: `ingest.py` exits 101 → read prompt `.md` → write response `.txt`
 | Stage 2.2 | `Stage-2-2-Chunk-N-*.md` | YAML with chunk_index, entities_found, concepts_found, claims, formulas, connections_to_existing_wiki, **updated_global_digest** (5 fields: book_meta/outline/key_entities/key_concepts/key_claims — rolls up across chunks; standalone 2.1 removed 2026-07-08) | Include detailed concept definitions with key_details — these feed directly into generation. First chunk establishes book_meta + outline; later chunks refine and append. |
 | Stage 2.4 | `Stage-2-4-Generation-*.md` | FILE blocks (`---FILE:wiki/<path>---\n...\n---END FILE---`) for source + concepts + entities | The largest step. Generate a page for EVERY concept/entity listed. Use exact slugs from the prompt. Only link to pages in the "Linkable pages" list. |
 | Stage 2.6 | `Stage-2-6-SourcePage-*.md` | One source-page FILE block (doctype-aware required H2 sections) | Missing required sections raise in code (`_stage_2_6_validate_required_sections`) — follow the section list verbatim. |
-| Stage 2.7 | `Stage-2-7-QueryGeneration-*.md` | 0-5 query FILE blocks or `---QUERIES: 0---` | Each query: type=query, title, background, clues, to-explore, see-also |
 | Stage 2.9 | `Stage-2-9-ComparisonReview-*.md` | 0-N comparison FILE blocks or `---COMPARISONS_IN_SOURCE: 0---` | Each comparison: why compare, table (≥4 dimensions), selection guide, see-also. |
 | Stage 3.4 | `Stage-3-4-Review-*.md` | YAML array of ≥5 review items (`type`/`title`/`description`/`affected_pages`/`severity`/`search_queries`) | Runs **after** Stage 3.1 write, on the already-written pages. Single handoff, no chunk chain — but still dispatch a fresh subagent, same as every handoff (policy 2026-07-08). |
 | Merge tasks | `LLM-task-*.md` | Merged page body (no frontmatter) | **Delegate to subagent** — see below |
@@ -50,7 +49,7 @@ These are repetitive — the same pages may be re-merged across runs.
 ## Stage 2.2 quality gate (mandatory, revised 2026-07-08)
 
 **Policy — dispatch a fresh subagent per handoff (EVERY prompt file: chunked
-2.2/2.4 AND single-shot 2.6/2.7/2.9/3.4/dedup-confirm/merge/wikilink), max 1
+2.2/2.4 AND single-shot 2.6/2.9/3.4/dedup-confirm/merge/wikilink), max 1
 handoff, then exit; the main conversation answers NO prompts (sole exception:
 the context probe).** Chained or main-conversation answering accumulates prompt
 text in one context window and degrades later output into thin/placeholder

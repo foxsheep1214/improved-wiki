@@ -190,11 +190,10 @@ The ingest entry-point accepts a `wiki/queries/` path directly (NashSU `autoInge
 The ingest pipeline will:
 1. **Stage 2.2**: Analyze the research page → extract key entities/concepts
 2. **Stage 2.4**: Generate entity/concept pages for newly discovered items
-3. **Stage 2.7**: Generate follow-up query pages if open questions found
-4. **Stage 2.9**: Generate comparison pages if relevant
-5. **Stage 3.4 (review)**: Generate review items — some may become new research topics
-6. **Stage 3.5**: Update index/log/overview
-7. **Stage 3.7**: Embed the new pages
+3. **Stage 2.9**: Generate comparison pages if relevant
+4. **Stage 3.4 (review)**: Generate review items — some may become new research topics (process via process-reviews)
+5. **Stage 3.5**: Update index/log/overview
+6. **Stage 3.7**: Embed the new pages
 
 This is what turns "a saved search result" into "integrated knowledge."
 

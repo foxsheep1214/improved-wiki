@@ -33,10 +33,10 @@ from _stage_2_4_generation import (
 from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_1_digest
 
 def _parse_accumulated_to_dict(accumulated) -> dict:
-    """Parse the rolled-up accumulated_digest back to a dict for 2.4/2.6/2.7/2.9.
+    """Parse the rolled-up accumulated_digest back to a dict for 2.4/2.6/2.9.
 
     2.2's per-chunk updated_global_digest refines accumulated_digest across
-    chunks (NashSU rolling-digest parity). 2.4/2.6/2.7/2.9 consume the
+    chunks (NashSU rolling-digest parity). 2.4/2.6/2.9 consume the
     structured fields (book_meta/outline/key_concepts/key_claims/key_entities),
     so the final accumulated value must be a dict. Returns {} for empty/corrupt.
     """
@@ -335,7 +335,7 @@ def _run_chunk_pipeline(
             raise PrepareStopAfter("1.5")
         # Restore the persisted roll-up digest. A pre-roll-up cache (no valid
         # persisted global_digest) would silently feed an empty digest to
-        # 2.4/2.6/2.7/2.9 — same pattern as the stage_2_3_done restore above:
+        # 2.4/2.6/2.9 — same pattern as the stage_2_3_done restore above:
         # warn, invalidate the marker, and fall through to re-run 2.2.
         _digest_cached = progress.get("global_digest")
         _digest_keys = {"book_meta", "outline", "key_concepts", "key_claims", "key_entities"}
@@ -343,7 +343,7 @@ def _run_chunk_pipeline(
             print("  [stage 2.2] ⚠️  stage_2_2_done set but no valid rolled-up "
                   "global_digest persisted (pre-roll-up cache?) — invalidating "
                   "marker and re-running chunk analysis (prevents an empty "
-                  "digest reaching 2.4/2.6/2.7/2.9).")
+                  "digest reaching 2.4/2.6/2.9).")
             unmark_stage_done(config, _h, "stage_2_2_done")
         else:
             global_digest = _digest_cached
@@ -372,11 +372,11 @@ def _run_chunk_pipeline(
     # can stop here and the later spine run restores chunk_analyses without
     # re-analyzing. 2.2 is wiki-independent \u2014 safe to cache before 2.3+ runs.
     # Roll the final accumulated_digest up into global_digest (dict) for
-    # 2.4/2.6/2.7/2.9. Persist so a cached resume restores it.
+    # 2.4/2.6/2.9. Persist so a cached resume restores it.
     global_digest = _parse_accumulated_to_dict(accumulated_digest)
 
     # Verify the rolled-up digest has the 5 required keys (book_meta/outline/
-    # key_concepts/key_claims/key_entities) that 2.4/2.6/2.7/2.9 consume.
+    # key_concepts/key_claims/key_entities) that 2.4/2.6/2.9 consume.
     # Migrated from Stage 2.1 (removed 2026-07-08): the gate now runs on the
     # 2.2 roll-up instead of the former whole-book prior.
     if chunk_analyses and not analyze_only:

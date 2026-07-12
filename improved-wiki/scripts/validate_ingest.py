@@ -257,24 +257,8 @@ def main():
     else:
         check("cache entry found", False)
 
-    # ═══════════════════════════════════════════════
-    # Stage 2.7: Query generation (conditional)
-    # ═══════════════════════════════════════════════
-    print("\n[Stage 2.7] Query generation")
-    queries_dir = WIKI / "queries"
-    query_pages = list(queries_dir.glob("*.md")) if queries_dir.is_dir() else []
-    src_query_pages = [p for p in query_pages
-                       if SOURCE_SLUG in p.read_text(encoding="utf-8", errors="ignore")] if query_pages else []
-    if entry:
-        tmpl = (entry.get("template") or "").lower()
-        qg = stages.get("queries_generated", 0)
-        if tmpl in ("datasheet", "standard"):
-            note("auto-skipped", f"template={tmpl} (datasheet/standard skip Stage 2.7)")
-        else:
-            check(f"{qg} query page(s) generated", 0 <= qg <= 5,
-                  f"cache={qg} disk_attributed={len(src_query_pages)} (0-5 valid; 0 = ---QUERIES: 0---)")
-    else:
-        note("no cache entry", f"disk queries/ has {len(query_pages)} page(s) total")
+    # (Stage 2.7 query-generation check removed 2026-07-12 — NashSU parity:
+    # ingest no longer generates query pages.)
 
     # ═══════════════════════════════════════════════
     # Stage 2.9 (cmp): Comparison generation (conditional)

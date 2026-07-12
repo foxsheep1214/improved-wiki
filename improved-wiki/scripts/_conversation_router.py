@@ -77,7 +77,7 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     #
     # Two prompt shapes carry the list, both must be redacted:
     #   1. Inline single-line (legacy 2.1/2.8 prompt shape): "- Existing wiki pages: a, b, c"
-    #   2. Heading + multi-line list (Stage 2.4/2.7/2.9/3.4):
+    #   2. Heading + multi-line list (Stage 2.4/2.9/3.4):
     #        "# Existing wiki pages ..." followed by indented dash items or a
     #        bare comma-separated line, terminated by a blank line or the next
     #        "#" heading. The old single-line regex only matched shape 1, so

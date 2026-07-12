@@ -5,9 +5,10 @@ Runs ``_lint_suggest.run_structural_lint`` (with suggestions) over ``wiki/``
 and applies the three fixes ported from NashSU ``lint-fixes.ts``:
 
   - broken-link + suggested_target   → rewrite [[broken]] → [[suggested]]
-  - broken-link + no suggestion      → create a ``type: query`` stub page
-                                       (skip with --no-stub — leaves the link
-                                       broken for real-content fill later)
+  - broken-link + no suggestion      → REVIEW/missing-page item (default since
+                                       2026-07-12, NashSU parity: stubs need an
+                                       explicit human choice — pass --stub to
+                                       bulk-create ``type: query`` stub pages)
   - orphan + suggested_source        → append [[orphan]] to the source page
   - no-outlinks + suggested_target   → append [[suggested]] to the page
 
@@ -581,8 +582,16 @@ def _emit_review_for_orphan_delete(
     Always writes (this IS the preview's actionable output — an orphan that
     should genuinely go, like a stale placeholder stub, gets deleted after a
     human approves; a freshly-ingested page that simply has no inbound links
-    yet gets spared). Idempotent: stable filename per page."""
-    review_dir = wiki_dir / "REVIEW" / "suggestion"
+    yet gets spared). Idempotent: stable filename per page.
+
+    Filed under its own ``review_type: orphan`` / ``wiki/REVIEW/orphan/``
+    category (2026-07-12, user-requested) rather than lumped into
+    ``suggestion`` — orphans are a distinct, high-volume review queue the
+    user wants to page through on their own, separate from general
+    suggestions. This is an improved-wiki-only category (no NashSU
+    equivalent — the app has no persistent REVIEW store at all), so adding
+    it doesn't break NashSU parity."""
+    review_dir = wiki_dir / "REVIEW" / "orphan"
     count = 0
     for rel in orphan_rels:
         slug = rel.removesuffix(".md").replace("/", "-").replace("\\", "-")[:60]
@@ -594,7 +603,7 @@ def _emit_review_for_orphan_delete(
         review_dir.mkdir(parents=True, exist_ok=True)
         content = f"""---
 type: review
-review_type: suggestion
+review_type: orphan
 title: "Orphan delete candidate: {rel}"
 created: {date_str}
 resolved: false
@@ -642,19 +651,22 @@ def main() -> int:
                              "Does NOT run the link auto-fixes.")
     parser.add_argument("--emit-review", action="store_true",
                         help="With --delete-orphans and WITHOUT --apply: in addition "
-                             "to the preview listing, write one REVIEW/suggestion "
+                             "to the preview listing, write one REVIEW/orphan "
                              "item per orphan so a human can approve deletion. This "
                              "is what wiki-lint.sh's delete-orphans stage passes "
                              "(2026-07-10): preview + review by default, real delete "
                              "only via an explicit --delete-orphans --apply.")
+    parser.add_argument("--stub", action="store_true",
+                        help="Create empty stub pages (wiki/queries/) for broken links "
+                             "that have no suggested target, and repoint the link at "
+                             "the stub. Default OFF since 2026-07-12 (NashSU parity: "
+                             "stubs come from a human-clicked per-item Fix, never a "
+                             "headless bulk pass) — without this flag, unsuggestable "
+                             "broken links become REVIEW/missing-page items instead.")
     parser.add_argument("--no-stub", action="store_true",
-                        help="Skip creating empty stub pages for broken links that "
-                             "have no suggested target. Only rewrite (typo→canonical) "
-                             "and append fixes run. Use when genuinely-missing concept "
-                             "pages should be filled with real content (deep-research) "
-                             "rather than batch-stubbed. NashSU builds stubs only on a "
-                             "human-clicked per-item Fix, never in bulk — this flag "
-                             "restores that spirit for the headless batch path.")
+                        help="(Deprecated no-op — stub-off is the default since "
+                             "2026-07-12. Kept so existing callers like wiki-lint.sh "
+                             "don't break. An explicit --stub wins.)")
     parser.add_argument("--no-append", action="store_true",
                         help="Skip appending [[wikilinks]] to orphan / no-outlinks "
                              "pages. These come from the low-threshold (0.08) related "
@@ -743,21 +755,24 @@ def main() -> int:
               f"auto-rewrite gate ({BROKEN_LINK_AUTO_REWRITE_MIN_SCORE}) → review items")
         _emit_review_for_uncertain_rewrite(wiki_dir, review_rewrites,
                                            dry_run=not args.apply)
-    if args.no_stub:
+    # Stub-off is the DEFAULT (2026-07-12, NashSU parity: stubs only from an
+    # explicit human choice). --stub restores the bulk stub-creation path;
+    # --no-stub is a deprecated no-op kept for existing callers.
+    if not args.stub:
         _before = len(actions)
         stub_actions = [a for a in actions if a.get("kind") == "stub"]
         actions = [a for a in actions if a.get("kind") != "stub"]
         _skipped = _before - len(actions)
         if _skipped:
-            print(f"[lint-fix] --no-stub: skipping {_skipped} stub-creation "
-                  f"action(s) — broken links with no suggestion → review items")
+            print(f"[lint-fix] skipping {_skipped} stub-creation "
+                  f"action(s) — broken links with no suggestion → review items "
+                  f"(pass --stub to bulk-create stubs instead)")
             # Generate review items for unsuggestable broken links (NashSU parity:
             # handleFix falls back to Review store when no suggestion exists).
             _emit_review_for_broken(project_root, wiki_dir, stub_actions, dry_run=not args.apply)
             # Orphan / no-outlinks findings with no suggestion are dropped by
             # plan_fixes (no stub/append action possible). Route them to review
-            # too (audit M4) — wiki-lint.sh's --fix-links always passes
-            # --no-stub, so this fires by default.
+            # too (audit M4) — fires on the default path.
             _emit_review_for_unsuggestable(wiki_dir, findings, dry_run=not args.apply)
     if args.no_append:
         _before = len(actions)
