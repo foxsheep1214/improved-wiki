@@ -116,7 +116,7 @@ If NO → leave unresolved
 | Before manual review session | Run sweep first to clear stale items |
 | When lint finds many review items | Sweep to reduce noise before investigating |
 
-> **Read-only preview via lint**: `wiki-lint.sh --sweep` runs `sweep_reviews.py` in dry-run and prints a one-line count of auto-resolvable items (e.g. `1 of 3 auto-resolvable, 2 still pending`). It never mutates review files — use it to gauge backlog; run `sweep_reviews.py --apply` (or `/improved-wiki sweep-reviews`) to actually close items.
+> **Auto-applies via lint (default-on)**: `wiki-lint.sh` runs `sweep_reviews.py --apply` as a default stage (`SWEEP=true`; skip with `--no-sweep`) — it actually resolves satisfied review items as part of a normal lint run, not just a preview. Same default-on/auto-apply pattern as cross-source dedup (`DEDUP=true`; `cross_source_dedup.py` applies unless `--dry-run` is passed). To preview without mutating, run the standalone script directly with `--dry-run`.
 
 ## Implementation Notes
 
