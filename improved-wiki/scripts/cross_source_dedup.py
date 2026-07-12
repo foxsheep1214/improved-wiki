@@ -109,12 +109,10 @@ TOKEN_ONLY_JACCARD = 0.5
 # Aggregate files excluded from dedup candidates (NashSU embedding/graph parity:
 # aggregates aren't dedup'd). Keep in sync with _lint_suggest.AGGREGATE_FILES.
 ANCHOR_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
-STATE_FILES = {
-    "lint-cache.json", "lint.json", "ingest-cache.json", "ingest-queue.json",
-    "ingest-lock", "lint-lock", "lint-semantic.json", "dedup-report.json",
-    "dedup-whitelist.json", "review.json", "review-suggestions.json",
-    "embed-cache.json",
-}
+# Shared canonical set + dedup-only extras (2026-07-12: literal copy folded
+# into _lint_suggest.STATE_FILES, same consolidation as the other three tools).
+from _lint_suggest import STATE_FILES as _SHARED_STATE_FILES  # noqa: E402
+STATE_FILES = _SHARED_STATE_FILES | {"dedup-whitelist.json", "dedup-embed-cache.json"}
 # Artifact dirs (lint/REVIEW/clusters/media) come from the shared
 # _paths.WIKI_ARTIFACT_DIRS via iter_wiki_pages — the local copy here had
 # drifted (missing `clusters`, so graph-generated hub pages leaked into dedup).
@@ -143,17 +141,32 @@ def collect_wiki_pages(wiki_dir: Path) -> list[tuple[str, str]]:
 
 
 def load_whitelist(*paths: Path) -> list[list[str]]:
+    """Load user-supplied not-duplicate whitelist files.
+
+    A corrupt whitelist RAISES instead of silently returning [] (2026-07-12):
+    dedup auto-applies merges, so an unreadable whitelist + auto-apply means
+    destructive merges of pairs the user explicitly protected. A missing file
+    is still skipped (nothing was protected)."""
     pairs: list[list[str]] = []
     for p in paths:
         if not p or not p.exists():
             continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as ex:
+            raise RuntimeError(
+                f"dedup whitelist unreadable: {p} ({ex}). Fix or remove the "
+                f"file (expected JSON: {{\"not_duplicates\": [[slugA, slugB], ...]}} "
+                f"or a bare array) — refusing to run dedup without it, since "
+                f"auto-apply would merge pairs the whitelist protects."
+            ) from ex
         raw = data.get("not_duplicates", data) if isinstance(data, dict) else data
         if not isinstance(raw, list):
-            continue
+            raise RuntimeError(
+                f"dedup whitelist malformed: {p} — top level must be a list "
+                f"(or {{\"not_duplicates\": [...]}}), got {type(raw).__name__}. "
+                f"Fix or remove the file before running dedup."
+            )
         for pair in raw:
             if isinstance(pair, list) and len(pair) >= 2:
                 pairs.append([str(x) for x in pair[:2]])
@@ -725,6 +738,16 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
         print(f"[dedup] {pending_merges} merge prompt(s) pending — emitted for "
               f"parallel answering ({len(applied)} merge(s) applied this pass)",
               flush=True)
+        # Partial-apply record (2026-07-12): merges applied THIS pass already
+        # changed files on disk, but the normal report write in run_phase2 is
+        # skipped when ConversationPending propagates — write a partial report
+        # first so no on-disk merge is ever unrecorded.
+        if applied:
+            _write_report(runtime / "dedup-report.json", {
+                "generatedAt": datetime.now().isoformat(timespec="seconds"),
+                "apply": True, "partial": True,
+                "pendingMerges": pending_merges,
+                "phase2": {"groups": groups, "applied": applied}})
         raise ConversationPending()
     return applied
 
@@ -733,12 +756,12 @@ def _persist_merge(project_root, result, backup_dir) -> None:
     for b in result.backup:
         bpath = backup_dir / b["path"]
         bpath.parent.mkdir(parents=True, exist_ok=True)
-        bpath.write_text(b["content"], encoding="utf-8")
+        atomic_write(bpath, b["content"])
     canon = project_root / result.canonical_path
     canon.parent.mkdir(parents=True, exist_ok=True)
-    canon.write_text(result.canonical_content, encoding="utf-8")
+    atomic_write(canon, result.canonical_content)
     for r in result.rewrites:
-        (project_root / r["path"]).write_text(r["new_content"], encoding="utf-8")
+        atomic_write(project_root / r["path"], r["new_content"])
     for p in result.pages_to_delete:
         dpath = project_root / p
         if dpath.exists():

@@ -48,7 +48,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：候选文件全部合规。
 
 ### Stage 0.2 · 源页去重检查
-- **作用**：判断候选文件该跳过、续跑还是从头消化。**唯一完整性信号是 `ingested` marker**（`_finalize_book` 在 Stage 3.7 embeddings 之后置位，见 `scripts/_ingest_skip.py::_stage_0_2_should_skip`）；源页 `wiki/sources/<raw-rel-path>.md` 的存在性作辅助判据。**不依赖 `ingest-cache.json`**——缓存不可靠：可被删、跨对话丢失、并发损坏。
+- **作用**：判断候选文件该跳过、续跑还是从头消化。**统一口径（与 SKILL.md / batch-digest-loop.md 一致）**：agent 在选文件前的批量预检用源页 `wiki/sources/<raw-rel-path>.md` 存在性快查；代码 Stage 0.2 的最终裁决以 **`ingested` marker 为主**（`_finalize_book` 在 Stage 3.7 embeddings 之后置位，见 `scripts/_ingest_skip.py::_stage_0_2_should_skip`），源页存在性为辅。**不依赖 `ingest-cache.json`**——缓存不可靠：可被删、跨对话丢失、并发损坏。
 - **四状态决策**（`stage_4_1` marker 已于 2026-07-08 改名为 `ingested`，已消化书的 stages.json 已同步迁移）：
   1. `ingested` marker 在 + 源页存在 → **skip**（整本完成）。
   2. `ingested` marker 在 + 源页不存在 → **stale marker**（源页被外部删了）→ 清 marker、重新消化。
@@ -80,12 +80,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **注意**：API 路径按 `page+md5前8` 命名，不做跨页 sha256 全局去重（同一图重复出现在不同页会各存一份）。
 
 ### Stage 1.3 · 图片 captioning
-- **作用**：对每张图用 VLM 生成 2-4 句描述（与源文本同语言，NashSU `captionImage` parity）。**一图一调用** + 上下文感知 prompt（前后正文作 anchoring context，NashSU `buildCaptionPromptWithContext` parity；`CONTEXT_CHARS=150`）。
-- **依赖**：`~/.agents/config.json` 配置 caption_provider（primary，无 env-var 替代路径——base_url/model/protocol 无法只靠一个 key 推出）+ 可选 caption_fallback_provider（2026-07-08）。
+- **作用**：对每张图用 VLM 生成 2-4 句描述（与源文本同语言，NashSU `captionImage` parity）。**一图一调用** + 上下文感知 prompt（NashSU `buildCaptionPromptWithContext` parity）。
+- **依赖**：`~/.agents/config.json` 配置 caption_provider（primary，无 env-var 替代路径）+ 可选 caption_fallback_provider（2026-07-08）。
 - **产物**：每图一个 `.caption.txt`。
 - **go/no-go**：每张图有 caption 文件且长度 ≥20 字符。
-- **failover（2026-07-08）**：primary 单图 3 次重试耗尽后，若配了 fallback，自动切 fallback 再试 3 次（打一行日志，非静默）——推荐 primary=GLM-5v-turbo、fallback=本地 Ollama qwen3-vl:8b-instruct，见 `image-caption-strategy.md`。fallback 调用严格串行（`_FALLBACK_SEMAPHORE`，一次一张），与 primary 的 `CAPTION_MAX_WORKERS` 并发互不影响。
-- **无回退**：无 provider（primary 都没配）→ `raise RuntimeError` 暂停；孤立单图两个 provider 都耗尽 → 写 `[待重试]` 占位符（下次运行重试，非质量降级）；连续 3 次（每次都已两个 provider 都试过）失败 → 判定全部 VLM 路径宕机 `raise RuntimeError` 暂停。
+- **failover / 无回退**：primary 重试耗尽自动切 fallback（打一行日志，非静默）；无 provider → `raise RuntimeError` 暂停；孤立单图全部 provider 耗尽 → 写 `[待重试]` 占位符（下次运行重试，非质量降级）；连续失败 → 判定全部 VLM 路径宕机 `raise RuntimeError` 暂停。重试次数、fallback 串行化（`_FALLBACK_SEMAPHORE`）、推荐 provider 配置等细节见 `image-caption-strategy.md`（权威）。
 
 ---
 
@@ -107,7 +106,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.4 · Generation（single-pass pipeline）
 - **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再逐 chunk 生成概念/实体页（源锚定；≤1 chunk 走单发）。**不是** analyze→generate 逐 chunk 交错——全部分析在前，生成在后（2.3 夹在中间，需要全量分析结果）。默认生成 source/concept/entity；若 `schema.md` 声明了额外 typed 文件夹（NashSU schema 驱动路由），LLM 可把贴切的页路由进去（人物→people/、方法→methods/ 等），写盘阶段会接受这些 schema 文件夹。
 - **并行生成（2026-07-09 默认开启）**：多 chunk 时用预计算 slug 清单（`_build_gen_inventory`，slug = slugify(name)，取自已缓存的 2.2 分析）取代"chunk N+1 靠 chunk N 实际产出的 slug 去重"——去重是确定性引用查表，不是像 2.2 rolling digest 那样的内容依赖，NashSU 本身也不对生成分 chunk（一次整书调用），没有"必须串行"的先例要对齐。一次 ingest.py 调用会吐出该书全部未缓存 chunk 的生成 prompt，主对话可批量并发派 sub-agent 作答（同一 `--parallel` 并发上限，见 `batch-parallel-prefetch.md`）。选项退出：`IMPROVED_WIKI_PARALLEL_GEN=0`/`false`/`no`/`off` 回退旧的严格串行累积路径（排查回归时用）。
-- **子步骤（生成前）· 增量关联验证**：`_stage_2_3_resolve_proposed_connections` 拿 2.2 chunk 分析自报的 `connections_to_existing_wiki` 去磁盘验证（确认被引用的 concept/entity/source 页真实存在），产出 verified `incremental_associations` 作为 2.4 生成的 Linkable pages 列表——只允许 LLM wikilink 到真实存在的页面，防止幻觉链接。wiki 为空时跳过。
+- **子步骤（生成前）· 增量关联验证**：`stage_2_3_resolve_proposed_connections` 拿 2.2 chunk 分析自报的 `connections_to_existing_wiki` 去磁盘验证（确认被引用的 concept/entity/source 页真实存在），产出 verified `incremental_associations` 作为 2.4 生成的 Linkable pages 列表——只允许 LLM wikilink 到真实存在的页面，防止幻觉链接。wiki 为空时跳过。
 - **子步骤（生成后收尾）· 源内概念去重**（原 Stage 2.5，已并入 2.4）：对同一本书内部概念去重合并（防同名异义重复页）。**embedding 语义初筛**（cosine ≥0.82，复用 `_dedup_embedding.candidate_pairs`，取代旧的词级 Jaccard，能抓跨语言/同义重复如 傅里叶变换 vs Fourier transform）+ LLM 逐组确认，失败保守不合并。**无回退**：embedding stack 不可用则 `raise` 暂停（不退回 Jaccard）。跳过条件：单 chunk 书。go/no-go：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。
 - **子步骤（生成后）· 源页生成**：所有 chunk 生成完，`stage_2_6_source_page` 从 global digest 生成源页（源索引，列出概念/实体/问题/对比），并入 file_blocks。源页正文按 doctype 分支：book → `## Book Summary` + `## Table of Contents & Key Concepts` + `## Key Takeaways`；paper → `## Paper Summary` + `## Methodology & Results` + `## Key Takeaways`（论文无章节目录，不套 chapter）。与 NashSU Step 2 把 source page 作为生成产物 item 1 对齐。go/no-go：source page 路径为 `wiki/sources/<stem>.md`。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
@@ -139,7 +138,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 3.4 · Review
 - **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate），写入 `wiki/REVIEW/<type>/<date>-<source>-<slug>.md` + `review-suggestions.json`。运行在已写盘文件上。
-- **go/no-go**：review items 数量 ≥0（即使 0 也要记）；`wiki/REVIEW/` 结构合法。
+- **go/no-go**：review items 数量 ≥0（prompt 要求 ≥5 条，但门禁实际接受 ≥0——即使 0 也要记）；`wiki/REVIEW/` 结构合法。
 - **时机偏离 NashSU（有意，audit M2 2026-07-07）**：NashSU 在 `writeFileBlocks` **之前**对 in-memory generation 跑 review；improved-wiki 在 3.1 写盘**之后**对已落盘文件跑。这是刻意选择，理由：(1) review items 本就是非阻断 triage（`resolved: false` 等人工处理），NashSU 的"写盘前"也只是时机不同、并不拦截写盘，故"写盘前拦截能力"在 NashSU 侧也不成立；(2) 写盘后 review 看到 enrichment/wikilink-merge/page-merge 之后的真实 on-disk 内容，finding 反映最终状态，对 lint/cross-source dedup 友好，而写盘前看到的是 pre-enrichment 内容、易产出过时 finding；(3) 真正的结构性失败拦截已由 Stage 2.6 `_stage_2_6_validate_required_sections` 硬门禁（缺 section 直接 raise）覆盖。代价：review 发现问题时页已落盘，需后续修复——但 review items 本就不阻断，该代价可接受。不额外跑 pre-write LLM pass（双倍 review 成本对非阻断 triage 项 ROI 低）。
 
 ### Stage 3.5 · Aggregate Repair + Cache
@@ -188,7 +187,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 **对未来"合并/拆分 stage"讨论的含义**：任何编号调整默认只是文档层 renumber-only，代码与 marker 不动；但有两条**载荷性边界**碰了就坏，不能移动：
 1. `stage_2_2_done | stage_2_3_done` —— wiki-独立/依赖分界；批量 prefetch 靠在这里精确停住（`raise PrepareStopAfter("1.5")`）才能让下一本书的 prefetch 并行跑。
-2. `write_loop_done | write_phase` —— 中间夹着 3.3 enrich 的非幂等 handoff；合并会让 resume 重跑非幂等的 Stage 3.1 写盘，重复 merge 每一页。同时要保持 artifact-before-marker 的写序（防 2026-06-25 的静默丢失 bug），碰这段边界时不要打乱写序。
+2. `write_loop_done | write_phase` —— 中间夹着 wikilink enrichment 的非幂等 handoff；合并会让 resume 重跑非幂等的 Stage 3.1 写盘，重复 merge 每一页。同时要保持 artifact-before-marker 的写序（防 2026-06-25 的静默丢失 bug），碰这段边界时不要打乱写序。
 
 ## 自动验证（ingest.py 内置）
 

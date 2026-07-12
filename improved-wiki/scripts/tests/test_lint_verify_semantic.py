@@ -197,5 +197,18 @@ class TestConversationHandoffRoundtrip(unittest.TestCase):
                     os.environ["IMPROVED_WIKI_ROOT"] = old_root
 
 
+
+class TestNullAffectedPages(unittest.TestCase):
+    """2026-07-12: a finding with affectedPages: null (explicit JSON null, not
+    a missing key) must not crash prompt building."""
+
+    def test_build_prompt_with_null_affected_pages(self):
+        lvs = _load_module()
+        finding = {"id": "lint-semantic-9", "severity": "warning",
+                   "detail": "[stale] something", "affectedPages": None}
+        system, user = lvs.build_verify_prompt([finding], {})
+        self.assertIn("lint-semantic-9", user)
+
+
 if __name__ == "__main__":
     unittest.main()

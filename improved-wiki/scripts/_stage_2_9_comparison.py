@@ -44,7 +44,9 @@ def _existing_comparisons(config: Config) -> list[tuple[str, str]]:
             continue
         try:
             content = f.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+        except OSError as e:
+            print(f"[stage 2.9] warn: unreadable comparison page skipped: "
+                  f"{f} ({type(e).__name__}: {e})")
             continue
         title = _stage_2_frontmatter_title(content)
         out.append((f.stem, title or f.stem))
@@ -224,12 +226,12 @@ def stage_2_9_comparison_generation(
             concept_titles, file_path, config,
             source_context=source_context, comp_cap=comp_cap,
         )
+        # No try/except here (2026-07-12): swallowing the first call's
+        # exception into response="" also hid programming errors and silently
+        # skipped all comparisons. Let it propagate (aligned with 2.6);
+        # ConversationPending passes through as before.
         _stop = ""
-        try:
-            response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)
-        except Exception as e:
-            print(f"[stage 2.9] LLM call failed: {e}")
-            response = ""
+        response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)
         # A6: a max_tokens stop means the tail comparison block was cut and
         # would be silently dropped by parse_file_blocks — warn and retry once.
         if response and _stop == "max_tokens":

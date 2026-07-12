@@ -69,6 +69,15 @@ def _verify_stage_2_2_chunks(chunk_analyses: list[dict], extracted_text: str) ->
     _verify_or_die(len(chunk_analyses) >= 1, "Stage 2.2",
                    f"Chunk analysis produced 0 results. "
                    f"Text was {len(extracted_text)} chars — should produce at least 1 chunk.")
+    # Hard-block error chunks. Since 2026-07-12 _stage_2_2_analyze_chunk raises
+    # instead of returning an error-dict sentinel, so this should never fire on
+    # fresh runs — it is defense in depth against pre-fix cached artifacts.
+    error_chunks = [c.get("chunk_index", i + 1) for i, c in enumerate(chunk_analyses)
+                    if isinstance(c, dict) and "error" in c]
+    _verify_or_die(not error_chunks, "Stage 2.2",
+                   f"{len(error_chunks)}/{len(chunk_analyses)} chunk(s) carry an "
+                   f"'error' key (chunks {error_chunks}) — stale pre-fix cached "
+                   f"analyses. Clear the cached chunk_analyses and re-run Stage 2.2.")
     # Warn if any chunk is suspiciously empty
     empty_chunks = [i for i, c in enumerate(chunk_analyses) if not c.get("concepts_found") and not c.get("entities_found")]
     if empty_chunks:
@@ -96,8 +105,6 @@ def _verify_stage_2_4_file_blocks(
     bare_paths = [p for p, _ in file_blocks if not p.startswith(_KNOWN_PREFIXES)]
     if bare_paths:
         print(f"  ⚠️  Stage 2: {len(bare_paths)} truly bare paths (no subdirectory prefix) — auto-correcting")
-    wrong_dir = [p for p, _ in file_blocks if p.startswith("wiki/sources/") and not any(
-        kw in p.lower() for kw in ["source", raw_file.stem.lower()[:10]])]
     # Only flag if there are many pages in sources/ that look like concepts
     sources_pages = [p for p, _ in file_blocks if p.startswith("wiki/sources/")]
     if len(sources_pages) > 2:

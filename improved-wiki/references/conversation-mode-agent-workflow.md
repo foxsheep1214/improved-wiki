@@ -109,15 +109,6 @@ block-count == requested slugs (minus the `foo-bar` placeholder) before advancin
 
 ## Re-ingest (comparison or correction)
 
-完整流程（backup → delete → re-ingest → compare）见 `references/re-ingest-comparison.md`；速查命令：
-
-```bash
-# 1. Delete old ingest
-~/.venv/bin/python3 ~/.agents/skills/improved-wiki/scripts/ingest.py \
-  --delete "raw/Book/<file>.pdf"
-
-# 2. Re-run fresh
-IMPROVED_WIKI_ROOT="$(pwd)" ~/.venv/bin/python3 \
-  ~/.agents/skills/improved-wiki/scripts/ingest.py \
-  "raw/Book/<file>.pdf"
-```
+先问用户：full redo 还是 analysis-only（`--delete --keep-media`）。
+完整流程（backup → delete → re-ingest → compare，两种变体）与全部命令见
+`references/re-ingest-comparison.md`（权威）。

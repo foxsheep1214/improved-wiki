@@ -150,7 +150,9 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bo
         for page in page_dir.glob("*.md"):
             try:
                 text = page.read_text()
-            except Exception:
+            except Exception as e:
+                print(f"[lifecycle] Skipping unreadable page {page_type}/{page.name} "
+                      f"({type(e).__name__}: {e}) — cannot check its sources.")
                 continue
             # Naive sources_str.split(",") breaks when a source filename
             # itself contains a comma — use the shared frontmatter-array

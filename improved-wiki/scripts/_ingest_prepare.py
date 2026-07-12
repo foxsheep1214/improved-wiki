@@ -14,6 +14,7 @@ from _core import (
     file_sha256,
     load_progress,
     save_progress,
+    delete_progress_keys,
     parse_file_blocks,
     set_current_file as _set_current_file,
     is_stage_done,
@@ -134,12 +135,16 @@ def _prepare_source_page(
         return file_blocks
 
     # LLM didn't use FILE block format — generate placeholder
-    source_rel = f"sources/{raw_file.relative_to(config.raw_root).with_suffix('.md')}"
+    try:
+        _raw_rel = raw_file.relative_to(config.raw_root)
+    except ValueError:
+        _raw_rel = Path(raw_file.name)
+    source_rel = f"sources/{_raw_rel.with_suffix('.md')}"
     book_meta = global_digest.get("book_meta", {})
     title = book_meta.get("title", raw_file.stem) if isinstance(book_meta, dict) else raw_file.stem
     stub = f"---\ntype: source\ntitle: \"{title}\"\n"
     stub += f"created: {time.strftime('%Y-%m-%d')}\nupdated: {time.strftime('%Y-%m-%d')}\n"
-    stub += f"tags: []\nrelated: []\nsources: [\"raw/{raw_file.relative_to(config.raw_root)}\"]\n---\n\n"
+    stub += f"tags: []\nrelated: []\nsources: [\"raw/{_raw_rel}\"]\n---\n\n"
     stub += f"**Title:** {title}\n**Author:** {raw_file.stem}\n\n"
     stub += f"## Global Digest\n\n```yaml\n{json.dumps(global_digest, ensure_ascii=False, indent=2)[:4000]}\n```\n\n"
     stub += f"## Key Concepts\n\n"
@@ -207,17 +212,18 @@ def _do_prepare(
                 print(f"  [extract] ⚠️ Cached extraction method '{_cm}' is legacy "
                       f"(pre-minerU) — invalidating extraction/image/caption cache "
                       f"and re-running minerU")
-                _invalidated = False
-                for _k in ("extracted_text", "extract_method", "stage_1_2", "stage_1_3"):
-                    if _k in progress:
-                        progress.pop(_k, None)
-                        _invalidated = True
+                # save_progress is a MERGE-write: popping keys from the local
+                # dict then saving it back can never delete a persisted key.
+                # delete_progress_keys does a locked load→del→write (真删除).
+                _stale = [k for k in ("extracted_text", "extract_method",
+                                      "stage_1_2", "stage_1_3") if k in progress]
+                for _k in _stale:
+                    progress.pop(_k, None)
+                if _stale:
+                    delete_progress_keys(config, h, _stale)
                 for _stage in ("stage_1_1_done", "stage_1_2_done"):
                     if is_stage_done(config, h, _stage):
                         unmark_stage_done(config, h, _stage)
-                        _invalidated = True
-                if _invalidated:
-                    save_progress(config, h, progress)
         # ── write_phase short-circuit (Bug 2 fix, 2026-06-25) ──
         # If the Stage 3.1-3.2 write phase already completed in a prior run,
         # skip the entire 2.x pipeline. Re-running Stage 2.4 generation would
@@ -283,8 +289,17 @@ def _do_prepare(
                 # method is "mineru-api" for all PDFs (extraction quality gate
                 # removed 2026-07-08; all minerU runs produce images on disk).
                 ocr_out = config.extract_tmp_dir / raw_file.stem
-                if ocr_out.exists():
-                    stage_1_2_result = _stage_1_2_extract_from_mineru(ocr_out, config, raw_file)
+                if not ocr_out.exists():
+                    # No silent count-0: a mineru extraction with no OCR output
+                    # dir means extract_tmp_dir was cleaned — caching {count: 0}
+                    # here would permanently record the whole book as image-free.
+                    raise RuntimeError(
+                        f"[Stage 1.2] minerU OCR output missing: {ocr_out} — "
+                        f"extract_tmp_dir was likely cleaned after extraction. "
+                        f"Re-run extraction (clear the cached extracted_text/"
+                        f"extract_method for {raw_file.name}) instead of "
+                        f"silently recording 0 images.")
+                stage_1_2_result = _stage_1_2_extract_from_mineru(ocr_out, config, raw_file)
                 # Save progress immediately after 1.2 completes
                 save_progress(config, h, {"stage_1_2": stage_1_2_result})
                 mark_stage_done(config, h, "stage_1_2_done")

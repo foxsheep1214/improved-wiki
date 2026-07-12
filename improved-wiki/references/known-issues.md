@@ -20,8 +20,10 @@
 ### `_stage_1_2_extract_from_mineru()` 两处硬编码 width/height=0（已修，2026-07-06）
 `_stage_1_2_images.py::_stage_1_2_extract_from_mineru()` 有两个分支（img_source_dir 存在时的正常复制分支、OCR 缓存续跑的 media_dir 恢复分支）在构造 manifest 图片条目时把 `"width": 0, "height": 0` 写死，而不像同文件里的 `_stage_1_2_harvest_images()` 那样用 PIL 读真实尺寸。后果：凡是走这个函数生成 manifest 的书，`_manifest.json` 里全部图片尺寸恒为 0×0——图片文件本身完全正常，只是元数据没填。表征：caption 失败时的占位符统一显示"尺寸 0×0"，无论实际图片多大（发现于《High Resolution Radar 2nd - 1995 - Wehner》，同一天摄入的《Fundamentals of Radar Signal Processing》走了另一条会算真实尺寸的路径，manifest 正常）。**已修复**：抽出共享辅助 `_stage_1_2_image_size()`（PIL 读取，读失败兜底 (0,0)，跟 `_stage_1_2_harvest_images()` 一致的防御写法），两处硬编码分支都改用它。**已回填**：Wehner 现有 `_manifest.json` 332 张图的尺寸已用现存图片文件补齐，无需重跑 VLM。
 
-### Stage 2.6 source 页偶发整体丢失 section 结构，根因未 100% 锁定（检测网已升级为硬门禁，2026-07-07）
-《Fundamentals of Radar Signal Processing - 2005 - Richard》今早首次摄入的 source 页完全没有走模板——标题是自创的 Bibliographic Information/Overview/Chapter Outline/Key Concepts，Main Arguments & Findings / Key Entities / Connections / Contradictions / Recommendations 全部缺失。排查过程：archived 的 Stage 2.6 conversation 产物（`.llm-wiki/conversation/47e0adf0/Stage-2-6-SourcePage-532d2243.txt`，生成时间 11:13:16，仅比 log.md 记录的摄入完成时间 11:17:17 早 4 分钟）本身内容完全合规（7 个 section 齐全、英文、43 条 claim）；`_normalize_source_frontmatter()` 只碰 frontmatter 不碰 body，排除了它改坏内容的可能；也没有可复用的旧 source 页触发 merge（首次摄入）；代码里也搜不到硬编码的 fallback 模板匹配这个坏结构。但一份 18 秒后生成的 wikilink-enrichment 提示词（`LLM-task-07027825.md`，11:13:34）里，`## PAGE: sources/Book/Fundamentals of Radar Signal Processing - 2005 - Richard.md` 下面已经是坏结构——**说明损坏发生在 Stage 2.6 生成"之后"、写盘"之前/期间"的 18 秒窗口内**，但受限于现有日志/缓存粒度，未能锁定到具体是哪一行代码/哪一次写入把好内容换成了坏内容。**检测网已升级为硬门禁**（2026-07-07，audit M5）：`_stage_2_6_validate_required_sections(response, source_kind)`（A10）在 `_stage_2_6_source_page.py` 对比 doctype-aware 的 7 个必需 H2 标题（paper 用 Paper Summary/Methodology & Results，其余用 Book Summary/Table of Contents & Key Concepts），缺失即 **raise RuntimeError** 暂停 ingest（不再是 warn-only，与 no-silent-fallback 政策一致）。这覆盖"LLM 自创结构"的失败模式；写盘窗口的损坏仍需写盘后校验（未做，因根因未锁且为单次事件）。**后续如再复现，应保留当次的 `.llm-wiki/conversation/<hash>/` 目录不要清理，为根因排查留证据**。
+### Stage 2.6 source 页偶发整体丢失 section 结构（单次事件 2026-07-07，根因未锁定；检测网已升级为硬门禁）
+现象：《Fundamentals of Radar Signal Processing - 2005 - Richard》首次摄入的 source 页落盘后不走模板（自创标题、必需 section 大面积缺失），但归档的 Stage 2.6 conversation 响应本身完全合规——损坏发生在生成"之后"、写盘"之前/期间"的 ~18 秒窗口内，受限于日志粒度未能锁定具体代码，此后未复现。
+现有防线：`_stage_2_6_validate_required_sections()` 硬门禁（doctype-aware 必需 H2 清单，缺失即 raise RuntimeError），覆盖"LLM 自创结构"失败模式；写盘窗口损坏无写盘后校验（单次事件，未加）。
+**行动项：如再复现，保留当次 `.llm-wiki/conversation/<hash>/` 目录不要清理，为根因排查留证据。**
 ~~`sweep_reviews.py` 规则阶段子串匹配假阳性（实测 ~15/197 误 auto-resolve）~~ **已修复**：`pageExists` 现为 EXACT 匹配（文件名 id / kebab 归一化 id / frontmatter title 三种精确等值，无子串匹配，对齐 NashSU）。保留 dry-run 先行的习惯即可。
 
 ## Design decisions (not bugs)
@@ -42,7 +44,7 @@ Stage 3.1 写盘后，pipeline 生成多个 `LLM-task-*.md` merge prompt（`.llm
 minerU 32 页/chunk 串行。272 页书（9 chunks）可能超 600s 终端超时。**重跑 `ingest.py` 从缓存恢复**——已完成 chunk 跳过。`--stop-after-stage 0` 分离 OCR 与 LLM 阶段。
 
 ### `--delete` for re-ingest
-`ingest.py --delete "raw/Book/<file>.pdf"` 删 source 页 + 孤儿 concepts/entities + media + cache，再重跑即可干净重摄。
+`ingest.py --delete` 删 source 页 + 孤儿 concepts/entities + media + cache，再重跑即可干净重摄；先问用户 full-redo 还是 analysis-only（`--keep-media`），权威流程见 `re-ingest-comparison.md`。
 
 ### Bash 工具 cwd 不在调用间持久
 `ingest.py` 靠 `Config.from_env`（`IMPROVED_WIKI_ROOT` env 或 `os.getcwd()`）解析项目根；没有 `--project` 参数。每次调用前必须显式 `cd <project> && ...`——不能指望上一次 `cd` 还生效。cwd 错了会直接 file-not-found（2026-06-28 起：先校验 raw 文件存在再进 context probe，报错更直白，但 cwd 问题本身不会自动修）。

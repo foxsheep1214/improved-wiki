@@ -75,13 +75,16 @@ This is a common idiom: "only run if at least 1GB free".
 
 ## Lint cron (separate, optional)
 
-The ingest cron handles new files. A second cron can run **Lint** periodically to:
-- Mark `status: outdated` on news pages > 6 months old
-- Detect newly broken wikilinks
-- Re-check `wiki/log.md` for missing entries
+The ingest cron handles new files. A second cron can run **Lint** periodically. The lint family has four passes:
+- **structural** (`wiki-lint.sh`): broken-link / orphan / no-outlinks / missing-frontmatter — deterministic, cron-safe
+- **semantic** (`wiki-lint-semantic.py`): LLM 判读，走 conversation-mode handoff，需要 agent 作答 — NOT cron-safe
+- **review sweep** (`sweep_reviews.py`): auto-resolve stale review items — run manually after batch ingests
+- **cross-source dedup** (`cross_source_dedup.py`): 跨源重复页检测/合并 — manual, LLM-confirmed
+
+Only the structural pass belongs in cron:
 
 ```bash
-# Lint weekly (Sunday 04:00)
+# Structural lint weekly (Sunday 04:00)
 0 4 * * 0 $SKILL_DIR/scripts/wiki-lint.sh
 ```
 

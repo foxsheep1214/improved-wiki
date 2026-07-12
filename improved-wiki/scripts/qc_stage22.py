@@ -54,6 +54,15 @@ CLAIM_LINE = re.compile(r"^\s*-\s*claim:", re.MULTILINE)
 EVIDENCE_LINE = re.compile(r"^\s*evidence:\s*[\"']?[^\"'\s]", re.MULTILINE)
 
 
+def _chunk_num(p: Path):
+    """Chunk number from a Stage-2-2-Chunk-*.txt filename, or None when the
+    glob matched but the number part isn't numeric (e.g. a stray
+    Stage-2-2-Chunk-copy.txt). Callers must tolerate None instead of crashing
+    the whole QC scan on one oddly-named file."""
+    m = re.search(r"Chunk-(\d+)", p.name)
+    return int(m.group(1)) if m else None
+
+
 def check(txt_file: Path) -> tuple[bool, str]:
     text = txt_file.read_text(encoding="utf-8", errors="replace")
     size = len(text)
@@ -96,16 +105,25 @@ def main() -> int:
     for conv_dir in sorted(conv_root.iterdir()):
         if args.conv and conv_dir.name != args.conv:
             continue
-        targets = sorted(
+        # Tolerant sort key: files whose chunk number can't be parsed sort
+        # last (by name) with a warning, instead of AttributeError-ing the run.
+        candidates = sorted(
             conv_dir.glob("Stage-2-2-Chunk-*.txt"),
-            key=lambda p: int(re.search(r"Chunk-(\d+)", p.name).group(1)),
+            key=lambda p: (_chunk_num(p) is None, _chunk_num(p) or 0, p.name),
         )
+        targets = []
+        for p in candidates:
+            if _chunk_num(p) is None:
+                print(f"  ⚠ skipping {p.name}: no numeric chunk index in name",
+                      file=sys.stderr)
+                continue
+            targets.append(p)
         if not targets:
             continue
         print(f"=== {conv_dir.name} ===")
         for f in targets:
             total += 1
-            n = re.search(r"Chunk-(\d+)", f.name).group(1)
+            n = _chunk_num(f)
             ok, msg = check(f)
             status = "✓" if ok else "✗"
             print(f"  chunk {n}: {status} {msg}")

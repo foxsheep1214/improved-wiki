@@ -17,20 +17,34 @@ from _paths import atomic_write
 
 
 def _read_queue(config: Config) -> list[dict]:
-    """Read ingest-queue.json, returning entries sorted by addedAt (oldest first)."""
+    """Read ingest-queue.json, returning entries sorted by addedAt (oldest first).
+
+    A corrupted queue file is preserved (renamed ``.corrupt-<unix-secs>``) with a
+    loud warning instead of being silently ignored — the next ``_write_queue``
+    would otherwise clobber it, losing whatever entries it still held.
+    """
     qpath = config.runtime_dir / "ingest-queue.json"
     if not qpath.exists():
         return []
     try:
         queue = json.loads(qpath.read_text(encoding="utf-8"))
         if not isinstance(queue, list):
-            return []
+            raise ValueError(f"expected a JSON list, got {type(queue).__name__}")
         # Sort: priority first, then oldest addedAt
         return sorted(queue, key=lambda e: (
             0 if e.get("priority") else 1,
             e.get("addedAt", 0),
         ))
-    except Exception:
+    except Exception as e:
+        corrupt = qpath.with_name(f"{qpath.name}.corrupt-{int(time.time())}")
+        print(f"⚠️  [watch] {qpath} corrupted ({type(e).__name__}: {e}) — "
+              f"preserving it as {corrupt.name} and starting with an empty queue.",
+              flush=True)
+        try:
+            qpath.rename(corrupt)
+        except OSError as rename_err:
+            print(f"⚠️  [watch] could not preserve corrupt queue file: {rename_err}",
+                  flush=True)
         return []
 
 
@@ -217,7 +231,10 @@ def ingest_watch(
 
             for entry, fp in wave_files:
                 result = result_by_path.get(str(fp))
-                if result and result.get("status") == "ok":
+                # "skipped" (source page already exists / already complete) is a
+                # successful outcome, not a failure — mark it done so the entry
+                # doesn't burn retries on every cycle.
+                if result and result.get("status") in ("ok", "skipped"):
                     entry["status"] = "done"
                     entry["completedAt"] = int(time.time() * 1000)
                     entry["error"] = None

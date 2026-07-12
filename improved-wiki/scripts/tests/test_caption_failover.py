@@ -28,16 +28,21 @@ def _make_config(tmp: Path, **overrides) -> _core.Config:
         cache_path=tmp / "rt" / "ingest-cache.json",
         progress_dir=tmp / "rt" / "ingest-progress",
         extract_tmp_dir=tmp / "rt" / "extract-tmp",
-        llm_base_url="https://example.invalid", llm_model="m", llm_api_key="",
-        llm_protocol="anthropic",
+        llm_model="m",
         caption_api_key="glm-key", caption_base_url="https://open.bigmodel.cn/api",
         caption_model="glm-5v-turbo", caption_protocol="anthropic",
-        chunk_size=60000, chunk_overlap=3000,
+        chunk_overlap=3000,
         source_budget=100000, target_chars=60000, target_tokens=30000,
         max_tokens=8192, conversation_prefix="ab12cd34",
     )
     kwargs.update(overrides)
-    return _core.Config(**kwargs)
+    # Config's field set evolves (e.g. llm_base_url/llm_api_key/llm_protocol/
+    # chunk_size were dropped 2026-07); pass only fields the current dataclass
+    # accepts so this caption-focused fixture doesn't break on unrelated
+    # Config changes.
+    import dataclasses
+    allowed = {f.name for f in dataclasses.fields(_core.Config)}
+    return _core.Config(**{k: v for k, v in kwargs.items() if k in allowed})
 
 
 class TestLoadCaptionProviderFallback(unittest.TestCase):
@@ -210,6 +215,62 @@ class TestCaptionOneImageWithFailover(unittest.TestCase):
         self.assertIsNone(caption)
         self.assertEqual(err, "primary down")
         self.assertEqual(used, "primary")
+
+    def test_corrupt_image_error_skips_fallback(self):
+        # A corrupt image file can't be fixed by another provider — the
+        # failover must short-circuit instead of burning fallback attempts.
+        calls = []
+
+        def fake(img, provider, media_dir, ctx_map):
+            calls.append(provider["model"])
+            return None, "corrupt-image: UnidentifiedImageError: cannot identify image file"
+        cap._stage_1_3_caption_one_image = fake
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(
+                Path(d),
+                caption_fallback_base_url="http://127.0.0.1:11434",
+                caption_fallback_model="qwen3-vl:8b-instruct",
+            )
+            caption, err, used = cap._stage_1_3_caption_one_image_with_failover(
+                {"filename": "p1.jpg"}, cfg, Path(d), {})
+        self.assertIsNone(caption)
+        self.assertTrue(err.startswith("corrupt-image:"))
+        self.assertEqual(used, "primary")
+        self.assertEqual(calls, ["glm-5v-turbo"])  # fallback never invoked
+
+
+class TestCorruptImageRoundClassification(unittest.TestCase):
+    """Corrupt images get a permanent skip marker, don't trip the
+    consecutive-failure circuit breaker, and are not re-pending."""
+
+    def setUp(self):
+        self._orig = cap._stage_1_3_caption_one_image_with_failover
+
+    def tearDown(self):
+        cap._stage_1_3_caption_one_image_with_failover = self._orig
+
+    def test_corrupt_images_do_not_trip_circuit_breaker(self):
+        def fake_failover(img, config, media_dir, ctx_map):
+            return None, "corrupt-image: OSError: image file is truncated", "primary"
+        cap._stage_1_3_caption_one_image_with_failover = fake_failover
+
+        n = cap.CONSECUTIVE_FAIL_PAUSE + 2  # would raise if counted as failures
+        with tempfile.TemporaryDirectory() as d:
+            media_dir = Path(d)
+            cfg = _make_config(media_dir / "cfg")
+            pending = [{"filename": f"p{i}.jpg"} for i in range(n)]
+            captioned = cap._stage_1_3_caption_one_round(
+                pending, cfg, media_dir, {}, "")  # must NOT raise
+            self.assertEqual(captioned, 0)
+            for img in pending:
+                marker = (media_dir / (img["filename"] + ".caption.txt")).read_text(
+                    encoding="utf-8")
+                self.assertIn("[图片损坏，跳过 VLM 描述]", marker)
+                # The marker is permanent: not detected as a failed caption,
+                # so the image is not re-pending on later rounds/runs.
+                self.assertFalse(cap._stage_1_3_is_caption_failed(marker))
+            self.assertEqual(cap._stage_1_3_pending_images(pending, media_dir), [])
 
 
 class TestFallbackSerialization(unittest.TestCase):

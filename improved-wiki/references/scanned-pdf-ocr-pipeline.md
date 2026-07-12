@@ -72,8 +72,8 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 | 产物 | 位置 | 验证标准 |
 |------|------|---------|
 | 每页文字 | `p<NNN>.txt`（1:1 对应） | chars > 100 |
-| 提取图片 | `wiki/media/<slug>/p<NNN>-mineru_<id>.<ext>`（chunk 处理时直接落盘，不是事后单独提取） | 图片数 ≥ 原文引用数 |
-| 图片 caption | `wiki/media/<slug>/*.caption.txt`（`_stage_1_1_scanned_assemble_manifest()` 跑完直接调 caption，不等 ingest.py 里独立的 Stage 1.3） | 每图都有，长度 ≥20 字符 |
+| 提取图片 | `wiki/media/<type>/<pdf-stem>/p<NNN>-mineru_<id>.<ext>`（镜像 raw/ 结构；chunk 处理时直接落盘，不是事后单独提取） | 图片数 ≥ 原文引用数 |
+| 图片 caption | `wiki/media/<type>/<pdf-stem>/*.caption.txt`（`_stage_1_1_scanned_assemble_manifest()` 跑完直接调 caption，不等 ingest.py 里独立的 Stage 1.3） | 每图都有，长度 ≥20 字符 |
 | 全本合并文字 | 由 `_stage_1_1_assemble_ocr_text()` 拼接所有 `p<NNN>.txt` 返回（没有独立的 `_full_text.txt` 文件） | chars > 2000 |
 | 统计文件 | `_mineru_stats.json` | 用于崩溃恢复 |
 

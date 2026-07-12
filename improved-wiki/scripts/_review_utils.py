@@ -52,8 +52,14 @@ def review_id_for(rtype: str, title: str) -> str:
     """
     key = f"{rtype}::{normalize_review_title(title)}"
     h = 0x811C9DC5
-    for ch in key:
-        h ^= ord(ch)
+    # Iterate UTF-16 code units (little-endian byte pairs), matching NashSU's
+    # JS `charCodeAt` semantics: a non-BMP character (emoji, rare CJK ext)
+    # hashes as its surrogate PAIR, not its single code point. Python's
+    # `ord(ch)` (code points) agreed only for BMP text and forked ids for
+    # non-BMP titles.
+    data = key.encode("utf-16-le")
+    for i in range(0, len(data), 2):
+        h ^= data[i] | (data[i + 1] << 8)
         # FNV prime 0x01000193, kept to 32 bits (JS Math.imul semantics).
         h = (h * 0x01000193) & 0xFFFFFFFF
     return f"review-{(h & 0xFFFFFFFF):08x}"

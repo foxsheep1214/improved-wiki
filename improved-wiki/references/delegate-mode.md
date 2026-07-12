@@ -206,15 +206,11 @@ done
 
 ### Re-ingest pattern: `--delete` first — ask full-redo vs analysis-only
 
-`--delete` removes the source page, orphaned concept/entity pages (those whose
-only source was the deleted book), media directory (images+captions — backed
-up to `page-history/media/` first, 2026-07-10), and cache entry, then a fresh
-run re-ingests cleanly. **Ask the user first** whether they want a full redo
-(re-extract OCR/images/captions too) or an analysis-only re-ingest that reuses
-existing OCR/images/captions (`--delete --keep-media`) — media has no separate
-cache, so once removed without `--keep-media` it can only come back via a full
-minerU re-call. **Authoritative flow (backup → delete → re-ingest → compare),
-both variants: `references/re-ingest-comparison.md`.**
+`--delete` removes the source page + orphan concepts/entities + media + cache entry;
+`--delete --keep-media` keeps media for an analysis-only re-ingest. **Ask the user
+first** which flow they want — never default to a full wipe. Authoritative flow
+(backup → delete → re-ingest → compare, both variants, media-backup behavior):
+`references/re-ingest-comparison.md`.
 
 ### Source page may be merged multiple times（已代码化，2026-07-09）
 
@@ -226,64 +222,17 @@ FILE block 在写循环中重复出现，与我们自己刚写的字节级相同
 same-slug collision merge，不是冗余。如再见到重复 merge 任务，属回归，应查代码
 而非手工绕过。
 
-## 链式作答 → 每个 handoff 独立 subagent（L4 修订，2026-07-08）
+## 每个 LLM handoff = 一个全新 subagent（强制政策；L4 修订，2026-07-08）
 
-**旧政策（2026-07-02）：** 链式作答上限 2 个 handoff，用于压缩交接死区（≈30%
-墙钟），叠加预取后单书 ≈ -15%。
+可操作规则：
 
-**为什么废除：** 上限=2 只是**减缓**上下文累积，不**消除**它。2026-07-08 的
-EW and Radar Systems Handbook 事故证明：即使不连答（在主对话里逐个答），
-主对话自身的 context 也会随每个 chunk 的 250K 字符 prompt + 响应单调累积，
-到后面的 chunk 时模型注意力被稀释到全书广度上，退化成"凭记忆答题"而非读原文。
-C1/C3 硬门禁（source_quotes / key_details≤5）是在**输出端**拦症状，但**输入端**
-的根因——上下文累积导致注意力分散——只有结构隔离能治。
+1. **每个 LLM handoff**——逐 chunk 的 2.2/2.4，以及单发的 2.4 去重确认 / 2.6 源页 / 2.9 对比 / 3.4 review / merge loop / wikilink enrichment——**一律派一个全新 subagent 作答，硬上限 1 handoff，答完即退出销毁**（不是"看着还行就多答一个"）。
+2. **主对话零 LLM 作答，只做编排**（派发、re-invoke、进度跟踪）。主对话直接答 prompt 等价于"连答"，同样退化，同样禁止。
+3. **唯一例外：context probe**（~百字节小往返，发生在任何累积之前，且 probe 的意义就是测当前会话模型）。
+4. 派发 prompt 必须显式声明：**"这是自包含的单一任务——不要再派发任何子 agent 或后台进程，自己读完整个 chunk、自己写出单个完整的 YAML/FILE 答案文件。"**（防 subagent 内部再拆分，产出不满足 schema 契约。）
+5. 主对话收到 "completed" 后，**必须先验证 `<stage-slug>.txt` 确实存在且通过 schema 校验，再 re-invoke `ingest.py`**——"completed" 只代表 subagent 停止，不代表任务完成。
+6. 每次 re-invoke 前跑 `scripts/qc_stage22.py`，防退化响应蒙混过关。
+7. 仅限单书串行；跨书 2.3+ 并行仍然禁止（不变量不变）。
+8. **为什么**：上下文累积（每 chunk prompt ~250K 字符）稀释注意力，模型退化成"凭记忆答题"；结构隔离是唯一根治，等价 NashSU per-call 无状态 `streamChat`。代价 ~5-7 次/书交接死区（≈30% 墙钟），质量优先，接受。
 
-**新政策（2026-07-08；当晚扩展到全部 handoff）：每个 LLM handoff——逐 chunk
-的 2.2/2.4，以及单发的 2.4 去重确认 / 2.6 源页 / 2.9 对比 /
-3.4 review / merge loop / wikilink enrichment——一律派一个全新 subagent，
-上限 1 handoff，答完即销毁。主对话零 LLM 作答，只做编排。**
-
-- **唯一例外：context probe**（一次 ~百字节小往返，发生在任何累积之前，派
-  subagent 只添延迟无收益；且 probe 的意义就是测"当前会话模型"的窗口）。
-- **为什么扩展**：单发 handoff 每本书只出现一次，单书场景累积可忽略；但 batch
-  连续消化多本书时，主对话要吃下 N 组 2.6+2.9+3.4（每组几十到几百 KB）+
-  编排噪音——同一条注意力稀释曲线，只是斜率更缓。全 handoff 隔离后主对话内容
-  恒定为纯编排，与 NashSU 的 per-call 无状态 `streamChat` 完全等价，不再是
-  "关键处等价"的折衷。
-- **代价**：每本书多 ~5-7 次交接死区。质量优先，接受。
-
-- subagent 的上下文里**只有**这一个 chunk 的 prompt（源文 + schema + 前序 digest），
-  没有其他 chunk 的干扰——等价于 NashSU 子进程的无状态 `streamChat`。
-- 主对话的 context 保持干净，只做编排（派发、re-invoke、进度跟踪），不承载 chunk 原文。
-- **1 handoff 是硬上限，不是"看着还行就多答一个"**：答完这一个 chunk 必须退出，
-  即使书还没摄入完。下一个 chunk 由主对话重新派发新 subagent。
-- 交接死区重新成为代价（≈30% 墙钟），但这是用速度换质量——放弃旧 L4 的 -15% 效率。
-- 不同 stage 类型的 handoff 一律留给主对话重新派发（保证 prompt 规则正确）。
-- 仅限单书串行；跨书 2.3+ 并行仍然禁止（不变量不变）。
-- 每次 re-invoke 前仍跑 `scripts/qc_stage22.py` 质量检查防止退化响应蒙混过关。
-- **Skolnik 事故（2026-07-07）的教训仍然适用**：那次根因是连答 14 个 chunk
-  不退出；新政策下不可能发生（上限=1），但主对话如果跳过 subagent 直接自己答
-  多个 chunk，效果等价于"连答"，同样退化——所以"主对话直接答"也被禁止。
-
-### Hansen 事故（2026-07-09）：subagent 自行拆分单个 handoff 会产生"已完成"但答案文件不存在
-
-一个 2.2 chunk 的原始文本 ~250K 字符，subagent 有时会把这一个 handoff
-**自行拆成多个自己派发的子任务**（如"Ch1+Ch2 start / Ch2 continued / Ch3
-part1 / Ch3 part2"分头并行提取），逐段返回散装的 entities/concepts/claims 文本，
-最终给主对话回报"completed"，但从未把结果写成 schema 要求的单个 YAML 写入
-`<stage-slug>.txt`——因为分头提取的每个子任务各自只覆盖了整体 schema 的一部分
-（例如只有 concepts 没有 updated_global_digest），没有一个子任务是"完整答案"。
-主对话核对 `.txt` 文件是否存在时才发现文件从未生成，此前的分头输出全部作废，
-被迫重新派发一次完整版 subagent 重做——纯浪费。
-
-**根因**：delegate-mode 的"1 handoff = 1 subagent"约束只界定了主对话侧的派发
-粒度，没有明确禁止 subagent 自己在内部再次派发 Agent 工具。当 chunk 文本很长时，
-subagent 会"合理地"想要并行化，但并行化的产物不满足 schema 契约。
-
-**修复**：派发 2.2/2.4 等 chunk-analysis handoff 时，prompt 必须显式包含：
-"这是一个自包含的单一任务——不要派发任何后台进程或等待任何其他 agent，你自己
-读完整个 chunk、自己分析、自己写出这一个完整的 YAML 答案文件，仅此而已。"
-主对话在收到"completed"通知后，**必须先验证 `<stage-slug>.txt` 确实存在
-且内容通过 schema 校验，再继续 re-invoke `ingest.py`**——不能只信任
-"completed"状态本身，那只代表 harness 认为 subagent 停止了，不代表它完成了
-被要求的任务。
+事故索引（一句话存档，细节不再展开）：**Skolnik（2026-07-07）**连答 14 个 chunk 不退出，后期输出退化成占位内容——催生 per-chunk 隔离；**EW and Radar Systems Handbook（2026-07-08）**主对话逐个直答 5 个 chunk 仍退化，证明累积本身（而非连答）是根因——政策当晚扩展到全部 handoff；**Hansen（2026-07-09）**subagent 内部自行拆分 handoff 并行提取，回报 completed 但从未写出完整 `<stage-slug>.txt`——催生规则 4/5。

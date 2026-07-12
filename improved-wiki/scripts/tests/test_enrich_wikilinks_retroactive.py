@@ -79,5 +79,58 @@ class TestBackfill(unittest.TestCase):
         self.assertIn("## Section\n\nImportant text.\n", out)
 
 
+class TestFixBrokenScoreGate(unittest.TestCase):
+    """2026-07-12: --fix-broken applies only suggestions at/above the shared
+    BROKEN_LINK_AUTO_REWRITE_MIN_SCORE gate; lower scores are listed for
+    manual handling, never rewritten."""
+
+    def _run(self, findings):
+        import contextlib
+        import io
+        import tempfile
+        from unittest import mock
+        import _lint_suggest
+        with tempfile.TemporaryDirectory() as t:
+            wiki = Path(t) / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            page = wiki / "concepts" / "a.md"
+            page.write_text(
+                "---\ntype: concept\ntitle: A\n---\n\n"
+                "See [[hi-score-typo]] and [[lo-score-typo]].\n",
+                encoding="utf-8")
+            out = io.StringIO()
+            with mock.patch.object(_lint_suggest, "run_structural_lint",
+                                   return_value=findings), \
+                 contextlib.redirect_stdout(out):
+                fp, fl = ewr.fix_broken_links(wiki, apply=True)
+            return fp, fl, page.read_text(encoding="utf-8"), out.getvalue()
+
+    def test_above_gate_rewritten_below_gate_listed(self):
+        findings = [
+            {"type": "broken-link", "page": "concepts/a.md",
+             "broken_target": "hi-score-typo",
+             "suggested_target": "hi-score.md", "suggested_score": 0.96},
+            {"type": "broken-link", "page": "concepts/a.md",
+             "broken_target": "lo-score-typo",
+             "suggested_target": "lo-score.md", "suggested_score": 0.82},
+        ]
+        fp, fl, content, printed = self._run(findings)
+        self.assertEqual((fp, fl), (1, 1))
+        self.assertIn("[[hi-score]]", content)          # rewritten
+        self.assertIn("[[lo-score-typo]]", content)     # untouched
+        self.assertIn("below the auto-rewrite gate", printed)
+        self.assertIn("lo-score", printed)
+
+    def test_missing_score_treated_as_below_gate(self):
+        findings = [
+            {"type": "broken-link", "page": "concepts/a.md",
+             "broken_target": "hi-score-typo",
+             "suggested_target": "hi-score.md"},  # no suggested_score
+        ]
+        fp, fl, content, printed = self._run(findings)
+        self.assertEqual((fp, fl), (0, 0))
+        self.assertIn("[[hi-score-typo]]", content)
+
+
 if __name__ == "__main__":
     unittest.main()

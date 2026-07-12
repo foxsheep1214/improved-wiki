@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from _paths import atomic_write
 from _core import (
     Config,
     is_safe_ingest_path,
@@ -160,7 +161,8 @@ def _reconstruct_blocks_from_disk(
         rel = p[len("wiki/"):] if p.startswith("wiki/") else p
         try:
             blocks.append((rel, full.read_text(encoding="utf-8")))
-        except OSError:
+        except OSError as e:
+            print(f"  ⚠️  [reconstruct] unreadable page excluded from review set: {p} — {e}")
             continue
     return blocks
 
@@ -386,7 +388,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         enriched_pages = enrich_wikilinks_batch(pages_for_enrichment, existing_slugs, config)
         for rel_path, full_path in enrich_candidates:
             if rel_path in enriched_pages:
-                full_path.write_text(enriched_pages[rel_path], encoding="utf-8")
+                atomic_write(full_path, enriched_pages[rel_path])
                 print(f"  [enrich] {rel_path} (+wikilinks)")
 
     if not source_block:
@@ -450,6 +452,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             stage_3_1_write_wiki_file(source_path, placeholder_content, config)
             files_written_paths.append(str(source_path.relative_to(config.wiki_root)))
         except OSError as e:
+            print(f"  [write] HARD ERROR: source-placeholder ({source_path.name}) — {e}")
             hard_failures.append("source-placeholder")
 
     # Stage 3.2: Image injection

@@ -4,6 +4,26 @@ from _paths import atomic_write
 from _review_utils import review_id_for
 
 
+def _append_review_failure_log(config: Config, raw_file: Path, messages: list[str]) -> None:
+    """Persist Stage 3.4 failure info to runtime_dir/ingest-warnings.log.
+
+    Same entry format as _ingest_write._append_ingest_warning_log (not imported
+    directly: _ingest_write imports this module, so importing back would be
+    circular). Failures here now raise instead of silently degrading to 0
+    reviews; the log keeps the failure inspectable after the run ends.
+    """
+    log_path = config.runtime_dir / "ingest-warnings.log"
+    try:
+        config.runtime_dir.mkdir(parents=True, exist_ok=True)
+        entry_lines = [f"## {time.strftime('%Y-%m-%dT%H:%M:%S')} | {raw_file.name}", ""]
+        entry_lines += [f"{i}. {m}" for i, m in enumerate(messages, 1)]
+        entry_lines.append("")
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(entry_lines) + "\n")
+    except OSError as e:
+        print(f"  ⚠️  failed to write ingest-warnings.log: {e}")
+
+
 def _render_review_page(rtype: str, title: str, desc: str, affected: list[str],
                         queries: list[str], severity: str, date_str: str,
                         source_stem: str) -> str:
@@ -175,8 +195,12 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
             max_retries=3, label="stage-3.4",
         )
     except Exception as e:
-        print(f"[stage 3.4] LLM call failed after retries: {e}")
-        return {"error": str(e)}
+        # No silent degradation to 0 reviews: pages are already safely on disk
+        # (3.4 runs post-write) and the conversation cache makes a resume cheap,
+        # so fail loud and let the operator re-run.
+        msg = f"stage 3.4 review LLM call failed after retries: {e}"
+        _append_review_failure_log(config, raw_file, [msg])
+        raise RuntimeError(msg) from e
 
     if verbose:
         print(f"[stage 3.4] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
@@ -200,6 +224,14 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
 
     if not isinstance(items, list):
         items = []
+    if not items:
+        # YAML parse produced nothing (both yaml.safe_load and the
+        # parse_simple_yaml fallback failed to yield items) — raise instead of
+        # silently writing 0 review pages.
+        msg = (f"stage 3.4 review YAML parse yielded 0 items "
+               f"(response {len(response)} chars, stop={stop_reason})")
+        _append_review_failure_log(config, raw_file, [msg])
+        raise RuntimeError(msg)
 
     # Write review pages to wiki/REVIEW/<review_type>/ (分子目录，一目了然)
     date_str = time.strftime("%Y-%m-%d")

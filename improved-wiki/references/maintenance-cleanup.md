@@ -30,7 +30,7 @@ ps aux | grep ingest.py | grep -v grep
 
 ### 🔒 项目锁冲突诊断（常见卡点，2026-07-04 实战修）
 
-`ingest.py:675` 的报错 `Could not acquire project lock — another ingest may be running` 经常出现，但很少是真正的"并发 ingest"——多数是**后台 OCR 子进程**还活着。improved-wiki 的 minerU Phase 0/1 在前台 batch 持锁时，会用 `subprocess.Popen(start_new_session=True)` 启动后台跑 `--no-project-lock`，但**主对话 LLM 阶段（Stage 2.2+）要求持锁**。所以常见卡法是：
+`ingest.py` 的报错 `Could not acquire project lock — another ingest may be running` 经常出现，但很少是真正的"并发 ingest"——多数是**后台 OCR 子进程**还活着。improved-wiki 的 minerU Phase 0/1 在前台 batch 持锁时，会用 `subprocess.Popen(start_new_session=True)` 启动后台跑 `--no-project-lock`，但**主对话 LLM 阶段（Stage 2.2+）要求持锁**。所以常见卡法是：
 
 ```
 Symptom: "ERROR: Could not acquire project lock — another ingest may be running"
@@ -74,9 +74,11 @@ fuser /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/ingest.lock 2>/dev/
 - `embed-cache.json` — embedding cache
 - `lancedb/` — vector database
 - `page-history/` — wiki page version backups (audit/rollback value; 18MB+ typical)
-- `clusters/` — graph community hub pages
-- `REVIEW/knowledge-gaps.md` — graph gap analysis output
 - `review-suggestions.json` — pending review items
+
+（注：graph 产物 `clusters/` 与 `REVIEW/knowledge-gaps.md` 实际由 `graph.py` 写在
+**`wiki/` 下**（`wiki/clusters/`、`wiki/REVIEW/knowledge-gaps.md`），不在 `.llm-wiki/`
+——同样不要删，但不属于本清单的 runtime 目录范围。）
 
 ### Cleanup command
 

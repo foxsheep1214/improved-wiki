@@ -20,7 +20,6 @@ Split into facade + sub-modules 2026-06-24. Imports shared infrastructure from _
 from __future__ import annotations
 
 import hashlib
-import os
 import random
 import re
 import sys
@@ -32,58 +31,32 @@ from pathlib import Path
 _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
-from _core import (
-    Config,
-    set_current_file as _set_current_file,
-    get_current_file as _get_current_file,
-    file_tag as _file_tag,
-    stage_begin as _stage_begin,
-    stage_end as _stage_end,
-    heartbeat as _heartbeat,
-    llm_call_progress as _llm_call_progress,
-    llm_call_done as _llm_call_done,
-    record_rate_limit as _record_rate_limit,
-    file_sha256,
-    load_cache,
-    save_cache,
-    detect_template_type,
-    load_template,
-)
+from _core import Config
 
 # ── Re-exports from split sub-stage modules (facade back-compat) ──────────────
-# External importers (ingest.py, _ingest_prepare.py, _stage_3_2_inject_images.py,
-# _stage_validators.py, _stage_2_base.py) import these names from this facade;
-# do not remove. Dependency direction is one-way at load time:
+# External importers (ingest.py, _ingest_prepare.py) import these names from
+# this facade; do not remove. Dependency direction is one-way at load time:
 #   _stage_1_extract → {scanned, images, caption}
 #   scanned → {images, caption}
 #   caption → {}  (log_event reached via late import)
 #   images → {}
 from _stage_1_1_scanned import (  # noqa: F401
     _stage_1_1_extract_text_scanned,
-    _clean_mineru_latex,
     log_event,
 )
 from _stage_1_2_images import (  # noqa: F401
     stage_1_2_extract_images,
     _stage_1_2_extract_from_mineru,
-    _stage_1_2_write_manifest,
-    _stage_1_2_find_uncaptioned_images,
-    _stage_1_2_harvest_images,
-    _stage_1_2_extract_images_office,
-    _is_image_too_small,
-    MINERU_IMG_MIN_WIDTH,
-    MINERU_IMG_MIN_HEIGHT,
 )
 from _stage_1_3_caption import (  # noqa: F401
     stage_1_3_caption_images,
     CAPTION_MAX_WORKERS,
 )
-# Back-compat aliases: media_slug / raw_type_subdir now live in _paths.py.
-# Kept under the old `_stage_1_2_*` names so existing
+# Back-compat alias: media_slug now lives in _paths.py. Kept under the old
+# `_stage_1_2_*` name so existing
 # `from _stage_1_extract import _stage_1_2_media_slug` callers keep working.
 from _paths import (  # noqa: F401
     media_slug as _stage_1_2_media_slug,
-    raw_type_subdir as _stage_1_2_raw_type_subdir,
 )
 
 # Public API: only export stage entry points
@@ -97,6 +70,11 @@ __all__ = [
 # ══════════════════════════════════════════════════════════════════════════════
 # Constants & Concurrency Control
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Office (PPTX/DOCX) extraction: individual slide/XML parse failures are
+# counted and reported; if more than this fraction of parts fail, the whole
+# extraction raises instead of silently handing off partial text.
+OFFICE_XML_SKIP_RAISE_RATIO = 0.3
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Stage 1.1: Text extraction
@@ -124,6 +102,7 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
                     key=lambda n: int("".join(c for c in n if c.isdigit()) or "0")
                 )
                 ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+                skipped = 0
                 for slide_name in slides:
                     try:
                         root = _ET.fromstring(zf.read(slide_name))
@@ -134,8 +113,14 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
                         if slide_text:
                             slide_num = "".join(c for c in slide_name if c.isdigit()) or "?"
                             chunks.append(f"\n## Slide {slide_num}\n" + " ".join(slide_text))
-                    except Exception:
+                    except Exception as slide_err:
+                        skipped += 1
+                        print(f"[extract] PPTX slide skipped ({slide_name}): {slide_err}")
                         continue
+                if slides and skipped / len(slides) > OFFICE_XML_SKIP_RAISE_RATIO:
+                    raise RuntimeError(
+                        f"PPTX extraction: {skipped}/{len(slides)} slides failed to parse "
+                        f"in {file_path.name} — refusing to hand off partial text")
 
             elif suffix == ".docx":
                 # Extract from document.xml, headers, footers, endnotes, footnotes
@@ -149,6 +134,7 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
                         if n.endswith(".xml"):
                             xml_files.append(n)
 
+                skipped = 0
                 for xml_file in xml_files:
                     try:
                         root = _ET.fromstring(zf.read(xml_file))
@@ -163,8 +149,14 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
                         if parts:
                             label = xml_file.split("/")[-1].replace(".xml", "") if xml_file != "word/document.xml" else "Body"
                             chunks.append(f"\n## {label}\n" + "\n".join(parts))
-                    except Exception:
+                    except Exception as xml_err:
+                        skipped += 1
+                        print(f"[extract] DOCX part skipped ({xml_file}): {xml_err}")
                         continue
+                if xml_files and skipped / len(xml_files) > OFFICE_XML_SKIP_RAISE_RATIO:
+                    raise RuntimeError(
+                        f"DOCX extraction: {skipped}/{len(xml_files)} XML parts failed to "
+                        f"parse in {file_path.name} — refusing to hand off partial text")
 
     except Exception as e:
         raise RuntimeError(f"Failed to extract text from {file_path.name}: {e}")
@@ -234,7 +226,7 @@ def _stage_1_1_sample_pdf(file_path: Path, sample_pages: int = 15) -> tuple[floa
     except ImportError:
         return (0.0, False, 0.0)
 
-    _C0_RE = __import__('re').compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+    _C0_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
     _seed = int(hashlib.md5(str(file_path).encode("utf-8")).hexdigest()[:8], 16)
     rng = random.Random(_seed)
 

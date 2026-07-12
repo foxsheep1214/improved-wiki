@@ -47,6 +47,9 @@ MINERU_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 MINERU_CHUNK_SIZE = 32  # pages per minerU invocation (crash-recovery granularity; total time is minerU-bound, so prefer small chunks: shorter per-call wait + finer resume)
 
+# HTTP timeout for /file_parse submissions and async-task polling (seconds).
+MINERU_PARSE_TIMEOUT = 1200
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # minerU LaTeX cleanup
@@ -307,27 +310,35 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
             MINERU_LOCK_FILE.touch(mode=0o644)
 
         fd = os.open(str(MINERU_LOCK_FILE), os.O_RDWR)
-        start = time.time()
-        last_print_minute = -1
-        while True:
-            try:
-                # Non-blocking attempt
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                print(f"[mineru] Lock acquired")
-                return fd
-            except OSError:
-                # Lock busy, wait and retry
-                elapsed = time.time() - start
-                if elapsed > timeout:
-                    raise RuntimeError(f"minerU lock timeout after {elapsed:.0f}s")
-                # Print once per minute boundary crossed — `% 60 == 0` drifts
-                # past exact multiples due to the 5s sleep + work-time jitter
-                # and can silently stop firing for many minutes.
-                minute = int(elapsed // 60)
-                if minute != last_print_minute:
-                    last_print_minute = minute
-                    print(f"[mineru] Waiting for lock... ({elapsed:.0f}s elapsed)")
-                time.sleep(5)
+        acquired = False
+        try:
+            start = time.time()
+            last_print_minute = -1
+            while True:
+                try:
+                    # Non-blocking attempt
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    print(f"[mineru] Lock acquired")
+                    acquired = True
+                    return fd
+                except OSError:
+                    # Lock busy, wait and retry
+                    elapsed = time.time() - start
+                    if elapsed > timeout:
+                        raise RuntimeError(f"minerU lock timeout after {elapsed:.0f}s")
+                    # Print once per minute boundary crossed — `% 60 == 0` drifts
+                    # past exact multiples due to the 5s sleep + work-time jitter
+                    # and can silently stop firing for many minutes.
+                    minute = int(elapsed // 60)
+                    if minute != last_print_minute:
+                        last_print_minute = minute
+                        print(f"[mineru] Waiting for lock... ({elapsed:.0f}s elapsed)")
+                    time.sleep(5)
+        finally:
+            # Don't leak the fd on the timeout-raise path (the success path
+            # returns fd to the caller, who releases it).
+            if not acquired:
+                os.close(fd)
     except Exception as e:
         raise RuntimeError(f"Failed to acquire minerU lock: {e}")
 
@@ -344,7 +355,6 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 
 def _stage_1_1_kill_mineru_servers() -> None:
     """Kill lingering mineru-api processes to ensure clean state."""
-    import subprocess
     try:
         subprocess.run(
             ["pkill", "-f", "mineru-api"], capture_output=True, timeout=5,
@@ -354,15 +364,31 @@ def _stage_1_1_kill_mineru_servers() -> None:
 
 
 def _stage_1_1_extract_text_scanned_locked(file_path: Path, config: Config) -> str:
-    """Wrapper around _stage_1_1_extract_text_scanned_impl() with file lock management."""
-    lock_fd = _stage_1_1_acquire_mineru_lock()
+    """Wrapper around _stage_1_1_extract_text_scanned_impl() with file lock management.
+
+    The global minerU flock covers only the minerU extraction phase (API server
+    + per-chunk OCR). The impl releases it via the release_mineru_lock callback
+    right before the assemble/captioning phase — Stage 1.3 captioning is pure
+    VLM network IO and must not serialize other books' minerU runs behind it.
+    The idempotent callback + finally pair guarantees exactly one release on
+    every path (early cached return, mid-extraction raise, caption raise).
+    """
+    lock_state = {"fd": _stage_1_1_acquire_mineru_lock()}
+
+    def _release_lock() -> None:
+        fd = lock_state["fd"]
+        if fd is not None:
+            lock_state["fd"] = None
+            _stage_1_1_release_mineru_lock(fd)
+
     try:
-        text = _stage_1_1_extract_text_scanned_impl(file_path, config)
+        text = _stage_1_1_extract_text_scanned_impl(
+            file_path, config, release_mineru_lock=_release_lock)
         text = _clean_mineru_latex(text)
         text = _convert_html_tables_to_markdown(text)
         return _collapse_degenerate_table_rows(text)
     finally:
-        _stage_1_1_release_mineru_lock(lock_fd)
+        _release_lock()
 
 
 def _stage_1_1_extract_text_scanned(file_path: Path, config: Config) -> str:
@@ -390,11 +416,28 @@ def log_event(event_type: str, **kwargs) -> None:
 
 
 def _stage_1_1_scanned_load_stats(out_dir: Path) -> tuple[dict, Path]:
-    """Load _mineru_stats.json for crash-recovery, or init empty stats."""
+    """Load _mineru_stats.json for crash-recovery, or init empty stats.
+
+    A corrupt/unparseable stats file (e.g. a crash mid-rename) is the one
+    sanctioned "loud warning + reset" case: chunks re-run instead of the
+    whole ingest dying on its own recovery file. Missing keys (older schema)
+    are backfilled via setdefault.
+    """
     stats_path = out_dir / "_mineru_stats.json"
     stats: dict = {"completed_chunks": [], "failed_chunks": [], "images": {}}
     if stats_path.exists():
-        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+        try:
+            loaded = json.loads(stats_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError(f"expected JSON object, got {type(loaded).__name__}")
+            stats = loaded
+        except Exception as e:
+            print(f"⚠️  [ocr] _mineru_stats.json is corrupt ({e}) — resetting "
+                  f"crash-recovery stats; completed chunks will re-run")
+            stats = {"completed_chunks": [], "failed_chunks": [], "images": {}}
+    stats.setdefault("completed_chunks", [])
+    stats.setdefault("failed_chunks", [])
+    stats.setdefault("images", {})
     return stats, stats_path
 
 
@@ -404,14 +447,13 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
     Returns (api_proc, venv_python). Raises RuntimeError if the API never
     becomes healthy (caller must close any open fitz doc on failure).
     """
-    import subprocess as _sp
     venv_python = Path.home() / ".venv" / "bin" / "python3"
     if not venv_python.exists():
         venv_python = Path(sys.executable)
-    api_proc = _sp.Popen(
+    api_proc = subprocess.Popen(
         [str(venv_python), "-m", "mineru.cli.fast_api",
          "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     for _ in range(30):
         time.sleep(2)
@@ -430,11 +472,10 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
 
 def _stage_1_1_scanned_restart_server(venv_python: Path):
     """Spawn a fresh minerU API server (after a crash / 5xx)."""
-    import subprocess as _sp
-    return _sp.Popen(
+    return subprocess.Popen(
         [str(venv_python), "-m", "mineru.cli.fast_api",
          "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 
 
@@ -547,11 +588,16 @@ def _stage_1_1_scanned_poll_task(
     task_id: str, chunk_pdf: Path, out_dir: Path, start: int, end: int,
     file_path: Path, config, t0: float,
 ) -> tuple["Path | None", bool]:
-    """Poll a minerU async task until completion. Returns (md_path, ok)."""
+    """Poll a minerU async task until completion. Returns (md_path, ok).
+
+    A "failed" task status or a poll timeout returns ok=False — the caller
+    (_stage_1_1_scanned_submit_chunk_with_retries) treats that as a retryable
+    attempt, not a terminal break."""
     for _ in range(60):
         time.sleep(5)
         tr = urllib.request.urlopen(
-            f"http://127.0.0.1:{MINERU_API_PORT}/tasks/{task_id}")
+            f"http://127.0.0.1:{MINERU_API_PORT}/tasks/{task_id}",
+            timeout=MINERU_PARSE_TIMEOUT)
         td = json.loads(tr.read())
         if td.get("status") == "completed":
             tdr = td.get("results", {})
@@ -567,7 +613,8 @@ def _stage_1_1_scanned_poll_task(
         if td.get("status") == "failed":
             print(f"TASK FAILED: {td.get('error_message', str(td)[:200])}")
             return None, False
-    return None, False  # poll timeout (5 min)
+    print(f"POLL TIMEOUT: task {task_id} not completed after 5 min")
+    return None, False
 
 
 def _stage_1_1_scanned_submit_chunk_with_retries(
@@ -592,7 +639,7 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
                 data=body,
                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
             )
-            r = urllib.request.urlopen(req, timeout=1200)
+            r = urllib.request.urlopen(req, timeout=MINERU_PARSE_TIMEOUT)
             resp = json.loads(r.read())
             if resp.get("status") == "completed":
                 results = resp.get("results", {})
@@ -625,6 +672,12 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
                         config, t0)
                     if ok:
                         return md_path, time.time() - t0, True, api_proc
+                    # Task failed / poll timed out — retry the submission
+                    # instead of breaking out with attempts left.
+                    if attempt < 2:
+                        print(f"ASYNC TASK FAILED (retry {attempt+1}/3)")
+                        continue
+                    print("ASYNC TASK FAILED (final)")
                 else:
                     print("NO TASK ID")
                     continue
@@ -691,7 +744,10 @@ def _stage_1_1_scanned_process_chunk(
     """Process one chunk: create chunk PDF, submit with retries, persist stats.
 
     Returns api_proc (may change on server restart). Raises RuntimeError if
-    cumulative failure rate exceeds 30% (fatal abort).
+    cumulative failure rate exceeds 30% (mid-run circuit breaker). Individual
+    failures (including EMPTY responses) are recorded in stats["failed_chunks"]
+    and caught by the final failure gate in _stage_1_1_extract_text_scanned_impl
+    — there is no "≤30% silent handoff" anymore.
     """
     chunk_key = f"{start}-{end}"
     if chunk_key in stats["completed_chunks"]:
@@ -747,7 +803,8 @@ def _stage_1_1_scanned_process_chunk(
                 f"Aborting. Check _mineru_stats.json in extract_tmp_dir.")
         return api_proc
 
-    # API wrote .md — read it (EMPTY → md_path None → record as failed, no fatal check)
+    # API wrote .md — read it (EMPTY → md_path None → record as failed; the
+    # final failure gate in the impl raises if it never recovers)
     if md_path is None or not md_path.exists():
         print(f"  [{ci+1:3d}/{len(chunks)}] FAILED — no output file")
         stats["failed_chunks"].append({"chunk": chunk_key, "error": "no .md output from API"})
@@ -759,6 +816,11 @@ def _stage_1_1_scanned_process_chunk(
     media_dir = config.wiki_dir / "media" / _media_slug
     media_dir.mkdir(parents=True, exist_ok=True)
     _stage_1_1_save_mineru_chunk_text(md_text, start, end, out_dir, stats, [])
+    # A chunk that failed earlier (this run or a previous one) and has now
+    # succeeded must not leave stale failed_chunks entries behind — they would
+    # accumulate across runs and falsely trip the final failure gate.
+    stats["failed_chunks"] = [fc for fc in stats["failed_chunks"]
+                              if fc.get("chunk") != chunk_key]
     stats["completed_chunks"].append(chunk_key)
     _stage_1_1_save_mineru_stats(stats_path, stats)
     print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars")
@@ -806,7 +868,9 @@ def _stage_1_1_scanned_assemble_manifest(
     return full_text
 
 
-def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str:
+def _stage_1_1_extract_text_scanned_impl(
+    file_path: Path, config: Config, release_mineru_lock=None,
+) -> str:
     """Extract a PDF (any type) via the local minerU API server (hybrid-engine).
 
     Despite the legacy "_scanned" name, this is the shared extraction path for
@@ -889,6 +953,37 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
                 api_proc.wait(timeout=10)
             except Exception:
                 api_proc.kill()
+
+    # Final failure gate (no-silent-fallback): any chunk still failed after its
+    # retries fails the whole extraction — the old "≤30% failed → silent
+    # handoff of partial text" is gone. (The >30% mid-run circuit breaker in
+    # _stage_1_1_scanned_process_chunk still aborts early.) EMPTY responses are
+    # recorded in failed_chunks and caught here too. Entries whose chunk later
+    # succeeded were pruned at success time, so this reflects real gaps only.
+    failed_keys: list[str] = []
+    for fc in stats["failed_chunks"]:
+        key = fc.get("chunk", "?")
+        if key not in stats["completed_chunks"] and key not in failed_keys:
+            failed_keys.append(key)
+    if failed_keys:
+        def _page_range(key: str) -> str:
+            try:
+                s, e = key.split("-")
+                return f"pages {int(s) + 1}-{int(e)}"
+            except (ValueError, AttributeError):
+                return "pages ?"
+        detail = "; ".join(f"chunk {k} ({_page_range(k)})" for k in failed_keys)
+        raise RuntimeError(
+            f"minerU OCR: {len(failed_keys)}/{len(chunks)} chunks failed after "
+            f"retries — {detail}. Not handing off partial text. Completed "
+            f"chunks are cached; re-run ingest to retry only the failed chunks "
+            f"(details: _mineru_stats.json / ocr_log.jsonl in {out_dir}).")
+
+    # minerU work is finished and the API server is terminated — release the
+    # global minerU lock BEFORE Stage 1.3 captioning (pure VLM network IO), so
+    # other books' minerU runs don't queue behind captioning.
+    if release_mineru_lock is not None:
+        release_mineru_lock()
 
     return _stage_1_1_scanned_assemble_manifest(out_dir, stats, file_path, config, total_pages)
 

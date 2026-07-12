@@ -91,23 +91,38 @@ def _embed_config() -> tuple[str, str, str]:
     return base_url, model, api_key
 
 
+# Bounded embedding access (2026-07-12, aligned with cross_source_dedup's
+# bounded path): a hard per-request timeout — embed_texts' historical default
+# was an unbounded-in-practice 120s×3-retries per batch — plus a consecutive-
+# failure circuit breaker so a dead endpoint fails the prefilter fast instead
+# of grinding through every batch.
+EMBED_TIMEOUT_S = 60
+EMBED_MAX_CONSECUTIVE_FAILURES = 3
+
+
 def embed_pages(pages: list[dict]) -> dict[str, Optional[list[float]]]:
     """Embed pages via the local Ollama stack. Returns id → vector (or None on
     per-batch failure). Batches of 16; a failed batch is recorded as None for
-    its members and the rest continue, so one bad page can't sink the scan."""
+    its members and the rest continue, so one bad page can't sink the scan.
+    EMBED_MAX_CONSECUTIVE_FAILURES failed batches in a row raise
+    DuplicatePrefilterError (endpoint is dead — callers already handle the
+    prefilter-error fallback)."""
     from build_embeddings import embed_texts  # local import (heavy module)
     base_url, model, api_key = _embed_config()
     out: dict[str, Optional[list[float]]] = {}
     batch = 16
     keys = [p["id"] for p in pages]
     texts = [page_to_embedding_text(p) for p in pages]
+    consecutive_failures = 0
     for i in range(0, len(texts), batch):
         chunk_keys = keys[i:i + batch]
         chunk_texts = texts[i:i + batch]
         try:
-            vecs = embed_texts(chunk_texts, base_url, model, api_key)
+            vecs = embed_texts(chunk_texts, base_url, model, api_key,
+                               timeout=EMBED_TIMEOUT_S)
             for k, v in zip(chunk_keys, vecs):
                 out[k] = list(v) if v else None
+            consecutive_failures = 0
         except Exception as e:
             # Single-batch failure is non-fatal (the rest continue), but must
             # be visible: these pages get None and are silently skipped in
@@ -117,6 +132,11 @@ def embed_pages(pages: list[dict]) -> dict[str, Optional[list[float]]]:
                   f"{len(chunk_keys)} pages marked None and will be skipped")
             for k in chunk_keys:
                 out[k] = None
+            consecutive_failures += 1
+            if consecutive_failures >= EMBED_MAX_CONSECUTIVE_FAILURES:
+                raise DuplicatePrefilterError(
+                    f"aborting embed after {consecutive_failures} consecutive "
+                    f"batch failures (endpoint down/stalled?)") from e
     return out
 
 

@@ -58,11 +58,13 @@ already have a source page in `wiki/sources/`.
 
 ## Key Points (All Modes)
 
-- **Dedup via source page**: `ingest.py` checks `wiki/sources/<pdf-stem>.md` before
-  processing. This is the authoritative "already ingested" signal (per the
-  improved-wiki skill). Do NOT use `ingest-cache.json` or memory. Note: source
-  pages may live in subdirectories (`wiki/sources/Book/`,
-  `wiki/sources/Datasheet/…`) mirroring the `raw/` layout — check all subdirs.
+- **Dedup signals**: before selecting files for a batch, the agent-side pre-check is
+  source-page existence (`wiki/sources/<raw-rel-path>.md`). The code's Stage 0.2
+  adjudication then uses the `ingested` completion marker as the primary signal, with
+  source-page existence as the auxiliary check (see `ingest-stages-mandatory.md`
+  Stage 0.2). Do NOT use `ingest-cache.json` or memory. Note: source pages may live
+  in subdirectories (`wiki/sources/Book/`, `wiki/sources/Datasheet/…`) mirroring the
+  `raw/` layout — check all subdirs.
 - **minerU is strictly serialized system-wide** — a cross-process file lock
   (`fcntl.flock` on `~/.cache/improved-wiki/.mineru.lock`) allows at most ONE
   minerU instance, regardless of `--parallel` (2026-06-23; replaced the old
@@ -73,10 +75,13 @@ already have a source page in `wiki/sources/`.
   lock from a crashed run is auto-recovered ("Stale lock from pid=XXX — taking over").
 - **Batch parallelism rule**: only the wiki-independent PREFETCH (Phase 0/1 +
   Stage 2.2) runs across books in parallel; the wiki-dependent spine
-  (Stage 2.3→write) runs one book at a time (see SKILL.md "Batch ingest" and
-  `references/batch-parallel-prefetch.md`). LLM calls within a single book are
-  serial (conversation mode — one prompt at a time).
-- **Timeout**: 3600s per book (1 hour). Most books complete in 10-30 minutes.
+  (Stage 2.3→write) runs one book at a time. Concurrency caps and the in-book
+  Stage 2.4 parallel exception (2026-07-09): `references/batch-parallel-prefetch.md`
+  (authoritative).
+- **Timeouts**: there is no per-book timeout. 3600s is the minerU **lock-acquisition**
+  timeout (`fcntl.flock`, waiting behind another book's OCR); each chunk's HTTP request
+  times out at 1200s with 3 retries (see `references/scanned-pdf-ocr-pipeline.md`).
+  Most books complete in 10-30 minutes.
 - **LLM model**: Text generation runs in conversation mode — the calling agent
   answers each LLM step with the current model. No `LLM_API_KEY` is needed for
   text gen. Image captioning (Stage 1.3) needs a `caption_provider` configured
@@ -101,7 +106,7 @@ tail -f /tmp/ingest_watch.log
 | Failure | Exit code | Cause | Fix |
 |---------|-----------|-------|-----|
 | Stage 2 verification | 1 | LLM didn't emit `wiki/sources/<title>.md` FILE block | Retry; check LLM model supports the prompt format |
-| minerU OCR timeout | -15 (SIGTERM) | Scanned PDF too large, OCR > 3600s | Increase timeout or skip large scanned books |
+| minerU timeout | 1 | mineru lock wait > 3600s (another book's OCR holding the lock), or a chunk exhausted its 3×1200s HTTP retries | Re-run — completed chunks are cached (`scanned-pdf-ocr-pipeline.md`); don't kill the running OCR |
 | Stale lock | 1 (recovered) | Previous ingest crashed, `.ingest-progress/` lock file remains | `ingest.py` auto-recovers: "Stale lock from pid=XXX — taking over" |
 | minerU hybrid OCR routing | 0 (normal) | 文本层薄/图表密集的 PDF | hybrid-engine `parse_method=auto` 按页自动判 txt vs VLM OCR，所有 PDF 统一走 minerU |
 

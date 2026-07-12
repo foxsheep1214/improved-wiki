@@ -15,7 +15,6 @@ Usage:
     python3 scripts/validate_ingest.py
     SOURCE_SLUG=INA1H94-SEP python3 scripts/validate_ingest.py
 """
-import hashlib
 import json
 import os
 import sys
@@ -29,7 +28,12 @@ WIKI = PROJECT_ROOT / "wiki"
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir, iter_wiki_pages
-from _lint_suggest import run_structural_lint, ANCHOR_FILES as _LINT_ANCHOR_FILES
+from _lint_suggest import (
+    run_structural_lint,
+    ANCHOR_FILES as _LINT_ANCHOR_FILES,
+    STATE_FILES as _LINT_STATE_FILES,
+)
+from _core import file_sha256
 RUNTIME = detect_runtime_dir(PROJECT_ROOT)
 SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "ADL8113")
 
@@ -104,14 +108,9 @@ def _validate_find_media_dir(slug: str) -> Optional[Path]:
 
 # ── Structural lint suggestions (wiki-wide, non-gating) ─────────────────────
 # Scan universe = NashSU {index, log} from _lint_suggest (overview/schema stay
-# valid targets; engine exempts aggregates from findings). + state + artifact
-# dirs (shared _paths.WIKI_ARTIFACT_DIRS — the local copy here had drifted,
-# missing `clusters`).
-_LINT_STATE_FILES = {
-    "lint-cache.json", "ingest-cache.json", "ingest-queue.json",
-    "review.json", "review-suggestions.json", "embed-cache.json",
-    "lint-semantic.json", "dedup-report.json",
-}
+# valid targets; engine exempts aggregates from findings). + state files
+# (shared _lint_suggest.STATE_FILES) + artifact dirs (shared
+# _paths.WIKI_ARTIFACT_DIRS) — the local copies here had drifted.
 
 
 def _validate_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
@@ -133,7 +132,6 @@ def _validate_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
 
 def main():
     results: list[bool] = []
-    warnings: list[str] = []
 
     def check(label: str, ok: bool, detail: str = ""):
         status = "✅" if ok else "❌"
@@ -386,7 +384,7 @@ def main():
         rel = entry.get("key", "")
         raw_file = raw_root / rel
         if raw_file.exists():
-            actual = hashlib.sha256(raw_file.read_bytes()).hexdigest()
+            actual = file_sha256(raw_file)
             expected = entry.get("hash", "")
             check("cache hash matches file",
                   actual[:16] == expected[:16],
@@ -434,7 +432,10 @@ def main():
               f"lance={'yes' if lance_present else 'no'}, embed-cache={'populated' if embed_cache_exists else 'no'}")
     else:
         sys.path.insert(0, str(_script_dir))
-        from ingest import _stage_3_7_check_embed_capability
+        # The capability probe lives in _stage_3_7_embed.py (the old
+        # `from ingest import ...` referenced a name that never existed there
+        # — a latent ImportError only this branch could trigger).
+        from _stage_3_7_embed import _stage_3_7_check_embed_capability
         base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
         model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
         cap_ok, cap_reason = _stage_3_7_check_embed_capability(base_url, model)

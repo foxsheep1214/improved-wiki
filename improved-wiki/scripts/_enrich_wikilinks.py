@@ -24,33 +24,53 @@ Usage:
 import json, re
 from pathlib import Path
 from _frontmatter import parse_frontmatter, write_frontmatter
+from _frontmatter_array import normalize_block_arrays
 from _llm_api import call_anthropic_protocol
 
 
 _LINK_SPAN_RE = re.compile(r'(\[\[.*?\]\])', re.DOTALL)
+# Line-level skips (same policy as _stage_3_write's figure-ref wrapper):
+# never insert links into heading lines or fenced code blocks.
+_HEADING_LINE_RE = re.compile(r"^#{1,6}[ \t]")
+_CODE_FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
 
 
 def _replace_first_outside_links(body: str, term: str, replacement: str):
     """Replace the first occurrence of `term` in `body` that is NOT inside an
-    existing ``[[...]]`` wikilink span. Returns the new body, or None if every
-    occurrence is inside a link (or there is no occurrence at all).
+    existing ``[[...]]`` wikilink span, NOT on a heading line, and NOT inside
+    a fenced code block. Returns the new body, or None if no eligible
+    occurrence exists.
 
-    Without this guard, a term that appears as a substring of an existing
+    The link-span guard: a term that appears as a substring of an existing
     link's slug (e.g. ``lead`` inside ``[[concepts/lead-(pd)-...-design]]``)
-    gets re-wrapped, producing malformed nested links such as
-    ``[[concepts/[[lead-(pd)-...]]-(pd)-...]]``.
+    must not be re-wrapped, or we produce malformed nested links such as
+    ``[[concepts/[[lead-(pd)-...]]-(pd)-...]]``. The heading/fence guard:
+    inserting [[links]] into an H1/H2... or into code corrupts the page
+    (H1 wikilinks are de-linked again by the write normalizer anyway).
     """
     if term not in body:
         return None
-    # With a capture group, re.split interleaves: [text, link, text, link, ...].
-    # Odd indices are link spans and must never be touched.
-    parts = _LINK_SPAN_RE.split(body)
-    for i, seg in enumerate(parts):
-        if i % 2 == 1:
-            continue  # link span — leave intact
-        if term in seg:
-            parts[i] = seg.replace(term, replacement, 1)
-            return "".join(parts)
+    lines = body.split("\n")
+    in_fence = False
+    for idx, line in enumerate(lines):
+        if _CODE_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence or _HEADING_LINE_RE.match(line):
+            continue
+        if term not in line:
+            continue
+        # With a capture group, re.split interleaves: [text, link, text, ...].
+        # Odd indices are link spans and must never be touched.
+        parts = _LINK_SPAN_RE.split(line)
+        for i, seg in enumerate(parts):
+            if i % 2 == 1:
+                continue  # link span — leave intact
+            if term in seg:
+                parts[i] = seg.replace(term, replacement, 1)
+                lines[idx] = "".join(parts)
+                return "\n".join(lines)
+        # every occurrence on this line sits inside a link — keep scanning
     return None
 
 
@@ -148,6 +168,9 @@ Pages with no suggestions may be omitted from the object.
         suggestions = suggestions_by_path.get(rel_path, [])
         if not suggestions:
             continue
+        # Normalize block-style frontmatter arrays before the naive
+        # parse→write round-trip below, which would silently empty them.
+        content = normalize_block_arrays(content)
         fm, body = parse_frontmatter(content)
         this_slug = Path(rel_path).stem
         changed = False

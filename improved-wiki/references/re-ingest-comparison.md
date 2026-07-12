@@ -135,7 +135,7 @@ preserved the images.
 | Source page size | `wc -c` old vs new |
 | Concept count | `find wiki/concepts -name "*.md" -exec grep -l "$BOOK" {} \; | wc -l` |
 | Entity count | Same for `wiki/entities/` |
-| Query count | Same for `wiki/queries/` |
+| Query count | Same for `wiki/queries/`（注：Stage 2.7 已于 2026-07-12 移除——新 ingest 恒为 0，此行仅对历史消化的旧结果有意义） |
 | Comparison count | Same for `wiki/comparisons/` |
 | Review count | Same for `wiki/REVIEW/` |
 | Media count | `find "wiki/media/Book/$BOOK" -type f | wc -l` |

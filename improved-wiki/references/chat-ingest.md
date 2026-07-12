@@ -174,14 +174,13 @@ python3 scripts/validate_ingest.py   # optional, manual only
 ```
 ## ✅ 消化完成：《Book Title》
 
-**生成页面** (8 个):
+**生成页面** (6 个):
 - wiki/sources/book-title.md — 源页面
 - wiki/concepts/概念A.md — core concept
 - wiki/concepts/概念B.md — core concept
 - wiki/concepts/概念C.md — supporting concept
 - wiki/entities/实体X.md — entity
 - wiki/comparisons/概念A-vs-已有概念Z.md — 对比页
-- wiki/queries/概念A的开放问题.md — query
 
 **Review items** (2 个):
 - ⚠️ 概念A 的公式推导需要人工验证
@@ -189,7 +188,7 @@ python3 scripts/validate_ingest.py   # optional, manual only
 
 **跳过**: 第1-2章（按你的指导）
 **图片**: 12 张已注入 source 页面
-**嵌入**: 8 页已向量化（Stage 3.7）
+**嵌入**: 6 页已向量化（Stage 3.7）
 ```
 
 ## Trigger Phrases
@@ -248,7 +247,7 @@ Claude should track which sources have been discussed and generated in the curre
 Chat ingest is NOT a replacement for auto-ingest. They coexist:
 
 ```
-ingest.py --mode auto    → 全自动流水线（批量、定时）
+ingest.py <file>         → 全自动流水线（批量、定时）
 /improved-wiki chat-ingest → 交互式人工引导（单本、重要源）
 ```
 

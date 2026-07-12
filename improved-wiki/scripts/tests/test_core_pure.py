@@ -228,9 +228,9 @@ def _make_config(tmp: Path) -> _core.Config:
         cache_path=tmp / "rt" / "ingest-cache.json",
         progress_dir=tmp / "rt" / "ingest-progress",
         extract_tmp_dir=tmp / "rt" / "extract-tmp",
-        llm_base_url="https://example.invalid", llm_model="m", llm_api_key="",
-        llm_protocol="anthropic", caption_api_key="", caption_base_url="x",
-        caption_model="c", chunk_size=60000, chunk_overlap=3000,
+        llm_model="m",
+        caption_api_key="", caption_base_url="x",
+        caption_model="c", chunk_overlap=3000,
         source_budget=100000, target_chars=60000, target_tokens=30000,
         max_tokens=8192, conversation_prefix="ab12cd34",
     )
@@ -266,6 +266,43 @@ class TestSaveProgressMergeWrite(unittest.TestCase):
             pp.write_text("{not valid json", encoding="utf-8")
             _core.save_progress(cfg, h, {"extracted_text": "x"})  # must not raise
             self.assertEqual(_core.load_progress(cfg, h)["extracted_text"], "x")
+
+    def test_load_progress_corrupted_warns_and_returns_none(self):
+        # Policy exception (2026-06-24): a corrupted state file is a loud
+        # warning + reset (None), never a raised JSONDecodeError.
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "0badf00d" * 8
+            pp = _core.progress_path(cfg, h)
+            pp.parent.mkdir(parents=True, exist_ok=True)
+            pp.write_text("{not valid json", encoding="utf-8")
+            self.assertIsNone(_core.load_progress(cfg, h))
+
+    def test_delete_progress_keys_truly_removes(self):
+        # save_progress is merge-write and cannot express deletion —
+        # delete_progress_keys must actually remove keys from storage.
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "feedc0de" * 8
+            _core.save_progress(cfg, h, {"chunk_analyses": [1, 2], "extracted_text": "x"})
+            _core.delete_progress_keys(cfg, h, ["chunk_analyses", "never-existed"])
+            p = _core.load_progress(cfg, h)
+            self.assertNotIn("chunk_analyses", p)
+            self.assertEqual(p["extracted_text"], "x")  # untouched keys survive
+            # A later merge-write must NOT resurrect the deleted key.
+            _core.save_progress(cfg, h, {"stage_1_2": {"count": 1}})
+            self.assertNotIn("chunk_analyses", _core.load_progress(cfg, h))
+
+    def test_delete_progress_keys_noop_without_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "abad1dea" * 8
+            _core.delete_progress_keys(cfg, h, ["anything"])  # must not raise
+            self.assertIsNone(_core.load_progress(cfg, h))
+            self.assertFalse(_core.progress_path(cfg, h).exists())
 
 
 class TestStageMarkers(unittest.TestCase):

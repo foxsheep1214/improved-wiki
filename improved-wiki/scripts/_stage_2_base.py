@@ -14,26 +14,11 @@ if str(_script_dir) not in sys.path:
 
 from _core import (
     Config,
-    heartbeat as _heartbeat,
-    stage_begin as _stage_begin,
-    stage_end as _stage_end,
-    llm_call_progress as _llm_call_progress,
-    llm_call_done as _llm_call_done,
     record_rate_limit as _record_rate_limit,
-    load_template,
-    load_progress,
-    save_progress,
-    clear_progress,
-    progress_path,
-    load_cache,
-    save_cache,
     list_existing_slugs,
     load_schema_md,
     schema_folders,
     BASE_PAGE_DIRS,
-    str_distance as _str_distance,
-    FOLDER_TO_TEMPLATE,
-    detect_template_type,
     parse_yaml_block,
     parse_file_blocks,
     parse_simple_yaml,
@@ -46,7 +31,6 @@ from _llm_api import (
     _is_retryable_exception,
     call_anthropic_protocol,
 )
-from _paths import media_slug as _stage_1_2_media_slug
 from _frontmatter import extract_frontmatter_title as _extract_fm_title
 
 # Folders that may appear in schema.md but are not LLM-generated page types.
@@ -125,8 +109,19 @@ def _stage_2_title_cjk_bigrams(title: str) -> set:
             tokens.update(run[i:i + 2] for i in range(len(run) - 1))
     return tokens
 
+def file_block_slug(path) -> str:
+    """Slug stem of a ---FILE:--- block path, for generated_slugs membership.
+
+    FILE-block-specific rule — deliberately SIMPLER than slugify(): the stem
+    is already LLM-emitted kebab-case, so only lowercase + space/slash
+    normalization is applied (no unicode folding, no punctuation stripping).
+    Shared by _ingest_chunks and _stage_2_4_generation (was 6 verbatim copies).
+    """
+    return Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+
+
 # Explicitly re-export underscore-prefixed helpers. Without __all__, the
 # `from _stage_2_base import *` used by every Stage 2.x module EXCLUDES
 # _-prefixed names (Python default), so _retry_jitter / _is_retryable_exception
-# / _record_rate_limit / _stage_1_2_media_slug would NameError on retry paths.
+# / _record_rate_limit would NameError on retry paths.
 __all__ = [n for n in dir() if not n.startswith("__")]

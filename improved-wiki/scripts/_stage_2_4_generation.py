@@ -477,6 +477,10 @@ def _stage_2_4_build_prompt(
     schema_section = _schema_routing_block(config)
     tags_section = _tags_reuse_section(config)
     extra_rules = _extra_rules(_source_page_slug(file_path, config))
+    try:
+        raw_rel = str(file_path.relative_to(config.raw_root))
+    except ValueError:
+        raw_rel = file_path.name
 
     language_directive = build_language_directive(chunk_text)
     return f"""{language_directive}
@@ -556,7 +560,7 @@ type: concept
 title: "..."
 tags: [...]
 related: [...]
-sources: ["raw/{file_path.relative_to(config.raw_root)}"]
+sources: ["raw/{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -572,7 +576,7 @@ type: entity
 title: "<entity name>"
 tags: [...]
 related: [...]
-sources: ["raw/{file_path.relative_to(config.raw_root)}"]
+sources: ["raw/{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -629,12 +633,42 @@ def _stage_2_4_per_concept_fallback(
             name = c.get("name", c) if isinstance(c, dict) else str(c)
             concept_to_chunk[name] = idx
 
-    print(f"[stage 2.3] Per-concept fallback: {len(unique_concepts)} concepts + "
+    print(f"[stage 2.4] Per-concept fallback: {len(unique_concepts)} concepts + "
           f"{len(unique_entities)} entities, {PER_CONCEPT_BATCH_MAX} per batch, "
           f"max_tokens={gen_tokens}")
 
     n = 0
     existing_slugs = list_existing_slugs(config)
+
+    def _generate_one(kind: str, name: str, prompt: str) -> None:
+        """Generate ONE fallback page (concept or entity).
+
+        Single-item failure is tolerated by design (print ❌; the coverage
+        stats record the gap) — the fallback IS the remedial layer, so a
+        failed item must not kill the backfill of the remaining ones.
+        """
+        nonlocal n
+        t_call = time.time()
+        try:
+            response, stop_reason = call_with_retry(
+                lambda: call_anthropic_protocol(prompt, config, max_tokens=gen_tokens),
+                max_retries=3, base_wait=2.0, label=f"fallback {kind}")
+        except Exception as e:
+            print(f"  [{kind} {n+1}/{total}] ❌ {e}")
+            return
+        all_responses.append(response)
+        blocks = parse_file_blocks(response)
+        all_file_blocks.extend(blocks)
+        n += 1
+        pct = n * 100 // total
+        dt = time.time() - t_call
+        print(f"  [{kind} {n}/{total}] {name[:50]} → "
+              f"{len(blocks)} blocks ({len(response):,} chars, {stop_reason}) "
+              f"{dt:.0f}s [{pct}%]")
+        for path, _content in blocks:
+            s = file_block_slug(path)
+            if s not in generated_slugs:
+                generated_slugs.append(s)
 
     for concept_name in unique_concepts:
         chunk_idx = concept_to_chunk.get(concept_name, 0)
@@ -656,34 +690,7 @@ def _stage_2_4_per_concept_fallback(
             concept_info, slug, file_path, config, global_digest,
             analysis, generated_slugs, existing_slugs, template,
         )
-
-        for attempt in range(3):
-            try:
-                t_call = time.time()
-                response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens)
-                all_responses.append(response)
-                blocks = parse_file_blocks(response)
-                all_file_blocks.extend(blocks)
-                dt = time.time() - t_call
-                n += 1
-                pct = n * 100 // total
-                tag = f" (retry #{attempt})" if attempt > 0 else ""
-                print(f"  [concept {n}/{total}] {concept_name[:50]} → "
-                      f"{len(blocks)} blocks ({len(response):,} chars, {stop_reason}) "
-                      f"{dt:.0f}s [{pct}%]{tag}")
-                for path, _content in blocks:
-                    s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
-                    if s not in generated_slugs:
-                        generated_slugs.append(s)
-                break
-            except Exception as e:
-                if attempt < 2 and _is_retryable_exception(e):
-                    wait = _retry_jitter(2.0, attempt)
-                    print(f"  [concept {n+1}/{total}] {type(e).__name__} retry in {wait:.1f}s...")
-                    time.sleep(wait)
-                    continue
-                print(f"  [concept {n+1}/{total}] ❌ {e}")
-                break
+        _generate_one("concept", concept_name, prompt)
 
     for entity_name in unique_entities[:min(len(unique_entities), 20)]:
         slug = slugify(entity_name)
@@ -693,71 +700,19 @@ def _stage_2_4_per_concept_fallback(
             entity_name, slug, file_path, config, global_digest,
             existing_slugs, template,
         )
-        for attempt in range(3):
-            try:
-                response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens)
-                all_responses.append(response)
-                blocks = parse_file_blocks(response)
-                all_file_blocks.extend(blocks)
-                n += 1
-                pct = n * 100 // total
-                print(f"  [entity {n}/{total}] {entity_name[:50]} → "
-                      f"{len(blocks)} blocks ({len(response):,} chars, {stop_reason}) [{pct}%]")
-                for path, _content in blocks:
-                    s = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
-                    if s not in generated_slugs:
-                        generated_slugs.append(s)
-                break
-            except Exception as e:
-                if attempt < 2 and _is_retryable_exception(e):
-                    time.sleep(_retry_jitter(2.0, attempt))
-                    continue
-                print(f"  [entity {n+1}/{total}] ❌ {e}")
-                break
+        _generate_one("entity", entity_name, prompt)
 
-    # Generate source page from global digest (compact)
-    try:
-        source_rel = f"sources/{file_path.relative_to(config.raw_root).with_suffix('.md')}"
-    except ValueError:
-        source_rel = f"sources/{file_path.with_suffix('.md').name}"
-    digest_json = json.dumps(global_digest, ensure_ascii=False, indent=2)
-    language_directive = build_language_directive(digest_json)
-    source_prompt = f"""{language_directive}
-
-# Role
-Generate a source page for this document from the global digest.
-
-# Global Digest
-```yaml
-{digest_json[:12000]}
-```
-
-# Concepts generated ({len(all_file_blocks)} pages)
-{', '.join(Path(p).stem for p, _ in all_file_blocks[:80])}
-
-# Output Format — EXACT
----FILE:wiki/{source_rel}---
-(frontmatter type:source + content)
----END FILE---
-
-START IMMEDIATELY with ---FILE:... No preamble.
-"""
-    try:
-        src_response, _ = call_anthropic_protocol(
-            source_prompt, config, max_tokens=config.compute_max_tokens(4096))
-        all_responses.append(src_response)
-        src_blocks = parse_file_blocks(src_response)
-        all_file_blocks.extend(src_blocks)
-    except Exception as e:
-        print(f"  [stage 2.3] Source page generation failed: {e}")
+    # NOTE: no source-page generation here (removed 2026-07-12). The caller
+    # (_generate_from_analyses) filters "sources/" blocks out of the fallback
+    # output, and Stage 2.6 generates the real source page — the block this
+    # segment produced was always discarded (one wasted LLM call per fallback).
 
     combined = "\n".join(all_responses)
     concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
     entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
-    source_blocks = [b for b in all_file_blocks if "sources/" in b[0]]
 
-    print(f"[stage 2.3] Per-concept fallback done — {time.time()-t0:.0f}s, "
-          f"{len(all_file_blocks)} blocks ({len(concept_blocks)}c/{len(entity_blocks)}e/{len(source_blocks)}s)")
+    print(f"[stage 2.4] Per-concept fallback done — {time.time()-t0:.0f}s, "
+          f"{len(all_file_blocks)} blocks ({len(concept_blocks)}c/{len(entity_blocks)}e)")
 
     analysis = {
         "book_meta": global_digest.get("book_meta", {}),
@@ -765,7 +720,6 @@ START IMMEDIATELY with ---FILE:... No preamble.
         "concepts_identified": len(unique_concepts),
         "concepts_generated": len(concept_blocks),
         "entities_generated": len(entity_blocks),
-        "source_generated": len(source_blocks) > 0,
         "coverage_pct": round(len(concept_blocks) / max(len(unique_concepts), 1), 2),
         "total_chunks": len(chunk_analyses),
         "method": "per-concept-fallback",
@@ -1077,6 +1031,10 @@ def _stage_2_4_build_all_prompt(
     schema_section = _schema_routing_block(config)
     tags_section = _tags_reuse_section(config)
     extra_rules = _extra_rules(_source_page_slug(file_path, config))
+    try:
+        raw_rel = str(file_path.relative_to(config.raw_root))
+    except ValueError:
+        raw_rel = file_path.name
 
     language_sample = source_context or json.dumps(chunk_analyses, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
@@ -1142,7 +1100,7 @@ type: concept
 title: "..."
 tags: [...]
 related: [...]
-sources: ["raw/{file_path.relative_to(config.raw_root)}"]
+sources: ["raw/{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -1158,7 +1116,7 @@ type: entity
 title: "<entity name>"
 tags: [...]
 related: [...]
-sources: ["raw/{file_path.relative_to(config.raw_root)}"]
+sources: ["raw/{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -1214,7 +1172,7 @@ def stage_2_4_generate_all(
             dt = time.time() - t0
             generated_slugs: list[str] = []
             for path, _ in blocks:
-                slug = Path(path).stem.lower().replace(" ", "-").replace("/", "-")
+                slug = file_block_slug(path)
                 if slug not in generated_slugs:
                     generated_slugs.append(slug)
             tag = f" (retry #{attempt})" if attempt > 0 else ""
@@ -1302,7 +1260,12 @@ def stage_2_4_generate_chunk(
                 time.sleep(wait)
                 continue
             print(f"  [chunk {chunk_idx+1}] generate FAILED: {e}")
-            return []
+            # No []-sentinel: returning [] let the gap be cached as "done"
+            # downstream. Raise so the ingest pauses; cached chunks make the
+            # resume cheap (no-silent-fallback).
+            raise RuntimeError(
+                f"Stage 2.4 chunk {chunk_idx+1} generation failed after "
+                f"{attempt+1} attempt(s): {type(e).__name__}: {e}") from e
 
 
 

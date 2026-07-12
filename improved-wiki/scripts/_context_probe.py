@@ -46,6 +46,8 @@ import shutil
 import time
 from pathlib import Path
 
+from _paths import atomic_write
+
 # Conversation prefix base. The probe dir is MODEL-NAMESPACED (``ctxprobe-<model>``)
 # so a different model → different dir → fresh probe, same model → cached, no loop.
 _PROBE_PREFIX_BASE = "ctxprobe"
@@ -140,9 +142,21 @@ def _known_context(model_self: str | None) -> int | None:
     a = _norm_model(model_self)
     if not a:
         return None
+    # Exact match first — a substring hit must never shadow an exact entry
+    # (e.g. a future "claude-sonnet-5-2" self-report vs the "claude-sonnet-5"
+    # table row).
+    for name, ctx in _KNOWN_MODEL_CONTEXT.items():
+        if a == _norm_model(name):
+            return ctx
+    # Substring tolerance (proxy prefixes like "anthropic/claude-opus-4-8"):
+    # still resolves, but say so — a fuzzy hit pinning the wrong spec should be
+    # visible in the log rather than silent.
     for name, ctx in _KNOWN_MODEL_CONTEXT.items():
         b = _norm_model(name)
-        if a == b or a in b or b in a:
+        if a in b or b in a:
+            print(f"[context-probe] ⚠️  substring match: self-report {model_self!r} "
+                  f"resolved to known model '{name}' ({ctx:,} tokens) — verify this "
+                  f"is the intended model.")
             return ctx
     return None
 
@@ -188,7 +202,7 @@ def save_cached(config, context: int, model_self: str | None, env_reliable) -> N
         # kept for any old reader that still looks for "model"
         "model": config.llm_model,
     }
-    _cache_path(config).write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write(_cache_path(config), json.dumps(d, indent=2, ensure_ascii=False))
 
 
 def _clear_ctxprobe_dirs(config) -> None:

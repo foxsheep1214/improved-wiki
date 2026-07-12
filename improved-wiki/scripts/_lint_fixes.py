@@ -23,7 +23,11 @@ import os
 import re
 import unicodedata
 
-from _frontmatter import TITLE_LINE_RE as _TITLE_RE
+from _frontmatter import (
+    TITLE_LINE_RE as _TITLE_RE,
+    WIKILINK_RE as _WIKILINK_BODY_RE,
+)
+from _paths import atomic_write as _atomic_write
 from pathlib import Path
 
 __all__ = [
@@ -37,7 +41,7 @@ __all__ = [
     "ensure_broken_link_stub",
     "normalize_wiki_ref_key",
     "build_deleted_keys",
-    "extract_frontmatter_title",
+    "extract_title_anywhere",
     "clean_index_listing",
     "strip_deleted_wikilinks",
 ]
@@ -192,7 +196,7 @@ def ensure_broken_link_stub(
         f"# {title}\n\n"
         "Created by Wiki Lint as a placeholder for a missing wikilink target.\n"
     )
-    full_path.write_text(content, encoding="utf-8")
+    _atomic_write(full_path, content)
     return full_path, relative_path, True
 
 
@@ -204,8 +208,9 @@ def ensure_broken_link_stub(
 
 # `- [[Target]] description` / `* [[T|D]]` — the primary wikilink of a list item.
 _INDEX_ENTRY_RE = re.compile(r"^\s*[-*]\s*\[\[([^\]|]+?)(?:\|[^\]]+)?\]\]")
-# [[target]] or [[target|display]] anywhere in body prose.
-_WIKILINK_BODY_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]")
+# _WIKILINK_BODY_RE ([[target]] / [[target|display]] anywhere in body prose)
+# is the shared _frontmatter.WIKILINK_RE, imported at the top of this module
+# (the local copy here was verbatim-identical).
 _REFKEY_STRIP_RE = re.compile(r"[\s\-_]+")
 
 
@@ -234,10 +239,17 @@ def build_deleted_keys(infos):
     return keys
 
 
-def extract_frontmatter_title(content: str) -> str:
-    """Extract the ``title:`` value from YAML-ish frontmatter, tolerating
+def extract_title_anywhere(content: str) -> str:
+    """Extract the first ``title:`` line value ANYWHERE in the text, tolerating
     optional single/double quotes (port of wiki-cleanup.ts:extractFrontmatterTitle).
-    Returns ``""`` when no title line is found."""
+    Returns ``""`` when no title line is found.
+
+    NOT the same as ``_frontmatter.extract_frontmatter_title``: this is a
+    whole-text MULTILINE regex search (NashSU-faithful), so a ``title:`` line
+    in the BODY can match when the frontmatter has none — the shared
+    ``_frontmatter`` version parses the frontmatter block properly and never
+    looks at the body. Renamed from ``extract_frontmatter_title`` (2026-07-12)
+    so the two semantics can't be confused at a call site."""
     m = _TITLE_RE.search(content)
     return m.group(1).strip() if m else ""
 

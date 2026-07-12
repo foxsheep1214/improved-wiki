@@ -9,7 +9,7 @@ Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stag
 """
 from __future__ import annotations
 
-import json, os, re, sys, time
+import re, sys, time
 from pathlib import Path
 
 _script_dir = Path(__file__).resolve().parent
@@ -18,12 +18,7 @@ if str(_script_dir) not in sys.path:
 from _paths import atomic_write, WIKI_ARTIFACT_DIRS
 from _core import (
     Config,
-    heartbeat as _heartbeat, file_tag as _file_tag,
-    stage_begin as _stage_begin, stage_end as _stage_end,
-    llm_call_progress as _llm_call_progress, llm_call_done as _llm_call_done,
-    load_cache, save_cache, list_existing_slugs,
-    parse_yaml_block, parse_file_blocks,
-    is_safe_ingest_path, _WINDOWS_RESERVED, _ILLEGAL_CHARS_RE,
+    is_safe_ingest_path, _ILLEGAL_CHARS_RE,
     source_slug_from_raw_path, schema_route_dir,
 )
 from _llm_api import call_anthropic_protocol
@@ -280,7 +275,13 @@ def _stage_3_1_backup_existing_page(path: Path, config: Config) -> None:
     safe_name = str(path.relative_to(config.wiki_dir)).replace("/", "_")
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_path = history_dir / f"{ts}_{safe_name}"
-    backup_path.write_text(path.read_text(encoding="utf-8"))
+    # Sequence suffix: same-second backups of the same page (e.g. merge +
+    # enrich passes) must not overwrite each other.
+    seq = 1
+    while backup_path.exists():
+        backup_path = history_dir / f"{ts}-{seq}_{safe_name}"
+        seq += 1
+    atomic_write(backup_path, path.read_text(encoding="utf-8"))
     print(f"  [backup] {path.name} → page-history/{backup_path.name}")
 
 
@@ -288,7 +289,6 @@ def _stage_3_1_backup_existing_page(path: Path, config: Config) -> None:
 from _frontmatter import (
     parse_frontmatter,
     write_frontmatter,
-    union_arrays,
     merge_page_content as _fm_merge_page_content,
     lock_fields,
     strip_embedded_images_section,
@@ -411,11 +411,17 @@ def _stage_3_1_canonicalize_sources_field(content: str, canonical_source: str) -
     items = ", ".join(f'"{s}"' for s in deduped)
     lines = fm.split("\n")
     new_lines = []
+    replaced = False
     for line in lines:
         if line.strip().startswith("sources:"):
             new_lines.append(f"sources: [{items}]")
+            replaced = True
         else:
             new_lines.append(line)
+    if not replaced:
+        # Frontmatter has no sources: line — append the computed list instead
+        # of silently dropping it (the page would otherwise lose provenance).
+        new_lines.append(f"sources: [{items}]")
     return "---\n" + "\n".join(new_lines) + "\n---" + body
 
 
@@ -842,7 +848,7 @@ def _scan_wiki_inventory(wiki_dir: Path) -> dict[str, list[tuple[str, str]]]:
                     m = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
                     title = m.group(1).strip() if m else f.stem
                 pages.append((f.stem, title))
-            except Exception:
+            except (OSError, UnicodeDecodeError):
                 pages.append((f.stem, f.stem))
         if pages:
             inventory[subdir] = pages
@@ -905,8 +911,12 @@ def stage_3_5_aggregate_repair(
         if m:
             insert_at = m.end()
             updated = current_index[:insert_at] + f"\n\n{new_link}" + current_index[insert_at:]
-            stage_3_1_write_wiki_file(index_path, updated, config)
-            files_written.append(str(index_path.relative_to(config.wiki_root)))
+        else:
+            print("[stage 3.5] ⚠️ index.md has no '## Sources' header — "
+                  "appending a new Sources section at end of file")
+            updated = current_index.rstrip("\n") + f"\n\n## Sources（来源）\n\n{new_link}\n"
+        stage_3_1_write_wiki_file(index_path, updated, config)
+        files_written.append(str(index_path.relative_to(config.wiki_root)))
 
     INDEX_MAX_CHARS = max(4096, int(config.source_budget * 0.12))
     # LLM whole-page rewrite can only produce ~250 bullets within the 4096-token

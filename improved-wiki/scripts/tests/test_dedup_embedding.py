@@ -185,5 +185,64 @@ class TestClusterByPairs(unittest.TestCase):
         self.assertEqual([frozenset(g) for g in groups], [frozenset({"a", "b"})])
 
 
+class TestEmbedPagesBoundedAccess(unittest.TestCase):
+    """2026-07-12: embed_pages passes the bounded EMBED_TIMEOUT_S to
+    embed_texts and trips a consecutive-failure circuit breaker instead of
+    grinding through every batch against a dead endpoint."""
+
+    def test_timeout_forwarded_to_embed_texts(self):
+        import build_embeddings
+        seen = {}
+
+        def _stub(texts, base_url, model, api_key, timeout=None):
+            seen["timeout"] = timeout
+            return [[1.0, 0.0]] * len(texts)
+
+        real = build_embeddings.embed_texts
+        build_embeddings.embed_texts = _stub
+        try:
+            out = e.embed_pages([{"id": "a", "title": "A", "body": "x"}])
+        finally:
+            build_embeddings.embed_texts = real
+        self.assertEqual(seen["timeout"], e.EMBED_TIMEOUT_S)
+        self.assertEqual(out["a"], [1.0, 0.0])
+
+    def test_consecutive_failures_trip_breaker(self):
+        import build_embeddings
+
+        def _always_fail(texts, base_url, model, api_key, timeout=None):
+            raise OSError("connection refused")
+
+        # 3 batches of 16 → breaker (threshold 3) trips on the third.
+        pages = [{"id": f"p{i}", "title": "t", "body": "b"} for i in range(33)]
+        real = build_embeddings.embed_texts
+        build_embeddings.embed_texts = _always_fail
+        try:
+            with self.assertRaises(e.DuplicatePrefilterError):
+                e.embed_pages(pages)
+        finally:
+            build_embeddings.embed_texts = real
+
+    def test_single_failure_still_non_fatal(self):
+        import build_embeddings
+        calls = {"n": 0}
+
+        def _fail_once(texts, base_url, model, api_key, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("blip")
+            return [[1.0, 0.0]] * len(texts)
+
+        pages = [{"id": f"p{i}", "title": "t", "body": "b"} for i in range(32)]
+        real = build_embeddings.embed_texts
+        build_embeddings.embed_texts = _fail_once
+        try:
+            out = e.embed_pages(pages)
+        finally:
+            build_embeddings.embed_texts = real
+        self.assertIsNone(out["p0"])          # first batch failed → None
+        self.assertEqual(out["p16"], [1.0, 0.0])  # second batch fine
+
+
 if __name__ == "__main__":
     unittest.main()
