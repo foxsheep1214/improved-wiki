@@ -80,7 +80,7 @@ comparison in Step 4, not the only safety net.
 ### Step 2: Delete old ingest (full redo, including media)
 
 ```bash
-~/.venv/bin/python3 ~/.agents/skills/improved-wiki/scripts/ingest.py \
+~/.venv/bin/python3 "$SKILL_DIR/scripts/ingest.py" \
   --delete "raw/Book/$BOOK.pdf"
 ```
 
@@ -92,10 +92,10 @@ Prints a summary of all removed files.
 
 ```bash
 # Phase 1: OCR (may timeout on 200+ page books, re-run resumes from cache)
-~/.venv/bin/python3 scripts/ingest.py "raw/Book/$BOOK.pdf" --stop-after-stage 0
+~/.venv/bin/python3 "$SKILL_DIR/scripts/ingest.py" "raw/Book/$BOOK.pdf" --stop-after-stage 0
 
 # Phase 2: LLM stages (conversation mode, multiple exit-101 cycles)
-~/.venv/bin/python3 scripts/ingest.py "raw/Book/$BOOK.pdf"
+~/.venv/bin/python3 "$SKILL_DIR/scripts/ingest.py" "raw/Book/$BOOK.pdf"
 ```
 
 ## Flow B: Analysis-only re-ingest (reuse existing OCR/images/captions)
@@ -111,7 +111,7 @@ touched by this flow, so it doesn't need backing up).
 ### Step 2: Delete, keeping media
 
 ```bash
-~/.venv/bin/python3 ~/.agents/skills/improved-wiki/scripts/ingest.py \
+~/.venv/bin/python3 "$SKILL_DIR/scripts/ingest.py" \
   --delete --keep-media "raw/Book/$BOOK.pdf"
 ```
 

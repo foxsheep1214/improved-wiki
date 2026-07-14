@@ -3,11 +3,11 @@
 When you have dozens of pending books and want to process them all without
 manual intervention per book.
 
-## Why not Claude Code?
+## Why not one-shot headless agents?
 
 `ingest.py` hands each LLM step to the calling agent (current model); for
 unattended batches you run an agent loop that answers each conversation prompt
-(see `references/delegate-mode.md`). Batch via `claude -p` is not supported —
+(see `references/delegate-mode.md`). Batch via a one-shot, prompt-only agent is not supported —
 the pipeline requires conversation-mode handoffs (exit 101 prompt-file pattern).
 No external LLM API key is needed for text generation — only image captioning
 calls a configured VLM provider.
@@ -24,7 +24,7 @@ each entry, and exits when the queue is empty.
 
 ```bash
 # Start the watcher — picks up entries from ingest-queue.json, exits when empty
-nohup python3 ~/.agents/skills/improved-wiki/scripts/ingest.py \
+nohup python3 "$SKILL_DIR/scripts/ingest.py" \
   --watch --drain \
   --parallel 4 \
   > /tmp/ingest_watch.log 2>&1 &
@@ -46,7 +46,7 @@ Best for ad-hoc batches when you know the file list upfront. Pass multiple
 PDF paths and a parallelism limit directly on the command line.
 
 ```bash
-python3 ~/.agents/skills/improved-wiki/scripts/ingest.py \
+python3 "$SKILL_DIR/scripts/ingest.py" \
   ~/Documents/知识库/HardwareWiki/raw/Book/*.pdf \
   --parallel 4
 ```
@@ -93,7 +93,7 @@ already have a source page in `wiki/sources/`.
 
 ```bash
 # Recommended: queue-driven
-nohup python3 ~/.agents/skills/improved-wiki/scripts/ingest.py \
+nohup python3 "$SKILL_DIR/scripts/ingest.py" \
   --watch --drain --parallel 4 \
   > /tmp/ingest_watch.log 2>&1 &
 

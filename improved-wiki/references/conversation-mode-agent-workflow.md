@@ -1,6 +1,6 @@
 # Conversation Mode — Agent Driving Pattern
 
-When an agent (Hermes, Claude Code) drives the improved-wiki pipeline, it must
+When a supported agent runtime drives the improved-wiki pipeline, it must
 answer each LLM step that `ingest.py` delegates via prompt files. This file
 documents the practical workflow for a single-book ingest.
 (机制与政策见 `references/delegate-mode.md`；本文是逐 stage 作答的 hands-on cheat sheet。)

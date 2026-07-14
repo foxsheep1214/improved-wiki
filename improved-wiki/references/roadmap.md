@@ -31,7 +31,7 @@ capabilities that don't exist yet and are intentionally deferred.
 
 ### 建议方案
 
-- 作为 **Ingest / Lint / Graph 之外的第 4 个 peer 命令**(如 `python3 scripts/synthesize.py`),
+- 作为 **Ingest / Lint / Graph 之外的第 4 个 peer 命令**(如 `python3 "$SKILL_DIR/scripts/synthesize.py"`),
   **不塞进 ingest** —— 保持"ingest 只做单源忠实抽取"的 NashSU 对齐;手动/周期触发,非每次 ingest。
 - **复用现有 `graph.py` 的 Louvain 社区 + 共现信号**:结构已经算好了(社区 / knowledge-gaps /
   surprising-connections),只差"社区 or 高共现对 → LLM 综述成页"这最后一步。

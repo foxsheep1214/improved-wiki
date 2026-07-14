@@ -201,9 +201,9 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 > 硬 raise 门禁只有以上几处（外加 Phase 0 的 `verify_stage_0` ≥100 字符提取门——1.1 的 `_verify_stage_1_1_text` 质量门已于 2026-07-08 移除）。source page 的**落盘**由 2.4 的写盘前门禁保证；写盘后 `validate_stage_outputs` 只做软校验（返回 warning 列表、**不 raise**），没有 3.1 raise 门。
 
-可选手动验证（**不再自动运行**——已为对齐 NashSU 移除）：`python3 scripts/validate_ingest.py`（全阶段体检，独立工具）。其它手动补充：
+可选手动验证（**不再自动运行**——已为对齐 NashSU 移除）：`python3 "$SKILL_DIR/scripts/validate_ingest.py"`（全阶段体检，独立工具）。其它手动补充：
 ```bash
-./scripts/wiki-lint.sh --summary                    # 结构性 lint（wikilink 健康）
+"$SKILL_DIR/scripts/wiki-lint.sh" --summary                    # 结构性 lint（wikilink 健康）
 test -d wiki/media/*/<slug> && find wiki/media/<type>/<slug> \( -name '*.jpeg' -o -name '*.png' \) | while read f; do [ -f "$f.caption.txt" ] || echo "MISSING CAPTION: $f"; done
 ```
 
@@ -215,16 +215,16 @@ test -d wiki/media/*/<slug> && find wiki/media/<type>/<slug> \( -name '*.jpeg' -
 
 ## Graph 命令（独立，与 Ingest/Lint 并列）
 
-Graph 不在 ingest 管线内。Ingest 管线不碰图——图建在 Graph 命令，图用在 Ingest 之外（`--mode query --slug <page>` 是只读工具，为任意页面返回 top-N 建议缺失 wikilink，不自动改文件、不在 ingest 管线内调用）。触发：仅手动运行 `python3 scripts/graph.py`（ingest/lint 不自动触发，对齐 NashSU：NashSU 无 post-ingest 图重建）。详见 `graph.py --help`。
+Graph 不在 ingest 管线内。Ingest 管线不碰图——图建在 Graph 命令，图用在 Ingest 之外（`--mode query --slug <page>` 是只读工具，为任意页面返回 top-N 建议缺失 wikilink，不自动改文件、不在 ingest 管线内调用）。触发：仅手动运行 `python3 "$SKILL_DIR/scripts/graph.py"`（ingest/lint 不自动触发，对齐 NashSU：NashSU 无 post-ingest 图重建）。详见 `graph.py --help`。
 
 - **四信号图构建**：解析 wikilinks + `related:` + frontmatter，构建 networkx 加权无向图（direct link ×3.0 / source overlap ×4.0 / Adamic-Adar ×1.5 / type affinity ×1.0）。产物 `<runtime>/graph.json`。大书（>100 页/源）source-overlap 改用 star（成员↔source 页 hub）避免 N² clique；AA 丢弃 <0.2 的 hub 噪声对。
 - **Louvain 社区检测**：社区检测 + cohesion 评分（<0.15 标记低质量）；大图 betweenness 用采样近似。
 - **图谱洞察**：`wiki/REVIEW/knowledge-gaps.md`（孤立节点/桥接节点/建议缺失链接）+ `wiki/clusters/cluster-NNN.md`（社区 hub 页）。
 
 ```bash
-python3 scripts/graph.py --wiki-root /path/to/wiki              # 全量
-python3 scripts/graph.py --wiki-root /path/to/wiki --dry-run    # 仅统计
-python3 scripts/graph.py --wiki-root /path/to/wiki --mode query --slug "page"  # 查询建议
+python3 "$SKILL_DIR/scripts/graph.py" --wiki-root /path/to/wiki              # 全量
+python3 "$SKILL_DIR/scripts/graph.py" --wiki-root /path/to/wiki --dry-run    # 仅统计
+python3 "$SKILL_DIR/scripts/graph.py" --wiki-root /path/to/wiki --mode query --slug "page"  # 查询建议
 ```
 依赖：`pip install networkx pyyaml`（networkx 3.x 内置 Louvain，无需 python-louvain）。
 

@@ -25,7 +25,7 @@
 
 ### 用户把新文件放入 raw/ 时
 
-**标准工作流**：用户先把文件放入 `raw/` 对应子目录，然后提示 Claude 按规则改名。Claude 应该：
+**标准工作流**：用户先把文件放入 `raw/` 对应子目录，然后提示调用 agent 按规则改名。调用 agent 应该：
 
 1. **找最新文件**：用 `find raw/ -type f -mmin -<N>` 或 `normalize_raw_names.py --recent <N>` 定位最近放入的文件
 2. **对照 `schema.md` 里的规则检查命名**
@@ -64,20 +64,20 @@ Skill: 检查 schema.md... 不存在（或没有 naming-rules YAML 块）。
 
 ## normalize_raw_names.py 约定
 
-脚本位于 skill 内：`~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py`
+脚本位于 skill 内：`$SKILL_DIR/scripts/normalize_raw_names.py`
 
 ```
 # 自动检测项目（从 CWD 向上找 schema.md）
-python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --check
+python3 "$SKILL_DIR/scripts/normalize_raw_names.py" --check
 
 # 指定项目
-python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --project <path> --check
+python3 "$SKILL_DIR/scripts/normalize_raw_names.py" --project <path> --check
 
 # 只检查最近文件
-python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --recent 30 --fix
+python3 "$SKILL_DIR/scripts/normalize_raw_names.py" --recent 30 --fix
 
 # 查看每项处理的详情
-python3 ~/.agents/skills/improved-wiki/scripts/normalize_raw_names.py --check --verbose
+python3 "$SKILL_DIR/scripts/normalize_raw_names.py" --check --verbose
 ```
 
 `--check` 检查所有文件是否符合规范；`--fix` 自动修正可识别的命名问题（如补 Vendor 前缀）；`--recent N` 只检查最近 N 分钟内修改的文件；`--verbose` 输出每项处理的详情。

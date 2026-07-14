@@ -150,7 +150,7 @@ provider 严格串行"）。
   "caption_fallback_provider": "ollama",
   "providers": {
     "glm": {
-      "api_key": "<智谱 sk-key，与 Claude Code 的 ANTHROPIC_AUTH_TOKEN 同一个>",
+      "api_key": "<智谱 sk-key>",
       "base_url": "https://open.bigmodel.cn/api",
       "protocol": "anthropic",
       "model": "glm-5v-turbo",

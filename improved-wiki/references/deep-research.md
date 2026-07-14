@@ -17,12 +17,12 @@ Each cycle expands the knowledge base without needing new raw source files. The 
 
 ## NashSU Alignment
 
-| NashSU | improved-wiki (Claude Code) |
+| NashSU | improved-wiki (calling agent) |
 |--------|---------------------------|
-| Search via Tavily / SerpAPI / SearXNG / Ollama / Brave / Firecrawl (6 providers; `deepResearchSource` = web / anytxt / both) | WebSearch (built-in) + Tavily MCP (`tavily_search`); page fetch via Tavily extract/crawl (WebFetch is denied in this harness) |
-| `collectResearchSources()` — multi-query, **5 results/query**, **snippet-only**, dedup by URL, cap 20 | Claude runs targeted queries, dedups by URL, cap 20 — synthesize from snippets (like NashSU) |
+| Search via Tavily / SerpAPI / SearXNG / Ollama / Brave / Firecrawl (6 providers; `deepResearchSource` = web / anytxt / both) | Use the runtime's available web-search capability; dedup by URL, cap 20, and synthesize from snippets. |
+| `collectResearchSources()` — multi-query, **5 results/query**, **snippet-only**, dedup by URL, cap 20 | The calling agent runs targeted queries, dedups by URL, cap 20 — synthesize from snippets (like NashSU) |
 | AnyTXT local-file source mode (`deepResearchSource: anytxt`/`both`) | `search_local.py` — CLI analog of AnyTXT mode: `keyword_search` on wiki/ + `mdfind`/ripgrep on raw/ (not byte-identical to AnyTXT) |
-| `executeResearch()` — LLM synthesis, reads `wiki/index.md` for cross-ref | Claude synthesizes from sources + `wiki/index.md` |
+| `executeResearch()` — LLM synthesis, reads `wiki/index.md` for cross-ref | The calling agent synthesizes from sources + `wiki/index.md` |
 | Save to `wiki/queries/<slug>-<date>-<HHMMSS>.md` | Same filename rule (Step 4) |
 | `autoIngest()` on research result | `ingest.py` on the new query page |
 | `queueResearch()` — concurrency queue (maxConcurrent=3) | Serial (conversation-based, one at a time) — CLI adaptation, no persistent queue |
@@ -43,7 +43,7 @@ Or triggered by the user asking a question that the wiki can't answer:
 
 ```
 User: wiki 里有没有关于 GaN 驱动电路的资料？
-Claude: [searches wiki] 没有找到。要我 deep research 这个主题并消化到 wiki 里吗？
+Agent: [searches wiki] 没有找到。要我 deep research 这个主题并消化到 wiki 里吗？
 ```
 
 ### Step 1: Ground in Wiki Context
@@ -63,7 +63,7 @@ material. Personal knowledge bases often hold un-ingested PDFs or partially-rela
 pages that should ground — not be rediscovered from the web.
 
 ```bash
-python3 scripts/search_local.py "<topic>" --project <project-path> --top 10
+python3 "$SKILL_DIR/scripts/search_local.py" "<topic>" --project <project-path> --top 10
 ```
 
 `search_local.py` reuses `_wiki_keyword.keyword_search` over `wiki/*.md` (curated
@@ -87,7 +87,7 @@ already cover the topic may narrow the research scope (skip what the wiki alread
 
 #### Step 2b: Web search
 
-Claude runs **3-5 targeted web queries** (not one broad query). Each query should approach the topic from a different angle:
+The calling agent runs **3-5 targeted web queries** (not one broad query). Each query should approach the topic from a different angle:
 
 ```
 Query 1: <topic> 技术原理 最新进展
@@ -97,18 +97,17 @@ Query 4: <topic> 对比 选型 方案
 Query 5: <topic> 最新研究 2025 2026
 ```
 
-Use the available search tools:
-- **WebSearch** (built-in): General web search
-- **Tavily MCP** (`mcp__tavily__tavily_search`): Advanced search with configurable depth
-- **Tavily extract/crawl** (`mcp__tavily__tavily_extract` / `tavily_crawl`): fetch full content of promising pages — WebFetch is denied in this harness, so all page fetching goes through Tavily.
+Use the runtime's available web-search and page-reading tools. Deduplicate results by URL.
+If no web-search capability is available, **pause before Step 3** and ask the user to
+enable it or provide sources; never present local-only work as web research.
 
 Deduplicate results by URL. Cap at 20 sources (NashSU `MAX_RESEARCH_SOURCES`). Prefer recent, authoritative sources.
 
-Synthesize from the search **snippets** — NashSU's `collectResearchSources` passes snippet text only and never fetches full page bodies. Only fetch a full page via Tavily extract/crawl when a snippet is too thin to use, and treat that as a CLI extra, not NashSU behavior.
+Synthesize from the search **snippets** — NashSU's `collectResearchSources` passes snippet text only and never fetches full page bodies. Only read a full page when a snippet is too thin to use and the current runtime provides a page-reading capability; treat that as a CLI extra, not NashSU behavior.
 
 ### Step 3: Synthesize
 
-Claude synthesizes the research into one wiki page from the collected sources
+The calling agent synthesizes the research into one wiki page from the collected sources
 (local Step 2a + web Step 2b). NashSU writes the LLM's synthesis **verbatim**
 (stripping only `<think>` blocks) and appends a **code-generated** References list
 — so follow these writing rules rather than forcing a fixed section template:
@@ -182,7 +181,7 @@ collides — no `-2` versioning needed, matching NashSU.
 This is the critical step that makes it a closed loop. Immediately after writing the research page, trigger ingest on it:
 
 ```bash
-python3 scripts/ingest.py wiki/queries/<slug>.md
+python3 "$SKILL_DIR/scripts/ingest.py" wiki/queries/<slug>.md
 ```
 
 The ingest entry-point accepts a `wiki/queries/` path directly (NashSU `autoIngest` parity): `_bridge_wiki_queries_to_raw` copies the page into `raw/queries/<slug>.md` and ingests that copy, so the rest of the raw-root-centric pipeline sees a normal source. The original `wiki/queries/<slug>.md` stays as the human-readable research page. (NashSU's `autoIngest` is path-agnostic and reads `wiki/queries/` directly; the improved-wiki pipeline derives source identity from a `raw/` path in ~20 places, so the copy is the bridge instead of a full refactor.)
@@ -237,9 +236,9 @@ can start a new deep-research invocation on any surfaced topic.
 - `wiki 里缺了 <topic>，帮我研究一下`
 - `调查 <topic> 并消化`
 
-## When Claude Should Proactively Suggest Deep Research
+## When the calling agent should proactively suggest Deep Research
 
-Claude should suggest deep research when:
+The calling agent should suggest deep research when:
 
 1. **Wiki query returns nothing**: "wiki 里没有这个主题，要我 deep research 吗？"
 2. **Review item is a knowledge gap**: "这个 review item 可以通过 deep research 填补"
@@ -253,23 +252,23 @@ Claude should suggest deep research when:
 
 ```
 User: deep research the review item "缺少 GaN HEMT 驱动电路设计"
-Claude: [reads the review item → formulates search queries → ...]
+Agent: [reads the review item → formulates search queries → ...]
 ```
 
-The review item's `search_queries` field (populated by Stage 3.4 for `suggestion`/`missing-page` reviews — NashSU `searchQueries` parity) provides 2-3 keyword-rich web search queries that seed Step 2b directly, with no extra LLM round-trip. The review item's `affected_pages` field tells Claude which pages to read for context. (NashSU also has a separate `optimizeResearchTopic` LLM call that refines a gap into a topic + queries; the improved-wiki skips it — the pre-computed `search_queries` already cover that role. If a review item lacks `search_queries`, fall back to deriving queries from `title` + `affected_pages`.)
+The review item's `search_queries` field (populated by Stage 3.4 for `suggestion`/`missing-page` reviews — NashSU `searchQueries` parity) provides 2-3 keyword-rich web search queries that seed Step 2b directly, with no extra LLM round-trip. The review item's `affected_pages` field tells the calling agent which pages to read for context. (NashSU also has a separate `optimizeResearchTopic` LLM call that refines a gap into a topic + queries; the improved-wiki skips it — the pre-computed `search_queries` already cover that role. If a review item lacks `search_queries`, fall back to deriving queries from `title` + `affected_pages`.)
 
 ### Variant B: From Comparison Gap
 
 ```
 User: 这个对比页缺少 B 方的数据，研究一下
-Claude: [reads the comparison page → identifies what's missing → searches → synthesizes → re-generates comparison]
+Agent: [reads the comparison page → identifies what's missing → searches → synthesizes → re-generates comparison]
 ```
 
 ### Variant C: Batch Deep Research
 
 ```
 User: deep research 这 5 个 review items 里的 missing-page 类型
-Claude: [processes each one sequentially, collecting results, presenting summary]
+Agent: [processes each one sequentially, collecting results, presenting summary]
 ```
 
 ### Variant D: Targeted Deep Research (with user-provided URLs)
@@ -278,13 +277,13 @@ Claude: [processes each one sequentially, collecting results, presenting summary
 User: deep research GaN power supplies, 重点看这些链接:
   - https://example.com/gan-article-1
   - https://example.com/gan-paper-2
-Claude: [fetches those URLs + complementary web search → synthesizes]
+Agent: [reads those URLs when the runtime allows it + complementary web search → synthesizes]
 ```
 
 ## Edge Cases
 
 ### Research Topic Too Broad
-If the topic would produce >20 high-quality sources with divergent themes, Claude should ask the user to narrow scope BEFORE searching. Wasted search on an overbroad topic helps no one.
+If the topic would produce >20 high-quality sources with divergent themes, the calling agent should ask the user to narrow scope BEFORE searching. Wasted search on an overbroad topic helps no one.
 
 ### Zero Useful Results (NashSU `noResearchSourcesTaskPatch`)
 NashSU distinguishes two states — mirror them:
@@ -296,7 +295,7 @@ NashSU distinguishes two states — mirror them:
 Either way, **never** fabricate a page from thin air.
 
 ### Topic Already Well-Covered in Wiki
-If the wiki already has extensive coverage, Claude should:
+If the wiki already has extensive coverage, the calling agent should:
 1. Point to existing pages
 2. Identify what's NEW that the research could add
 3. Only proceed if there's genuine incremental value

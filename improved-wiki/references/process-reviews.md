@@ -24,10 +24,10 @@ carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答
 
 | NashSU review-view.tsx | improved-wiki |
 |---|---|
-| Review panel lists pending items | Claude scans `wiki/REVIEW/*/` for `resolved: false` |
-| Per-item buttons: Deep Research / Create Page / Skip | AskUserQuestion per item with the same three options |
+| Review panel lists pending items | Calling agent scans `wiki/REVIEW/*/` for `resolved: false` |
+| Per-item buttons: Deep Research / Create Page / Skip | Present the same three options to the user per item |
 | `__deep_research__` → `queueResearch(topic, searchQueries)` | run the deep-research flow (`deep-research.md`) with the item's `search_queries` as seed queries |
-| No search API configured → falls back to Create Page | no Tavily/WebSearch available → offer Create Page instead |
+| No search API configured → falls back to Create Page | no web-search capability available → offer Create Page instead |
 | `createReviewPageDrafts` type routing | same routing rules (below) |
 | `resolveItem(id, action)` — resolved in store, never deleted | frontmatter `resolved: true` + `resolved_at` + `resolved_reason` — file kept on disk (audit trail, same convention as sweep) |
 

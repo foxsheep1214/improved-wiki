@@ -1,6 +1,6 @@
 # Delegate Mode — Agent Orchestration
 
-Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **conversation mode** — there is no flag, and no direct-API alternative. Every text-generation LLM step (including wikilink enrichment, batched once per ingest) is handled by the calling agent with the current conversation's model. Two external dependencies outside text generation: **image captioning** (Stage 1.3, configurable VLM provider — vision content can't flow through the prompt-file handoff) and **embeddings** (Stage 3.7, local Ollama bge-m3). Both are **no-fallback**: if the caption key is missing/batch fails or the Ollama stack is down, `ingest.py` raises `RuntimeError` and pauses — the calling agent must surface this to the user rather than silently continuing. Extraction/page writes are cached, so re-running after the user fixes the dependency resumes from the failed stage.
+Invoking improved-wiki from a supported agent runtime always uses **conversation mode** — there is no flag, and no direct-API alternative. Every text-generation LLM step (including wikilink enrichment, batched once per ingest) is handled by the calling agent with the current conversation's model. Two external dependencies outside text generation: **image captioning** (Stage 1.3, configurable VLM provider — vision content can't flow through the prompt-file handoff) and **embeddings** (Stage 3.7, local Ollama bge-m3). Both are **no-fallback**: if the caption key is missing/batch fails or the Ollama stack is down, `ingest.py` raises `RuntimeError` and pauses — the calling agent must surface this to the user rather than silently continuing. Extraction/page writes are cached, so re-running after the user fixes the dependency resumes from the failed stage.
 
 ---
 
@@ -18,7 +18,7 @@ Invoking improved-wiki from an agent (Claude Code, Hermes, etc.) always uses **c
 
 ```bash
 cd /path/to/wiki/project
-scripts/ingest.py raw/Book/Book.pdf
+python3 "$SKILL_DIR/scripts/ingest.py" raw/Book/Book.pdf
 ```
 
 At each LLM call point, `ingest.py` writes a prompt file and raises `ConversationPending` (exit code `101`).
@@ -38,7 +38,7 @@ The agent reads the `.md` file, executes the LLM task, and writes the result to:
 ### Step 3: Re-invoke to continue
 
 ```bash
-scripts/ingest.py raw/Book/Book.pdf
+python3 "$SKILL_DIR/scripts/ingest.py" raw/Book/Book.pdf
 ```
 
 `ingest.py` finds the result file, reads it, continues to the next stage, and repeats until completion.
@@ -77,7 +77,7 @@ not just one session's personal preference) — user-requested 2026-07-10.
 def ingest_via_conversation(pdf_path, project_path):
     while True:
         proc = subprocess.run(
-            ["scripts/ingest.py", pdf_path],
+            [os.path.join(os.environ["SKILL_DIR"], "scripts", "ingest.py"), pdf_path],
             cwd=project_path,
             env={**os.environ, "IMPROVED_WIKI_ROOT": project_path},
         )
@@ -135,7 +135,7 @@ conclude the prompt file is missing or corrupted from a single failed Read.
 fails on PEP 604 union syntax. Full explanation: `references/scripting-pitfalls.md` Pitfall 4.
 
 ```bash
-IMPROVED_WIKI_ROOT="$(pwd)" ~/.venv/bin/python3 ~/.agents/skills/improved-wiki/scripts/ingest.py "raw/Book/Book.pdf"
+IMPROVED_WIKI_ROOT="$(pwd)" ~/.venv/bin/python3 "$SKILL_DIR/scripts/ingest.py" "raw/Book/Book.pdf"
 ```
 
 ### minerU OCR can take 10+ minutes — use `--stop-after-stage 0`
@@ -145,10 +145,10 @@ exceed foreground terminal timeouts. Split the run:
 
 ```bash
 # Phase 1: OCR only (may timeout, re-run resumes from cache)
-~/.venv/bin/python3 scripts/ingest.py "raw/Book/Book.pdf" --stop-after-stage 0
+~/.venv/bin/python3 "$SKILL_DIR/scripts/ingest.py" "raw/Book/Book.pdf" --stop-after-stage 0
 
 # Phase 2: LLM stages (conversation mode, multiple exit-101 cycles)
-~/.venv/bin/python3 scripts/ingest.py "raw/Book/Book.pdf"
+~/.venv/bin/python3 "$SKILL_DIR/scripts/ingest.py" "raw/Book/Book.pdf"
 ```
 
 `--stop-after-stage 0` halts **cleanly (exit 0, `{"status":"ok","stopped_after":"0"}`)**

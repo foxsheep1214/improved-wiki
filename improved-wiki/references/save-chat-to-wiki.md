@@ -8,14 +8,14 @@ cleaned assistant content written verbatim, exactly like NashSU.
 
 ## Core Idea
 
-You ask Claude questions all the time. Some answers are throwaway — but some
+You ask the calling agent questions all the time. Some answers are throwaway — but some
 contain real insight. Without save-to-wiki, that insight disappears into chat
 history. With save-to-wiki, an assistant answer is captured as a `wiki/queries/`
 page and auto-ingested — extracting entities, concepts, and cross-references just
 like a source document.
 
 ```
-Claude answers → User: "save this to wiki"
+Agent answers → User: "save this to wiki"
   → clean the assistant content (NashSU cleanAssistantContentForWikiSave)
   → write wiki/queries/<slug>-<YYYY-MM-DD>-<HHMMSS>.md (frontmatter + verbatim body)
   → update index.md (## Queries) + log.md
@@ -25,7 +25,7 @@ Claude answers → User: "save this to wiki"
 
 ## NashSU Alignment
 
-| NashSU (`chat-save-to-wiki.ts` / `chat-message.tsx`) | improved-wiki (Claude Code) |
+| NashSU (`chat-save-to-wiki.ts` / `chat-message.tsx`) | improved-wiki (calling agent) |
 |--------|---------------------------|
 | UI button "Save to Wiki" on an assistant message | User says "保存到 wiki" / "save to wiki" / "记住这个" |
 | `cleanAssistantContentForWikiSave()` — strips `<!-- save-worthy: -->` / `<!-- sources: -->` comments + `<think>` blocks, trims | Same cleaning rules (see Step 1), nothing more |
@@ -107,14 +107,14 @@ NashSU updates two aggregate files on every save — do the same:
 ### Step 5: Auto-Ingest
 
 ```bash
-python3 scripts/ingest.py wiki/queries/<filename>.md
+python3 "$SKILL_DIR/scripts/ingest.py" wiki/queries/<filename>.md
 ```
 
 This bridges the query page into `raw/queries/` and ingests it (NashSU `autoIngest`
 parity), extracting entities/concepts and creating cross-references. Without this,
 the saved page is a static note; with it, the knowledge is decomposed and
-integrated. (NashSU gates auto-ingest on having a usable LLM; in Claude Code the
-calling agent is always the LLM, so it always runs.)
+integrated. (NashSU gates auto-ingest on having a usable LLM; here it runs only when
+the calling agent can complete the conversation-mode handoffs.)
 
 ### Step 6: Confirm
 
@@ -137,15 +137,15 @@ calling agent is always the LLM, so it always runs.)
 - `add this to the wiki` / `wiki this`
 - `消化这段对话`
 
-## When Claude Should Proactively Suggest Saving
+## When the calling agent should proactively suggest saving
 
 NashSU's trigger is a manual button — there is no proactive prompting upstream.
 The trigger phrases above are the CLI equivalent of the button. As a light CLI
-convenience (not NashSU behavior), Claude *may* offer to save after an in-depth,
+convenience (not NashSU behavior), the calling agent *may* offer to save after an in-depth,
 novel answer, but the default is to wait for an explicit trigger.
 
 ```
-Claude: [详细回答后]
+Agent: [详细回答后]
 💡 要把这个回答保存到 HardwareWiki 并消化吗？
 ```
 

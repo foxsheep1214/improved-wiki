@@ -9,6 +9,28 @@ related_skills: [karpathy-llm-wiki, llm-wiki-local]
 
 Karpathy LLM-Wiki pattern，参考 NashSU 最新版本。 Three peer commands: **Ingest** (15 active Stages across 4 Phases — Phase 0 included: 0 pre-processing → 1 extraction → 2 analysis/generation → 3 write & enrich), **Lint** (structural + semantic), **Graph** (knowledge graph — full rules under Key features). (No post-ingest validation phase — see "Standalone validation" under Key features.)
 
+## Quick routing & command convention
+
+Run shell commands from the target wiki project. The project does **not** contain a
+`scripts/` directory; invoke the installed skill in place. Before using any command
+below, set this once for the current shell:
+
+```bash
+export SKILL_DIR="${SKILL_DIR:-$HOME/.agents/skills/improved-wiki}"
+```
+
+| User intent | Route | Preconditions / stop point |
+|---|---|---|
+| Ingest one source | `python3 "$SKILL_DIR/scripts/ingest.py" <file>` | Proceed directly; answer each conversation handoff. |
+| Ingest 2+ sources | same command with all files | 🔴 Confirm the complete file list and target project first. |
+| Re-ingest with `--delete` | ingest command with `--delete` | 🔴 Confirm source slug and full-redo vs `--keep-media`. |
+| Research a topic into the wiki | `/improved-wiki deep-research <topic>` | 🔴 Confirm scope; require a web-search capability before claiming web research. |
+| Lint / graph / retrieve | respective script below | Read-only unless an explicit fix/apply option is requested. |
+
+Use the calling agent and the runtime's available tools. Never assume a vendor-specific
+agent, browser, MCP server, or shell helper exists; when a required capability is absent,
+pause and tell the user what is missing rather than silently substituting lower-quality work.
+
 ```
 Phase 0: [0.1 raw-naming] → [0.2 source dedup]  (pre-processing gates)
 Ingest: 1.1→1.2→1.3→2.2→2.3→2.4→2.6→2.9→3.1→3.2→3.4→3.5→3.7
@@ -62,13 +84,13 @@ Single-file auto-ingest, lint, graph, and save-chat-to-wiki are NOT gated — pr
 
 ## Entry points
 
-- **Auto Ingest**: `python3 scripts/ingest.py file.pdf […]` — fully automated pipeline; the calling agent does each LLM step with the current model
+- **Auto Ingest**: `python3 "$SKILL_DIR/scripts/ingest.py" file.pdf […]` — fully automated pipeline; the calling agent does each LLM step with the current model
 - **Chat Ingest** ⭐: `/improved-wiki chat-ingest <file>` — interactive human-guided ingest (CLI revival of the interactive ingest NashSU later removed; a skill enhancement on the FILE-block write path, not current `executeIngestWrites` parity). See `references/chat-ingest.md`.
 - **Deep Research** ⭐: `/improved-wiki deep-research <topic>` — closed-loop web→wiki research pipeline (参考 NashSU `deep-research.ts`). See `references/deep-research.md`.
 - **Save Chat to Wiki** ⭐: say "保存到 wiki" after any conversation — captures chat insight as wiki page + auto-ingests (参考 NashSU `chat-save-to-wiki.ts`). See `references/save-chat-to-wiki.md`.
 - **Review Sweep** ⭐: `/improved-wiki sweep-reviews` — auto-resolves review items satisfied by subsequent ingests (参考 NashSU `sweep-reviews.ts`). See `references/review-sweep.md`.
 - **Process Reviews** ⭐: `/improved-wiki process-reviews` — human adjudication of pending review items, per-item [Deep Research / Create Page / Skip] (参考 NashSU `review-view.tsx` 审核面板). This is where query pages are born post-2.7-removal. See `references/process-reviews.md`.
-- **Graph** ⭐: `python3 scripts/graph.py` — build/refresh the knowledge graph (full rules under Key features).
+- **Graph** ⭐: `python3 "$SKILL_DIR/scripts/graph.py"` — build/refresh the knowledge graph (full rules under Key features).
 - **Stage Checklist**: `references/ingest-stages-mandatory.md` — authoritative ingest-stage checklist with go/no-go gates.
 
 ## Reference map
@@ -86,7 +108,7 @@ Single-file auto-ingest, lint, graph, and save-chat-to-wiki are NOT gated — pr
 - `references/review-sweep.md` ⭐ — auto-resolve review items satisfied by new ingests (参考 NashSU sweep-reviews.ts)
 - `references/process-reviews.md` ⭐ — human adjudication of pending review items: [Deep Research / Create Page / Skip] per item (参考 NashSU review-view.tsx)
 - `references/context-probe.md` — live context-window probe at ingest start (replaces `LLM_CONTEXT_SIZE` env); per-model cache, sanity gate, no-silent-fallback
-- `references/delegate-mode.md` — **agent invocation** via `ingest.py`: how a calling agent (Claude Code/Hermes) answers each LLM step. Includes operational pitfalls: venv Python requirement, OCR timeout handling, wikilink merge task batching, re-ingest `--delete` pattern.
+- `references/delegate-mode.md` — **agent invocation** via `ingest.py`: how a calling agent answers each LLM step. Includes operational pitfalls: venv Python requirement, OCR timeout handling, wikilink merge task batching, re-ingest `--delete` pattern.
 - `references/conversation-mode-agent-workflow.md` — concrete per-step prompt-file cheat sheet for a single-book ingest (Stage 2.2/2.4/2.9 prompt patterns, merge-loop subagent dispatch). Companion to `delegate-mode.md` (concept) with the hands-on detail.
 - `references/nashsu-search-architecture.md` — NashSU 源码实证：graph-relevance.ts（纯确定性 4 信号）+ search.rs（hybrid keyword+vector+RRF，远程 embedding API，无本地模型）。澄清 "NashSU parity" 在搜索侧的实际覆盖范围
 
@@ -119,14 +141,14 @@ Single-file auto-ingest, lint, graph, and save-chat-to-wiki are NOT gated — pr
 
 ## Key features
 
-- **Auto-ingest**: `python3 scripts/ingest.py file.pdf [file2.pdf ...]` — NashSU Step 2 parity: Stage 2.4 generation produces concept/entity pages (per-chunk) + source page (from digest). LLM steps run in conversation mode (current model).
-- **Chat ingest** ⭐ (CLI revival of interactive ingest — NashSU **removed** the entry point in a later version; skill enhancement, not current parity): `/improved-wiki chat-ingest <file>` — interactive two-step: Claude presents digest → you provide guidance → Claude generates guided wiki pages. Human relevance judgment in the loop. See `references/chat-ingest.md`.
+- **Auto-ingest**: `python3 "$SKILL_DIR/scripts/ingest.py" file.pdf [file2.pdf ...]` — NashSU Step 2 parity: Stage 2.4 generation produces concept/entity pages (per-chunk) + source page (from digest). LLM steps run in conversation mode (current model).
+- **Chat ingest** ⭐ (CLI revival of interactive ingest — NashSU **removed** the entry point in a later version; skill enhancement, not current parity): `/improved-wiki chat-ingest <file>` — interactive two-step: the calling agent presents a digest → you provide guidance → the agent generates guided wiki pages. Human relevance judgment remains in the loop. See `references/chat-ingest.md`.
 - **Deep research** ⭐ (参考 NashSU `deep-research.ts`): `/improved-wiki deep-research <topic>` — closed-loop: web search → LLM synthesis → wiki query page → auto-ingest → entity/concept pages → new review items. Knowledge base grows itself. Verbatim synthesis + code-generated References; `tags: [research]`; one topic per invocation (no review-derived auto-chain). See `references/deep-research.md`.
 - **Save chat to wiki** ⭐ (参考 NashSU `chat-save-to-wiki.ts`): say "保存到 wiki" after any conversation — cleans the assistant answer and writes it verbatim to `wiki/queries/<slug>-<date>-<HHMMSS>.md` (frontmatter `type/title/created/tags` only) + updates index/log + auto-ingests. Conversations become permanent knowledge. See `references/save-chat-to-wiki.md`.
 - **Review sweep** ⭐ (参考 NashSU `sweep-reviews.ts`): `/improved-wiki sweep-reviews` — scans pending review items, auto-resolves those satisfied by subsequent ingests (rule-based pass, then a conversation-mode LLM judge; resolved pages are kept on disk). Details in `references/review-sweep.md`.
 - **Process reviews** ⭐ (参考 NashSU `review-view.tsx` 审核面板): `/improved-wiki process-reviews` — the human side of the review queue: present each pending suggestion/missing-page item with NashSU's predefined options [Deep Research / Create Page / Skip]; Deep Research uses the item's pre-generated `search_queries` to seed the deep-research flow, whose result becomes the query page. Since the 2026-07-12 Stage 2.7 removal this is the canonical birthplace of `wiki/queries/` pages (alongside save-chat-to-wiki). Details in `references/process-reviews.md`.
-- **Batch ingest**: `python3 scripts/ingest.py f1.pdf f2.pdf ...` — pass all books in **one command**; the pipeline auto-parallelizes the wiki-independent prefetch (Phase 0/1 + Stage 2.2) across books while the wiki-dependent spine (Stage 2.3→write) runs one book at a time. **Do not manually split books into separate `ingest.py` calls**, and never run two books' 2.3+ in parallel — only the spine is serial. Concurrency caps (`--parallel` sub-agent limit), the in-book Stage 2.4 parallel exception (2026-07-09), and prefetch mechanics: `references/batch-parallel-prefetch.md` (authoritative).
-- **Graph** (separate command, peer of Ingest/Lint): `python3 scripts/graph.py` builds the knowledge graph (NashSU graph-view CLI parity — four-signal weighted graph + Louvain communities + cohesion + gaps + cluster hubs). Deterministic, no LLM. Run explicitly only — ingest/lint never auto-trigger it (NashSU-aligned: NashSU has no post-ingest graph rebuild). `--mode query --slug <s>` for read-only per-page wikilink suggestions (manual; not wired into any ingest stage).
+- **Batch ingest**: `python3 "$SKILL_DIR/scripts/ingest.py" f1.pdf f2.pdf ...` — pass all books in **one command**; the pipeline auto-parallelizes the wiki-independent prefetch (Phase 0/1 + Stage 2.2) across books while the wiki-dependent spine (Stage 2.3→write) runs one book at a time. **Do not manually split books into separate `ingest.py` calls**, and never run two books' 2.3+ in parallel — only the spine is serial. Concurrency caps (`--parallel` sub-agent limit), the in-book Stage 2.4 parallel exception (2026-07-09), and prefetch mechanics: `references/batch-parallel-prefetch.md` (authoritative).
+- **Graph** (separate command, peer of Ingest/Lint): `python3 "$SKILL_DIR/scripts/graph.py"` builds the knowledge graph (NashSU graph-view CLI parity — four-signal weighted graph + Louvain communities + cohesion + gaps + cluster hubs). Deterministic, no LLM. Run explicitly only — ingest/lint never auto-trigger it (NashSU-aligned: NashSU has no post-ingest graph rebuild). `--mode query --slug <s>` for read-only per-page wikilink suggestions (manual; not wired into any ingest stage).
 - **Unified single-pass pipeline**: Stage 2.2 analyzes ALL chunks (rolling global digest, empty seed — the standalone Stage 2.1 whole-book digest was removed 2026-07-08 for NashSU parity) → Stage 2.3 detects existing-wiki associations → Stage 2.4 generates pages (per-chunk, source-grounded; single-shot for ≤1 chunk). Works for all chunk counts (1 to N), with per-chunk checkpoints for crash recovery. Legacy multi-round synthesis retired.
 - **Parallel I/O**: per-image caption dispatch (×4 workers, `CAPTION_MAX_WORKERS`; 4 stays under GLM-5v-turbo free-tier 429 limit). Pure I/O-bound parallelism only — no quality impact.
 - **Heading path tracking** (NashSU parity): each chunk analysis prompt includes full heading hierarchy (`Chapter 3 > Section 3.2 > Subsec 3.2.1`)
