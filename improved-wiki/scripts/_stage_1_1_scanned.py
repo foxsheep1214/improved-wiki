@@ -354,7 +354,18 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 
 
 def _stage_1_1_kill_mineru_servers() -> None:
-    """Kill lingering mineru-api processes to ensure clean state."""
+    """Kill lingering mineru-api processes to ensure clean state.
+
+    Skip if a healthy server is already running on MINERU_API_PORT — we want
+    to reuse it rather than kill+restart.
+    """
+    try:
+        r = urllib.request.urlopen(
+            f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
+        if json.loads(r.read()).get("status") == "healthy":
+            return  # reuse existing server
+    except Exception:
+        pass
     try:
         subprocess.run(
             ["pkill", "-f", "mineru-api"], capture_output=True, timeout=5,
@@ -450,6 +461,17 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
     venv_python = Path.home() / ".venv" / "bin" / "python3"
     if not venv_python.exists():
         venv_python = Path(sys.executable)
+
+    # Check if minerU is already running on the port — if so, reuse it
+    try:
+        r = urllib.request.urlopen(
+            f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
+        if json.loads(r.read()).get("status") == "healthy":
+            print(f"[ocr] minerU API already running on port {MINERU_API_PORT} — reusing")
+            return None, venv_python
+    except Exception:
+        pass
+
     api_proc = subprocess.Popen(
         [str(venv_python), "-m", "mineru.cli.fast_api",
          "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
@@ -686,11 +708,16 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
             if attempt < 2:
                 if e.code >= 500:
                     print(f"HTTP {e.code} (retry {attempt+1}/3, restarting server)...")
-                    api_proc.terminate()
-                    try:
-                        api_proc.wait(timeout=5)
-                    except Exception:
-                        api_proc.kill()
+                    if api_proc is not None:
+                        api_proc.terminate()
+                        try:
+                            api_proc.wait(timeout=5)
+                        except Exception:
+                            api_proc.kill()
+                    else:
+                        # Reused an externally-started server — can't terminate it.
+                        # Kill by port to free the slot for a fresh server.
+                        _stage_1_1_kill_mineru_servers()
                     time.sleep(3)
                     api_proc = _stage_1_1_scanned_restart_server(venv_python)
                     time.sleep(5)

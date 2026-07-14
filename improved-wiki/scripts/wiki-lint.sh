@@ -63,6 +63,16 @@
 #         --sweep/--dedup used to swallow this and silently fall through to
 #         later stages without actually applying the sweep/dedup — fixed to
 #         propagate exit 101 the same way --semantic already did.)
+#
+# --dedup convergence note (2026-07-12, user-directed): cross_source_dedup.py
+# batches are content-hash keyed, so each merge round shifts the wiki page
+# set and re-invalidates nearly all batches — re-running wiki-lint.sh after
+# answering one round of dedup handoffs tends to re-emit a near-full new
+# batch set rather than shrinking monotonically. Default calling-agent policy:
+# answer ONE round of dedup conversation handoffs, then re-invoke with
+# --no-dedup to move on to the remaining stages. Only keep looping dedup
+# rounds if the user explicitly asks to run it to full convergence. See
+# references/dedup-design.md for the full rationale.
 
 set -uo pipefail
 
