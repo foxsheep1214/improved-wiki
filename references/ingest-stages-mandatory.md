@@ -25,7 +25,7 @@ improved-wiki 流水线 = **15 个 active Stage（含 Phase 0 前置门，跨 4 
 | 2.1 | _(已移除，对齐 NashSU)_ | 原 Global Digest（并入 2.2 滚动） |
 | 2.2 | `_stage_2_2_analyze_chunk` | 逐 chunk 分析（**全部 chunk 分析完**再进入 2.3） |
 | 2.3 | `stage_2_3_*`（`_stage_2_3_incremental.py`） | 已存在 wiki 关联检测（在 2.2 与 2.4 之间，读 wiki） |
-| 2.4 | `_stage_2_4_generate_*` + `_dedup_intra_source.py` | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发）+ 源内概念去重收尾（embedding 语义初筛 cosine≥0.82 + LLM 确认，多 chunk；无回退） |
+| 2.4 | `stage_2_4_generate_all` / `stage_2_4_generate_chunk` + `_dedup_intra_source.py` | 概念/实体逐 chunk 生成（源锚定；≤1 chunk 单发）+ 源内概念去重收尾（embedding 语义初筛 cosine≥0.82 + LLM 确认，多 chunk；无回退） |
 | 2.6 | `stage_2_6_source_page` | 源页生成（源索引；2.4 之后） |
 | 2.7 | _(已移除，对齐 NashSU，2026-07-12)_ | 原问题生成 + 跨源 query 解析（信号改走 3.4 REVIEW suggestion → process-reviews） |
 | 2.9 | `stage_2_9_comparison_generation` | 源内对比生成 |

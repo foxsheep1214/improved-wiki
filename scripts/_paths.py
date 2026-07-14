@@ -203,20 +203,6 @@ def iter_wiki_pages(
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def raw_type_subdir(raw_file: Path, config: "Config") -> str:
-    """Return the raw/-relative parent directory for this file.
-
-    raw/Book/Foo.pdf           → book
-    raw/Datasheet/05_AMP/Bar.pdf → datasheet/05_AMP
-    """
-    try:
-        rel = raw_file.relative_to(config.raw_root)
-    except ValueError:
-        return ""
-    parent = str(rel.parent)
-    return parent if parent != "." else ""
-
-
 def media_slug(raw_file: Path, config: "Config") -> str:
     """Derive media directory path from raw file path, mirroring raw/ structure.
 

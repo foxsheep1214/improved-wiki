@@ -43,7 +43,7 @@ wiki/
 
 **Schema 路由——两层机制，同时生效（不是新旧替换关系）**：
 1. **Accept-list 门禁**（上面已述的机制）：`_core.py` 的 `BASE_PAGE_DIRS` + `load_schema_md()` + `schema_folders()`（对全文做宽松正则扫描）喂给 `_ingest_write.py` 的 `_VALID_SUBDIRS`——写盘时第一道过滤，判断 FILE block 目标目录是否可接受（非 schema 文件夹仍走拼写纠错兜底）。
-2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `validate_wiki_page_routing()` + `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_1_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
+2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_1_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
 
 两层在同一次写盘中都跑：第 1 层管"这个目录能不能收"，第 2 层管"具体该放哪个目录"。**与 NashSU 的刻意分歧**：NashSU 路由不上就丢弃该页；improved-wiki 自动纠正、把页面挪到正确目录（不丢数据，符合 no-silent-fallback 策略）。
 
@@ -92,7 +92,7 @@ wiki/sources/<raw-rel-path>.md
 
 **规则**：`<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），**镜像 `raw/` 的目录结构**。
 
-**improved-wiki 实现**：`ingest.py:wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
+**improved-wiki 实现**：`_stage_3_write.py:_stage_3_1_wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
 
 ```
 # 示例

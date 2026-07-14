@@ -70,7 +70,7 @@ def embed_texts(texts, base_url, model, api_key, timeout=120):
                 with urllib.request.urlopen(req, timeout=timeout) as resp:
                     result = json.loads(resp.read().decode("utf-8"))
                     data = result.get("data", [])
-                    vecs = [item["embedding"] for item in data]
+                    vecs = [item.get("embedding") for item in data if item.get("embedding") is not None]
                     out.extend(vecs)
                     break
             except Exception as e:
@@ -162,7 +162,7 @@ def collect_pages():
                 # manufacturers' datasheets both named "LM2596.md")
                 page_id = rel_path[:-3].replace(os.sep, "/")
                 try:
-                    content = open(path, encoding="utf-8").read()
+                    content = Path(path).read_text(encoding="utf-8")
                 except Exception as e:
                     # A skipped page silently disappears from the embedding
                     # index — say so instead of dropping it without a trace.
@@ -220,7 +220,8 @@ def cmd_embed():
     cache = {}
     if os.path.exists(EMBED_CACHE):
         try:
-            cache = json.load(open(EMBED_CACHE))
+            with open(EMBED_CACHE, encoding="utf-8") as f:
+                cache = json.load(f)
         except (ValueError, OSError) as e:
             # Corrupt cache = full re-embed, not a crash. Loud so the operator
             # knows why this run suddenly embeds everything from scratch.

@@ -117,10 +117,16 @@ def stage_3_7_embed_new_pages(config: Config, files_written: list[str]) -> None:
     except Exception:
         page_count = len(new_files)
     embed_timeout = max(600, page_count * 2)
-    proc = subprocess.run(
-        [sys.executable, str(script), "--project", str(config.wiki_root), "embed"],
-        capture_output=True, text=True, timeout=embed_timeout,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script), "--project", str(config.wiki_root), "embed"],
+            capture_output=True, text=True, timeout=embed_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"Stage 3.7 embedding timed out after {embed_timeout}s "
+            f"({page_count} pages). Pages are written + cached; re-run to resume."
+        )
     if proc.returncode != 0:
         # No silent fallback (consistent with the capability gate above): a failed
         # embed must not be reported as complete. Pages are already written and

@@ -353,19 +353,24 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
         print(f"[mineru] Warning: Failed to release lock: {e}")
 
 
+def _is_mineru_healthy() -> bool:
+    """Check if a healthy minerU API server is running on MINERU_API_PORT."""
+    try:
+        r = urllib.request.urlopen(
+            f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
+        return json.loads(r.read()).get("status") == "healthy"
+    except Exception:
+        return False
+
+
 def _stage_1_1_kill_mineru_servers() -> None:
     """Kill lingering mineru-api processes to ensure clean state.
 
     Skip if a healthy server is already running on MINERU_API_PORT — we want
     to reuse it rather than kill+restart.
     """
-    try:
-        r = urllib.request.urlopen(
-            f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
-        if json.loads(r.read()).get("status") == "healthy":
-            return  # reuse existing server
-    except Exception:
-        pass
+    if _is_mineru_healthy():
+        return  # reuse existing server
     try:
         subprocess.run(
             ["pkill", "-f", "mineru-api"], capture_output=True, timeout=5,
@@ -463,14 +468,9 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
         venv_python = Path(sys.executable)
 
     # Check if minerU is already running on the port — if so, reuse it
-    try:
-        r = urllib.request.urlopen(
-            f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
-        if json.loads(r.read()).get("status") == "healthy":
-            print(f"[ocr] minerU API already running on port {MINERU_API_PORT} — reusing")
-            return None, venv_python
-    except Exception:
-        pass
+    if _is_mineru_healthy():
+        print(f"[ocr] minerU API already running on port {MINERU_API_PORT} — reusing")
+        return None, venv_python
 
     api_proc = subprocess.Popen(
         [str(venv_python), "-m", "mineru.cli.fast_api",

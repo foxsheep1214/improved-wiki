@@ -192,7 +192,11 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
                 data = b64_uri
 
             # 改进5：用 MD5 ID 替代位置索引
-            raw_bytes = _b64.b64decode(data)
+            try:
+                raw_bytes = _b64.b64decode(data)
+            except Exception as e:
+                print(f"  ⚠ skipping malformed image data URI ({img_name}): {e}")
+                continue
             img_id = hashlib.md5(raw_bytes).hexdigest()[:8]
 
             # Determine extension

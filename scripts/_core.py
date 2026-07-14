@@ -65,34 +65,11 @@ def stage_begin(name: str) -> None:
     print(f"\n{'─'*40}\n{tag}[{name}] Starting...\n{'─'*40}", flush=True)
 
 
-def stage_end(name: str) -> None:
-    t0 = _stage_start_times.pop(name, None)
-    elapsed = time.time() - t0 if t0 else 0.0
-    tag = file_tag()
-    if elapsed >= 60:
-        print(f"{tag}[{name}] Done ({elapsed/60:.1f}m)", flush=True)
-    else:
-        print(f"{tag}[{name}] Done ({elapsed:.0f}s)", flush=True)
-
-
 def heartbeat(msg: str = "") -> None:
     ts = time.strftime("%H:%M:%S")
     tag = file_tag()
     suffix = f" — {msg}" if msg else ""
     print(f"  {ts}  {tag}… {suffix}", flush=True)
-
-
-def llm_call_progress(label: str, attempt: int = 1, retries: int = 0) -> None:
-    tag = file_tag()
-    # Show "retry" only on actual retries (attempt > 1). Printing "(retry 1/4)"
-    # on a first attempt is misleading — it's the initial try, not a retry.
-    hint = f" (retry {attempt - 1}/{retries})" if retries and attempt > 1 else ""
-    print(f"  {tag}→ {label}{hint}...", end=" ", flush=True)
-
-
-def llm_call_done(elapsed: float, chars: int | None = None) -> None:
-    size_hint = f", {chars:,} chars" if chars else ""
-    print(f"OK ({elapsed:.0f}s{size_hint})", flush=True)
 
 
 # Rate-limit tracking (shared across workers)
