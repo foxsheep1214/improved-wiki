@@ -475,6 +475,21 @@ def detect_template_type(raw_file: Path, raw_root: Path, override: str | None) -
     return FOLDER_TO_TEMPLATE[match]
 
 
+def is_query_bridge_source(raw_file: Path, raw_root: Path) -> bool:
+    """True iff raw_file is a deep-research bridge copy under raw/queries/.
+
+    These are not real source documents (see
+    ``ingest.py::_bridge_wiki_queries_to_raw``) — the ``wiki/queries/<slug>.md``
+    page is the canonical human-readable artifact, so the bridge copy should
+    not get its own ``wiki/sources/queries/`` digest page (Stage 2.6).
+    """
+    try:
+        rel = raw_file.relative_to(raw_root)
+    except ValueError:
+        return False
+    return len(rel.parts) >= 1 and rel.parts[0].lower() == "queries"
+
+
 def load_template(template_name: str) -> str:
     skill_dir = Path(__file__).resolve().parent.parent
     tmpl_path = skill_dir / "templates" / f"{template_name}.md"
