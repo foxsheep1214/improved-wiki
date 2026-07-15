@@ -21,6 +21,7 @@ from _core import (
     mark_stage_done,
     unmark_stage_done,
     list_existing_slugs,
+    is_query_bridge_source,
 )
 from _stage_1_extract import (
     stage_1_1_extract_text,
@@ -457,18 +458,27 @@ def _do_prepare(
             # excerpt is the right analog (cf. the single-chunk 2.4 path).
             _src_grounding = (extracted_text or "")[: config.source_budget]
 
-            # Stage 2.6: Source page generation + merge
-            file_blocks = _prepare_source_page(
-                global_digest, raw_file, config, template_content, progress,
-                file_blocks, verbose, source_context=_src_grounding,
-                associations=incremental_associations,
-                # Full-book claim coverage for Main Arguments (2026-07-02):
-                # the digest's key_claims skew to the front sample; the 2.2
-                # chunk claims span every chapter by construction.
-                chunk_claims=[c for ca in (chunk_analyses or [])
-                              if isinstance(ca, dict)
-                              for c in (ca.get("claims") or [])])
-            _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations)
+            # Stage 2.6: Source page generation + merge — skipped for deep-research
+            # query bridges (raw/queries/*.md): wiki/queries/<slug>.md is already
+            # the canonical human-readable artifact, so no separate digest page
+            # (see is_query_bridge_source / deep-research.md).
+            _is_query_bridge = is_query_bridge_source(raw_file, config.raw_root)
+            if _is_query_bridge:
+                print("  [stage 2.6] Skipped (deep-research query bridge — "
+                      "no source page; see references/deep-research.md)")
+            else:
+                file_blocks = _prepare_source_page(
+                    global_digest, raw_file, config, template_content, progress,
+                    file_blocks, verbose, source_context=_src_grounding,
+                    associations=incremental_associations,
+                    # Full-book claim coverage for Main Arguments (2026-07-02):
+                    # the digest's key_claims skew to the front sample; the 2.2
+                    # chunk claims span every chapter by construction.
+                    chunk_claims=[c for ca in (chunk_analyses or [])
+                                  if isinstance(ca, dict)
+                                  for c in (ca.get("claims") or [])])
+            _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations,
+                                          is_query_bridge=_is_query_bridge)
 
             # A6 (audit H2): 2.9 uses a stratified per-chapter sample, not
             # the front prefix — 2.6 keeps the prefix (the audit targets

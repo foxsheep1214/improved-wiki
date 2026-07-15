@@ -13,6 +13,15 @@ Covers two 2026-06-25 audit findings:
   (a wikilink-completeness check after an unconditional return). Removed; the
   ingested marker is the single completeness signal. Test: the four
   marker/source-page states resolve to the right skip/resume decision.
+
+  Finding 3 (2026-07-15) — deep-research query bridges (raw/queries/*.md)
+  deliberately get no Stage 2.6 source page (wiki/queries/<slug>.md is
+  already the canonical artifact). The source-page-existence staleness
+  check in _stage_0_2_should_skip doesn't know that, so every call saw
+  "no source page" and force-cleared the ingested marker — an endless
+  re-ingest loop regenerating duplicate concepts/entities on every run.
+  Fixed by special-casing is_query_bridge_source() paths to trust the
+  ingested marker alone, skipping the source-page check entirely.
 """
 from __future__ import annotations
 
@@ -50,6 +59,13 @@ def _raw_file(tmp: Path) -> Path:
     raw = tmp / "raw" / "Book" / "x.pdf"
     raw.parent.mkdir(parents=True, exist_ok=True)
     raw.write_bytes(b"%PDF-1.4 fake")
+    return raw
+
+
+def _raw_query_bridge_file(tmp: Path) -> Path:
+    raw = tmp / "raw" / "queries" / "research-x-2026-07-15-000000.md"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text("---\ntype: query\n---\n# x\n", encoding="utf-8")
     return raw
 
 
@@ -144,6 +160,33 @@ class TestStage02ShouldSkip(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg, raw, _h = self._setup(tmp)
+            self.assertFalse(_stage_0_2_should_skip(raw, cfg))
+
+
+class TestStage02ShouldSkipQueryBridge(unittest.TestCase):
+    """Query bridges (raw/queries/*.md) never get a Stage 2.6 source page —
+    the ingested marker alone must decide skip/resume (Finding 3)."""
+
+    def test_marker_set_skips_even_though_no_source_page_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = _raw_query_bridge_file(tmp)
+            h = _core.file_sha256(raw)
+            _core.mark_stage_done(cfg, h, "ingested")
+
+            # Sanity: this is exactly the state that used to be misread as a
+            # stale marker for a normal source (page never existed here).
+            self.assertFalse(_stage_3_1_wiki_path_for_source(raw, cfg).exists())
+            self.assertTrue(_stage_0_2_should_skip(raw, cfg))
+            # And the marker must survive — no false "stale marker" clear.
+            self.assertTrue(_core.is_stage_done(cfg, h, "ingested"))
+
+    def test_no_marker_does_not_skip(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = _raw_query_bridge_file(tmp)
             self.assertFalse(_stage_0_2_should_skip(raw, cfg))
 
 

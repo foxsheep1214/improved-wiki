@@ -87,17 +87,20 @@ def _verify_stage_2_2_chunks(chunk_analyses: list[dict], extracted_text: str) ->
 def _verify_stage_2_4_file_blocks(
     file_blocks: list[tuple[str, str]], raw_file: Path,
     incremental_associations: dict | None = None,
+    is_query_bridge: bool = False,
 ) -> None:
     """Verify synthesis produced valid FILE blocks with correct paths."""
     _verify_or_die(len(file_blocks) >= 1, "Stage 2",
                    f"0 FILE blocks parsed from LLM response for {raw_file.name}. "
                    f"LLM did not generate any wiki pages.")
-    # Verify source page block exists
-    source_blocks = [p for p, _ in file_blocks if "sources/" in p]
-    _verify_or_die(len(source_blocks) >= 1, "Stage 2",
-                   f"No source page FILE block in {len(file_blocks)} blocks. "
-                   f"Paths: {[p for p, _ in file_blocks[:10]]}. "
-                   f"LLM must emit a wiki/sources/<title>.md block.")
+    # Verify source page block exists — skipped for deep-research query bridges,
+    # which deliberately have no Stage 2.6 source page (see is_query_bridge_source).
+    if not is_query_bridge:
+        source_blocks = [p for p, _ in file_blocks if "sources/" in p]
+        _verify_or_die(len(source_blocks) >= 1, "Stage 2",
+                       f"No source page FILE block in {len(file_blocks)} blocks. "
+                       f"Paths: {[p for p, _ in file_blocks[:10]]}. "
+                       f"LLM must emit a wiki/sources/<title>.md block.")
     # Verify concept pages are in wiki/concepts/, not bare wiki/ or wiki/sources/
     concept_blocks = [p for p, _ in file_blocks if "concepts/" in p or (not p.startswith(("wiki/", "sources/", "concepts/", "entities/")) and "sources/" not in p)]
     # True bare paths: no known subdirectory prefix and no wiki/ prefix

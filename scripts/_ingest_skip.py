@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from _core import Config, file_sha256, is_stage_done
+from _core import Config, file_sha256, is_stage_done, is_query_bridge_source
 from _stage_3_write import _stage_3_1_wiki_path_for_source
 
 def _should_stop_after(config: Config, stage: str, result: dict) -> bool:
@@ -46,6 +46,16 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
     completeness signal.
     """
     h = file_sha256(raw_file)
+    # Deep-research query bridges (raw/queries/*.md) deliberately have no Stage
+    # 2.6 source page — the `ingested` marker alone is authoritative for them,
+    # skipping the source-page-existence staleness check below (which would
+    # otherwise see "no source page" on every call and force an endless re-ingest).
+    if is_query_bridge_source(raw_file, config.raw_root):
+        if is_stage_done(config, h, "ingested"):
+            print(f"  [skip] Ingest complete (ingested marker present)")
+            return True
+        return False
+
     if is_stage_done(config, h, "ingested"):
         if not _stage_3_1_wiki_path_for_source(raw_file, config).exists():
             # Stale marker (source page deleted externally) — clear and re-ingest.

@@ -214,6 +214,28 @@ class TestDetectTemplateType(unittest.TestCase):
             "digest-book")
 
 
+class TestIsQueryBridgeSource(unittest.TestCase):
+    """raw/queries/*.md deep-research bridge copies (2026-07-15 fix)."""
+
+    RAW = Path("/proj/raw")
+
+    def test_queries_subdir_is_a_bridge(self):
+        self.assertTrue(
+            _core.is_query_bridge_source(self.RAW / "queries/research-x.md", self.RAW))
+
+    def test_case_insensitive(self):
+        self.assertTrue(
+            _core.is_query_bridge_source(self.RAW / "Queries/research-x.md", self.RAW))
+
+    def test_book_is_not_a_bridge(self):
+        self.assertFalse(
+            _core.is_query_bridge_source(self.RAW / "Book/x.pdf", self.RAW))
+
+    def test_path_outside_raw_root_is_not_a_bridge(self):
+        self.assertFalse(
+            _core.is_query_bridge_source(Path("/other/queries/x.md"), self.RAW))
+
+
 class TestStrDistance(unittest.TestCase):
     def test_levenshtein_basics(self):
         self.assertEqual(_core.str_distance("book", "book"), 0)
