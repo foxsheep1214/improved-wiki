@@ -242,7 +242,6 @@ def main():
     print("\n[Stage 2.4] Generation (synthesis)")
     if entry:
         fb = stages.get("file_blocks_generated", 0)
-        identified = stages.get("concepts_identified", fb)
         generated = stages.get("concepts_generated", fb)
         core = stages.get("concepts_core", 0)
         supp = stages.get("concepts_supporting", 0)

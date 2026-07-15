@@ -326,7 +326,7 @@ class TestParseFileBlocksStreamWarnings(unittest.TestCase):
     def test_empty_path_inside_content_does_not_warn(self):
         """Empty path only triggers for FILE header, not body lines."""
         text = "---FILE: wiki/concepts/real.md---\n---FILE:   ---  # this is body prose\n---END FILE---"
-        with capture_parse_stdout() as buf:
+        with capture_parse_stdout():
             blocks = _core.parse_file_blocks(text)
         self.assertEqual(len(blocks), 1)
         self.assertEqual(blocks[0][0], "concepts/real.md")

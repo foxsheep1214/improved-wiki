@@ -430,7 +430,6 @@ def _do_prepare(
             print("  [stage 2.5–2.9] ⚠️  stage_2_9_done set but no persisted "
                   "file_blocks artifact — invalidating marker and re-running "
                   "the 2.5–2.9 tail (prevents silent comparison loss).")
-            from _core import unmark_stage_done
             unmark_stage_done(config, h, "stage_2_9_done")
         if _tail_cached:
             _pcache = progress or {}

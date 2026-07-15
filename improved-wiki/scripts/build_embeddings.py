@@ -277,7 +277,7 @@ def cmd_embed():
             "path": c["path"],
             "vector": vec,
         })
-    tbl = db.create_table("wiki_chunks", data, mode="overwrite")
+    db.create_table("wiki_chunks", data, mode="overwrite")
     print(f"✓ LanceDB: {len(data)} chunks → {LANCE_DIR}/wiki_chunks")
 
 

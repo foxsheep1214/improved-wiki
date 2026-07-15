@@ -106,7 +106,6 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
 
     Returns corrected path (relative to wiki/ dir, NO "wiki/" prefix) or None if uncorrectable.
     """
-    basename = Path(rel_path).name
     stem = Path(rel_path).stem
 
     # 2026-06-15: macOS/Linux 文件名不能含 /，LLM 可能在 slug 中输出 /

@@ -101,7 +101,6 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
                     [n for n in zf.namelist() if n.startswith("ppt/slides/slide") and n.endswith(".xml")],
                     key=lambda n: int("".join(c for c in n if c.isdigit()) or "0")
                 )
-                ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
                 skipped = 0
                 for slide_name in slides:
                     try:
@@ -124,7 +123,6 @@ def _stage_1_1_extract_text_office(file_path: Path) -> str:
 
             elif suffix == ".docx":
                 # Extract from document.xml, headers, footers, endnotes, footnotes
-                ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
                 xml_files = ["word/document.xml"]
 
                 # Add headers/footers if present

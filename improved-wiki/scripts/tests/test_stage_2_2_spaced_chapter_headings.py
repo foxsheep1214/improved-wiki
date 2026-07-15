@@ -70,7 +70,6 @@ def _book(toc_extra: str = "") -> str:
 class SpacedChapterHeadings(unittest.TestCase):
     def test_toc_alone_no_longer_wins_over_real_later_chapter(self):
         text = _book()
-        ch1_pos = text.index("C H A P T E R 1\n\n# Electronic")
         ch3_pos = text.index("C H A P T E R 3\n\n# Signal")
         # Chunk spans from just after the TOC through real chapter 3's start.
         label = s2._stage_2_2_resolve_chunk_heading_path(text, 0, ch3_pos + 10)
