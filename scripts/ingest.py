@@ -41,7 +41,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -87,34 +86,12 @@ from _ingest_write import _do_write
 # Main pipeline — ingest_one, batch, queue, CLI
 # ═════════════════════════════════════════════════════════
 
-def _bridge_wiki_queries_to_raw(rf: Path, config: Config) -> Path:
-    """Accept a ``wiki/queries/<page>`` deep-research page as an ingest source.
-
-    NashSU ``deep-research.ts`` writes the research page to ``wiki/queries/``
-    and hands its absolute path straight to ``autoIngest``, which is
-    path-agnostic (``sourceIdentityForPath`` falls back to the filename for
-    non-raw paths). The improved-wiki pipeline derives source identity from a
-    ``raw/`` path in ~20 places (``relative_to(config.raw_root)``), so a pure
-    gate-relax would crash on the first stage. This bridge copies the research
-    page into ``raw/queries/<same-rel-path>`` and returns the copy — the rest
-    of the pipeline then sees a normal raw source.
-
-    The original ``wiki/queries/`` page stays as the human-readable research
-    artifact (NashSU keeps it too); ``raw/queries/<name>.md`` is the source of
-    record for this ingest. Idempotent: a same-name copy is overwritten so a
-    re-ingest is a clean redo. No-op for paths not under ``wiki/queries/``.
-    """
-    queries_dir = config.wiki_dir / "queries"
-    try:
-        rel = rf.relative_to(queries_dir)
-    except ValueError:
-        return rf
-    dest_dir = config.raw_root / "queries"
-    dest = dest_dir / rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(rf, dest)
-    print(f"[ingest] deep-research bridge: wiki/queries/{rel} -> raw/queries/{rel}")
-    return dest
+def _is_ingestable_source_path(rf: Path, config: Config) -> bool:
+    """True for a normal ``raw/`` source, or a deep-research page under
+    ``wiki/queries/`` (2026-07-16: ingested directly — see
+    ``is_query_bridge_source``/deep-research.md; there is no longer a
+    ``raw/queries/`` copy step, NashSU ``autoIngest`` path-agnostic parity)."""
+    return rf.is_relative_to(config.raw_root) or rf.is_relative_to(config.wiki_dir / "queries")
 
 
 def _finalize_book(raw_file: Path, config: Config,
@@ -611,15 +588,12 @@ def main() -> int:
         if not rf.exists():
             print(f"ERROR: {rf} not found", file=sys.stderr)
             return 1
-        # NashSU deep-research parity: accept a wiki/queries/<page> research page
-        # as an ingest source by bridging it into raw/queries/ (see
-        # _bridge_wiki_queries_to_raw). NashSU's autoIngest is path-agnostic; the
-        # improved-wiki pipeline derives source identity from a raw/ path in ~20
-        # places, so we copy instead of refactoring all of them. No-op for normal
-        # raw/ inputs.
-        rf = _bridge_wiki_queries_to_raw(rf, config)
-        if not rf.is_relative_to(config.raw_root):
-            print(f"ERROR: {rf} is not under raw_root ({config.raw_root})", file=sys.stderr)
+        # NashSU deep-research parity (2026-07-16): accept a wiki/queries/<page>
+        # research page as an ingest source directly, no raw/queries/ copy step
+        # (see _is_ingestable_source_path / is_query_bridge_source).
+        if not _is_ingestable_source_path(rf, config):
+            print(f"ERROR: {rf} is not under raw_root ({config.raw_root}) "
+                  f"or wiki/queries/ ({config.wiki_dir / 'queries'})", file=sys.stderr)
             return 1
         if is_sensitive_config_source_file(rf):
             print(

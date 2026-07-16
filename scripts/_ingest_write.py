@@ -20,6 +20,8 @@ from _core import (
     save_cache,
     clear_progress,
     load_progress,
+    canonical_source_path,
+    source_cache_key,
 )
 from _stage_3_write import (
     _stage_3_1_wiki_path_for_source,
@@ -214,7 +216,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     except ImportError:
         expected_lang = "unknown"
 
-    canonical_source = f"raw/{raw_file.relative_to(config.raw_root)}"
+    canonical_source = canonical_source_path(raw_file, config)
     today_str = time.strftime("%Y-%m-%d")
 
     # ── Wikilink enrichment setup (round iv, 2026-06-22) ──
@@ -512,10 +514,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     index_log_files = stage_3_5_aggregate_repair(source_path, raw_file, analysis, h, method, config)
 
     # Update cache
-    try:
-        rel = str(raw_file.relative_to(config.raw_root))
-    except ValueError:
-        rel = str(raw_file)
+    rel = source_cache_key(raw_file, config)
     # Stage stats: derive page counts from review_blocks (the real on-disk set)
     # and take the max against any in-memory analysis/params, so a write_phase
     # resume — where file_blocks/analysis are empty — records the

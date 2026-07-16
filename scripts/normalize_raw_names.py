@@ -375,8 +375,9 @@ def stage_0_1_check_file(raw_file: Path, project_root: Path) -> List[str]:
 
     Returns error strings (empty = compliant or out of scope). Scope mirrors
     ``stage_0_1_scan_raw``: only ``.pdf`` files under a folder that declares a
-    rule are checked — so e.g. ``raw/queries/*.md`` deep-research bridge copies
-    always pass. Warn-level heuristics do not block.
+    rule are checked — so e.g. ``.md`` deep-research pages (``wiki/queries/*.md``,
+    ingested directly since 2026-07-16, or a pre-2026-07-16 ``raw/queries/*.md``
+    bridge copy) always pass. Warn-level heuristics do not block.
 
     Raises ``RuntimeError`` when the project has no parseable naming rules
     (``schema.md`` missing or lacking the ```yaml rules block) — the documented

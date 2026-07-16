@@ -481,19 +481,78 @@ def detect_template_type(raw_file: Path, raw_root: Path, override: str | None) -
     return FOLDER_TO_TEMPLATE[match]
 
 
-def is_query_bridge_source(raw_file: Path, raw_root: Path) -> bool:
-    """True iff raw_file is a deep-research bridge copy under raw/queries/.
+def is_query_bridge_source(raw_file: Path, config: "Config") -> bool:
+    """True iff raw_file is a deep-research research page — ingested directly
+    from ``wiki/queries/<slug>.md`` (2026-07-16: the ``raw/queries/`` copy
+    step was removed, NashSU ``autoIngest`` parity — query pages are no
+    longer duplicated into raw/) or, for pre-2026-07-16 data, a legacy bridge
+    copy still sitting under ``raw/queries/``.
 
-    These are not real source documents (see
-    ``ingest.py::_bridge_wiki_queries_to_raw``) — the ``wiki/queries/<slug>.md``
-    page is the canonical human-readable artifact, so the bridge copy should
-    not get its own ``wiki/sources/queries/`` digest page (Stage 2.6).
+    These are not real source documents — the ``wiki/queries/<slug>.md``
+    page is the canonical human-readable artifact, so it should not get its
+    own ``wiki/sources/queries/`` digest page (Stage 2.6).
+    """
+    for base in (config.wiki_dir, config.raw_root):
+        try:
+            rel = raw_file.relative_to(base)
+        except ValueError:
+            continue
+        if len(rel.parts) >= 1 and rel.parts[0].lower() == "queries":
+            return True
+    return False
+
+
+def canonical_source_path(raw_file: Path, config: "Config") -> str:
+    """The authoritative ``sources:`` frontmatter value for ``raw_file``.
+
+    ``raw/<rel>`` for a normal source under ``config.raw_root``; ``wiki/queries/<rel>``
+    for a deep-research page ingested directly from ``wiki/queries/`` (2026-07-16:
+    no more ``raw/queries/`` bridge copy — see ``is_query_bridge_source``). Falls
+    back to the bare filename for any other path (should not normally happen —
+    ``ingest.py``'s CLI gate only accepts these two roots).
+
+    Single source of truth: every place that writes a ``sources:`` field
+    (canonical write in ``_ingest_write.py``, the per-page prompt hints in
+    Stage 2.4/2.6/2.9, the log.md line in Stage 3.5) must call this — not
+    hand-roll an ``f"raw/{rel}"`` string — so they can never drift out of
+    sync with each other. A drift would silently defeat
+    ``_stage_3_1_canonicalize_sources_field``'s basename-based "already
+    present" check (two differently-prefixed strings for the same file both
+    have the same basename, so the stale one never gets overwritten).
     """
     try:
-        rel = raw_file.relative_to(raw_root)
+        return f"raw/{raw_file.relative_to(config.raw_root)}"
     except ValueError:
-        return False
-    return len(rel.parts) >= 1 and rel.parts[0].lower() == "queries"
+        pass
+    try:
+        return f"wiki/queries/{raw_file.relative_to(config.wiki_dir / 'queries')}"
+    except ValueError:
+        return raw_file.name
+
+
+def source_cache_key(raw_file: Path, config: "Config") -> str:
+    """The ``ingest-cache.json`` ``entries[]`` key for ``raw_file``.
+
+    Path-based (unlike the content-hash-keyed ``stages.json`` that governs
+    re-ingest skip logic — this key never affects whether a source gets
+    re-ingested, only ``--delete``/``validate_ingest.py`` bookkeeping).
+
+    A deep-research page ingested from ``wiki/queries/<rel>`` gets the SAME
+    key (``queries/<rel>``) a pre-2026-07-16 ``raw/queries/<rel>`` bridge
+    copy of the same file would have gotten — this is deliberate, so
+    ``--delete`` on a query source ingested before/after the bridge removal
+    resolves to one consistent key rather than forking into two formats.
+    Must stay in sync with ``_source_lifecycle.py::delete_source``, which
+    computes the same key for the delete path.
+    """
+    try:
+        return str(raw_file.relative_to(config.raw_root))
+    except ValueError:
+        pass
+    try:
+        return str(Path("queries") / raw_file.relative_to(config.wiki_dir / "queries"))
+    except ValueError:
+        return raw_file.name
 
 
 def load_template(template_name: str) -> str:

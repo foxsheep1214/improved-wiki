@@ -16,6 +16,7 @@ from _core import (
     load_schema_md,
     schema_folders,
     BASE_PAGE_DIRS,
+    source_cache_key,
 )
 from _frontmatter_array import parse_frontmatter_array
 
@@ -39,15 +40,13 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
     page-history pattern) so a `--delete` run is never irrecoverable by default.
     """
     wiki_root = config.wiki_root
-    raw_root = config.raw_root
     runtime_dir = detect_runtime_dir(wiki_root)
     tag = "[lifecycle][dry-run]" if dry_run else "[lifecycle]"
 
-    # Resolve source path
-    try:
-        rel = str(raw_file.relative_to(raw_root))
-    except ValueError:
-        rel = raw_file.name
+    # Resolve source path — must match _ingest_write.py's cache-key algorithm
+    # (source_cache_key) exactly, or a write uses one key and a delete looks
+    # up another.
+    rel = source_cache_key(raw_file, config)
 
     removed = 0
 

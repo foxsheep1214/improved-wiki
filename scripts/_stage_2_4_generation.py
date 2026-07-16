@@ -477,10 +477,7 @@ def _stage_2_4_build_prompt(
     schema_section = _schema_routing_block(config)
     tags_section = _tags_reuse_section(config)
     extra_rules = _extra_rules(_source_page_slug(file_path, config))
-    try:
-        raw_rel = str(file_path.relative_to(config.raw_root))
-    except ValueError:
-        raw_rel = file_path.name
+    raw_rel = canonical_source_path(file_path, config)
 
     language_directive = build_language_directive(chunk_text)
     return f"""{language_directive}
@@ -560,7 +557,7 @@ type: concept
 title: "..."
 tags: [...]
 related: [...]
-sources: ["raw/{raw_rel}"]
+sources: ["{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -576,7 +573,7 @@ type: entity
 title: "<entity name>"
 tags: [...]
 related: [...]
-sources: ["raw/{raw_rel}"]
+sources: ["{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -744,10 +741,7 @@ def _stage_2_4_build_per_concept_prompt(
     importance = concept_info.get("importance", "core")
     details = concept_info.get("key_details", [])[:5]
 
-    try:
-        raw_rel = str(file_path.relative_to(config.raw_root))
-    except ValueError:
-        raw_rel = file_path.name
+    raw_rel = canonical_source_path(file_path, config)
 
     # Sibling concepts from same chunk (for wikilinks)
     siblings = []
@@ -795,7 +789,7 @@ type: concept
 title: "{name}"
 tags: [...]
 related: []
-sources: ["raw/{raw_rel}"]
+sources: ["{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -820,10 +814,7 @@ def _stage_2_4_build_per_entity_prompt(
     template: str = "",
 ) -> str:
     """Build a focused prompt for generating ONE entity page."""
-    try:
-        raw_rel = str(file_path.relative_to(config.raw_root))
-    except ValueError:
-        raw_rel = file_path.name
+    raw_rel = canonical_source_path(file_path, config)
 
     language_directive = build_language_directive(
         f"{entity_name} " + json.dumps(global_digest, ensure_ascii=False))
@@ -852,7 +843,7 @@ type: entity
 title: "{entity_name}"
 tags: [...]
 related: []
-sources: ["raw/{raw_rel}"]
+sources: ["{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -1031,10 +1022,7 @@ def _stage_2_4_build_all_prompt(
     schema_section = _schema_routing_block(config)
     tags_section = _tags_reuse_section(config)
     extra_rules = _extra_rules(_source_page_slug(file_path, config))
-    try:
-        raw_rel = str(file_path.relative_to(config.raw_root))
-    except ValueError:
-        raw_rel = file_path.name
+    raw_rel = canonical_source_path(file_path, config)
 
     language_sample = source_context or json.dumps(chunk_analyses, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
@@ -1100,7 +1088,7 @@ type: concept
 title: "..."
 tags: [...]
 related: [...]
-sources: ["raw/{raw_rel}"]
+sources: ["{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---
@@ -1116,7 +1104,7 @@ type: entity
 title: "<entity name>"
 tags: [...]
 related: [...]
-sources: ["raw/{raw_rel}"]
+sources: ["{raw_rel}"]
 created: {time.strftime('%Y-%m-%d')}
 updated: {time.strftime('%Y-%m-%d')}
 ---

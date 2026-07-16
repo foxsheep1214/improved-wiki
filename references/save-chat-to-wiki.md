@@ -110,11 +110,12 @@ NashSU updates two aggregate files on every save — do the same:
 python3 "$SKILL_DIR/scripts/ingest.py" wiki/queries/<filename>.md
 ```
 
-This bridges the query page into `raw/queries/` and ingests it (NashSU `autoIngest`
-parity), extracting entities/concepts and creating cross-references. Without this,
-the saved page is a static note; with it, the knowledge is decomposed and
-integrated. (NashSU gates auto-ingest on having a usable LLM; here it runs only when
-the calling agent can complete the conversation-mode handoffs.)
+This ingests the query page in place (NashSU `autoIngest` parity, path-agnostic —
+no `raw/queries/` copy step), extracting entities/concepts and creating
+cross-references. Without this, the saved page is a static note; with it, the
+knowledge is decomposed and integrated. (NashSU gates auto-ingest on having a
+usable LLM; here it runs only when the calling agent can complete the
+conversation-mode handoffs.)
 
 ### Step 6: Confirm
 

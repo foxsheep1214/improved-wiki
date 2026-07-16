@@ -25,6 +25,7 @@ from _core import (
     slugify,
     atomic_write,
     call_with_retry,
+    canonical_source_path,
 )
 from _llm_api import (
     _retry_jitter,

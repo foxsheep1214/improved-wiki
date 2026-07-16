@@ -184,7 +184,7 @@ This is the critical step that makes it a closed loop. Immediately after writing
 python3 "$SKILL_DIR/scripts/ingest.py" wiki/queries/<slug>.md
 ```
 
-The ingest entry-point accepts a `wiki/queries/` path directly (NashSU `autoIngest` parity): `_bridge_wiki_queries_to_raw` copies the page into `raw/queries/<slug>.md` and ingests that copy, so the rest of the raw-root-centric pipeline sees a normal source. The original `wiki/queries/<slug>.md` stays as the human-readable research page. (NashSU's `autoIngest` is path-agnostic and reads `wiki/queries/` directly; the improved-wiki pipeline derives source identity from a `raw/` path in ~20 places, so the copy is the bridge instead of a full refactor.)
+The ingest entry-point accepts a `wiki/queries/` path directly (NashSU `autoIngest` parity, path-agnostic): the pipeline ingests `wiki/queries/<slug>.md` in place — no `raw/queries/` copy step (removed 2026-07-16; the ~20 `relative_to(raw_root)` source-identity call sites now route through `_core.canonical_source_path`/`source_cache_key`, which resolve a `wiki/queries/` path to `wiki/queries/<rel>` directly instead of faking a `raw/` path). `is_query_bridge_source` still recognizes a pre-2026-07-16 `raw/queries/<slug>.md` bridge copy for backward compatibility with older wikis, but no new ones are created.
 
 The ingest pipeline will:
 1. **Stage 2.2**: Analyze the research page → extract key entities/concepts

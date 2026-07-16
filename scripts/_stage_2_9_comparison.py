@@ -65,10 +65,7 @@ def _stage_2_9_build_prompt_in_source(
     # (alphabetical cut, 2026-07-02). Titles are cheap; 300 covers real books.
     concepts_with_desc = '\n'.join(f"- {c}" for c in concept_titles[:300])
     today_str = time.strftime("%Y-%m-%d")
-    try:
-        raw_rel = str(file_path.relative_to(config.raw_root))
-    except ValueError:
-        raw_rel = file_path.name
+    raw_rel = canonical_source_path(file_path, config)
 
     # P1 parity with Stage 2.4 (2026-06-27): ground comparisons in the raw source
     # so the LLM only contrasts what the SOURCE itself sets side-by-side, using the
@@ -110,7 +107,7 @@ def _stage_2_9_build_prompt_in_source(
 You are maintaining a wiki knowledge base. Review the concepts just generated for a book.
 
 # Source
-{file_path.stem} (raw/{raw_rel})
+{file_path.stem} ({raw_rel})
 
 # Generated Concepts
 {concepts_with_desc}
@@ -148,7 +145,7 @@ type: comparison
 title: "{{Concept A}} vs {{Concept B}}"
 tags: [{{2-4 tags}}]
 related: [{{concept-A-stem}}, {{concept-B-stem}}]
-sources: ["raw/{raw_rel}"]
+sources: ["{raw_rel}"]
 created: {today_str}
 updated: {today_str}
 ---

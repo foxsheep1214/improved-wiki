@@ -215,25 +215,33 @@ class TestDetectTemplateType(unittest.TestCase):
 
 
 class TestIsQueryBridgeSource(unittest.TestCase):
-    """raw/queries/*.md deep-research bridge copies (2026-07-15 fix)."""
+    """wiki/queries/*.md deep-research pages (2026-07-16: ingested directly —
+    no more raw/queries/ bridge copy, NashSU autoIngest path-agnostic parity)
+    plus backward-compat recognition of pre-2026-07-16 raw/queries/*.md bridge
+    copies still sitting in older wikis."""
 
-    RAW = Path("/proj/raw")
+    def setUp(self):
+        self.config = _make_config(Path("/proj"))
 
-    def test_queries_subdir_is_a_bridge(self):
-        self.assertTrue(
-            _core.is_query_bridge_source(self.RAW / "queries/research-x.md", self.RAW))
+    def test_wiki_queries_is_a_bridge_source(self):
+        self.assertTrue(_core.is_query_bridge_source(
+            self.config.wiki_dir / "queries/research-x.md", self.config))
 
-    def test_case_insensitive(self):
-        self.assertTrue(
-            _core.is_query_bridge_source(self.RAW / "Queries/research-x.md", self.RAW))
+    def test_wiki_queries_case_insensitive(self):
+        self.assertTrue(_core.is_query_bridge_source(
+            self.config.wiki_dir / "Queries/research-x.md", self.config))
+
+    def test_legacy_raw_queries_bridge_copy_still_recognized(self):
+        self.assertTrue(_core.is_query_bridge_source(
+            self.config.raw_root / "queries/research-x.md", self.config))
 
     def test_book_is_not_a_bridge(self):
-        self.assertFalse(
-            _core.is_query_bridge_source(self.RAW / "Book/x.pdf", self.RAW))
+        self.assertFalse(_core.is_query_bridge_source(
+            self.config.raw_root / "Book/x.pdf", self.config))
 
-    def test_path_outside_raw_root_is_not_a_bridge(self):
-        self.assertFalse(
-            _core.is_query_bridge_source(Path("/other/queries/x.md"), self.RAW))
+    def test_path_outside_wiki_and_raw_root_is_not_a_bridge(self):
+        self.assertFalse(_core.is_query_bridge_source(
+            Path("/other/queries/x.md"), self.config))
 
 
 class TestStrDistance(unittest.TestCase):

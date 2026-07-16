@@ -458,10 +458,10 @@ def _do_prepare(
             _src_grounding = (extracted_text or "")[: config.source_budget]
 
             # Stage 2.6: Source page generation + merge — skipped for deep-research
-            # query bridges (raw/queries/*.md): wiki/queries/<slug>.md is already
-            # the canonical human-readable artifact, so no separate digest page
+            # pages (wiki/queries/*.md): the page itself is already the
+            # canonical human-readable artifact, so no separate digest page
             # (see is_query_bridge_source / deep-research.md).
-            _is_query_bridge = is_query_bridge_source(raw_file, config.raw_root)
+            _is_query_bridge = is_query_bridge_source(raw_file, config)
             if _is_query_bridge:
                 print("  [stage 2.6] Skipped (deep-research query bridge — "
                       "no source page; see references/deep-research.md)")

@@ -46,11 +46,12 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
     completeness signal.
     """
     h = file_sha256(raw_file)
-    # Deep-research query bridges (raw/queries/*.md) deliberately have no Stage
-    # 2.6 source page — the `ingested` marker alone is authoritative for them,
-    # skipping the source-page-existence staleness check below (which would
-    # otherwise see "no source page" on every call and force an endless re-ingest).
-    if is_query_bridge_source(raw_file, config.raw_root):
+    # Deep-research pages (wiki/queries/*.md, or a pre-2026-07-16 raw/queries/
+    # bridge copy) deliberately have no Stage 2.6 source page — the `ingested`
+    # marker alone is authoritative for them, skipping the source-page-existence
+    # staleness check below (which would otherwise see "no source page" on
+    # every call and force an endless re-ingest).
+    if is_query_bridge_source(raw_file, config):
         if is_stage_done(config, h, "ingested"):
             print(f"  [skip] Ingest complete (ingested marker present)")
             return True

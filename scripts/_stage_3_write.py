@@ -20,6 +20,7 @@ from _core import (
     Config,
     is_safe_ingest_path, _ILLEGAL_CHARS_RE,
     source_slug_from_raw_path, schema_route_dir,
+    canonical_source_path,
 )
 from _llm_api import call_anthropic_protocol
 from _frontmatter_array import parse_frontmatter_array, write_frontmatter_array
@@ -903,11 +904,10 @@ def stage_3_5_aggregate_repair(
         log_text = log_path.read_text(encoding="utf-8")
     else:
         log_text = "# Log\n"
-    raw_rel = raw_file.relative_to(config.raw_root)
     source_rel = source_path.relative_to(config.wiki_dir)
     entry = (
         f"\n## {time.strftime('%Y-%m-%d %H:%M:%S')} — INGEST\n"
-        f"- Source: `raw/{raw_rel}`\n"
+        f"- Source: `{canonical_source_path(raw_file, config)}`\n"
         f"- Source page: `wiki/{source_rel}`\n"
         f"- Hash: {source_hash[:16]}\n"
         f"- Method: {extract_method}\n"

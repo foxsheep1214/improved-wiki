@@ -44,7 +44,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 0.1 · Raw 文件命名规范检查
 - **作用**：确保 raw/ 下文件符合项目命名规范（规则块以 `<project>/schema.md` 的 ```yaml 为准；datasheet 厂商表另在 `raw/Datasheet/VENDORS.yaml`）。
-- **流程**（2026-07-08 起代码强制）：`_do_prepare` 对每个候选文件调 `stage_0_1_check_file`——schema.md 缺失或无规则块 → raise（先起草规则）；违规 → raise（`normalize_raw_names.py --fix` 重命名后重跑）。范围与全库扫描一致：仅检查规则声明文件夹下的 `.pdf`（`raw/queries/*.md` 桥接件天然放行）；warn 级启发式不阻断。全库批量检查/修复仍用 `normalize_raw_names.py --check/--fix`。
+- **流程**（2026-07-08 起代码强制）：`_do_prepare` 对每个候选文件调 `stage_0_1_check_file`——schema.md 缺失或无规则块 → raise（先起草规则）；违规 → raise（`normalize_raw_names.py --fix` 重命名后重跑）。范围与全库扫描一致：仅检查规则声明文件夹下的 `.pdf`（`.md` 天然放行，含 deep-research 直接摄取的 `wiki/queries/*.md`）；warn 级启发式不阻断。全库批量检查/修复仍用 `normalize_raw_names.py --check/--fix`。
 - **go/no-go**：候选文件全部合规。
 
 ### Stage 0.2 · 源页去重检查
