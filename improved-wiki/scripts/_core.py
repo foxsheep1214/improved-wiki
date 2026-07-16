@@ -186,6 +186,7 @@ def _caption_provider_entry(provider: dict | None, name: str) -> dict | None:
         "model": models.get("caption") or models.get("vision") or provider.get("model", ""),
         "protocol": provider.get("protocol", "anthropic"),
         "provider": name,
+        "timeout_seconds": provider.get("timeout_seconds", 180),
     }
 
 
@@ -202,7 +203,8 @@ def load_caption_provider() -> dict:
     unchanged: if BOTH providers are exhausted, the ingest still pauses.
     """
     config_path = Path.home() / ".agents" / "config.json"
-    empty = {"api_key": "", "base_url": "", "model": "", "protocol": "", "provider": "", "fallback": None}
+    empty = {"api_key": "", "base_url": "", "model": "", "protocol": "", "provider": "",
+              "timeout_seconds": 180, "fallback": None}
     if config_path.exists():
         try:
             cfg = json.loads(config_path.read_text(encoding="utf-8"))
@@ -325,6 +327,8 @@ class Config:
     caption_fallback_base_url: str = ""
     caption_fallback_model: str = ""
     caption_fallback_protocol: str = ""
+    caption_timeout_seconds: int = 180
+    caption_fallback_timeout_seconds: int = 180
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -355,10 +359,12 @@ class Config:
             caption_base_url=caption["base_url"],
             caption_model=caption["model"],
             caption_protocol=caption.get("protocol", "anthropic"),
+            caption_timeout_seconds=caption.get("timeout_seconds", 180),
             caption_fallback_api_key=(caption.get("fallback") or {}).get("api_key", ""),
             caption_fallback_base_url=(caption.get("fallback") or {}).get("base_url", ""),
             caption_fallback_model=(caption.get("fallback") or {}).get("model", ""),
             caption_fallback_protocol=(caption.get("fallback") or {}).get("protocol", ""),
+            caption_fallback_timeout_seconds=(caption.get("fallback") or {}).get("timeout_seconds", 180),
             chunk_overlap=3_000,
             source_budget=source_budget,
             target_chars=target_chars,

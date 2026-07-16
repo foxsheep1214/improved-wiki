@@ -12,7 +12,7 @@ Full script inventory by category. Entry points (user-facing) are **bold**.
 | Graph | **`graph.py`** |
 | Queue | `wiki-monitor.sh`, `run-queue.sh`, `run-ingest.sh` (手动包装：exit 101 handoff → exit 0，供把 handoff 当失败的 task UI 用) |
 | Embeddings | **`build_embeddings.py`**, **`search_wiki.py`** |
-| Repair | `sweep_reviews.py`, `enrich_wikilinks_retroactive.py`, `cross_source_dedup.py`（跨源去重 CLI，在用） |
+| Repair | `sweep_reviews.py`, `enrich_wikilinks_retroactive.py`, `cross_source_dedup.py`（跨源去重 CLI，在用）, `rebuild_index.py`（index.md 确定性全量重建，不调 LLM，无页数上限；NashSU 0.6.4 `rebuild_wiki_index` parity，2026-07-16；与 Stage 3.5 的 LLM 版重写互补——后者只在 ingest 中跑且 ≤250 页） |
 | Search | `search_local.py` (local source search for deep-research) |
 | QC / Review guard | `qc_stage22.py` (Stage 2.2 响应离线质检), `review_fix_guard.py` |
 | Lint internals | `_lint_suggest.py`, `_lint_fixes.py` |

@@ -30,6 +30,7 @@ __all__ = [
     "stage_3_1_build_slug_dirs",       # Stage 3.1 link normalizer (universe)
     "stage_3_1_normalize_page_links",  # Stage 3.1 link normalizer (per page)
     "stage_3_5_aggregate_repair",      # Stage 3.5
+    "rebuild_index_deterministic",     # standalone recovery tool (rebuild_index.py)
 ]
 
 # Fallback per-side cap on body text shown to the LLM page-merge prompt, used
@@ -852,6 +853,35 @@ def _scan_wiki_inventory(wiki_dir: Path) -> dict[str, list[tuple[str, str]]]:
         if pages:
             inventory[subdir] = pages
     return inventory
+
+
+def rebuild_index_deterministic(wiki_dir: Path) -> str:
+    """Full index.md rebuild from the on-disk page inventory — no LLM call.
+
+    NashSU parity (llm_wiki 0.6.4 ``rebuild_wiki_index``): a pure
+    frontmatter-scan recovery tool, independent of the ingest pipeline's LLM
+    whole-page rewrite in ``stage_3_5_aggregate_repair`` above. That LLM
+    rewrite only runs mid-ingest and is capped at ``INDEX_REWRITE_MAX_PAGES``
+    (250) pages; this is for the "index.md looks corrupted/drifted but I
+    don't want to trigger a full ingest re-run" case, at any wiki size.
+
+    Same bullet format as the LLM rewrite (`- [[<stem>]] — <title>`, sorted
+    alphabetically by stem within each section, bilingual headers in
+    ``_INDEX_CATEGORIES`` order, empty categories omitted) so the two stay
+    visually interchangeable. Entry point: ``rebuild_index.py``.
+    """
+    inventory = _scan_wiki_inventory(wiki_dir)
+    lines = ["# Index", ""]
+    for subdir, header in _INDEX_CATEGORIES:
+        pages = inventory.get(subdir, [])
+        if not pages:
+            continue
+        lines.append(f"## {header}")
+        lines.append("")
+        for stem, title in sorted(pages, key=lambda p: p[0]):
+            lines.append(f"- [[{stem}]] — {title}")
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def stage_3_5_aggregate_repair(

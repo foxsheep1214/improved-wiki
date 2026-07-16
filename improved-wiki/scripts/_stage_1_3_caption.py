@@ -78,6 +78,13 @@ CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "4"))
 # that are all just waiting on the same single-threaded local inference queue.
 _FALLBACK_SEMAPHORE = threading.Semaphore(1)
 
+# Per-call HTTP timeout for the VLM request (default 180s, configurable via
+# ~/.agents/config.json providers.<name>.timeout_seconds — NashSU parity,
+# 2026-07-16: llm_wiki 0.6.4 made its equivalent LLM request timeout
+# configurable for slow local/CPU-inference models. CAPTION_TIMEOUT_SECONDS
+# env var overrides per-run without touching config.json.
+_TIMEOUT_ENV_OVERRIDE = os.environ.get("CAPTION_TIMEOUT_SECONDS", "").strip()
+
 # How many chars of before/after body text to pass as anchoring context.
 # NashSU parity (image-caption-pipeline.ts CONTEXT_CHARS): NashSU tuned this
 # DOWN from 500 → 150 because larger windows dragged in unrelated body text
@@ -547,20 +554,22 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _stage_1_3_vlm_post_json(url: str, body: bytes, headers: dict,
-                             extract_text) -> tuple[str | None, str | None]:
+                             extract_text, timeout: int = 180) -> tuple[str | None, str | None]:
     """Shared 3-attempt retry shell for one VLM HTTP call.
 
     POSTs ``body`` to ``url``, parses the JSON response, and applies
     ``extract_text(data)`` (protocol-specific callback) to pull the caption
     text. Transient failures retry with exponential backoff. Returns
-    (text, None) on success, (None, last_err) on exhaustion.
+    (text, None) on success, (None, last_err) on exhaustion. ``timeout`` is
+    the per-attempt HTTP timeout in seconds (see provider["timeout"] —
+    configurable per NashSU parity, 2026-07-16).
     """
     import urllib.request
     last_err = None
     for attempt in range(3):
         try:
             req = urllib.request.Request(url, data=body, method="POST", headers=headers)
-            with urllib.request.urlopen(req, timeout=180) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read())
             text = extract_text(data)
             if text:
@@ -645,7 +654,7 @@ def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
             msg = choices[0].get("message", {})
             return (msg.get("content") or "").strip()
 
-        return _stage_1_3_vlm_post_json(url, body, headers, _extract_openai)
+        return _stage_1_3_vlm_post_json(url, body, headers, _extract_openai, provider["timeout"])
 
     # Default: Anthropic Messages API
     content = [
@@ -670,7 +679,7 @@ def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
         return "".join(c["text"] for c in data.get("content", [])
                        if c.get("type") == "text").strip()
 
-    return _stage_1_3_vlm_post_json(url, body, headers, _extract_anthropic)
+    return _stage_1_3_vlm_post_json(url, body, headers, _extract_anthropic, provider["timeout"])
 
 
 def _stage_1_3_provider_bundles(config: Config) -> list[tuple[str, dict]]:
@@ -682,6 +691,7 @@ def _stage_1_3_provider_bundles(config: Config) -> list[tuple[str, dict]]:
         "base_url": config.caption_base_url,
         "model": config.caption_model,
         "protocol": config.caption_protocol,
+        "timeout": _stage_1_3_resolve_timeout(config.caption_timeout_seconds),
     })]
     if config.caption_fallback_base_url and config.caption_fallback_model:
         bundles.append(("fallback", {
@@ -689,8 +699,18 @@ def _stage_1_3_provider_bundles(config: Config) -> list[tuple[str, dict]]:
             "base_url": config.caption_fallback_base_url,
             "model": config.caption_fallback_model,
             "protocol": config.caption_fallback_protocol,
+            "timeout": _stage_1_3_resolve_timeout(config.caption_fallback_timeout_seconds),
         }))
     return bundles
+
+
+def _stage_1_3_resolve_timeout(configured: int) -> int:
+    """CAPTION_TIMEOUT_SECONDS env var overrides the per-provider config.json
+    value for quick tuning; falls back to ``configured`` (which itself
+    defaults to 180 — see Config.caption_timeout_seconds)."""
+    if _TIMEOUT_ENV_OVERRIDE.isdigit():
+        return int(_TIMEOUT_ENV_OVERRIDE)
+    return configured
 
 
 def _stage_1_3_caption_one_image_with_failover(
