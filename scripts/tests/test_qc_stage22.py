@@ -8,7 +8,10 @@ aborts the pipeline.
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import qc_stage22
@@ -123,6 +126,35 @@ class TestChunkNumTolerance(unittest.TestCase):
 
     def test_non_numeric_name_returns_none(self):
         self.assertIsNone(qc_stage22._chunk_num(Path("Stage-2-2-Chunk-copy.txt")))
+
+
+class TestSingleFileCli(unittest.TestCase):
+    """The per-handoff gate must ignore stale responses in the same directory."""
+
+    def test_file_scope_checks_only_requested_response(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            good = _write(tmp, _good_response())
+            (tmp / "Stage-2-2-Chunk-2-stale.txt").write_text(
+                "concepts_found: []\n", encoding="utf-8")
+            out = StringIO()
+            with patch.object(sys, "argv", ["qc_stage22.py", "--file", str(good)]):
+                with redirect_stdout(out):
+                    rc = qc_stage22.main()
+            self.assertEqual(rc, 0, out.getvalue())
+            self.assertIn("✓ OK", out.getvalue())
+            self.assertNotIn("stale", out.getvalue())
+
+    def test_file_scope_rejects_missing_path(self):
+        err = StringIO()
+        with patch.object(
+            sys, "argv",
+            ["qc_stage22.py", "--file", "/definitely/missing/response.txt"],
+        ):
+            with redirect_stderr(err):
+                rc = qc_stage22.main()
+        self.assertEqual(rc, 2)
+        self.assertIn("not found", err.getvalue())
 
 
 if __name__ == "__main__":

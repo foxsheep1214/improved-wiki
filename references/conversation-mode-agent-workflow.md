@@ -71,9 +71,11 @@ before advancing, verify:
   2026-07-08 in favor of per-chunk subagent isolation, and these two checks moved
   into the offline scanner; 2.4 consumes at most 5 key_details per concept regardless)
 
-Run `scripts/qc_stage22.py` (scans every `Stage-2-2-Chunk-*.txt` under
-`.llm-wiki/conversation/*/`) to check all responses at once. If a response
-fails the gate, delete the `.txt` and re-dispatch that chunk's subagent.
+Before every re-invoke, run
+`scripts/qc_stage22.py --file <current-Stage-2-2-result.txt>` so stale responses
+from older prompt hashes cannot fail the current handoff. Use `--conv <prefix>`
+only for a full-book historical audit. If the current response fails the gate,
+delete its `.txt` and re-dispatch that chunk's subagent.
 
 ## Stage 2.2/2.4: scale extraction density + ground formulas (updated 2026-07-01)
 

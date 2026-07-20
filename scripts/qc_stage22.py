@@ -19,12 +19,13 @@ pipeline abort).
 Usage:
     python3 scripts/qc_stage22.py                       # scans IMPROVED_WIKI_ROOT (or cwd)
     python3 scripts/qc_stage22.py --conv e1aa860d       # only this book's conversation dir
+    python3 scripts/qc_stage22.py --file /path/to/Stage-2-2-Chunk-1-abcd1234.txt
     IMPROVED_WIKI_ROOT=/path/to/project python3 scripts/qc_stage22.py
 
---conv scopes the scan to one conversation prefix (the current book). Without
-it the scan crosses every book ever ingested and drowns the signal in stale
-historical answers (observed live 2026-07-09: hundreds of flags from
-already-superseded runs).
+Use --file for the mandatory per-handoff gate: a conversation directory can
+contain superseded responses from earlier prompt hashes, so --conv is useful
+for an audit but can still drown the current response in stale failures.
+Without either option the scan crosses every book ever ingested.
 """
 import argparse
 import os
@@ -88,14 +89,34 @@ def check(txt_file: Path) -> tuple[bool, str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--conv", default="",
-                    help="only scan this conversation prefix (e.g. e1aa860d); "
-                         "default: all books")
+    scope = ap.add_mutually_exclusive_group()
+    scope.add_argument("--conv", default="",
+                       help="scan this conversation prefix (e.g. e1aa860d), "
+                            "including superseded responses; default: all books")
+    scope.add_argument("--file", type=Path,
+                       help="check exactly one Stage 2.2 response file "
+                            "(recommended before re-invoking ingest.py)")
     args = ap.parse_args()
 
     project_root = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
     runtime = detect_runtime_dir(project_root)
     conv_root = runtime / "conversation"
+    if args.file:
+        target = args.file if args.file.is_absolute() else project_root / args.file
+        if not target.is_file():
+            print(f"Response file not found: {target}", file=sys.stderr)
+            return 2
+        if _chunk_num(target) is None:
+            print(f"Not a Stage 2.2 chunk response: {target}", file=sys.stderr)
+            return 2
+        ok, msg = check(target)
+        status = "✓" if ok else "✗"
+        print(f"{target}: {status} {msg}")
+        if not ok:
+            print("Bad chunk (delete to force redo):")
+            print(f"  rm {target}")
+        return 0 if ok else 1
+
     if not conv_root.is_dir():
         print(f"No conversation dir at {conv_root}")
         return 0

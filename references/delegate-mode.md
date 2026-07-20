@@ -231,7 +231,10 @@ same-slug collision merge，不是冗余。如再见到重复 merge 任务，属
 3. **唯一例外：context probe**（~百字节小往返，发生在任何累积之前，且 probe 的意义就是测当前会话模型）。
 4. 派发 prompt 必须显式声明：**"这是自包含的单一任务——不要再派发任何子 agent 或后台进程，自己读完整个 chunk、自己写出单个完整的 YAML/FILE 答案文件。"**（防 subagent 内部再拆分，产出不满足 schema 契约。）
 5. 主对话收到 "completed" 后，**必须先验证 `<stage-slug>.txt` 确实存在且通过 schema 校验，再 re-invoke `ingest.py`**——"completed" 只代表 subagent 停止，不代表任务完成。
-6. 每次 re-invoke 前跑 `scripts/qc_stage22.py`，防退化响应蒙混过关。
+6. 每次 re-invoke 前跑
+   `scripts/qc_stage22.py --file <current-Stage-2-2-result.txt>`，防退化响应蒙混过关。
+   `--conv` 会审计同一本书目录中的全部历史 prompt hash，可能被已废弃响应干扰，
+   不用于逐 handoff 放行。
 7. 仅限单书串行；跨书 2.3+ 并行仍然禁止（不变量不变）。
 8. **为什么**：上下文累积（每 chunk prompt ~250K 字符）稀释注意力，模型退化成"凭记忆答题"；结构隔离是唯一根治，等价 NashSU per-call 无状态 `streamChat`。代价 ~5-7 次/书交接死区（≈30% 墙钟），质量优先，接受。
 
