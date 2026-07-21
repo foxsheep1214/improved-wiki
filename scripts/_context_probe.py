@@ -241,9 +241,19 @@ def _parse_probe(text: str):
     purely that number / UNKNOWN; None if unobtainable.
     """
     raw_lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
-    cleaned = (text or "").replace(",", "").replace(" ", "")
-    m = re.search(r"\d{4,}", cleaned)
-    context = int(m.group()) if m else None
+
+    def _extract_int(s):
+        cleaned = (s or "").replace(",", "").replace(" ", "")
+        m = re.search(r"\d{4,}", cleaned)
+        return int(m.group()) if m else None
+
+    # Prefer the last line for the context number (the prompt's two-line
+    # contract puts it there) — scanning the whole text first false-positives
+    # on digits embedded in the model identifier itself (e.g. a release-date
+    # suffix like "-20251001"), which the identifier line commonly has.
+    context = _extract_int(raw_lines[-1]) if raw_lines else None
+    if context is None:
+        context = _extract_int(text)
     model_self = None
     for ln in raw_lines:
         if re.fullmatch(r"[\d,\s]+", ln) or ln.strip().upper() == "UNKNOWN":
