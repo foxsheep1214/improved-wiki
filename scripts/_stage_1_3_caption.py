@@ -38,13 +38,16 @@ Design (NashSU parity, 2026-06-24):
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 
 # Shared infrastructure
@@ -52,6 +55,7 @@ _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 from _core import Config  # noqa: E402
+from _batch_worker_status import update_worker_phase  # noqa: E402
 from _paths import atomic_write  # noqa: E402
 from _review_utils import resolve_review_path  # noqa: E402
 
@@ -77,6 +81,27 @@ CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "4"))
 # provider 需要单独限流吗"). Serializing client-side avoids piling up threads
 # that are all just waiting on the same single-threaded local inference queue.
 _FALLBACK_SEMAPHORE = threading.Semaphore(1)
+
+# Detached batch workers may overlap one book's captioning with the next
+# book's minerU OCR.  Serialize caption *rounds* across processes so two
+# four-thread pools never multiply the provider load into eight or more calls.
+# The lock lives in the global temporary directory, is per-user, and is
+# released automatically by the kernel if a worker exits.
+CAPTION_BATCH_LOCK_FILE = (
+    Path(tempfile.gettempdir())
+    / f"improved-wiki-caption-{getattr(os, 'getuid', lambda: 0)()}.lock"
+)
+
+
+@contextmanager
+def _caption_batch_slot():
+    fd = os.open(CAPTION_BATCH_LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 # Per-call HTTP timeout for the VLM request (default 180s, configurable via
 # ~/.agents/config.json providers.<name>.timeout_seconds — NashSU parity,
@@ -846,8 +871,14 @@ _MAX_CAPTION_ROUNDS = 3
 _ROUND_BACKOFF_SECONDS = (15, 45)  # before round 2, round 3 (rate-limit cooldown)
 
 
-def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir: Path,
-                                  ctx_map: dict, label: str) -> int:
+def _stage_1_3_caption_one_round(
+    pending: list[dict],
+    config: Config,
+    media_dir: Path,
+    ctx_map: dict,
+    label: str,
+    max_workers: int = CAPTION_MAX_WORKERS,
+) -> int:
     """One parallel pass over `pending`. Returns captioned count.
 
     CONSECUTIVE_FAIL_PAUSE failures in a row within THIS round still raises
@@ -859,7 +890,7 @@ def _stage_1_3_caption_one_round(pending: list[dict], config: Config, media_dir:
     captioned = 0
     fallback_used = 0
     consecutive_fail = 0
-    workers = min(CAPTION_MAX_WORKERS, len(pending)) or 1
+    workers = min(max(1, max_workers), len(pending)) or 1
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_img = {
             executor.submit(_stage_1_3_caption_one_image_with_failover,
@@ -966,7 +997,17 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
                   f"{len(pending)} still pending — waiting {wait}s "
                   f"(rate-limit cooldown) before retry...")
             time.sleep(wait)
-        total_captioned += _stage_1_3_caption_one_round(pending, config, media_dir, ctx_map, label)
+        update_worker_phase("waiting_caption")
+        with _caption_batch_slot():
+            update_worker_phase("captioning")
+            total_captioned += _stage_1_3_caption_one_round(
+                pending,
+                config,
+                media_dir,
+                ctx_map,
+                label,
+                max_workers=max_workers,
+            )
         pending = _stage_1_3_pending_images(images, media_dir)
         if not pending:
             break

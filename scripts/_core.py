@@ -29,10 +29,10 @@ from _paths import detect_runtime_dir  # noqa: E402
 from _paths import atomic_write  # noqa: E402,F401
 from _paths import WIKI_ARTIFACT_DIRS as _WIKI_ARTIFACT_DIRS  # noqa: E402
 
-# Maximum concurrency for parallel LLM phases (Stage 1/1.5/2 are
-# read-only LLM calls — no shared wiki/ state mutation — so they can
-# run in parallel). Shared by ingest.py (batch_ingest, main) and
-# _watch.py (ingest_watch). 4 is safe for most provider rate limits.
+# Driver-facing batch concurrency ceiling. The OS Phase-1 pipeline uses at
+# most two detached workers (one minerU resource slot + one caption resource
+# slot); the same value caps handoff answers coordinated outside this process.
+# Shared by ingest.py and _watch.py.
 BATCH_MAX_CONCURRENT = 4
 
 
@@ -799,10 +799,9 @@ class ProjectLock:
     unlink→write sequence was non-atomic and racy. The lock file's text content
     (owner/pid) is advisory diagnostics only; the flock is the real lock.
 
-    A child ``ingest.py`` subprocess spawned by the batch driver passes
-    ``--skip-lock`` because the parent already holds this flock in a separate
-    process — flock is per-process (per fd), not inherited across exec, so the
-    child must not try to re-acquire.
+    Batch Phase-1 workers do not acquire this lock because extraction/caption
+    never writes shared wiki pages. The coordinator acquires it only around the
+    current book's Stage 2.3+ association/generation/write/finalize spine.
     """
 
     def __init__(self, config: Config, owner_id: str = ""):
@@ -860,7 +859,8 @@ class ProjectLock:
         if not self.acquire():
             raise RuntimeError(
                 f"Another ingest is running on this project. "
-                f"Wait for it to finish or remove {self._lock_path}"
+                f"Wait for its write spine to finish; inspect the flock holder "
+                f"for {self._lock_path} rather than deleting the lock file."
             )
         return self
 

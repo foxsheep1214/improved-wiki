@@ -21,7 +21,8 @@ Covers:
 - Explicit opt-out (``0``/``false``/``no``/``off``) → serial accumulation
   (chunk 2 sees chunk 1's produced slugs).
 - Drain mode: ≥2 uncached chunks raise ConversationPending exactly once
-  after attempting ALL chunks; 0 uncached returns the union of blocks.
+  after attempting the configured parallel wave; 0 uncached returns the union
+  of blocks.
 """
 from __future__ import annotations
 
@@ -347,6 +348,43 @@ class TestFlagOnDrain(unittest.TestCase):
         self.assertEqual(calls["other_slugs"][0], ["a1", "a2"])
         self.assertEqual(calls["other_slugs"][1], ["a0", "a2"])
         self.assertEqual(calls["other_slugs"][2], ["a0", "a1"])
+
+    def test_parallel_limit_emits_one_bounded_wave_not_serial(self):
+        metas = [_meta(i) for i in range(6)]
+        analyses = [
+            _analysis(concepts=[f"A{i}"]) for i in range(6)
+        ]
+        seen: list[int] = []
+
+        class Config:
+            handoff_parallel_limit = 2
+
+        def fake_gen(_analysis_value, chunk_idx, _slugs, *args, **kwargs):
+            seen.append(chunk_idx)
+            raise _core.ConversationPending()
+
+        orig = _ingest_chunks.stage_2_4_generate_chunk
+        _ingest_chunks.stage_2_4_generate_chunk = fake_gen
+        try:
+            with _FlagEnv("1"):
+                with self.assertRaises(_core.ConversationPending):
+                    _ingest_chunks._generate_all_chunks(
+                        metas,
+                        analyses,
+                        {},
+                        Path("raw.txt"),
+                        Config(),
+                        "",
+                        chunk_total=6,
+                        t_start=0.0,
+                        verbose=False,
+                    )
+        finally:
+            _ingest_chunks.stage_2_4_generate_chunk = orig
+
+        # Still parallel: two independent prompts are emitted in this wave.
+        # The remaining four wait for later re-invocations.
+        self.assertEqual(seen, [0, 1])
 
 
 if __name__ == "__main__":

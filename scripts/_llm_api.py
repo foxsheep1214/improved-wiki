@@ -5,8 +5,9 @@ conversation mode is no longer optional. ``call_anthropic_protocol`` (the
 entry point the stage modules import) always delegates to the conversation
 router registered by ingest.py: the prompt is written to a file and
 ``ConversationPending`` is raised so the calling agent answers with the
-current conversation's model. Serial only — there is no concurrent text-gen
-path.
+current conversation's model. There is no direct-API text-gen path; independent
+prompt files (notably Stage 2.4) may still be answered concurrently by separate
+fresh agents.
 
 Image captioning (Stage 1.3) and minerU OCR are NOT text
 generation and live elsewhere (`_stage_1_extract.py`); they are unaffected —
@@ -157,6 +158,8 @@ def conversation_handoff(
     print(f"  Result:  {result_file}", flush=True)
     print(f"  Answer via a FRESH subagent (1 handoff, then exit) — the main", flush=True)
     print(f"  conversation only orchestrates; sole exception: the context probe.", flush=True)
+    print(f"  Write <slug>.txt.tmp, validate it, then atomically rename to .txt;", flush=True)
+    print(f"  never stream a partial answer directly into the final result path.", flush=True)
     print(f"  (NashSU per-call statelessness — see delegate-mode.md L4.)", flush=True)
     print(f"{'=' * 60}\n", flush=True)
     raise ConversationPending()
@@ -167,8 +170,9 @@ def call_anthropic_protocol(prompt: str, config, max_tokens: int | None = None,
     """Route a text-generation LLM call to the conversation router.
 
     Always delegates to the conversation router registered by ingest.py
-    (prompt-file handoff, raises ``ConversationPending``). Serial only —
-    there is no direct-API fallback for text generation.
+    (prompt-file handoff, raises ``ConversationPending``). There is no
+    direct-API fallback for text generation; orchestration may answer
+    independent prompt files in parallel.
 
     ``label`` is accepted for call-site compatibility (progress lines that
     pass it) but is not otherwise used.

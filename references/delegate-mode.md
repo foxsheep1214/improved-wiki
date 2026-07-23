@@ -94,9 +94,12 @@ def ingest_via_conversation(pdf_path, project_path):
             # Execute with agent's own LLM
             result = call_llm(prompt)
 
-            # Write result back
+            # Publish only a complete result. Never stream directly into .txt:
+            # an eager driver may see file existence and re-invoke mid-write.
             result_file = prompt_file.with_suffix(".txt")
-            result_file.write_text(result)
+            result_tmp = result_file.with_suffix(".txt.tmp")
+            result_tmp.write_text(result)
+            os.replace(result_tmp, result_file)
             continue
 
         raise RuntimeError(f"Ingest failed: {proc.returncode}")
@@ -169,9 +172,13 @@ mid-chunk, re-running the same command resumes from the last completed chunk
 
 ### 🔒 项目锁冲突（看 ps 别抢锁）
 
-`Could not acquire project lock` 绝大多数是**另一本书的后台 OCR 还在跑**，不是死锁：先
-`ps aux | grep ingest.py`，看到就**不要 kill**，等它自然完成释放锁后重跑本书（缓存都在，
-从 Stage 2.2+ 续上）。完整诊断三件套与真死锁处置见 `maintenance-cleanup.md` "🔒 项目锁冲突诊断"（权威版）。
+`Could not acquire project lock` 表示另一个 Stage 2.3+ 写入主干正在运行；普通
+Phase 1 OCR/caption 和 Stage 2.2 不再持有该锁。先用 `lsof
+.llm-wiki/ingest.lock` 查真实 flock 持有者，不要删除锁文件或按陈旧 PID 抢锁。
+exit 101 会释放 kernel flock，但逻辑 owner 由
+`.llm-wiki/spine-reservation.json` 跨 handoff 保留；用 `--batch-status` 同时看
+两层状态。完整诊断和 pause/resume 用法见
+`maintenance-cleanup.md` "🔒 项目锁冲突诊断"（权威版）。
 
 ### Wikilink enrichment generates many merge tasks
 
@@ -229,14 +236,16 @@ same-slug collision merge，不是冗余。如再见到重复 merge 任务，属
 1. **每个 LLM handoff**——逐 chunk 的 2.2/2.4，以及单发的 2.4 去重确认 / 2.6 源页 / 2.9 对比 / 3.4 review / merge loop / wikilink enrichment——**一律派一个全新 subagent 作答，硬上限 1 handoff，答完即退出销毁**（不是"看着还行就多答一个"）。
 2. **主对话零 LLM 作答，只做编排**（派发、re-invoke、进度跟踪）。主对话直接答 prompt 等价于"连答"，同样退化，同样禁止。
 3. **唯一例外：context probe**（~百字节小往返，发生在任何累积之前，且 probe 的意义就是测当前会话模型）。
-4. 派发 prompt 必须显式声明：**"这是自包含的单一任务——不要再派发任何子 agent 或后台进程，自己读完整个 chunk、自己写出单个完整的 YAML/FILE 答案文件。"**（防 subagent 内部再拆分，产出不满足 schema 契约。）
-5. 主对话收到 "completed" 后，**必须先验证 `<stage-slug>.txt` 确实存在且通过 schema 校验，再 re-invoke `ingest.py`**——"completed" 只代表 subagent 停止，不代表任务完成。
+4. 派发 prompt 必须显式声明：**"这是自包含的单一任务——不要再派发任何子 agent 或后台进程，自己读完整个 chunk，并把单个完整 YAML/FILE 答案写到 `<stage-slug>.txt.tmp`；不要直接流式写最终 `.txt`。"**（防内部再拆分，也防驱动仅看到 `.txt` 出现就过早 re-invoke。）
+5. 主对话收到 "completed" 后，**必须先验证 `.txt.tmp` 完整且通过 schema/QC，再用同目录原子 rename 发布为 `<stage-slug>.txt`，之后才能 re-invoke `ingest.py`**。`completed` 只代表 subagent 停止，不代表任务完成。已有只返回文本、不直接写盘的 subagent，也由主对话先写临时文件再原子发布。
 6. 每次 re-invoke 前跑
    `scripts/qc_stage22.py --file <current-Stage-2-2-result.txt>`，防退化响应蒙混过关。
    `--conv` 会审计同一本书目录中的全部历史 prompt hash，可能被已废弃响应干扰，
    不用于逐 handoff 放行。
 7. **运行生命周期（强制）**：`ConversationPending` / exit 101 只是内部交接，绝不是一次 ingest 的完成或可对用户结案的状态。只要用户已经确认启动/继续，主对话必须按“派发 → 验证 → re-invoke”循环自行推进；不得在已有 pending prompt、待消费 `.txt`、或仍未完成的批次源文件时发送 final。仅当所有确认范围内的源文件 exit 0、用户明确要求暂停，或确有外部依赖阻塞且已报告时，循环才能结束。
-8. 仅限单书串行；跨书 2.3+ 并行仍然禁止（不变量不变）。
+8. **并行边界**：Stage 2.2 因 rolling digest 必须逐 chunk 串行；Stage 2.4
+   chunk 互相独立，可同时派发多个 fresh subagent，但每个仍只答自己的 1 个
+   handoff，且同一波不超过 `--parallel`。跨书 Stage 2.3+ 并行始终禁止。
 9. **为什么**：上下文累积（每 chunk prompt ~250K 字符）稀释注意力，模型退化成"凭记忆答题"；结构隔离是唯一根治，等价 NashSU per-call 无状态 `streamChat`。代价 ~5-7 次/书交接死区（≈30% 墙钟），质量优先，接受。
 
 事故索引（一句话存档，细节不再展开）：**Skolnik（2026-07-07）**连答 14 个 chunk 不退出，后期输出退化成占位内容——催生 per-chunk 隔离；**EW and Radar Systems Handbook（2026-07-08）**主对话逐个直答 5 个 chunk 仍退化，证明累积本身（而非连答）是根因——政策当晚扩展到全部 handoff；**Hansen（2026-07-09）**subagent 内部自行拆分 handoff 并行提取，回报 completed 但从未写出完整 `<stage-slug>.txt`——催生规则 4/5。

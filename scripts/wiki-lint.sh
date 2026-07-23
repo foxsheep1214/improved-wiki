@@ -222,7 +222,7 @@ rm -f "$LOCK_FIFO"
 # Extend the trap to also kill the holder (lockdir cleanup already trapped).
 trap "kill '$LOCK_HOLDER_PID' 2>/dev/null; rm -rf '$LINT_LOCKDIR'" EXIT
 if [ "$LOCK_STATUS" != "LOCKED" ]; then
-  echo "[lint] An ingest holds the project lock ($INGEST_LOCK_FILE) — refusing to run lint concurrently with an active ingest. Wait for it to finish (or check 'ps' for a stuck OCR; see maintenance-cleanup.md)." >&2
+  echo "[lint] A Stage 2.3+ writer holds the project lock ($INGEST_LOCK_FILE) — refusing to run lint concurrently. Wait for that write spine to finish; ordinary background OCR does not hold this lock (see maintenance-cleanup.md)." >&2
   exit 1
 fi
 

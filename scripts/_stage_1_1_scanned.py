@@ -24,6 +24,7 @@ _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 from _core import Config, file_sha256  # noqa: E402
+from _batch_worker_status import update_worker_phase  # noqa: E402
 
 from _stage_1_2_images import (  # noqa: E402
     _stage_1_2_harvest_images,
@@ -304,6 +305,7 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
     Rationale: pgrep-based counting is unreliable under concurrent stress (multiple
     conversations/cron jobs). File lock is atomic and system-wide.
     """
+    update_worker_phase("waiting_mineru")
     try:
         # Touch lock file if not exists
         if not MINERU_LOCK_FILE.exists():
@@ -319,6 +321,7 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
                     # Non-blocking attempt
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     print(f"[mineru] Lock acquired")
+                    update_worker_phase("mineru")
                     acquired = True
                     return fd
                 except OSError:
@@ -349,6 +352,7 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
         print(f"[mineru] Lock released")
+        update_worker_phase("post_mineru")
     except Exception as e:
         print(f"[mineru] Warning: Failed to release lock: {e}")
 

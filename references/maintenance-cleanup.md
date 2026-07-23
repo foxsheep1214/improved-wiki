@@ -28,35 +28,58 @@ stale data and are safe to clean **when no ingest is running**.
 ps aux | grep ingest.py | grep -v grep
 ```
 
-### 🔒 项目锁冲突诊断（常见卡点，2026-07-04 实战修）
+### 🔒 项目锁冲突诊断
 
-`ingest.py` 的报错 `Could not acquire project lock — another ingest may be running` 经常出现，但很少是真正的"并发 ingest"——多数是**后台 OCR 子进程**还活着。improved-wiki 的 minerU Phase 0/1 在前台 batch 持锁时，会用 `subprocess.Popen(start_new_session=True)` 启动后台跑 `--no-project-lock`，但**主对话 LLM 阶段（Stage 2.2+）要求持锁**。所以常见卡法是：
-
-```
-Symptom: "ERROR: Could not acquire project lock — another ingest may be running"
-原因 1（常见）：另一本书的 minerU/OCR 在跑，~10-20 分钟
-原因 2（少数）：真的有死锁（stale lock from crashed run）
-```
-
-**诊断三件套**（一行跑完）：
+single/batch/watch 仅在当前书的 Stage 2.3+ 活动调用中持有
+`.llm-wiki/ingest.lock`。Phase 1 OCR/caption、Stage 2.2、后台等待和 watch
+空闲轮询都不持有该锁。因此 `Could not acquire project lock` 表示另一个
+wiki-dependent writer 正在运行，不再等同于“后台 OCR 还活着”。
 
 ```bash
-# 1. 谁在跑？什么 stage？
-ps aux | grep "ingest.py" | grep -v grep | awk '{print $2, $13, $14}'
+# 查真实 flock 持有者；锁文件本身长期存在是正常的
+lsof /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/ingest.lock
 
-# 2. 锁文件 mtime（最近的 mtime = 当前持锁者）
-ls -la /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/ingest*.lock 2>/dev/null
-
-# 3. 删除 stale lock（如果找不到对应 pid）
-fuser /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/ingest.lock 2>/dev/null
-# 没回显 = 没有人持锁，可以删；in.py 自动 take over
+# 查正在运行的协调器/后台 worker/minerU
+ps -ax -o pid=,ppid=,etime=,command= | \
+  rg 'ingest\.py|mineru\.cli\.fast_api|file_parse'
 ```
 
-**用户策略（胡杨 2026-07-04 拍板）**：看到锁就别抢，**等 OCR 自然跑完再继续**。OCR 完成（`stage_1_1_done` 写盘）后会自动 `lock.release()`，主对话重新跑同一本书的 `ingest.py file.pdf`，即可从 Stage 2.2 续上。
+`ProjectLock` 是打开文件描述符上的 `fcntl.flock`：进程退出时内核自动释放。
+文件内容和 mtime 只用于诊断，文件仍存在不代表锁仍被持有；不要删除它，也不存在
+“没有进程但 kernel 永久残留 flock、必须重启”的正常状态。
 
-🚫 **禁止**：未经用户许可 `kill <pid>` 后台 OCR——即使它跑了几十分钟。minerU 重启开销大（server 冷启动 60s+），杀掉就要重头 OCR。
+conversation handoff 的 exit 101 必然释放这个 kernel flock，所以另有
+`.llm-wiki/spine-reservation.json` 保留 source-bound 逻辑 owner。先统一查看：
 
-⚠️ **真死锁判断**：如果 `ps` 里**根本没有** ingest.py 进程，但 `fuser` 还能看到 lock 引用——那是 macOS 协作锁的 kernel 残留，`fuser -k` 也清不掉。重启 macOS / `kill -9 <pid-of-old-owner-if-recoverable>` 是两个选择，但**确认是这种情况先问用户**。
+```bash
+python3 "$SKILL_DIR/scripts/ingest.py" --batch-status
+```
+
+同一本 source hash 可跨 handoff 重入；不同书不能进入 Stage 2.3+。正常
+complete/skip 会清 reservation。失败时保留它是安全闸门，不是死锁：先恢复 owner。
+只有明确放弃该书并检查过部分写入后，才运行
+`--abandon-spine <status显示的8位hash>`；不要手删 JSON。
+该命令还会先取得 `ingest.lock`，有 live writer 时拒绝放弃。
+
+若需要有意暂停批量任务，使用：
+
+```bash
+# 全部暂停
+python3 "$SKILL_DIR/scripts/ingest.py" --pause-batch
+
+# 只暂停后台 OCR/caption，允许已完成 Phase 1 的书继续
+python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch
+```
+
+这会建立相应 pause marker，并只向 token/source/lease/心跳身份匹配的 detached
+进程组发信号。
+不要手工按旧 `batch-bg.json` PID 杀进程；PID 可能陈旧或已复用。恢复时用完整、
+已确认的文件列表加 `--resume-batch`；只恢复 OCR/caption 可用
+`--resume-prefetch`。
+
+`batch.pause` 是项目级 full pause，普通单文件 `ingest.py book.pdf` 也不能绕过；
+这是为了拦截把批次拆成单书反复 re-invoke 的旧驱动。若只想停 OCR/caption 而让
+已提取书继续主干，必须使用 `--pause-prefetch`，不要使用 full pause。
 
 ### Safe to delete (stale after ingest completes)
 
@@ -69,6 +92,11 @@ fuser /Users/skyfend/Documents/知识库/<Project>/.llm-wiki/ingest.lock 2>/dev/
 
 **Do NOT delete** (active state):
 - `ingest-cache.json` — dedup hash cache (Stage 3.5)
+- `batch.pause` / `batch-prefetch.pause` — explicit pause state
+- `batch-bg.json` / `batch-workers/*.json[.lease]` — detached-worker identity
+- `spine-reservation.json` — source-bound Stage 2.3+ owner across handoffs
+- `batch-coordinator.lock` / `ingest.lock` / `watch.lock` — advisory files whose
+  kernel flocks, not file existence, indicate a live holder
 - `lint-cache.json` / `lint-lock` — lint state
 - `graph.json` — knowledge graph (Graph command output)
 - `embed-cache.json` — embedding cache

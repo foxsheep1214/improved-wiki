@@ -36,6 +36,7 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
                            ▼
         _stage_1_3_caption_images_batch()  ← unified entry point
                 │
+                ├── per-user cross-process flock  (one caption round globally)
                 ├── _stage_1_3_build_context_map()  (minerU content_list → before/after text)
                 ├── ThreadPoolExecutor (CAPTION_MAX_WORKERS per-image parallel)
                 │     └── _stage_1_3_caption_one_image_with_failover()
@@ -52,7 +53,7 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
 
 | Parameter | Default | Env var | Description |
 |-----------|---------|---------|-------------|
-| Max workers | 4 | `CAPTION_MAX_WORKERS` | Per-image parallel concurrency. 4 stays under GLM-5v-turbo free-tier rate limit (12 trips HTTP 429). |
+| Max workers | 4 | `CAPTION_MAX_WORKERS` | Per-image concurrency inside one caption round. A per-user cross-process flock prevents two batch workers from multiplying this into 8+ calls. |
 | Image max dim | 1568 | — | Downscale threshold (vision limit) |
 | Context window | 150 chars/side | — | before/after body text fed as anchoring context (NashSU `CONTEXT_CHARS`, matched) |
 | Tiny-image min | 20px | `MINERU_IMG_MIN_WIDTH/HEIGHT` | 过滤噪声（故意低，保留公式截图） |
@@ -142,6 +143,11 @@ captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_la
 （12 会触发 429，见下方"限流"节）。付费/高频账号可调高；fallback（本地）命中的图
 **不受此并发上限约束，而是代码强制一张一张来**（见下方"并发：本地 fallback
 provider 严格串行"）。
+
+批量 ingest 可以让一本书的 caption 与下一本书的 minerU OCR 重叠，但不同书的
+caption round 不会彼此重叠：`_caption_batch_slot()` 在系统临时目录使用 per-user
+`fcntl.flock`。锁按 round 获取，重试 backoff 期间释放，因此不会无意义阻塞其他书；
+单个 round 内仍保留默认 4 路远程并发。
 
 ```json
 // ~/.agents/config.json

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from _core import (
+    BATCH_MAX_CONCURRENT,
     Config,
     ConversationPending,
     stage_begin as _stage_begin,
@@ -436,7 +437,7 @@ def _generate_all_chunks_parallel(
     chunk_total: int, t_start: float, verbose: bool,
     related_pages: list[dict] | None = None,
 ) -> tuple[list, list, str | None]:
-    """Eager-inventory + drain variant of the >1-chunk generation loop.
+    """Eager-inventory + bounded-drain variant of >1-chunk generation.
 
     The serial path forces order by feeding each chunk the slugs PRODUCED by
     prior chunks. Here every concept/entity slug is computed up front from the
@@ -444,18 +445,30 @@ def _generate_all_chunks_parallel(
     skip+link the concepts owned by OTHER chunks independent of execution order
     (``_other_chunk_slugs``, sorted → stable cache key).
 
-    Drain: in conversation mode an uncached prompt raises ``ConversationPending``
-    AFTER writing its prompt .md. We catch it per chunk and CONTINUE so a single
-    pipeline invocation emits ALL uncached chunk prompts for parallel answering,
-    then raise ``ConversationPending`` once at the end. On the final all-cached
-    replay no chunk raises, so we return ``(blocks, slug_union, None)`` exactly
-    like the serial path's contract.
+    Bounded drain: in conversation mode an uncached prompt raises
+    ``ConversationPending`` AFTER writing its prompt .md. We catch it per chunk
+    and continue until the configured parallel handoff ceiling is reached.
+    Thus ``--parallel 4`` advances a 10-chunk book in ``4 + 4 + 2`` prompt
+    waves; it does not serialize Stage 2.4. Cached answers are drained for free,
+    and a ceiling at least as large as the chunk count retains the original
+    all-at-once behavior.
     """
     _assert_chunk_count_alignment(chunk_meta, chunk_analyses)
     inventory = _build_gen_inventory(chunk_meta, chunk_analyses)
     all_file_blocks: list = []
     generated_slugs: list = []
     pending = 0
+    try:
+        handoff_limit = max(
+            1,
+            int(getattr(
+                config,
+                "handoff_parallel_limit",
+                BATCH_MAX_CONCURRENT,
+            )),
+        )
+    except (TypeError, ValueError, OverflowError):
+        handoff_limit = BATCH_MAX_CONCURRENT
     for meta, analysis in zip(chunk_meta, chunk_analyses):
         i, chunk_text = meta[0], meta[1]
         other_slugs = _other_chunk_slugs(inventory, i)
@@ -468,20 +481,22 @@ def _generate_all_chunks_parallel(
         except ConversationPending:
             # Prompt .md already written; defer this chunk's answer.
             pending += 1
+            if pending >= handoff_limit:
+                break
             continue
         all_file_blocks.extend(blocks)
         for path, _ in blocks:
             slug = file_block_slug(path)
             if slug not in generated_slugs:
                 generated_slugs.append(slug)
-        print(f"  [generate] {i + 1}/{chunk_total} [parallel-eager, grounded]")
+        print(f"  [generate] {i + 1}/{chunk_total} [parallel-wave, grounded]")
 
     if pending > 0:
-        print(f"  [generate] emitted {pending} chunk prompt(s) for "
-              f"parallel answering")
+        print(f"  [generate] emitted {pending} chunk prompt(s) for a "
+              f"parallel wave (limit {handoff_limit})")
         raise ConversationPending()
 
-    print(f"  [generate] {chunk_total}/{chunk_total} parallel-eager grounded done "
+    print(f"  [generate] {chunk_total}/{chunk_total} parallel-wave grounded done "
           f"[{time.time() - t_start:.0f}s]")
     return all_file_blocks, generated_slugs, None
 

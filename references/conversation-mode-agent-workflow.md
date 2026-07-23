@@ -106,6 +106,19 @@ keep each chunk well-extracted and formula-faithful:
 exit) is what keeps chunk N+1's attention on chunk N+1 instead of the whole book.
 Policy and incident record: `references/delegate-mode.md` L4 revision (2026-07-08).
 
+Result publication is two-phase: each answer is produced as
+`<stage-slug>.txt.tmp`, validated, then atomically renamed to
+`<stage-slug>.txt`. Never let a subagent stream directly into the final `.txt`;
+file-existence-driven drivers can otherwise consume a partial answer and advance
+the state machine while the writer is still appending.
+
+Scheduling differs by stage: Stage 2.2 must wait for the prior chunk's validated
+rolling-digest answer. Stage 2.4 has a precomputed owner-slug inventory, so its
+chunk prompts may be answered concurrently by separate fresh subagents. `ingest.py`
+emits at most `--parallel` unresolved Stage 2.4 prompts per wave; answer that wave,
+validate every result file, then re-invoke for the next wave. This is bounded
+parallelism, not a conversion of Stage 2.4 to serial execution.
+
 For Stage 2.4, the subagent generates that chunk's exact slug list; verify
 block-count == requested slugs (minus the `foo-bar` placeholder) before advancing.
 

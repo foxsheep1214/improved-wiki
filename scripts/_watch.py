@@ -8,11 +8,17 @@ them. ``batch_ingest`` is imported lazily because it lives in ingest.py
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import time
 from pathlib import Path
 
-from _core import BATCH_MAX_CONCURRENT, Config, ConversationPending, ProjectLock
+from _core import BATCH_MAX_CONCURRENT, Config, ConversationPending
+from _batch_coordination import (
+    BatchCoordinatorBusy,
+    SpineReservationConflict,
+)
 from _paths import atomic_write
 
 
@@ -83,7 +89,8 @@ def ingest_watch(
     Each watch cycle:
       1. Read the queue
       2. Collect pending entries (status=pending, or failed with retryCount < max_retries)
-      3. Feed them through the batch pipeline (parallel Stage 0-2, serial Stage 3+)
+      3. Feed them through the batch pipeline (two-stage Phase-1 prefetch,
+         current-book Stage 2.2, serial Stage 2.3+)
       4. Update queue status for each (done / failed / skipped)
       5. Re-scan for new entries added by wiki-monitor.sh
       6. If --drain: exit when queue is empty; otherwise loop forever
@@ -93,12 +100,22 @@ def ingest_watch(
     ingest.py --watch picks them up in the next cycle.
     """
     from ingest import batch_ingest  # lazy: breaks ingest <-> _watch import cycle
-    lock = ProjectLock(config, owner_id="watch")
-    if not lock.acquire(timeout=10):
+    # A watcher needs singleton protection, but it must not monopolize the
+    # wiki write lock while sleeping, extracting, or waiting for handoffs.
+    # batch_ingest acquires ProjectLock only around each active 2.3+ call and
+    # uses a source-bound durable reservation across exit-101 handoffs.
+    config.runtime_dir.mkdir(parents=True, exist_ok=True)
+    watch_lock_path = config.runtime_dir / "watch.lock"
+    watch_lock_fd = os.open(watch_lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(watch_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(watch_lock_fd)
         raise RuntimeError(
-            "Could not acquire project lock for watch mode. "
-            "Is another ingest.py --watch or batch running?"
-        )
+            "Could not acquire watch.lock — another ingest.py --watch is running")
+    except Exception:
+        os.close(watch_lock_fd)
+        raise
 
     cycle = 0
     total_processed = 0
@@ -206,6 +223,11 @@ def ingest_watch(
                 # failure — re-raise so main() returns 101; the agent answers the
                 # prompt and re-invokes --watch, resuming this wave from cache.
                 raise
+            except (BatchCoordinatorBusy, SpineReservationConflict):
+                # Coordination conflicts are not source failures and must not
+                # consume every queued book's retry budget. Surface them to the
+                # caller so the owning run/source can be resumed or inspected.
+                raise
             except Exception as e:
                 print(f"[watch] Batch ingest crashed: {e}")
                 import traceback
@@ -239,7 +261,7 @@ def ingest_watch(
                     entry["completedAt"] = int(time.time() * 1000)
                     entry["error"] = None
                     total_done += 1
-                else:
+                elif result:
                     entry["status"] = "failed"
                     retries = entry.get("retryCount", 0) + 1
                     entry["retryCount"] = retries
@@ -249,8 +271,16 @@ def ingest_watch(
                     if retries >= max_retries:
                         print(f"  [watch] {entry['sourcePath']}: max retries ({max_retries}) reached — giving up")
                     total_failed += 1
+                else:
+                    # batch_ingest deliberately stops at the first failed
+                    # serial-spine source. Missing results are later, unattempted
+                    # books — keep them pending without burning a retry.
+                    entry["status"] = "pending"
+                    entry["error"] = "waiting behind earlier serial-spine failure"
+                    entry.pop("startedAt", None)
                 rest.append(entry)
-                total_processed += 1
+                if result:
+                    total_processed += 1
 
             _write_queue(config, rest)
             print(f"[watch] Cycle {cycle} complete — "
@@ -261,4 +291,5 @@ def ingest_watch(
               f"Processed {total_processed}: {total_done} done, {total_failed} failed.")
         print(f"[watch] Queue preserved at {config.runtime_dir / 'ingest-queue.json'}")
     finally:
-        lock.release()
+        fcntl.flock(watch_lock_fd, fcntl.LOCK_UN)
+        os.close(watch_lock_fd)

@@ -1,98 +1,185 @@
-# Batch Pipeline Ingest — 多书流水线（minerU[N+1] ∥ spine[N]）
+# Batch Pipeline Ingest — 两级 Phase-1 预取 + 单写入主干
 
-> **归属**：`batch_ingest`（ingest.py）的内部设计。多书 batch 时自动启用，**不需要操作者手动编排**。
->
-> **核心设计：流水线并行，不是 barrier。** 一条命令传所有书 → 系统自动把下一本的 OCR 预取和当前书的 LLM 工作重叠。**不要手动分书分步跑**（会丧失并行能力，OCR 被串行到 LLM 后面）。
->
-> **并行边界（三层）**：
-> ① **进程级后台预取**（bg OS 子进程）：Phase 0/1（minerU + caption，非 LLM）——自动与主对话 LLM 并行；
-> ② **可并行作答的 conversation prompt** = wiki-independent 段（Phase 0/1 + Stage 2.2）——多个同时 pending 时可每个派一个 sub-agent 并行作答，**并发上限 = `--parallel N`**（默认4，见下方"并发上限"节）；
-> ③ **wiki-dependent spine（2.3+）**：跨书串行——一次只有一本书处于 2.3+（见 [[batch-digest-loop]]、[[delegate-mode]]）。**书内 2.4 例外（2026-07-09 起默认开启）**：Stage 2.4 多 chunk 生成用预计算 slug 清单（`_build_gen_inventory`，确定性、不依赖答题顺序），一次 ingest.py 调用可能同时吐出该书全部未缓存 chunk 的生成 prompt——这些属于同一本书、同一 spine，**允许同时派多个 sub-agent 并行作答**，同样受 `--parallel N` 并发上限约束。2.2（chunk 分析）因滚动 digest 的真实内容依赖，仍严格逐 chunk 串行，不受此例外影响。
+> **归属**：`ingest.py::batch_ingest`。多文件批处理自动启用；操作者传入完整文件列表，
+> 不需要手工拆分 OCR。
 
-## 并发上限（2026-07-07 补全）
+## 当前并行模型
 
-`--parallel N` 只约束了代码层（OCR 子进程数），没有一处明说"派给这些 handoff 作答的 sub-agent 数量也要 ≤N"。**这条现在补上：并行作答 wiki-independent handoff 时，同时存在的 sub-agent 数量不得超过 `--parallel` 的值**（默认4）。
+自动批处理有三类并行边界：
 
-- 原因：即使 minerU 本身靠 `fcntl.flock` 强制单实例（不受 `--parallel` 影响），LLM handoff（2.2）不受这把锁约束——如果一次喂几十本书且它们的 Phase 0/1 恰好在短时间内密集完成，理论上可能同时冒出远多于 `--parallel` 数量的 pending handoff。不设上限会导致同时派发的 sub-agent 数量跟 `--parallel` 脱钩，跟"`--parallel` 控制并行度"这个用户可见的预期不一致，也可能不必要地推高瞬时并发成本。
-- 做法：主对话维护一个"当前活跃 sub-agent 数"计数，达到 `--parallel` 时新出现的 pending handoff 排队，等某个 sub-agent 完成退出后再派发下一个——不需要精确的调度器，简单的"派够 N 个就等一个回来再派"即可。
-
-## 设计：流水线，不是 barrier
-
-旧设计（barrier）：所有书的预取（0/1/2.2）全跑完 → 才开始任何 spine。问题：book 1 的 spine 干等 book N 的 minerU。
-
-新设计（pipeline，2026-06-28）：book N 的 LLM 工作（2.2 + spine）和 book N+1 的 minerU 提取**重叠**。
+1. **Phase 1 后台进程**：最多两个 detached worker。全局始终只有一个 worker
+   使用 minerU；另一个可同时进行图片描述，形成 `OCR[N+1] ∥ caption[N]`。
+2. **主对话 Stage 2.2**：只推进当前书。chunk 分析依赖滚动 digest，严格逐 chunk
+   串行；普通 batch 不会自动让多本书同时产生 2.2 handoff。
+3. **Stage 2.3+ spine**：跨书严格串行。项目锁只在当前书的
+   `2.3 → generate → write → finalize` 区间持有。书内 Stage 2.4 的多个
+   generation prompt 仍可并行作答，但按 `--parallel N` 分波发出，而不是无上限
+   一次吐出全部 prompt。
 
 ```
-主对话（串行，一本一本）：
-  book1: 等 Phase0/1(已缓存) → 2.2(LLM handoff) → 2.3+(spine, LLM handoff)
-  → book2: 等 Phase0/1(bg 已跑完) → 2.2 → spine
-  → book3: 等 Phase0/1 → 2.2 → spine
-
-后台 detached 子进程（minerU + caption，非 LLM）：
-  bg-A: book2 的 Phase 0/1  ──────┐
-  bg-B: book3 的 Phase 0/1  ──────┤  (minerU fcntl.flock 串行，但与主对话 LLM 重叠)
-                                  └→ book2/3 的 Phase 0/1 在 book1 spine 期间跑完
+后台 worker A:  book N   OCR ─────────→ caption ─────→ done
+后台 worker B:             等 minerU ─→ OCR ────────→ caption
+主协调进程:     等 book N Phase 1 → 2.2 → [ProjectLock: 2.3+ spine]
 ```
 
-## 实现机制（ingest.py）
+minerU 和 caption 都各有一个跨进程资源槽：
 
-- **`--no-project-lock` 标志**：单文件路径跳过 `ProjectLock`。供后台 extract 子进程用——主 batch 持锁，bg 不能再 acquire（会死锁）。Phase 0/1 不写 wiki/，不需要锁。
-- **`_launch_bg_extract`**：用 `subprocess.Popen(start_new_session=True)` 启动 detached 子进程跑 `ingest.py --stop-after-stage 0 --no-project-lock <book>`（"0" = Phase 1 完成后干净退出；旧值 "1" 的停靠点已随 Stage 2.1 移除，2026-07-08 改）。`start_new_session` 让它跨主 batch 的 ConversationPending exit 存活。恢复批次若前几本已缓存 Phase 0/1，`_launch_next_pending_extract` 会跳过这些书，立即启动后面第一本真正待提取的书；仍然一次只启动一本。
-- **`_wait_extract_done`**：主 batch 到达 book N 时，poll `is_stage_done(h, "stage_1_3_done")` 等 bg 跑完（book 1 是初始 minerU 等待；book 2+ 应已被前一本 spine 期间跑完）。
-- **bg-state 持久化**（`.llm-wiki/batch-bg.json`）：记录已启动的 bg PID。`_pid_alive` 检查 PID 存活——死了就重开，不死等。跨 handoff re-invoke 复用。
-- **沙箱 PID 探测**：某些 runtime 禁止 `os.kill(pid, 0)`，对存活子进程返回
-  `PermissionError/EPERM`。这表示“无法探测”，必须按存活处理；只有
-  `ProcessLookupError/ESRCH` 才能判定进程已退出，否则每次 conversation
-  re-invoke 都会重复启动同一本书的后台提取。
-- **stage 标记**：Phase 1 完成 = `stage_1_3_done`（不是 "1"）。
+- minerU：`~/.cache/improved-wiki/.mineru.lock`，一次一本。
+- caption：系统临时目录中的 per-user flock，一次一个 caption round；round 内仍按
+  `CAPTION_MAX_WORKERS=4` 并行逐图调用。这样两个后台 worker 不会叠加成 8 个远程请求。
 
-## 操作者只需
+## `--parallel N` 的真实语义
 
+- `N=1`：只启动一个 Phase-1 worker，不做 OCR/caption 跨书重叠。
+- `N>=2`：Phase-1 worker 上限为 2；超过 2 不会再增加 OCR 进程，因为流水线只有
+  minerU 和 caption 两个独占资源槽。
+- 同一个数也是 Stage 2.4 并行 handoff 波次的硬上限。例如 10 个未缓存 chunk
+  配 `--parallel 4` 时按 `4 + 4 + 2` 推进；`N=1` 才会显式退化为串行；若 N
+  不小于剩余 chunk 数，仍一次发出全部。
+- Stage 2.2 **不**套用这类并行波次：chunk N+1 的 prompt 依赖 chunk N 更新后的
+  rolling digest，因此严格串行。Stage 2.4 的 owner slug inventory 在生成前已
+  确定，各 chunk 不存在这种滚动内容依赖。
+
+默认 `--parallel 4`，因此自动 Phase-1 实际使用两个 worker。
+
+## 顺序保证
+
+调度器不会同时盲启两个 PDF：
+
+1. 先启动按文件列表排序的第一本待提取书。
+2. worker 状态进入 `mineru`（已取得全局锁）后，才允许启动下一本。
+3. 第二本进入 `waiting_mineru`，因此不能抢在第一本前面。
+4. 当前书完成 Phase 1 后释放一个 worker 槽，再按列表顺序补入下一本。
+
+恢复批次时会扫描并跳过任意长度的 `stage_1_3_done` 缓存前缀，启动第一本真正
+待提取的书，而不是只检查相邻一本。
+
+## 进程监督
+
+`.llm-wiki/batch-bg.json` 保存协调信息；每个 worker 另有
+`.llm-wiki/batch-workers/<hash>-<token>.json`，包含：
+
+- 随机 token、source hash、PID、进程组 PGID；
+- `started_at`、`heartbeat_at`；
+- `status`、`phase`、`exit_code`、`error`。
+
+每个状态文件还有同名 `.lease` 文件。worker 从启动到退出始终持有随机 token
+对应的 kernel flock；协调器按“token + source hash + 心跳 + lease + PID/PGID”
+联合判断：
+
+- `EPERM` 只表示 PID 探测未知；新鲜心跳仍视为运行中。
+- lease 已存在但无人持有，证明原 worker 已退出；即使数字 PID 又变成 live，也按
+  PID 复用处理，绝不向它发信号。
+- 心跳过期时，即使 PID 探测返回 `EPERM`，也判为 stalled，不再无限等待。
+- worker 明确失败、退出或停滞后，协调器立即转为前台缓存恢复。
+- 单次 heartbeat 原子写失败只告警并在下一周期重试，不会永久杀死心跳线程。
+- 默认没有固定两小时总超时；可用
+  `IMPROVED_WIKI_BG_EXTRACT_MAX_SECONDS` 设置硬上限。默认心跳失效窗口为 60 秒。
+
+后台 worker 使用独立 session/process group。停止时对整个进程组发信号，worker、
+minerU API 子进程和其后代一起清理，不再只终止 Python 父进程。只有 lease
+确证为当前 worker 时才允许发信号；旧版无 lease 状态宁可警告并拒绝误杀。
+
+## 两层主干锁与协调器锁
+
+- `.llm-wiki/batch-coordinator.lock`：短期 kernel flock，同一项目同一时刻只允许一个
+  live batch/watch 调度调用修改 `batch-bg.json`。exit 101 后自动释放，便于重启。
+- `.llm-wiki/ingest.lock`：短期 kernel flock，仅覆盖当前进程中实际执行
+  Stage 2.3+ 的窗口。conversation handoff 退出时会自动释放。
+- `.llm-wiki/spine-reservation.json`：跨 exit 101 的持久逻辑 owner。它绑定 source
+  hash，同一本书重启可重入；不同书会被拒绝，直到 owner 完成/skip，或操作者明确
+  放弃。这样不会在当前书等待 Stage 2.4、merge、review 等回答时让后一本偷进
+  Stage 2.3，导致关联快照漂移。
+- batch 重启会在启动新 prefetch 前校验：reservation owner 必须仍在文件列表中，
+  且必须是列表里的第一本未完成书。漏传或重排不会先做一轮昂贵 OCR 后才暴露冲突。
+
+如果 serial spine 发生写入或 finalization 错误，batch 会在第一本失败书处停止，
+后续书不进入 Stage 2.3+；watch 中这些未尝试的条目保持 pending，也不消耗 retry。
+失败书的 reservation 保留，先从缓存恢复它。
+
+## 暂停和恢复
+
+```bash
+# 在项目根目录执行；不需要重复文件列表
+python3 "$SKILL_DIR/scripts/ingest.py" --pause-batch
+
+# 只暂停 OCR/caption 预取；不冻结已经提取完的书
+python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch
+
+# 查看 pause、worker、handoff、spine owner 和未完成 source
+python3 "$SKILL_DIR/scripts/ingest.py" --batch-status
+
+# 只恢复 OCR/caption 预取
+python3 "$SKILL_DIR/scripts/ingest.py" --resume-prefetch
+
+# 恢复时必须重新给出已经确认过的完整列表
+python3 "$SKILL_DIR/scripts/ingest.py" --resume-batch \
+  "raw/Book/A.pdf" "raw/Book/B.pdf" "raw/Book/C.pdf"
 ```
-cd <project-root>
-python3 ingest.py "raw/Book/A.pdf" "raw/Book/B.pdf" "raw/Book/C.pdf"
+
+`--pause-batch` 写入 `.llm-wiki/batch.pause` 并终止所有身份已验证的后台进程组。
+当前协调器会停止；进度、OCR chunk、图片和 caption 均保留。该 marker 是项目级
+full pause：multi-file batch、watch 和普通单文件 `ingest.py book.pdf` 都会拒绝
+推进，避免旧驱动把一批书拆成单文件命令后绕过暂停。必须用已确认的完整列表显式
+`--resume-batch`。`--dry-run` 和 maintenance/status 命令不受影响。
+
+`--pause-prefetch`（别名 `--pause-batch-ocr`）写
+`.llm-wiki/batch-prefetch.pause`，只停止并禁止新建 Phase-1 worker。已存在
+`stage_1_3_done` 的书仍可进入 Stage 2.2/serial spine；遇到第一本仍需 Phase 1
+的书时以 exit 76 干净让出。`--resume-prefetch`（别名
+`--resume-batch-ocr`）只清这个 marker；`--resume-batch` 会同时清 full 和
+prefetch 两类 marker。
+
+Ctrl-C/SIGTERM 命中 batch 协调器时也会建立 pause marker，并清理后台进程组。
+
+若 `--batch-status` 显示某个失败/人为停在 Stage 2 的 source 长期占有 spine，
+应优先重跑同一本书。只有确认不再恢复它、并检查过潜在部分写入后，才可显式：
+
+```bash
+python3 "$SKILL_DIR/scripts/ingest.py" --abandon-spine <status显示的8位hash>
 ```
 
-batch 自动：启动 bg extract（B、C）→ 处理 A（2.2 + spine，LLM handoff 给你）→ 你派 fresh subagent 答一个 handoff、重跑，batch 推进 → A 写完 → B（Phase 0/1 已就绪）→ ...。每个 handoff 派 subagent 作答后重跑即可。
+不要直接删除 reservation 文件；命令会核对 owner hash，避免放错锁。
+若仍有进程持有 `.llm-wiki/ingest.lock`，该命令会拒绝执行。
 
-## context 隔离（强制，2026-07-08 起）
+## `--stop-after-stage` 防误用
 
-主对话累积历史会让每个 handoff 作答越来越贵。**强制（2026-07-08 起，原为可选）**：每个 handoff 派一个 fresh subagent 作答（读 prompt、写 .txt、返回），主对话只协调（唯一例外 context probe）。subagent 不继承主对话上下文，省 ~150k input token/handoff，且消除多书累积的注意力稀释（见 delegate-mode.md L4）。
+`--stop-after-stage` 仅允许单文件诊断/预取。多文件 batch 与它组合会在 context
+probe 和任何 OCR 之前直接报错，避免把整批任务误变成“OCR-only batch”。
+自动后台 worker 使用内部 `--batch-extract-worker` 模式，不依赖公开 stop flag。
+公开 `--no-project-lock` 也只允许和 `--stop-after-stage 0` 或 `1.5` 组合；它不能
+被误用于完整写入。
 
-**注意（与 SKILL.md 规则的关系）**：可**并行**作答的只有 wiki-independent 的预取 handoff（Phase 0/1 + 2.2，SKILL.md 规则）。串行 spine（2.3+）的 handoff 一次只有一个 pending——把它交给一个 fresh subagent 作答是 context 隔离（自 2026-07-08 起为强制政策），**不是并行**，不违反串行不变量；spine 的协调（重跑 batch）必须留在主对话，保证一本一本串行。任何时刻都不允许两本书的 2.3+ handoff 同时在处理。
+## 进阶：显式预取下一本 Stage 2.2
 
-## 进阶：`--stop-after-stage 1.5` 预取（隐藏下一本的 2.2，实测 2026-07-02）
+普通 batch 自动重叠 Phase 1，但不会自动并发不同书的 conversation handoff。若需要
+隐藏下一本的 Stage 2.2，可在另一条受控对话流中运行单文件：
 
-进程级 bg 预取只能到 Phase 0/1（bg 进程无法作答 LLM handoff）。但 2.2 是
-wiki-independent（SKILL.md 规则 ②），操作者可以**手动开第二条 conversation 流水线**
-把下一本书的 digest+chunk 分析也提前做掉：
-
+```bash
+python3 "$SKILL_DIR/scripts/ingest.py" \
+  --stop-after-stage 1.5 --no-project-lock \
+  "raw/Book/<book N+1>.pdf"
 ```
-# book N 的 spine 正常推进的同时，另开一条：
-python3 ingest.py --stop-after-stage 1.5 --no-project-lock "raw/Book/<book N+1>.pdf"
-# 每次 exit 101 → 派一个 fresh subagent 作答该 handoff → re-invoke（与 spine 的
-# subagent 并行，互不等待）。到 2.2 全部完成时干净退出（PrepareStopAfter("1.5")，
-# stage_2_2_done 缓存）。book N 写完后直接跑 spine，2.2 全部 cache 命中，
-# 从 2.3 起步。
-```
 
-**实测**（RadarWiki，2026-07-02，64K chunk）：book4（3 chunks，spine 全程 125 min
-LLM 延迟）期间并行预取 book5（Barton 系统分析与建模，6 chunks）的 digest + 3 个
-chunk 分析共 **86 min LLM 延迟，全部隐藏、零墙钟成本**。按今晚三本书统计，
-2.2（实测时含已并入的 2.1）占单书总 LLM 延迟的 40-56%——即该模式能把整批消化墙钟压掉约四成。
-
-**注意**：预取时 2.2 的 existing-wiki 快照早于前一本书落盘，book N+1 对 book N
-新页的连接提案会缺失（SKILL.md 设计上接受的折衷）；主题强相关的相邻两本书若在意
-交链密度，可放弃预取回退纯串行。
+每次 exit 101 仍需 fresh subagent 作答并重跑，直到 Stage 2.2 完成。Stage 2.2
+只分析本书内容；真正读取现有 Wiki 并建立跨书关联的是之后的 Stage 2.3，因此
+当前书写入完成后再进入 N+1 spine，仍会读取最新 Wiki。
 
 ## 关键不变量
 
-- **spine 串行**：一次只有一本书在 2.3+。bg 只做 Phase 0/1（不碰 wiki/），所以并行安全。
-- **ConversationPending 跨 re-invoke**：bg 是 detached 子进程，主 batch exit 101 不杀它。stage-progress cache 让主 batch loop 干净 resume。
-- **minerU fcntl.flock**：多个 bg 的 minerU 自动串行（不并发开两个 minerU）。
+- minerU 同时最多 1 个。
+- 跨进程 caption round 同时最多 1 个；round 内远程调用默认最多 4 个。
+- Phase-1 worker 同时最多 2 个，且按完整文件列表顺序取得 minerU。
+- Stage 2.3+ 跨书同时最多 1 个。
+- ProjectLock 不覆盖 OCR、caption、Stage 2.2 或空闲等待；single 与 batch 使用
+  相同边界。
+- durable spine reservation 跨 exit 101 保持 source owner，不允许 handoff
+  等待期换书。
+- Stage 2.4 保持并行，但每波未完成 handoff 不超过 `--parallel`；Stage 2.2 串行。
+- ConversationPending exit 101 不清理健康 detached worker；显式 pause/信号才清理。
 
 ## 相关
 
-- [[batch-digest-loop]] — batch 驱动循环、串行主干规则与坑
-- [[delegate-mode]] — conversation mode 的 agent 作答机制
-- [[conversation-mode-agent-workflow]] — 单书 ingest 的逐 stage 作答 cheat sheet
+- [[batch-digest-loop]] — batch 驱动与恢复
+- [[delegate-mode]] — conversation handoff
+- [[conversation-mode-agent-workflow]] — 单书逐阶段作答

@@ -16,27 +16,33 @@ calls a configured VLM provider.
 
 `ingest.py` has two built-in batch modes.
 
-### Mode 1: `--watch --drain` (Queue-Driven, Fire-and-Forget)
+### Mode 1: `--watch --drain` (Queue-Driven)
 
-Best for production / unattended runs. An external script (e.g. `wiki-monitor.sh`)
+Best for a persistent queue coordinator. An external script (e.g. `wiki-monitor.sh`)
 drops entries into `ingest-queue.json`. `ingest.py` watches the queue, processes
-each entry, and exits when the queue is empty.
+each entry, and exits when the queue is empty. Conversation-mode exit 101
+handoffs still require the calling agent; this is not a standalone text-LLM daemon.
 
 ```bash
 # Start the watcher — picks up entries from ingest-queue.json, exits when empty
+mkdir -p /tmp/codex-work/improved-wiki-batch
 nohup python3 "$SKILL_DIR/scripts/ingest.py" \
   --watch --drain \
   --parallel 4 \
-  > /tmp/ingest_watch.log 2>&1 &
+  > /tmp/codex-work/improved-wiki-batch/ingest_watch.log 2>&1 &
 
 # Monitor
-tail -f /tmp/ingest_watch.log
+tail -f /tmp/codex-work/improved-wiki-batch/ingest_watch.log
 ```
 
 Key options:
+
 - `--watch` — continuously re-scans `ingest-queue.json` (every 30s by default)
 - `--drain` — exit when the queue is empty (omit to loop forever)
-- `--parallel N` — max concurrent books for the wiki-independent PREFETCH only (Phase 0/1 + Stage 2.2; default: 4). The wiki-dependent spine (Stage 2.3→write) always runs one book at a time regardless of N.
+- `--parallel N` — batch concurrency ceiling. `N=1` uses one Phase-1 worker;
+  `N>=2` enables the two-stage OCR/caption prefetch. Stage 2.3→write remains one
+  book at a time. The same value is enforced as the Stage 2.4 prompt-wave ceiling
+  (`10 chunks, N=4 → 4+4+2`); Stage 2.2 remains serial.
 - `--poll-interval SECS` — override the 30s queue re-scan interval
 - `--max-retries N` — max attempts per queued entry before giving up (default: 3)
 
@@ -51,10 +57,10 @@ python3 "$SKILL_DIR/scripts/ingest.py" \
   --parallel 4
 ```
 
-This prefetches the wiki-independent stages of all matching PDFs concurrently
-(up to `--parallel` at once), then writes them one at a time, and exits when
-done. Dedup is automatic — `ingest.py` skips books that
-already have a source page in `wiki/sources/`.
+This runs up to two ordered detached Phase-1 workers: one book may use minerU
+while another uses the cross-process-limited caption slot. The main conversation
+advances Stage 2.2 and the Stage 2.3+ spine one book at a time. Dedup is
+automatic and uses the authoritative `ingested` marker.
 
 ## Key Points (All Modes)
 
@@ -67,21 +73,22 @@ already have a source page in `wiki/sources/`.
   `raw/` layout — check all subdirs.
 - **minerU is strictly serialized system-wide** — a cross-process file lock
   (`fcntl.flock` on `~/.cache/improved-wiki/.mineru.lock`) allows at most ONE
-  minerU instance, regardless of `--parallel` (2026-06-23; replaced the old
-  process-counter approach). `--parallel 4` is safe — it batches the
-  wiki-independent prefetch while minerU work still runs one book at a time.
-- **Per-project lock**: `ingest.py` uses a file lock (`.ingest-progress/<hash>.lock`);
-  multiple processes on the same project serialize automatically, and a stale
-  lock from a crashed run is auto-recovered ("Stale lock from pid=XXX — taking over").
-- **Batch parallelism rule**: only the wiki-independent PREFETCH (Phase 0/1 +
-  Stage 2.2) runs across books in parallel; the wiki-dependent spine
-  (Stage 2.3→write) runs one book at a time. Concurrency caps and the in-book
-  Stage 2.4 parallel exception (2026-07-09): `references/batch-parallel-prefetch.md`
-  (authoritative).
-- **Timeouts**: there is no per-book timeout. 3600s is the minerU **lock-acquisition**
-  timeout (`fcntl.flock`, waiting behind another book's OCR); each chunk's HTTP request
-  times out at 1200s with 3 retries (see `references/scanned-pdf-ocr-pipeline.md`).
-  Most books complete in 10-30 minutes.
+  minerU instance, regardless of `--parallel`. Caption rounds also have a
+  cross-process per-user flock; the round itself still uses four image-call threads.
+- **Per-project write lock**: `.llm-wiki/ingest.lock` is held only for the current
+  book's active Stage 2.3+ invocation. OCR, caption, Stage 2.2 and watch idle time do
+  not hold it. `.llm-wiki/spine-reservation.json` retains the same source as logical
+  owner across exit-101 handoffs, when the kernel lock necessarily drops.
+- **Batch parallelism rule**: automatic cross-book concurrency covers Phase 1.
+  Ordinary batch Stage 2.2 remains current-book serial because its chunks use a
+  rolling digest. Stage 2.4 is the parallel exception: independent chunk prompts
+  are emitted in bounded waves. Explicit next-book 2.2 prefetch is an advanced
+  separate flow.
+  See `references/batch-parallel-prefetch.md`.
+- **Timeouts**: worker health is heartbeat-driven (60s stale window by default);
+  there is no fixed two-hour worker deadline. A hard wall limit is optional via
+  `IMPROVED_WIKI_BG_EXTRACT_MAX_SECONDS`. minerU lock acquisition still times out
+  after 3600s; each chunk HTTP request times out at 1200s with retries.
 - **LLM model**: Text generation runs in conversation mode — the calling agent
   answers each LLM step with the current model. No `LLM_API_KEY` is needed for
   text gen. Image captioning (Stage 1.3) needs a `caption_provider` configured
@@ -93,13 +100,28 @@ already have a source page in `wiki/sources/`.
 
 ```bash
 # Recommended: queue-driven
+mkdir -p /tmp/codex-work/improved-wiki-batch
 nohup python3 "$SKILL_DIR/scripts/ingest.py" \
   --watch --drain --parallel 4 \
-  > /tmp/ingest_watch.log 2>&1 &
+  > /tmp/codex-work/improved-wiki-batch/ingest_watch.log 2>&1 &
 
 # Monitor
-tail -f /tmp/ingest_watch.log
+tail -f /tmp/codex-work/improved-wiki-batch/ingest_watch.log
 ```
+
+Pause/resume a direct batch from the project root:
+
+```bash
+python3 "$SKILL_DIR/scripts/ingest.py" --pause-batch
+python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch   # OCR/caption only
+python3 "$SKILL_DIR/scripts/ingest.py" --batch-status
+python3 "$SKILL_DIR/scripts/ingest.py" --resume-prefetch
+python3 "$SKILL_DIR/scripts/ingest.py" --resume-batch \
+  "raw/Book/A.pdf" "raw/Book/B.pdf"
+```
+
+Resume requires the complete, previously confirmed file list. Multi-file
+`--stop-after-stage` is rejected before OCR to prevent accidental OCR-only batches.
 
 ## Common ingest.py failure modes
 
@@ -107,7 +129,12 @@ tail -f /tmp/ingest_watch.log
 |---------|-----------|-------|-----|
 | Stage 2 verification | 1 | LLM didn't emit `wiki/sources/<title>.md` FILE block | Retry; check LLM model supports the prompt format |
 | minerU timeout | 1 | mineru lock wait > 3600s (another book's OCR holding the lock), or a chunk exhausted its 3×1200s HTTP retries | Re-run — completed chunks are cached (`scanned-pdf-ocr-pipeline.md`); don't kill the running OCR |
-| Stale lock | 1 (recovered) | Previous ingest crashed, `.ingest-progress/` lock file remains | `ingest.py` auto-recovers: "Stale lock from pid=XXX — taking over" |
+| Project write lock busy | 1 | Another Stage 2.3+ spine currently holds `.llm-wiki/ingest.lock` | Wait for that writer; do not delete the advisory lock file |
+| Full project ingest paused | 75 | `.llm-wiki/batch.pause` exists (also blocks a stale driver that resumes books one-by-one) | Re-run the confirmed full list with `--resume-batch` |
+| OCR/caption prefetch paused | 76 | `.llm-wiki/batch-prefetch.pause` exists and the next book still needs Phase 1 | Keep it paused, or clear with `--resume-prefetch` |
+| Logical spine reserved | 77 | Another source owns `spine-reservation.json` across a handoff/failure | Use `--batch-status`; resume the owner. Abandon only after checking partial writes |
+| Coordinator busy | 78 | Another live batch/watch invocation owns `batch-coordinator.lock` | Do not start a duplicate scheduler; wait for the active invocation to yield |
+| Background worker stalled | foreground cache recovery | PID died, terminal failure, or heartbeat expired | Inspect the recorded `log_file`; rerun resumes completed OCR/caption artifacts |
 | minerU hybrid OCR routing | 0 (normal) | 文本层薄/图表密集的 PDF | hybrid-engine `parse_method=auto` 按页自动判 txt vs VLM OCR，所有 PDF 统一走 minerU |
 
 ## When Display is Off
