@@ -47,6 +47,19 @@ Stage 2.7 query generation is retired. Review suggestions are handled by
 `process-reviews`; Graph remains a separate explicit command. The authoritative
 stage gates are in `references/ingest-stages-mandatory.md`.
 
+### Project schema contract
+
+- Require `<project>/schema.md`; its scoped `## Page Types` table is the
+  authoritative `frontmatter type → wiki directory` map.
+- Inject the semantic schema into Stage 2.2, 2.4, 2.6, 2.9, and 3.4 prompts,
+  matching NashSU. Exclude improved-wiki's machine-only raw naming YAML from
+  LLM context while still enforcing it at Stage 0.1.
+- Load optional `<project>/purpose.md` into the same prompts: schema defines
+  how the wiki is structured; purpose defines why the project exists.
+- Resolve schema-typed candidates through the parsed type map, never through an
+  LLM-supplied folder string. Auto-correct known type/directory mismatches at
+  write time rather than losing a valid page.
+
 ### Parallelism
 
 - Stage 2.2 is serial: chunk N+1 consumes chunk N's validated rolling digest.

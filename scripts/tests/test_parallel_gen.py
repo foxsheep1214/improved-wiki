@@ -13,8 +13,8 @@ Run:
     python3 scripts/tests/test_parallel_gen.py       # from skill root
 
 Covers:
-- ``_build_gen_inventory`` first-chunk-owns assignment, entities included,
-  blank names skipped.
+- ``_build_gen_inventory`` first-chunk-owns assignment, entities and
+  schema-typed candidates included, blank names skipped.
 - ``_other_chunk_slugs`` = all stems except those owned by i, sorted.
 - Determinism of the per-chunk other-slug list.
 - Unset env var → parallel-safe drain (the new default).
@@ -88,6 +88,64 @@ class TestBuildGenInventory(unittest.TestCase):
         inv = _ingest_chunks._build_gen_inventory(metas, analyses)
         self.assertEqual(inv["concept-one"], 0)
         self.assertEqual(inv["entity-two"], 1)
+
+    def test_authoritative_schema_candidates_included(self):
+        schema = """## Page Types
+
+| type | directory |
+|------|-----------|
+| concept | wiki/concepts/ |
+| finding | wiki/findings/ |
+"""
+        metas = [_meta(0), _meta(1), _meta(2)]
+        analyses = [
+            {
+                **_analysis(concepts=["Concept One"]),
+                "schema_typed_candidates": [{
+                    "type": "finding",
+                    "name": "Measured Result",
+                }],
+            },
+            {
+                **_analysis(),
+                "schema_typed_candidates": [{
+                    "type": "finding",
+                    "name": "Measured Result",
+                }],
+            },
+            {
+                **_analysis(),
+                "schema_typed_candidates": [{
+                    "type": "unknown",
+                    "name": "Do Not Inventory",
+                }],
+            },
+        ]
+        inv = _ingest_chunks._build_gen_inventory(metas, analyses, schema)
+        self.assertEqual(inv["measured-result"], 0)
+        self.assertNotIn("do-not-inventory", inv)
+
+    def test_schema_candidate_outranks_earlier_generic_page(self):
+        schema = """## Page Types
+
+| type | directory |
+|------|-----------|
+| concept | wiki/concepts/ |
+| finding | wiki/findings/ |
+"""
+        metas = [_meta(0), _meta(1)]
+        analyses = [
+            _analysis(concepts=["Measured Result"]),
+            {
+                **_analysis(),
+                "schema_typed_candidates": [{
+                    "type": "finding",
+                    "name": "Measured Result",
+                }],
+            },
+        ]
+        inv = _ingest_chunks._build_gen_inventory(metas, analyses, schema)
+        self.assertEqual(inv["measured-result"], 1)
 
     def test_blank_names_skipped(self):
         metas = [_meta(0)]

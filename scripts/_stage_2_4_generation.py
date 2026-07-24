@@ -10,10 +10,12 @@ from _core import (
     slugify,
 )
 from _schema import (
-    BASE_PAGE_DIRS,
     list_existing_slugs,
+    load_purpose_md,
     load_schema_md,
-    schema_folders,
+    parse_wiki_schema_routing,
+    schema_candidate_routes,
+    schema_prompt_text,
 )
 from _llm_api import (
     _is_retryable_exception,
@@ -23,7 +25,6 @@ from _llm_api import (
 from _parse import parse_file_blocks
 from _retry import call_with_retry
 from _stage_2_base import (
-    SCHEMA_NON_PAGE_DIRS,
     _stage_2_title_cjk_bigrams,
     _stage_2_title_words,
     file_block_slug,
@@ -218,36 +219,91 @@ def _collect_formulas_block(analyses: list[dict], cap: int = 60) -> str:
     )
 
 
-# Folders that may appear in schema.md but are not LLM-generated page types.
-# Shared constant lives in _stage_2_base.SCHEMA_NON_PAGE_DIRS (NashSU
-# schema-typed-candidates parity — used by Stage 2.2 analysis too).
-
-
 def _schema_routing_block(config: Config) -> str:
-    """NashSU schema-driven routing guidance.
-
-    When schema.md declares typed folders beyond the base page types, tell the LLM
-    it may route a page into the folder that fits best (a person → people/, a
-    method → methods/) instead of forcing everything into concepts/entities.
-    Empty when the schema adds no extra folders (so default projects see no noise).
-    """
+    """Inject NashSU's authoritative schema routing and optional purpose."""
     text = load_schema_md(config)
-    if not text.strip():
+    schema_context = schema_prompt_text(text)
+    purpose_context = load_purpose_md(config).strip()[:6000]
+    if not schema_context and not purpose_context:
         return ""
-    extra = schema_folders(text) - BASE_PAGE_DIRS - SCHEMA_NON_PAGE_DIRS
-    if not extra:
-        return ""
-    return (
-        "\n# Schema-Defined Folders (route pages here when they fit better) — NashSU schema parity\n"
-        "This project's schema.md defines extra typed folders. When a page clearly\n"
-        "belongs to one (e.g. a person → people/, a method → methods/, a decision →\n"
-        "decisions/), emit it as `---FILE:wiki/<folder>/<slug>.md---` and wikilink it\n"
-        "as `[[<folder>/<slug>]]`. Otherwise use concepts/ or entities/ as usual.\n"
-        f"Schema folders available: {', '.join(sorted(extra))}\n"
-        "<schema>\n"
-        f"{text.strip()[:1500]}\n"
-        "</schema>\n"
+
+    routing = parse_wiki_schema_routing(text)
+    route_lines = "\n".join(
+        f"- `{page_type}` → `wiki/{route}/`"
+        if route else f"- `{page_type}` → `wiki/`"
+        for page_type, route in sorted(routing.items())
     )
+    schema_block = (
+        "\n# Project Schema and Routing (AUTHORITATIVE)\n"
+        "<schema>\n"
+        f"{schema_context}\n"
+        "</schema>\n"
+        "Use this schema as the primary routing and frontmatter contract. Prefer a\n"
+        "schema-defined type over forcing content into entity/concept when a more\n"
+        "specific declared type genuinely fits. Every generated page's frontmatter\n"
+        "`type` MUST match its FILE directory. Do not invent schema-typed content\n"
+        "that the source does not support.\n"
+        f"Exact type→directory mapping:\n{route_lines}\n"
+    ) if schema_context else ""
+    purpose_block = (
+        "\n# Wiki Purpose\n"
+        "<purpose>\n"
+        f"{purpose_context}\n"
+        "</purpose>\n"
+        "Use the purpose to prioritize what matters; never let it override source\n"
+        "evidence or the schema routing contract.\n"
+    ) if purpose_context else ""
+    return schema_block + purpose_block
+
+
+def _schema_candidate_inventory(
+    analyses: list[dict],
+    config: Config,
+    existing_refs: dict,
+    generated_slugs: list[str],
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Normalize Stage 2.2 candidates against the authoritative type→dir map."""
+    routes = schema_candidate_routes(load_schema_md(config))
+    if not routes:
+        return [], []
+
+    lines: list[str] = []
+    slugs: list[tuple[str, str]] = []
+    seen_stems: set[str] = set()
+    generated = set(generated_slugs)
+    for analysis in analyses:
+        for cand in analysis.get("schema_typed_candidates", []) or []:
+            if not isinstance(cand, dict):
+                continue
+            name = str(cand.get("name", "")).strip()
+            cand_type = str(cand.get("type", "")).strip()
+            folder = routes.get(cand_type)
+            if not name or not folder:
+                continue
+            stem = slugify(name)
+            if not stem:
+                continue
+            full_slug = f"{folder}/{stem}"
+            if stem in seen_stems:
+                continue
+            seen_stems.add(stem)
+            if name in existing_refs and existing_refs[name]:
+                target = existing_refs[name][0]
+                lines.append(
+                    f"  - {name} → ALREADY COVERED by [[{target}]]: "
+                    f"do NOT generate; wikilink ONLY as [[{target}]]"
+                )
+            elif full_slug in generated or stem in generated:
+                lines.append(
+                    f"  - {name} (slug: {full_slug}) [ALREADY COVERED — SKIP]"
+                )
+            else:
+                rationale = str(cand.get("rationale", "")).strip()
+                lines.append(
+                    f"  - {name} (slug: {full_slug}) [{cand_type}]: {rationale}"
+                )
+                slugs.append((name, full_slug))
+    return lines, slugs
 
 
 def _stage_2_4_build_prompt(
@@ -276,6 +332,20 @@ def _stage_2_4_build_prompt(
         generated_slugs = []
     existing_refs = existing_refs or {}
 
+    # Resolve specific schema types before rendering generic concepts/entities.
+    # A same-name finding/methodology/thesis is one typed page, not a second
+    # generic page with the same stem.
+    schema_candidate_lines, schema_candidate_slugs = _schema_candidate_inventory(
+        [chunk_analysis], config, existing_refs, generated_slugs
+    )
+    schema_candidate_targets = {
+        target.rsplit("/", 1)[-1]: target
+        for _name, target in schema_candidate_slugs
+    }
+    schema_candidates_str = (
+        "\n".join(schema_candidate_lines[:40]) if schema_candidate_lines else "(none)"
+    )
+
     concept_lines = []
     concept_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
     concept_slug_stems: set[str] = set()  # for entity-dedup (Issue 4)
@@ -299,6 +369,12 @@ def _stage_2_4_build_prompt(
                     f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
                     f"do NOT generate a page; wikilink ONLY as [[{existing_slug}]] "
                     f"(never [[concepts/{slug}]])"
+                )
+            elif slug in schema_candidate_targets:
+                concept_lines.append(
+                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} "
+                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    "SKIP GENERIC CONCEPT]"
                 )
             elif slug in generated_slugs:
                 concept_lines.append(
@@ -332,6 +408,12 @@ def _stage_2_4_build_prompt(
                     f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
                     f"do NOT generate; wikilink ONLY as [[{existing_slug}]]"
                 )
+            elif slug in schema_candidate_targets:
+                entity_lines.append(
+                    f"  - {name} (slug: entities/{slug}): {sig} "
+                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    "SKIP GENERIC ENTITY]"
+                )
             elif slug in generated_slugs or slug in concept_slug_stems:
                 # Issue 4: a concept page for this slug already exists (this chunk
                 # or a prior one) — skip the duplicate entity page; wikilink to
@@ -356,39 +438,6 @@ def _stage_2_4_build_prompt(
     # 100→480 / 30→160 (2026-06-30) so realistic high-density chunks are never cut.
     concept_str = "\n".join(concept_lines[:480]) if concept_lines else "(none)"
     entity_str = "\n".join(entity_lines[:160]) if entity_lines else "(none)"
-
-    # NashSU parity: schema-typed candidates pre-identified by Stage 2.2.
-    # Surface them explicitly so generation routes a page into the candidate's
-    # folder instead of re-deriving the type from concepts/entities. Skip any
-    # whose slug is already covered (existing/prior-chunk) — wikilink only.
-    schema_candidate_slugs: list[tuple[str, str]] = []  # (name, folder/slug)
-    schema_candidate_lines: list[str] = []
-    for cand in chunk_analysis.get("schema_typed_candidates", []) or []:
-        if not isinstance(cand, dict):
-            continue
-        name = str(cand.get("name", "")).strip()
-        folder = str(cand.get("folder", "")).strip()
-        if not name or not folder:
-            continue
-        slug = slugify(name)
-        full_slug = f"{folder}/{slug}"
-        if name in existing_refs and existing_refs[name]:
-            schema_candidate_lines.append(
-                f"  - {name} → ALREADY COVERED by [[{existing_refs[name][0]}]]: "
-                f"do NOT generate; wikilink ONLY as [[{existing_refs[name][0]}]]"
-            )
-        elif full_slug in generated_slugs:
-            schema_candidate_lines.append(f"  - {name} (slug: {full_slug}) [ALREADY COVERED — SKIP]")
-        else:
-            cand_type = str(cand.get("type") or folder)
-            cand_rationale = str(cand.get("rationale", ""))
-            schema_candidate_lines.append(
-                f"  - {name} (slug: {full_slug}) [{cand_type}]: {cand_rationale}"
-            )
-            schema_candidate_slugs.append((name, full_slug))
-    schema_candidates_str = (
-        "\n".join(schema_candidate_lines[:40]) if schema_candidate_lines else "(none)"
-    )
 
     # Display only the most-recent window (NashSU-bounded); the full list is still
     # used for SKIP membership (above) and the Linkable list (below), so older
@@ -546,7 +595,7 @@ and a `type: concept` frontmatter like the others. Do NOT [[wikilink]] to any sl
 that is not either in the Linkable list or a page you generate in THIS response.
 
 # ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
-- Your FIRST line of output MUST be `---FILE:wiki/concepts/...`
+- Your FIRST line of output MUST start with `---FILE:wiki/`
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
 
 # [[wikilink]] Rules — STRICT
@@ -913,6 +962,18 @@ def _stage_2_4_build_all_prompt(
     existing_refs = existing_refs or {}
     existing_slugs = list_existing_slugs(config)
 
+    schema_candidate_lines, schema_candidate_slugs = _schema_candidate_inventory(
+        chunk_analyses, config, existing_refs, []
+    )
+    schema_candidate_targets = {
+        target.rsplit("/", 1)[-1]: target
+        for _name, target in schema_candidate_slugs
+    }
+    schema_candidates_str = (
+        "\n".join(schema_candidate_lines[:120])
+        if schema_candidate_lines else "(none)"
+    )
+
     seen_concept_slugs: set[str] = set()
     concept_lines: list[str] = []
     concept_slugs: list[tuple[str, str]] = []
@@ -937,6 +998,12 @@ def _stage_2_4_build_all_prompt(
                     f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
                     f"do NOT generate a page; wikilink ONLY as [[{existing_slug}]] "
                     f"(never [[concepts/{slug}]])"
+                )
+            elif slug in schema_candidate_targets:
+                concept_lines.append(
+                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} "
+                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    "SKIP GENERIC CONCEPT]"
                 )
             else:
                 concept_lines.append(f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}")
@@ -966,6 +1033,12 @@ def _stage_2_4_build_all_prompt(
                     f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
                     f"do NOT generate; wikilink ONLY as [[{existing_slug}]]"
                 )
+            elif slug in schema_candidate_targets:
+                entity_lines.append(
+                    f"  - {name} (slug: entities/{slug}): {sig} "
+                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    "SKIP GENERIC ENTITY]"
+                )
             elif slug in concept_slug_stems:
                 entity_lines.append(
                     f"  - {name} (slug: entities/{slug}): {sig} "
@@ -981,7 +1054,6 @@ def _stage_2_4_build_all_prompt(
     # in one prompt, so allow generous headroom. Bumped 200→800 / 60→200 (2026-06-30).
     concept_str = "\n".join(concept_lines[:800]) if concept_lines else "(none)"
     entity_str = "\n".join(entity_lines[:200]) if entity_lines else "(none)"
-
     # Must-link targets (this book's slugs, Stage 2.3 existing_refs, related
     # pages) are always kept; the background fill of other existing wiki pages
     # is bounded — ranked by relevance to this book when over the room, not
@@ -991,6 +1063,8 @@ def _stage_2_4_build_all_prompt(
     for _, s in concept_slugs:
         must_link.add(s)
     for _, s in entity_slugs:
+        must_link.add(s)
+    for _, s in schema_candidate_slugs:
         must_link.add(s)
     for slugs in existing_refs.values():
         for s in slugs:
@@ -1002,7 +1076,11 @@ def _stage_2_4_build_all_prompt(
     fill = sorted(s for s in set(existing_slugs) if s not in must_link)
     room = max(0, 300 - len(must_link))
     if len(fill) > room:
-        refs = [n for n, _s in concept_slugs] + [n for n, _s in entity_slugs]
+        refs = (
+            [n for n, _s in concept_slugs]
+            + [n for n, _s in entity_slugs]
+            + [n for n, _s in schema_candidate_slugs]
+        )
         fill = sorted(_rank_linkable_fill(fill, refs)[:room])
     linkable_list = sorted(must_link) + fill
     linkable_str = "\n".join(f"  - {s}" for s in linkable_list) if linkable_list else "(none)"
@@ -1079,6 +1157,10 @@ Chunks: {len(chunk_analyses)}
 # Entities found across ALL chunks (generate a page for key ones — skip ALREADY COVERED / DUPLICATE):
 {entity_str}
 {_ENTITY_RULES_SECTION}
+# Schema-typed pages found across ALL chunks (use the exact schema route and
+# frontmatter type; skip ALREADY COVERED):
+{schema_candidates_str}
+
 # Supplementary foundational pages (use sparingly)
 If the source clearly defines a foundational concept NOT in the lists above AND NOT
 in the Linkable pages list below, you MAY generate a page for it at a new
@@ -1087,7 +1169,7 @@ source actually explains — never for passing mentions. Do NOT [[wikilink]] to 
 slug that is not either in the Linkable list or a page you generate in THIS response.
 
 # ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
-- Your FIRST line of output MUST be `---FILE:wiki/concepts/...`
+- Your FIRST line of output MUST start with `---FILE:wiki/`
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
 
 # [[wikilink]] Rules — STRICT
@@ -1171,8 +1253,17 @@ def stage_2_4_generate_all(
     valid = [ca for ca in chunk_analyses if isinstance(ca, dict) and "error" not in ca]
     has_concepts = any(ca.get("concepts_found") for ca in valid)
     has_entities = any(ca.get("entities_found") for ca in valid)
-    if not has_concepts and not has_entities:
-        print("  [generate-all] no concepts or entities across all chunks — skipped")
+    candidate_routes = schema_candidate_routes(load_schema_md(config))
+    has_schema_candidates = any(
+        any(
+            isinstance(cand, dict)
+            and str(cand.get("type", "")).strip() in candidate_routes
+            for cand in (ca.get("schema_typed_candidates", []) or [])
+        )
+        for ca in valid
+    )
+    if not has_concepts and not has_entities and not has_schema_candidates:
+        print("  [generate-all] no concepts, entities, or schema-typed candidates — skipped")
         return [], [], None
 
     prompt = _stage_2_4_build_all_prompt(
@@ -1244,8 +1335,14 @@ def stage_2_4_generate_chunk(
     """
     concepts_n = len(analysis.get("concepts_found", []))
     entities_n = len(analysis.get("entities_found", []))
-    if concepts_n == 0 and entities_n == 0:
-        print(f"  [chunk {chunk_idx+1}] (no concepts or entities — skipped)")
+    candidate_routes = schema_candidate_routes(load_schema_md(config))
+    schema_candidates_n = sum(
+        1 for cand in (analysis.get("schema_typed_candidates", []) or [])
+        if isinstance(cand, dict)
+        and str(cand.get("type", "")).strip() in candidate_routes
+    )
+    if concepts_n == 0 and entities_n == 0 and schema_candidates_n == 0:
+        print(f"  [chunk {chunk_idx+1}] (no concepts, entities, or schema candidates — skipped)")
         return []
 
     prompt = _stage_2_4_build_prompt(
@@ -1259,14 +1356,16 @@ def stage_2_4_generate_chunk(
         try:
             t0 = time.time()
             if attempt == 0:
-                print(f"  [chunk {chunk_idx+1}] generating ({concepts_n}c/{entities_n}e)...",
+                print(f"  [chunk {chunk_idx+1}] generating "
+                      f"({concepts_n}c/{entities_n}e/{schema_candidates_n}s)...",
                       flush=True)
             response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens, label=f"chunk {chunk_idx+1} generation")
             blocks = parse_file_blocks(response)
             dt = time.time() - t0
             tag = f" (retry #{attempt})" if attempt > 0 else ""
             print(f"  [chunk {chunk_idx+1}] generate OK{tag} — "
-                  f"{concepts_n}c/{entities_n}e → {len(blocks)} blocks "
+                      f"{concepts_n}c/{entities_n}e/{schema_candidates_n}s → "
+                      f"{len(blocks)} blocks "
                   f"({len(response):,} chars, {stop_reason}) {dt:.0f}s")
             if verbose:
                 print(f"    response: {response[:500]}...")

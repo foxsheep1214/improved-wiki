@@ -17,11 +17,12 @@ mkdir -p $PROJECT/raw/{Book,Paper,Presentation}
 # mkdir -p $PROJECT/raw/{Datasheet,Applicationnote,Designexample,Standard,News}
 cd $PROJECT
 
-# 2. Copy the anchor files from the skill's templates/
-#    schema.md lives at the PROJECT ROOT; the 3 aggregate
+# 2. Copy the project contract + anchor files from the skill's templates/
+#    schema.md and purpose.md live at the PROJECT ROOT; the 3 aggregate
 #    pages (index/overview/log) live under wiki/.
 SKILL_DIR=~/.agents/skills/improved-wiki
 cp $SKILL_DIR/templates/schema.md    ./schema.md
+cp $SKILL_DIR/templates/purpose.md   ./purpose.md
 cp $SKILL_DIR/templates/index.md     ./wiki/index.md
 cp $SKILL_DIR/templates/log.md       ./wiki/log.md
 cp $SKILL_DIR/templates/overview.md  ./wiki/overview.md
@@ -122,8 +123,8 @@ After setup, the following should all be true:
 $SKILL_DIR/scripts/ingest.py raw/Book/X.pdf --dry-run
 # Expected: prints "DRY RUN: would process X" and "template: digest-book"
 
-# Check 2: the wiki anchor files exist
-test -f schema.md && test -f wiki/index.md && test -f wiki/log.md && test -f wiki/overview.md
+# Check 2: the project contract + wiki anchor files exist
+test -f schema.md && test -f purpose.md && test -f wiki/index.md && test -f wiki/log.md && test -f wiki/overview.md
 echo $?  # should be 0
 
 # Check 3: the cache file is created/updated after the first ingest

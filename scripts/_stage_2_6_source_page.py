@@ -8,6 +8,7 @@ from pathlib import Path
 from _config import Config
 from _llm_api import call_anthropic_protocol
 from _language import build_language_directive
+from _schema import load_purpose_md, load_schema_md, schema_prompt_text
 from _stage_2_4_generation import _rank_linkable_fill
 
 
@@ -527,6 +528,26 @@ Which wiki pages should be created or updated based on this source? What should 
 
     language_sample = source_context or json.dumps(global_digest, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
+    schema_context = schema_prompt_text(load_schema_md(config))
+    purpose_context = load_purpose_md(config).strip()[:6000]
+    project_context_section = ""
+    if schema_context:
+        project_context_section += (
+            "\n# Project Schema and Routing (AUTHORITATIVE)\n"
+            "<schema>\n"
+            f"{schema_context}\n"
+            "</schema>\n"
+            "The source page path and frontmatter must comply with this schema.\n"
+        )
+    if purpose_context:
+        project_context_section += (
+            "\n# Wiki Purpose\n"
+            "<purpose>\n"
+            f"{purpose_context}\n"
+            "</purpose>\n"
+            "Use this purpose to prioritize the summary without omitting material "
+            "source evidence.\n"
+        )
     # Full-book claims from the per-chunk analyses (fix 2026-07-02): the 2.1
     # digest is built from a front-weighted sample, so its key_claims skew to
     # the opening chapters (observed live: a 9-chapter book's Main Arguments
@@ -557,7 +578,7 @@ Which wiki pages should be created or updated based on this source? What should 
 # Role
 You are writing a **source page** for a Karpathy-pattern wiki knowledge base.
 This page will be the authoritative entry for a {source_kind} in the wiki.
-{template_section}{linkable_rule}{source_section}{assoc_section}{generated_pages_section}
+{template_section}{project_context_section}{linkable_rule}{source_section}{assoc_section}{generated_pages_section}
 # {info_header}
 ```yaml
 {digest_str}

@@ -8,6 +8,7 @@ from _config import Config
 from _core import canonical_source_path
 from _llm_api import call_anthropic_protocol
 from _parse import parse_file_blocks
+from _schema import load_purpose_md, load_schema_md, schema_prompt_text
 from _stage_2_base import _stage_2_frontmatter_title
 from _language import build_language_directive, get_output_language
 
@@ -109,6 +110,23 @@ def _stage_2_9_build_prompt_in_source(
 
     language_sample = source_context or concepts_with_desc
     language_directive = build_language_directive(language_sample)
+    schema_context = schema_prompt_text(load_schema_md(config))
+    purpose_context = load_purpose_md(config).strip()[:6000]
+    project_context = ""
+    if schema_context:
+        project_context += (
+            "\n# Project Schema and Routing (AUTHORITATIVE)\n"
+            "<schema>\n"
+            f"{schema_context}\n"
+            "</schema>\n"
+        )
+    if purpose_context:
+        project_context += (
+            "\n# Wiki Purpose\n"
+            "<purpose>\n"
+            f"{purpose_context}\n"
+            "</purpose>\n"
+        )
     h_why, h_table, h_guide, h_see = _stage_2_9_headings(language_sample)
     return f"""{language_directive}
 
@@ -117,6 +135,7 @@ You are maintaining a wiki knowledge base. Review the concepts just generated fo
 
 # Source
 {file_path.stem} ({raw_rel})
+{project_context}
 
 # Generated Concepts
 {concepts_with_desc}

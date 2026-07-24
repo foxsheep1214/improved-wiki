@@ -69,23 +69,22 @@ BASE_PAGE_DIRS = {
 
 
 def load_schema_md(config: Config) -> str:
-    for path in (config.wiki_root / "schema.md", config.wiki_dir / "schema.md"):
+    roots = [
+        root
+        for root in (
+            getattr(config, "wiki_root", None),
+            getattr(config, "wiki_dir", None),
+        )
+        if isinstance(root, Path)
+    ]
+    for root in roots:
+        path = root / "schema.md"
         try:
             if path.exists():
                 return path.read_text(encoding="utf-8")
         except OSError:
             pass
     return ""
-
-
-def schema_folders(schema_text: str) -> set[str]:
-    """Return folder names declared as ``wiki/<folder>`` in schema text."""
-    return set(
-        re.findall(
-            r"wiki/([a-z0-9][a-z0-9_-]*)/?(?!\.)",
-            schema_text or "",
-        )
-    )
 
 
 BASE_TYPE_TO_DIR = {
@@ -101,6 +100,22 @@ BASE_TYPE_TO_DIR = {
 }
 
 _SCHEMA_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]*$", re.IGNORECASE)
+_SCHEMA_PROMPT_MAX_CHARS = 12_000
+
+# NashSU's automatic ingest owns these page kinds directly or through a
+# dedicated pipeline stage.  They should remain available in the authoritative
+# schema context, but Stage 2.2 must not re-propose them as custom typed pages:
+# query pages are user/research initiated, comparisons have Stage 2.9, and
+# synthesis is cross-source work rather than a per-source artifact.
+_INGEST_MANAGED_SCHEMA_TYPES = {
+    "source",
+    "entity",
+    "concept",
+    "query",
+    "comparison",
+    "synthesis",
+    "overview",
+}
 
 
 def parse_wiki_schema_routing(schema_text: str) -> dict[str, str]:
@@ -141,6 +156,80 @@ def parse_wiki_schema_routing(schema_text: str) -> dict[str, str]:
             continue
         type_dirs[page_type] = bare
     return type_dirs
+
+
+def schema_folders(schema_text: str) -> set[str]:
+    """Return top-level folders declared by the ``Page Types`` table.
+
+    This intentionally delegates to the scoped, structured parser instead of
+    regex-scanning the whole document.  Prose such as ``wiki/index.md`` and
+    ``wiki/log.md`` is not a page-type declaration; whole-text regex matching
+    previously backtracked into those filenames and leaked phantom ``inde`` /
+    ``lo`` folders into prompts and the writer allow-list.
+    """
+    folders: set[str] = set()
+    for route in parse_wiki_schema_routing(schema_text).values():
+        if route:
+            folders.add(route.split("/", 1)[0])
+    return folders
+
+
+def schema_candidate_routes(schema_text: str) -> dict[str, str]:
+    """Return schema types eligible for source-grounded typed-page generation."""
+    return {
+        page_type: route
+        for page_type, route in parse_wiki_schema_routing(schema_text).items()
+        if route and page_type not in _INGEST_MANAGED_SCHEMA_TYPES
+    }
+
+
+def schema_prompt_text(
+    schema_text: str,
+    max_chars: int = _SCHEMA_PROMPT_MAX_CHARS,
+) -> str:
+    """Return NashSU-style semantic schema context for LLM prompts.
+
+    improved-wiki stores its deterministic raw-file naming gate in the same
+    file under ``Machine-Readable Naming Rules``.  NashSU schemas do not carry
+    that implementation block, so omit it from LLM context while preserving
+    Page Types, naming/frontmatter guidance, cross-reference policy, and
+    research conventions. The 12K safety cap is above the bundled and current
+    project schemas, so their complete semantic contract reaches the model
+    while an accidentally enormous schema cannot dominate every prompt.
+    """
+    if not schema_text:
+        return ""
+    kept: list[str] = []
+    for line in schema_text.splitlines():
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*#*$", line.strip())
+        if match and re.match(
+            r"^machine[- ]readable\s+naming\s+rules$",
+            match.group(2).strip(),
+            re.IGNORECASE,
+        ):
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()[:max_chars].rstrip()
+
+
+def load_purpose_md(config: Config) -> str:
+    """Load optional NashSU-style project purpose (root first, legacy fallback)."""
+    roots = [
+        root
+        for root in (
+            getattr(config, "wiki_root", None),
+            getattr(config, "wiki_dir", None),
+        )
+        if isinstance(root, Path)
+    ]
+    for root in roots:
+        path = root / "purpose.md"
+        try:
+            if path.exists():
+                return path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    return ""
 
 
 def schema_route_dir(
@@ -214,9 +303,12 @@ __all__ = [
     "BASE_TYPE_TO_DIR",
     "is_safe_ingest_path",
     "list_existing_slugs",
+    "load_purpose_md",
     "load_schema_md",
     "parse_wiki_schema_routing",
+    "schema_candidate_routes",
     "schema_folders",
+    "schema_prompt_text",
     "schema_route_dir",
     "source_slug_from_raw_path",
 ]

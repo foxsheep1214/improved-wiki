@@ -12,6 +12,7 @@ from _retry import call_with_retry
 from _page_ref import PageRef, PageRefError
 from _paths import atomic_write
 from _review_utils import review_id_for, resolve_review_path
+from _schema import load_purpose_md, load_schema_md, schema_prompt_text
 
 
 _REVIEW_TYPES = {
@@ -320,16 +321,14 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
         if len(existing_pages) >= 40:
             break
 
-    schema_text = ""
-    # schema.md lives at the project root (NashSU), not in wiki/.
-    schema_path = config.wiki_root / "schema.md"
-    if not schema_path.exists():
-        schema_path = config.wiki_dir / "schema.md"  # back-compat: legacy wiki/ location
-    if schema_path.exists():
-        schema_text = schema_path.read_text(encoding="utf-8")[:2000]
+    schema_text = schema_prompt_text(load_schema_md(config))
+    purpose_text = load_purpose_md(config).strip()[:6000]
 
     user_content = f"""# schema.md
 {schema_text}
+
+# purpose.md
+{purpose_text}
 
 # Newly generated pages (from {raw_file.stem})
 {chr(10).join(new_pages)}

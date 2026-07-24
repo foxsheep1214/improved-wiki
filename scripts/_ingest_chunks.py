@@ -23,7 +23,11 @@ from _progress import (
     save_progress,
     delete_progress_keys,
 )
-from _schema import list_existing_slugs
+from _schema import (
+    list_existing_slugs,
+    load_schema_md,
+    schema_candidate_routes,
+)
 from _stage_2_base import file_block_slug
 from _stage_2_analyze import (
     ChunkAnalysisValidationError,
@@ -300,19 +304,59 @@ def _analyze_all_chunks(
         print(f"  [analyze] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
     return chunk_analyses, accumulated_digest
 
-def _build_gen_inventory(chunk_meta: list, chunk_analyses: list) -> dict[str, int]:
+def _build_gen_inventory(
+    chunk_meta: list,
+    chunk_analyses: list,
+    schema_text: str = "",
+) -> dict[str, int]:
     """Eager slug→owner-chunk inventory for the parallel-gen path.
 
-    Every concept/entity slug is DETERMINISTIC: ``slug = slugify(name)`` where
-    ``name`` is taken from the (cached, stable) chunk analyses. So the canonical
-    slug of every page is computable BEFORE generation. Returns a flat
-    ``slug_stem -> owner_chunk_index`` map where the owner is the FIRST chunk
-    (in chunk order) that lists that name. Concepts and entities share one flat
-    map, matching how the serial loop mixes both kinds of stems into
-    ``generated_slugs``. Blank names are skipped.
+    Every concept/entity/schema-candidate slug is DETERMINISTIC:
+    ``slug = slugify(name)`` where ``name`` is taken from the (cached, stable)
+    chunk analyses. So the canonical slug of every page is computable BEFORE
+    generation. Returns a flat ``slug_stem -> owner_chunk_index`` map. An
+    eligible schema-specific candidate takes precedence over a generic
+    concept/entity with the same stem; within each tier the FIRST chunk wins.
+    All page types share one flat map, matching how the serial loop mixes
+    produced FILE stems into ``generated_slugs``. Schema candidates are
+    included only when their type is an eligible route in the authoritative
+    Page Types table. Blank names are skipped.
     """
     _assert_chunk_count_alignment(chunk_meta, chunk_analyses)
+    candidate_routes = schema_candidate_routes(schema_text)
     inventory: dict[str, int] = {}
+
+    # Schema-specific types win over the generic concept/entity buckets even
+    # when the generic mention occurs in an earlier chunk. This mirrors the
+    # generation contract ("prefer the more specific declared type") and keeps
+    # one subject from becoming both concepts/foo and findings/foo.
+    for meta, analysis in zip(chunk_meta, chunk_analyses):
+        i = meta[0]
+        if not isinstance(analysis, dict):
+            continue
+        candidates = analysis.get("schema_typed_candidates", [])
+        if not isinstance(candidates, list):
+            raise RuntimeError(
+                "[Stage 2.4] Unvalidated Stage 2.2 field "
+                "schema_typed_candidates: "
+                f"{type(candidates).__name__}. Re-run Stage 2.2.")
+        for item in candidates:
+            if not isinstance(item, dict):
+                raise RuntimeError(
+                    "[Stage 2.4] Unvalidated Stage 2.2 schema candidate: "
+                    f"{type(item).__name__}. Re-run Stage 2.2.")
+            name = item.get("name", "")
+            candidate_type = item.get("type", "")
+            if (
+                not isinstance(name, str)
+                or not isinstance(candidate_type, str)
+                or candidate_type not in candidate_routes
+            ):
+                continue
+            stem = slugify(name)
+            if stem and stem not in inventory:  # first candidate chunk owns
+                inventory[stem] = i
+
     for meta, analysis in zip(chunk_meta, chunk_analyses):
         i = meta[0]
         if not isinstance(analysis, dict):
@@ -442,10 +486,10 @@ def _generate_all_chunks_parallel(
     """Eager-inventory + bounded-drain variant of >1-chunk generation.
 
     The serial path forces order by feeding each chunk the slugs PRODUCED by
-    prior chunks. Here every concept/entity slug is computed up front from the
-    cached analyses (``_build_gen_inventory``), so each chunk can be told to
-    skip+link the concepts owned by OTHER chunks independent of execution order
-    (``_other_chunk_slugs``, sorted → stable cache key).
+    prior chunks. Here every concept/entity/schema-candidate slug is computed
+    up front from the cached analyses (``_build_gen_inventory``), so each chunk
+    can be told to skip+link the pages owned by OTHER chunks independent of
+    execution order (``_other_chunk_slugs``, sorted → stable cache key).
 
     Bounded drain: in conversation mode an uncached prompt raises
     ``ConversationPending`` AFTER writing its prompt .md. We catch it per chunk
@@ -456,7 +500,19 @@ def _generate_all_chunks_parallel(
     all-at-once behavior.
     """
     _assert_chunk_count_alignment(chunk_meta, chunk_analyses)
-    inventory = _build_gen_inventory(chunk_meta, chunk_analyses)
+    # Some programmatic callers/tests intentionally provide a minimal config
+    # carrying only the handoff limit. Treat that as a project with no schema;
+    # a real Config always has both path attributes.
+    schema_text = (
+        load_schema_md(config)
+        if hasattr(config, "wiki_root") and hasattr(config, "wiki_dir")
+        else ""
+    )
+    inventory = _build_gen_inventory(
+        chunk_meta,
+        chunk_analyses,
+        schema_text,
+    )
     all_file_blocks: list = []
     generated_slugs: list = []
     pending = 0

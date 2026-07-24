@@ -97,6 +97,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 2.2 · Chunk Analysis
 - **作用**：对源文本切块分析。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`source_quotes`/`formulas`/`connections_to_existing_wiki`/`schema_typed_candidates`/`updated_global_digest`。
+- **Schema/Purpose 上下文（NashSU 0.6.5 parity）**：把根目录
+  `schema.md` 的语义部分作为 AUTHORITATIVE 路由/Frontmatter 契约注入每个
+  chunk；机器命名 YAML 仅供 Stage 0.1，不进入 LLM 上下文。可选
+  `purpose.md` 同时注入，用于内容优先级而非改写事实。候选类型来自结构化
+  `type→dir` 表，排除 query/comparison/synthesis 等已有专门生命周期的类型。
 - **NashSU 对齐（2026-07-08）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 2.4/2.6/2.9。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），首 chunk 建立 book_meta+outline。
 - **NashSU 对齐 · digest 传递量与颗粒度（2026-07-09 用户裁定）**：chunk→chunk 传递的 digest 是**紧凑连续性台账，不是档案**——对齐 NashSU `ingest.ts` 的 `LONG_SOURCE_DIGEST_MAX = 15_000` 固定上限（`_stage_2_analyze.py::_DIGEST_PROMPT_CAP`，刻意**不**随模型 context 缩放；chunk 大小才缩放）+ "compact document-level digest" 指令。规则：先前所有 concept/entity 的**名字必须存活**（供后续 chunk 去重/关联），但每条压成一行短语，禁止逐字累积完整定义/key_details。详细内容不经 digest 传递——每个 chunk 的完整分析（concepts_found/claims/formulas）单独持久化在 `chunk_analyses`，2.4 逐 chunk 生成用各自 chunk 的全量分析，2.6 的 Main Arguments 用全书 `chunk_claims`、Key Concepts/Entities 清单用 2.4 实际生成的 slug 全集，均不依赖 digest 的详细度。此前 6K→24K→动态 target_chars 三版上限均为该裁定之前的过渡方案，已废除。
 - **per-handoff subagent 隔离**：每 chunk fresh subagent 答单 chunk（7/8 事故政策；当晚扩展为**所有** LLM handoff 均派 fresh subagent、主对话只编排，见 `delegate-mode.md` L4）。
@@ -104,7 +109,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：`stages.chunks_analyzed ≥ 1`；2.2 完成后 `_verify_stage_2_1_digest` 校验滚动最终 digest 5 字段（`not analyze_only` 时）。
 
 ### Stage 2.4 · Generation（single-pass pipeline）
-- **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再逐 chunk 生成概念/实体页（源锚定；≤1 chunk 走单发）。**不是** analyze→generate 逐 chunk 交错——全部分析在前，生成在后（2.3 夹在中间，需要全量分析结果）。默认生成 source/concept/entity；若 `schema.md` 声明了额外 typed 文件夹（NashSU schema 驱动路由），LLM 可把贴切的页路由进去（人物→people/、方法→methods/ 等），写盘阶段会接受这些 schema 文件夹。
+- **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再逐 chunk 生成概念/实体/项目 schema typed 页（源锚定；≤1 chunk 走单发）。**不是** analyze→generate 逐 chunk 交错——全部分析在前，生成在后（2.3 夹在中间，需要全量分析结果）。完整语义 schema 以 AUTHORITATIVE 形式注入；每个 `schema_typed_candidate` 在生成前按结构化 `type→dir` 重新解析，忽略 LLM 自报的 folder，且单 chunk/all-chunks 路径都必须生成候选页。写盘阶段继续对已知 type/目录不一致做无损移动。
 - **并行生成（2026-07-09 默认开启；2026-07-23 加并发上限）**：多 chunk 时用预计算 slug 清单（`_build_gen_inventory`，slug = slugify(name)，取自已缓存的 2.2 分析）取代"chunk N+1 靠 chunk N 实际产出的 slug 去重"——去重是确定性引用查表，不是像 2.2 rolling digest 那样的内容依赖，NashSU 本身也不对生成分 chunk（一次整书调用），没有"必须串行"的先例要对齐。一次 ingest.py 调用最多吐出 `--parallel N` 个仍缺答案的 generation prompt；主对话并发派该波的 fresh sub-agent，写回后 re-invoke 进入下一波（10 chunks、N=4 → 4+4+2）。`N=1` 才显式串行，N≥剩余 chunk 数仍一次全发。选项退出：`IMPROVED_WIKI_PARALLEL_GEN=0`/`false`/`no`/`off` 回退旧的严格串行累积路径（排查回归时用）。
 - **子步骤（生成前）· 增量关联验证**：`stage_2_3_resolve_proposed_connections` 拿 2.2 chunk 分析自报的 `connections_to_existing_wiki` 去磁盘验证（确认被引用的 concept/entity/source 页真实存在），产出 verified `incremental_associations` 作为 2.4 生成的 Linkable pages 列表——只允许 LLM wikilink 到真实存在的页面，防止幻觉链接。wiki 为空时跳过。
 - **子步骤（生成后收尾）· 源内概念去重**（原 Stage 2.5，已并入 2.4）：对同一本书内部概念去重合并（防同名异义重复页）。**embedding 语义初筛**（cosine ≥0.82，复用 `_dedup_embedding.candidate_pairs`，取代旧的词级 Jaccard，能抓跨语言/同义重复如 傅里叶变换 vs Fourier transform）+ LLM 逐组确认，失败保守不合并。**无回退**：embedding stack 不可用则 `raise` 暂停（不退回 Jaccard）。跳过条件：单 chunk 书。go/no-go：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。

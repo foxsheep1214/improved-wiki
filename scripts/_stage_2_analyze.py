@@ -9,10 +9,11 @@ from pathlib import Path
 from _config import Config
 from _core import record_rate_limit as _record_rate_limit
 from _schema import (
-    BASE_PAGE_DIRS,
     list_existing_slugs,
+    load_purpose_md,
     load_schema_md,
-    schema_folders,
+    schema_candidate_routes,
+    schema_prompt_text,
 )
 from _llm_api import (
     _is_retryable_exception,
@@ -21,7 +22,6 @@ from _llm_api import (
 )
 from _parse import parse_yaml_block
 from _stage_2_base import (
-    SCHEMA_NON_PAGE_DIRS,
     _stage_2_title_cjk_bigrams,
     _stage_2_title_words,
 )
@@ -365,29 +365,39 @@ The source is a **{file_path.parent.name}** document. Follow these type-specific
 
 
 def _stage_2_2_schema_types_block(config: Config) -> str:
-    """NashSU parity — tell Stage 2.2 which schema-defined page types
-    (beyond entity/concept) this project supports, so the analysis can flag
-    schema-typed candidates for the generation stage to route.
-
-    Empty for default projects (schema.md absent or no extra folders) so the
-    heavily-tuned book-ingest prompt sees zero noise.
-    """
+    """Inject authoritative NashSU-style schema and optional project purpose."""
     text = load_schema_md(config)
-    if not text.strip():
+    schema_context = schema_prompt_text(text)
+    purpose_context = load_purpose_md(config).strip()[:6000]
+    if not schema_context and not purpose_context:
         return ""
-    extra = schema_folders(text) - BASE_PAGE_DIRS - SCHEMA_NON_PAGE_DIRS
-    if not extra:
-        return ""
-    return (
-        "\n# Schema-Defined Page Types (NashSU parity)\n"
-        "This project's schema.md defines extra typed page types beyond entity/concept. "
-        "When THIS chunk genuinely contains content fitting one of these types, record it "
-        "under `schema_typed_candidates` below so the generation stage can route a page "
-        "into the matching folder. Use a type ONLY when the source actually supports it; "
-        "NEVER invent goals, habits, journal entries, decisions, or other user-authored "
-        "records that are not present in the source.\n"
-        f"Available schema types: {', '.join(sorted(extra))}\n"
-    )
+
+    routes = schema_candidate_routes(text)
+    route_lines = ", ".join(
+        f"{page_type} → wiki/{route}/"
+        for page_type, route in sorted(routes.items())
+    ) or "(none — generate only the pipeline-managed source/entity/concept pages)"
+    schema_block = (
+        "\n# Project Schema and Routing (AUTHORITATIVE)\n"
+        "<schema>\n"
+        f"{schema_context}\n"
+        "</schema>\n"
+        "Treat the Page Types table as the primary routing and frontmatter contract. "
+        "For schema-typed candidates, `type` and `folder` MUST use the exact mapping "
+        "below in the `schema_typed_candidates` output field. Use a typed page only "
+        "when THIS source genuinely supports it; NEVER invent goals, habits, journal "
+        "entries, decisions, findings, or hypotheses.\n"
+        f"Eligible source-grounded schema types: {route_lines}\n"
+    ) if schema_context else ""
+    purpose_block = (
+        "\n# Wiki Purpose\n"
+        "<purpose>\n"
+        f"{purpose_context}\n"
+        "</purpose>\n"
+        "Use the purpose to prioritize relevant material; it never overrides source "
+        "evidence or the schema's routing contract.\n"
+    ) if purpose_context else ""
+    return schema_block + purpose_block
 
 
 def _stage_2_2_granularity_block(accumulated_digest) -> str:
@@ -623,12 +633,11 @@ Analyze THIS CHUNK of the book. Extract:
    claims / formulas above); do NOT duplicate it here. Target well under
    15,000 characters — anything beyond is hard-truncated before the next
    chunk sees it.
-6. **Schema-typed page candidates** — if the project schema defines page types
-   beyond entity/concept (e.g. finding, decision, methodology) AND this chunk
-   genuinely contains matching content, note it for the generation stage. Use a
-   schema-defined type ONLY when the source actually supports it; NEVER invent
-   goals, habits, journal entries, decisions, or other user-authored records
-   that are not present in the source.
+6. **Schema-typed page candidates** — use only the eligible type→directory
+   mappings in the authoritative schema block above (e.g. finding, decision,
+   methodology), and only when this chunk genuinely contains matching content.
+   NEVER invent goals, habits, journal entries, decisions, findings, hypotheses,
+   or other records that are not present in the source.
 
 # Output (YAML only, in ```yaml block)
 ```yaml
@@ -719,11 +728,10 @@ connections_to_existing_wiki:
   - existing_page: "..."
     relationship: "extends" | "contrasts" | "applies" | "cites"
 
-# Schema-typed page candidates (NashSU parity). ONLY when the project
-# schema defines extra types AND this chunk genuinely contains matching content.
-# `type` MUST be one of the schema types listed above. Leave empty (`[]`) when
-# the schema adds no types or this chunk has no matching content. NEVER invent
-# goals/habits/journal/decisions not present in the source.
+# Schema-typed page candidates (NashSU parity). ONLY use eligible mappings
+# listed in the authoritative schema block, and only when this chunk genuinely
+# contains matching content. Leave empty (`[]`) when no eligible type fits.
+# NEVER invent goals/habits/journal/decisions/findings/hypotheses.
 schema_typed_candidates:
   - type: "finding" | "decision" | "methodology" | "..."   # a schema-declared type
     name: "..."        # short specific kebab-case-friendly name (3-6 words)

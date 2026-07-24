@@ -123,7 +123,7 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
             cfg.wiki_root.mkdir(parents=True, exist_ok=True)
             # schema.md declares an extra typed folder beyond the base set.
             (cfg.wiki_root / "schema.md").write_text(
-                "# Schema\n| type | directory |\n|--|--|\n"
+                "# Schema\n\n## Page Types\n\n| type | directory |\n|--|--|\n"
                 "| person | wiki/people/ |\n| concept | wiki/concepts |\n",
                 encoding="utf-8")
             stem = "Some Book"

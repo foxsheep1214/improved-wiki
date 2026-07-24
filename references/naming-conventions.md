@@ -7,7 +7,7 @@
 
 ## 1. 目录结构
 
-### 1.1 wiki/ 子目录（NashSU 9 种 page type）
+### 1.1 wiki/ 子目录（NashSU 基础类型 + Research 模板类型）
 
 ```
 wiki/
@@ -33,16 +33,28 @@ wiki/
 
 # 项目根（wiki/ 之外）：
 <project>/schema.md  # page type → directory 映射；放在根目录，不进 wiki/ 扫描
+<project>/purpose.md # 可选；项目目标/范围，与 schema 一同注入 LLM 上下文
 ```
 
-**Schema 驱动路由（NashSU parity, 2026-06-28）**：上面 9 种是**基础** page type，始终可用。`schema.md` 还可以声明**额外的 typed 文件夹**（如 `wiki/people/`、`wiki/methods/`、`wiki/decisions/`）。这些额外文件夹会：(1) 被注入 Stage 2.4 生成提示词，告诉 LLM "一个人物 → people/、一个方法 → methods/，否则用 concepts/entities"（`_schema_routing_block`）；(2) 被写盘阶段接受而非丢弃（`_VALID_SUBDIRS = BASE_PAGE_DIRS ∪ schema_folders(schema.md)`）。非 schema 声明的文件夹仍走 auto-correct/drop（拼写错误兜底）。基础 9 种之外无额外文件夹时，提示词不注入（默认项目无噪音）。
+**Schema 驱动路由（NashSU 0.6.5 parity）**：NashSU 通用模板的基础类型是
+`entity/concept/source/query/comparison/synthesis/overview`；Research 模板再声明
+`thesis/methodology/finding`。improved-wiki 的兼容常量仍允许这些历史目录，但项目
+`schema.md` 的 `## Page Types` 表才是权威类型映射。完整的语义 schema（排除
+improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/2.6/2.9/3.4；可选
+`purpose.md` 同时注入。Stage 2.2 只把非 pipeline-managed 类型
+（如 finding/methodology/person/decision）作为 `schema_typed_candidates`，并在
+Stage 2.4 按解析后的 type→dir 重新裁决，绝不信任 LLM 自报 folder。
 
-**来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页，均在 wiki/ 下）；`ingest.ts:1830/1839/1840`（schema-defined typed pages 路由）；`create-project-dialog.tsx`（schema.md 写入项目根 `${pp}/schema.md`）。
+**来源**：NashSU 0.6.5 `templates.ts`（通用/Research 场景 schema）、
+`wiki-schema.ts`（Page Types 结构化解析与路由校验）、`ingest.ts`
+（analysis/generation 全 schema 注入）。
 
 **entity `role:` 字段——已删除，无替代轴**：NashSU 没有 entity `role:` frontmatter 字段（`wiki-schema.ts` 的 frontmatter 是开放的 `Record<string,unknown>`）。improved-wiki 曾自造一个封闭集 `role:` 轴（person/organization/system/standard/model/device），已从生成提示词、Stage 2.2 analyze YAML、`graph.py` 的 by-role 配色模式、以及 invalid-role lint 检查里全部移除。人物/机构/系统的区分**只**靠 schema.md 声明的 typed 文件夹，没有其它机制（封闭集或开放集都没有）。
 
 **Schema 路由——两层机制，同时生效（不是新旧替换关系）**：
-1. **Accept-list 门禁**（上面已述的机制）：`_core.py` 的 `BASE_PAGE_DIRS` + `load_schema_md()` + `schema_folders()`（对全文做宽松正则扫描）喂给 `_ingest_write.py` 的 `_VALID_SUBDIRS`——写盘时第一道过滤，判断 FILE block 目标目录是否可接受（非 schema 文件夹仍走拼写纠错兜底）。
+1. **Accept-list 门禁**：`schema_folders()` 只消费 `parse_wiki_schema_routing()`
+   对 `## Page Types` 表的结构化结果，再与兼容基础目录合并。禁止全文正则扫描；
+   `wiki/index.md`/`wiki/log.md` 等正文提及不能泄漏为 phantom folder。
 2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_1_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
 
 两层在同一次写盘中都跑：第 1 层管"这个目录能不能收"，第 2 层管"具体该放哪个目录"。**与 NashSU 的刻意分歧**：NashSU 路由不上就丢弃该页；improved-wiki 自动纠正、把页面挪到正确目录（不丢数据，符合 no-silent-fallback 策略）。
@@ -77,6 +89,8 @@ raw/
 | `synthesis` | `synthesis/` | 恒等 |
 | `finding` | `findings/` | 恒等 |
 | `thesis` | `thesis/` | 恒等 |
+| `methodology` | `methodology/` | 恒等 |
+| `overview` | `wiki/` 根 | 聚合页 |
 
 **来源**：`wiki-page-types.ts:11-21`。
 
@@ -421,6 +435,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | 项目 | NashSU 原生 | improved-wiki | 说明 |
 |------|------------|---------------|------|
 | Raw 布局 | `raw/sources/<type>/<file>` | `raw/<type>/<任意子目录>/<file>` | 刻意设计，人类友好 |
+| Raw 命名门禁 | schema 中为自然语言约定 | schema 末尾另有 machine-readable YAML，Stage 0.1 强制 | improved-wiki 扩展；不注入 LLM prompt |
 | 聚合页排除 | `index.md` + `log.md`（lint universe） | findings 豁免 `index/log/overview/schema` | 分层模型见 `_lint_suggest.py` |
 | Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 1.2 独有产物 |
 | Lint 页面 | app UI 直接展示（内存） | `.llm-wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出；属 runtime 状态，不放入 wiki/ |

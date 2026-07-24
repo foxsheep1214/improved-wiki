@@ -287,9 +287,12 @@ from _schema import (  # noqa: E402,F401
     _ILLEGAL_CHARS_RE,
     is_safe_ingest_path,
     list_existing_slugs,
+    load_purpose_md,
     load_schema_md,
     parse_wiki_schema_routing,
+    schema_candidate_routes,
     schema_folders,
+    schema_prompt_text,
     schema_route_dir,
     source_slug_from_raw_path,
 )
