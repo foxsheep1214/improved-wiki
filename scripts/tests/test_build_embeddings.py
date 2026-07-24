@@ -31,6 +31,34 @@ class _FakeTable:
 
 
 class LanceDbMaintenanceTests(unittest.TestCase):
+    def test_collect_pages_includes_methodology(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wiki = Path(tmp) / "wiki"
+            page = wiki / "methodology" / "calibration.md"
+            page.parent.mkdir(parents=True)
+            page.write_text(
+                "---\n"
+                "type: methodology\n"
+                'title: "Calibration Method"\n'
+                "---\n\n"
+                "# Calibration Method\n\nReusable procedure.\n",
+                encoding="utf-8",
+            )
+            had_wiki = hasattr(embeddings, "WIKI")
+            old_wiki = getattr(embeddings, "WIKI", None)
+            embeddings.WIKI = str(wiki)
+            try:
+                pages = embeddings.collect_pages()
+            finally:
+                if had_wiki:
+                    embeddings.WIKI = old_wiki
+                else:
+                    del embeddings.WIKI
+
+            self.assertEqual(len(pages), 1)
+            self.assertEqual(pages[0]["page_id"], "methodology/calibration")
+            self.assertEqual(pages[0]["path"], "methodology/calibration.md")
+
     def test_compact_prunes_all_verified_old_versions(self):
         table = _FakeTable()
 

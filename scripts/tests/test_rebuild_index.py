@@ -36,18 +36,25 @@ class TestRebuildIndexDeterministic(unittest.TestCase):
             _write_page(wiki_dir, "concepts/zeta.md", "Zeta Concept")
             _write_page(wiki_dir, "concepts/alpha.md", "Alpha Concept")
             _write_page(wiki_dir, "sources/book1.md", "Book One")
+            _write_page(
+                wiki_dir,
+                "methodology/calibration.md",
+                "Calibration Method",
+            )
 
             out = rebuild_index_deterministic(wiki_dir)
 
             self.assertTrue(out.startswith("# Index\n\n"))
             self.assertIn("## Sources（来源）", out)
             self.assertIn("## Concepts（概念）", out)
+            self.assertIn("## Methodology（方法论）", out)
             # Sources section must precede Concepts (declared _INDEX_CATEGORIES order).
             self.assertLess(out.index("## Sources"), out.index("## Concepts"))
             # Within Concepts, alpha sorts before zeta.
             self.assertLess(out.index("[[alpha]]"), out.index("[[zeta]]"))
             self.assertIn("- [[alpha]] — Alpha Concept", out)
             self.assertIn("- [[book1]] — Book One", out)
+            self.assertIn("- [[calibration]] — Calibration Method", out)
 
     def test_omits_empty_categories(self):
         with tempfile.TemporaryDirectory() as tmp:

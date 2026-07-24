@@ -121,6 +121,7 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
     return removed
 
 
+
 # schema.md may list folders that aren't LLM-generated per-source page types.
 _NON_PAGE_DIRS = {"media", "raw", "page-history", "chats"}
 
@@ -128,15 +129,20 @@ _NON_PAGE_DIRS = {"media", "raw", "page-history", "chats"}
 def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bool = False) -> int:
     """Remove derived pages whose ONLY source reference is this book.
 
-    Covers concepts, entities, queries, comparisons, plus any schema-defined
-    typed folders (NashSU schema-driven routing — people/, methods/, etc.), so a
-    page routed there by Stage 2.4 is cleaned on --delete just like a concept page.
+    Covers concepts, entities, queries, comparisons, findings, methodologies,
+    plus any schema-defined typed folders (NashSU schema-driven routing —
+    people/, methods/, etc.), so a page routed there by Stage 2.4 is cleaned on
+    --delete just like a concept page.
     The single-source test below is the guard: pages with ``sources: []`` or with
     more than one source (hand-authored or multi-source hub pages) never match and
-    are correctly preserved. synthesis/findings/thesis are intentionally excluded
-    (cross-source higher-order pages, not per-source derived).
+    are correctly preserved. synthesis/thesis are intentionally excluded
+    (cross-source higher-order pages, not per-source derived). A finding may
+    be grounded in one source, so it follows the same cleanup rule.
     """
-    base_types = ("concepts", "entities", "queries", "comparisons")
+    base_types = (
+        "concepts", "entities", "queries", "comparisons", "findings",
+        "methodology",
+    )
     extra = schema_folders(load_schema_md(config)) - BASE_PAGE_DIRS - _NON_PAGE_DIRS
     page_types = base_types + tuple(sorted(extra))
 
@@ -171,4 +177,3 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bo
                 print(f"{tag} Deleted orphan page: {page_type}/{page.name}")
                 removed += 1
     return removed
-

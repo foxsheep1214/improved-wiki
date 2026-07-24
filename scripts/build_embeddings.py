@@ -148,7 +148,7 @@ def collect_pages():
     """
     pages = []
     for sub in ["sources", "concepts", "entities", "queries", "comparisons",
-                "findings", "synthesis", "thesis"]:
+                "findings", "synthesis", "thesis", "methodology"]:
         d = f"{WIKI}/{sub}"
         if not os.path.exists(d):
             continue

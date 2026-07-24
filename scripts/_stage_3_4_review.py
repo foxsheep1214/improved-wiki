@@ -300,7 +300,10 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
 
     # Sample existing wiki pages (up to 40)
     existing_pages: list[str] = []
-    for sub in ["sources", "concepts", "entities", "comparisons", "findings"]:
+    for sub in [
+        "sources", "concepts", "entities", "comparisons", "findings",
+        "methodology",
+    ]:
         d = config.wiki_dir / sub
         if not d.exists():
             continue

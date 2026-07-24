@@ -819,6 +819,7 @@ _INDEX_CATEGORIES: list[tuple[str, str]] = [
     ("synthesis", "Synthesis（综合）"),
     ("findings", "Findings（发现）"),
     ("thesis", "Thesis（论题）"),
+    ("methodology", "Methodology（方法论）"),
 ]
 
 
@@ -1024,7 +1025,8 @@ from the filesystem — the ground truth of what pages exist now).
 Rewrite the COMPLETE index.md so every category lists exactly its inventory
 pages, under these bilingual section headers in this order (omit empty ones):
 Sources（来源）, Concepts（概念）, Entities（实体）, Queries（查询）,
-Comparisons（对比）, Synthesis（综合）, Findings（发现）, Thesis（论题）.
+Comparisons（对比）, Synthesis（综合）, Findings（发现）, Thesis（论题）,
+Methodology（方法论）.
 
 Rules:
 - Preserve existing entries' descriptions verbatim where the stem matches.

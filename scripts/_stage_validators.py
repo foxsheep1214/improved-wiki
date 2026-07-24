@@ -140,7 +140,11 @@ def _verify_stage_2_4_file_blocks(
                        f"LLM must emit a wiki/sources/<title>.md block.")
     # Verify concept pages are in wiki/concepts/, not bare wiki/ or wiki/sources/
     # True bare paths: no known subdirectory prefix and no wiki/ prefix
-    _KNOWN_PREFIXES = ("wiki/", "sources/", "concepts/", "entities/", "queries/", "comparisons/", "synthesis/", "findings/", "thesis/")
+    _KNOWN_PREFIXES = (
+        "wiki/", "sources/", "concepts/", "entities/", "queries/",
+        "comparisons/", "synthesis/", "findings/", "thesis/",
+        "methodology/",
+    )
     bare_paths = [p for p, _ in file_blocks if not p.startswith(_KNOWN_PREFIXES)]
     if bare_paths:
         print(f"  ⚠️  Stage 2: {len(bare_paths)} truly bare paths (no subdirectory prefix) — auto-correcting")
