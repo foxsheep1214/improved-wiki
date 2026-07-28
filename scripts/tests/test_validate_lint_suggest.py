@@ -58,5 +58,39 @@ class TestCollectStructuralLintFindings(unittest.TestCase):
             self.assertEqual(vi._validate_collect_structural_lint_findings(wiki), [])
 
 
+class TestRecordedSourcePages(unittest.TestCase):
+    def test_checks_selected_entry_instead_of_global_cache_count(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            source = root / "wiki/sources/Paper/topic/paper.md"
+            _write(source, "# Paper")
+            entry = {
+                "filesWritten": [
+                    "wiki/sources/Paper/topic/paper.md",
+                    "wiki/concepts/key-method.md",
+                ],
+            }
+
+            recorded, existing = vi._validate_recorded_source_pages(entry, root)
+
+            self.assertEqual(recorded, ["wiki/sources/Paper/topic/paper.md"])
+            self.assertEqual(existing, [source])
+
+    def test_missing_recorded_source_page_is_reported(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            entry = {
+                "filesWritten": [
+                    "wiki/sources/Paper/topic/missing.md",
+                    "wiki/concepts/key-method.md",
+                ],
+            }
+
+            recorded, existing = vi._validate_recorded_source_pages(entry, root)
+
+            self.assertEqual(recorded, ["wiki/sources/Paper/topic/missing.md"])
+            self.assertEqual(existing, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

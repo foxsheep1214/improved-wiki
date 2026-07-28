@@ -344,6 +344,65 @@ def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end
 
 # ---------- Stage 2.2 prompt building + chunking ----------
 
+_SOURCE_KIND_LABELS = {
+    "applicationnote": "application note",
+    "book": "book",
+    "datasheet": "datasheet",
+    "designexample": "design example",
+    "news": "news article",
+    "paper": "paper",
+    "presentation": "presentation",
+    "standard": "standard",
+}
+
+
+def _stage_2_2_source_kind(template: str, file_path: Path) -> str:
+    """Return a stable source kind without mistaking a topic folder for it.
+
+    ``raw/Paper/<topic>/x.pdf`` previously used ``file_path.parent.name`` and
+    told the model that ``<topic>`` was the document type. Prefer the selected
+    digest template; fall back to the first path component below ``raw/``.
+    """
+    match = re.match(r"\s*#\s*digest-([a-z0-9_-]+)", template or "", re.I)
+    if match:
+        key = match.group(1).lower().replace("-", "").replace("_", "")
+        return _SOURCE_KIND_LABELS.get(key, key.replace("_", " "))
+
+    parts = file_path.parts
+    for index, part in enumerate(parts[:-1]):
+        if part.lower() == "raw" and index + 1 < len(parts) - 1:
+            key = parts[index + 1].lower().replace("-", "").replace("_", "")
+            return _SOURCE_KIND_LABELS.get(key, "source")
+    return "source"
+
+
+def _stage_2_2_digest_meta_template(source_kind: str) -> str:
+    """Build the compatibility metadata block for the actual source kind.
+
+    ``book_meta`` is retained as an internal artifact key because existing
+    checkpoints and downstream validators consume it. Its fields, however,
+    must describe the real source instead of coercing papers into
+    publisher/textbook metadata.
+    """
+    common = (
+        "  book_meta:  # compatibility key used for every source type\n"
+        '    title: "..."\n'
+        '    authors: ["..."]\n'
+        '    year: "..."\n'
+        f'    source_kind: "{source_kind}"'
+    )
+    if source_kind == "book":
+        return (
+            common
+            + '\n    publisher: "..."\n'
+            + '    granularity: "textbook" | "manual"   '
+            + '# "manual" ONLY for implementation/maintenance monographs'
+        )
+    if source_kind == "paper":
+        return common + '\n    venue: "..."\n    doi: "..."\n    url: "..."'
+    return common + '\n    venue: "..."\n    publisher: "..."\n    url: "..."'
+
+
 def _stage_2_2_build_template_section(template: str, file_path: Path, max_chars: int = 4000) -> str:
     """Build the template injection section for a Stage 2.2 prompt.
 
@@ -354,9 +413,14 @@ def _stage_2_2_build_template_section(template: str, file_path: Path, max_chars:
     if not template:
         return ""
     template_trimmed = template[:max_chars]
+    source_kind = _stage_2_2_source_kind(template, file_path)
     return f"""
 # Document Type Instructions
-The source is a **{file_path.parent.name}** document. Follow these type-specific conventions:
+The source is a **{source_kind}**. Follow these type-specific conventions as
+content-emphasis guidance. If the template names a type-specific metadata block
+such as `paper_meta`, map those fields into the required compatibility
+`book_meta` block in the Stage 2.2 output below; do not emit a competing second
+metadata block.
 <template>
 {template_trimmed}
 </template>
@@ -497,11 +561,11 @@ def _stage_2_2_build_prompt(
     If heading_path is provided, it tells the LLM which chapter/section
     hierarchy this chunk belongs to (NashSU parity: chunk.headingPath).
 
-    ``existing_slugs`` is the per-book SNAPSHOT of existing wiki slugs taken
-    when the book first entered Stage 2.2 (persisted under
+    ``existing_slugs`` is the per-source SNAPSHOT of existing wiki slugs taken
+    when the source first entered Stage 2.2 (persisted under
     "slugs_snapshot_2_2" in progress by _ingest_chunks). 2.2 is contractually
     wiki-independent; a live list_existing_slugs() read here made the prompt
-    hash drift while a parallel batch book wrote wiki pages → conversation
+    hash drift while a parallel batch source wrote wiki pages → conversation
     cache misses on every resume. None falls back to a live read (legacy
     callers/tests only — the pipeline always passes the snapshot).
     """
@@ -532,6 +596,8 @@ def _stage_2_2_build_prompt(
         existing_slugs = list_existing_slugs(config)
     existing_slugs = _stage_2_2_cap_existing_slugs(list(existing_slugs), chunk_text)
 
+    source_kind = _stage_2_2_source_kind(template, file_path)
+    digest_meta_template = _stage_2_2_digest_meta_template(source_kind)
     template_section = _stage_2_2_build_template_section(template, file_path, max_chars=2000)
 
     overlap_section = _stage_2_2_build_overlap_section(overlap_before)
@@ -544,7 +610,7 @@ def _stage_2_2_build_prompt(
     heading_section = ""
     if heading_path:
         heading_section = f"""
-# Current location in the book
+# Current location in the source
 You are analyzing content from: **{heading_path}**
 
 """
@@ -569,7 +635,7 @@ You are analyzing content from: **{heading_path}**
 
 # Role
 You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
+You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a source ingest pipeline.
 {template_section}{schema_types_section}{granularity_section}
 # Context: Accumulated Global Digest
 This digest is cumulative context rolled up across all PREVIOUS chunks — use
@@ -600,7 +666,7 @@ Deduplication against REAL existing pages still happens downstream
 # Task
 {density_hint}
 
-Analyze THIS CHUNK of the book. Extract:
+Analyze THIS CHUNK of the source. Extract:
 
 1. **Key concepts** — theories, methods, techniques, and phenomena that are new
    or materially updated in this chunk and genuinely important to understanding
@@ -663,16 +729,16 @@ entities_found:
 concepts_found:
   - name: "..."
     importance: "core" | "supporting" | "mentioned"
-    definition: "..."      # the concept's definition as stated in the book
+    definition: "..."      # the concept's definition as stated in the source
     key_details: ["...", "..."]   # concise source-grounded facts/formulas/rules; [] is valid
 
 # ⚠️  CONCEPT NAMING RULES:
 #   - name MUST be a SHORT, SPECIFIC topic (3-6 words), e.g. "DC-Link Voltage Control", "IGBT Thermal Modeling"
-#   - NEVER use the book title or filename as a concept name
+#   - NEVER use the source title or filename as a concept name
 #   - NEVER include "Chunk N", "Chapter N" or page numbers in the name
 #   - Create separate entries only for independently useful topics; keep facets
 #     of one coherent topic together
-#   - Use the actual technical term from the book, not a generic description
+#   - Use the actual technical term from the source, not a generic description
 #   - `mentioned` is context only and will not become a standalone page. Prefer
 #     omitting such items unless retaining the name prevents ambiguity.
 
@@ -706,8 +772,8 @@ claims:
   - claim: "..."
     evidence: "§X.X or 式(N) or Figure N — specific source-text anchor (NOT generic chapter ref)"
     confidence: "high" | "medium" | "low"
-    table_ref: "Table N or Figure N"   # for datasheets: REQUIRED; for books: omit if no table source
-    page_ref: "p.NN"                   # for datasheets: REQUIRED; for books: omit if not applicable
+    table_ref: "Table N or Figure N"   # for datasheets: REQUIRED; otherwise omit if no table/figure source
+    page_ref: "p.NN"                   # for datasheets: REQUIRED; otherwise omit if not applicable
 
 formulas:
   - formula: '\\text{{Energy}} = \\frac{{1}}{{2}} C V^2'   # SINGLE-quoted; transcribe verbatim, never paraphrase
@@ -739,14 +805,11 @@ updated_global_digest: |
   # genuinely important, keep key_claims to the source's core arguments, and
   # retain only genuinely supported schema-typed candidates needed by later
   # chunks. MUST contain the first 5 top-level keys below; the optional sixth
-  # carries typed-candidate continuity. The FIRST chunk ESTABLISHES book_meta
-  # and outline; later chunks refine them and append to the other fields.
-  book_meta:
-    title: "..."
-    authors: ["..."]
-    year: "..."
-    publisher: "..."
-    granularity: "textbook" | "manual"   # "manual" ONLY for implementation/maintenance monographs
+  # carries typed-candidate continuity. The FIRST chunk ESTABLISHES the
+  # compatibility `book_meta` source-metadata block and outline; later chunks
+  # refine them and append to the other fields. The key remains `book_meta`
+  # for checkpoint compatibility even when source_kind is not a book.
+{digest_meta_template}
   outline:
     - "Chapter/Section ..."
   key_entities:
@@ -756,7 +819,7 @@ updated_global_digest: |
     - name: "..."
       definition: "..."   # ONE short line, not a paragraph; no key_details here
   key_claims:
-    - claim: "..."        # ONE line; keep only the book's MAIN arguments here
+    - claim: "..."        # ONE line; keep only the source's MAIN arguments here
       evidence: "..."
   schema_typed_candidates:
     - type: "..."

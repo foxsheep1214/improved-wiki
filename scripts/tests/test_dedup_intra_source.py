@@ -8,8 +8,10 @@ Run:  python3 scripts/tests/test_dedup_intra_source.py
 """
 from __future__ import annotations
 
+import io
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -56,6 +58,26 @@ class TestFindDuplicateConceptsEmbedding(unittest.TestCase):
         broken = {"a": [1.0, 0.0], "b": None, "c": None}
         with self.assertRaises(emb.DuplicatePrefilterError):
             d._dedup_find_duplicate_concepts(concepts, embeddings=broken)
+
+
+class TestNormalizedPathCounts(unittest.TestCase):
+    def test_single_chunk_reports_normalized_concept_paths(self):
+        file_blocks = [
+            ("concepts/first.md", "---\ntitle: First\n---\nbody"),
+            ("concepts/second.md", "---\ntitle: Second\n---\nbody"),
+            ("entities/system.md", "---\ntitle: System\n---\nbody"),
+        ]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            result = d.dedup_intra_source(
+                file_blocks,
+                [{"chunk": 1}],
+                config=object(),
+            )
+
+        self.assertEqual(result["concept_count_before"], 2)
+        self.assertEqual(result["concept_count_after"], 2)
+        self.assertIn("single chunk; 2 concepts", output.getvalue())
 
 
 class TestLlmConfirmGate(unittest.TestCase):

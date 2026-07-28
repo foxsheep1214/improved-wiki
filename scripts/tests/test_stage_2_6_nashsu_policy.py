@@ -147,6 +147,76 @@ class TestPromptPolicy(unittest.TestCase):
         )
         self.assertIn("related: []", normalized)
 
+    def test_known_metadata_replaces_blank_generated_values(self):
+        response = _page("body").replace(
+            "sources: [\"raw/book.pdf\"]\n",
+            "sources: [\"raw/book.pdf\"]\n"
+            "authors: []\n"
+            "year: \"\"\n"
+            "url: \"\"\n"
+            "venue: \"\"\n",
+        )
+        normalized = s26._normalize_source_frontmatter(
+            response,
+            authors_yaml='["A. Author"]',
+            year_yaml="2024",
+            url_yaml='"https://doi.org/10.1/example"',
+            venue_yaml='"IET Radar"',
+        )
+        self.assertIn('authors: ["A. Author"]', normalized)
+        self.assertIn("year: 2024", normalized)
+        self.assertIn('url: "https://doi.org/10.1/example"', normalized)
+        self.assertIn('venue: "IET Radar"', normalized)
+
+    def test_specific_paper_meta_overrides_compatibility_meta(self):
+        digest = {
+            "book_meta": {
+                "title": "Paper",
+                "authors": [],
+                "year": "2024",
+                "publisher": "Generic Publisher",
+            },
+            "paper_meta": {
+                "title": "Paper",
+                "authors": ["A. Author"],
+                "year": "2023",
+                "venue": "IET Radar",
+                "doi": "10.1/example",
+            },
+            "outline": [],
+            "key_concepts": [],
+            "key_entities": [],
+            "key_claims": [],
+        }
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            return _page(
+                "Grounded summary.",
+                "wiki/sources/Paper/paper.md",
+            ), "end_turn"
+
+        original = s26.call_anthropic_protocol
+        s26.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                tmp = Path(directory)
+                cfg = _config(tmp)
+                (cfg.raw_root / "Paper").mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                response, _ = s26.stage_2_6_source_page(
+                    digest,
+                    cfg.raw_root / "Paper" / "paper.pdf",
+                    cfg,
+                    template="# digest-paper.md",
+                )
+        finally:
+            s26.call_anthropic_protocol = original
+
+        self.assertIn('authors: ["A. Author"]', response)
+        self.assertIn("year: 2023", response)
+        self.assertIn('url: "https://doi.org/10.1/example"', response)
+        self.assertIn('venue: "IET Radar"', response)
+
 
 class TestSourceFallbackAndTruncationRepair(unittest.TestCase):
     DIGEST = {

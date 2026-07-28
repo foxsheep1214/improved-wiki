@@ -106,6 +106,31 @@ def _validate_find_media_dir(slug: str) -> Optional[Path]:
     return None
 
 
+def _validate_recorded_source_pages(entry: dict, project_root: Path) -> tuple[list[str], list[Path]]:
+    """Return source-page paths recorded by this cache entry and those on disk.
+
+    Cache entries are not globally one-to-one with source pages: deep-research
+    entries intentionally write no source page, while older ingests may retain
+    pre-migration paths.  Per-source validation must therefore inspect the
+    selected entry instead of comparing project-wide cache/page totals.
+    """
+    recorded: list[str] = []
+    existing: list[Path] = []
+    for value in entry.get("filesWritten", []):
+        if not isinstance(value, str):
+            continue
+        normalized = value.replace("\\", "/").lstrip("./")
+        if not normalized.startswith("wiki/sources/"):
+            continue
+        recorded.append(value)
+        path = Path(value)
+        if not path.is_absolute():
+            path = project_root / path
+        if path.is_file():
+            existing.append(path)
+    return recorded, existing
+
+
 # ── Structural lint suggestions (wiki-wide, non-gating) ─────────────────────
 # Scan universe = NashSU {index, log} from _lint_suggest (overview/schema stay
 # valid targets; engine exempts aggregates from findings). + state files
@@ -293,19 +318,33 @@ def main():
         check(f"{len(fw)} files written, all on disk",
               not missing and len(fw) >= 1,
               f"missing={len(missing)}" if missing else f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
+        recorded_sources, existing_recorded_sources = _validate_recorded_source_pages(
+            entry, PROJECT_ROOT,
+        )
+        check(
+            "target source page is recorded and exists",
+            bool(recorded_sources) and bool(existing_recorded_sources),
+            (
+                f"recorded={len(recorded_sources)} "
+                f"existing={len(existing_recorded_sources)}"
+            ),
+        )
     else:
         check("sources/concepts/entities all populated",
               len(sources) > 0 and len(concepts) > 0 and len(entities) > 0,
               f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
-    # Source page coverage (project-wide health check)
+    # Project-wide inventory is diagnostic only. Cache entries and source pages
+    # are not one-to-one because research-query entries intentionally have no
+    # source page and historical entries may retain pre-migration paths.
     if CACHE_PATH.exists():
         _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
         _entries = _cache.get("entries", {})
         ingested = sum(1 for v in _entries.values()
                        if isinstance(v, dict) and (v.get("filesWritten") or v.get("hash")))
-        check(f"ingested files covered by source pages",
-              ingested <= len(sources),
-              f"ingested={ingested} sources={len(sources)}")
+        note(
+            "project-wide source-page inventory (non-gating)",
+            f"cache entries={ingested} source pages={len(sources)}",
+        )
 
     # ═══════════════════════════════════════════════
     # Stage 3.2: Image injection

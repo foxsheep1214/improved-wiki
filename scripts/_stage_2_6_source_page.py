@@ -42,13 +42,35 @@ def _normalize_source_frontmatter(
         return response
 
     fm = lines[fm_open + 1:fm_close]
+    desired = {
+        "authors": authors_yaml,
+        "year": year_yaml,
+        "url": url_yaml,
+        "venue": venue_yaml,
+    }
+    empty_yaml = {"", "[]", '""', "''", "null", "~"}
+
+    # A generated block may keep a field but blank out a value that the digest
+    # already supplied. Treat that the same as a missing field; otherwise the
+    # pre-filled bibliographic contract can still be silently lost.
+    for index, line in enumerate(fm):
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if (
+            key in desired
+            and value.strip().lower() in empty_yaml
+            and desired[key].strip().lower() not in empty_yaml
+        ):
+            fm[index] = f"{key}: {desired[key]}"
+    lines[fm_open + 1:fm_close] = fm
     present = {ln.split(":", 1)[0].strip() for ln in fm if ":" in ln}
 
     # Inject missing bibliographic fields before the frontmatter close.
     additions = [
         f"{key}: {val}"
-        for key, val in (("authors", authors_yaml), ("year", year_yaml),
-                         ("url", url_yaml), ("venue", venue_yaml))
+        for key, val in desired.items()
         if key not in present
     ]
     if additions:
@@ -224,21 +246,37 @@ def stage_2_6_source_page(
     book_meta = global_digest.get("book_meta", {})
     if not isinstance(book_meta, dict):
         book_meta = {}
-    title = book_meta.get("title", file_path.stem) if isinstance(book_meta, dict) else file_path.stem
     # Bibliographic metadata for the source-page frontmatter (NashSU source-page
     # parity: authors/year/url/venue). Pull from whichever *_meta block the digest
     # carries — book_meta (books), paper_meta (papers; has venue/doi), part_meta /
     # clip_meta / deck_meta (datasheets/news/decks may carry url/venue).
-    bib_meta = book_meta if book_meta else next(
-        (v for k, v in global_digest.items()
-         if k.endswith("_meta") and isinstance(v, dict)),
+    # Older Stage 2.2 prompts could emit both a compatibility ``book_meta`` and
+    # a more accurate type-specific block. Merge them, preferring non-empty
+    # type-specific values, rather than letting a non-empty ``book_meta`` hide
+    # a paper's venue/DOI.
+    bib_meta = dict(book_meta)
+    specific_meta = next(
+        (
+            v for k, v in global_digest.items()
+            if k != "book_meta" and k.endswith("_meta") and isinstance(v, dict)
+        ),
         {},
     )
+    for key, value in specific_meta.items():
+        if value not in ("", None, [], {}):
+            bib_meta[key] = value
+    title = bib_meta.get("title") or book_meta.get("title") or file_path.stem
     bib_authors = bib_meta.get("authors", []) if isinstance(bib_meta, dict) else []
     if not isinstance(bib_authors, list):
         bib_authors = [bib_authors] if bib_authors else []
     bib_year = bib_meta.get("year", "") if isinstance(bib_meta, dict) else ""
     bib_url = bib_meta.get("url", "") if isinstance(bib_meta, dict) else ""
+    bib_doi = str(bib_meta.get("doi", "") or "").strip() if isinstance(bib_meta, dict) else ""
+    if not bib_url and bib_doi:
+        if bib_doi.startswith(("http://", "https://")):
+            bib_url = bib_doi
+        else:
+            bib_url = "https://doi.org/" + re.sub(r"^doi:\s*", "", bib_doi, flags=re.I)
     # NashSU has no `publisher` field; fold a book's publisher into `venue`.
     bib_venue = (bib_meta.get("venue", "") or bib_meta.get("publisher", "")) if isinstance(bib_meta, dict) else ""
 

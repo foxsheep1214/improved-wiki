@@ -15,6 +15,77 @@ from _language import get_output_language
 from _paths import media_slug, atomic_write
 
 
+def _stage_3_2_language_sample(content: str) -> str:
+    """Return page prose without metadata/link targets that can spoof script.
+
+    A nested raw path such as ``Paper/01_反无人机探测与识别/...`` appears in
+    source frontmatter. ``detect_language`` quite reasonably sees those Han
+    characters, but they are an identifier, not the English page's prose.
+    """
+    sample = re.sub(
+        r"\A---\s*\n.*?\n---\s*\n?",
+        "",
+        content,
+        count=1,
+        flags=re.DOTALL,
+    )
+    sample = sample.split("\n## Embedded Images", 1)[0]
+    sample = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", sample)
+    sample = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", sample)
+
+    def _wikilink_label(match: re.Match) -> str:
+        target = match.group(1)
+        label = match.group(2)
+        return label or target.rsplit("/", 1)[-1]
+
+    sample = re.sub(r"\[\[([^|\]]+)(?:\|([^\]]+))?\]\]", _wikilink_label, sample)
+    return sample[:4000]
+
+
+def _stage_3_2_source_kind(raw_file: Path, config: Config) -> str:
+    try:
+        category = raw_file.relative_to(config.raw_root).parts[0].lower()
+    except (ValueError, IndexError):
+        return "document"
+    return {
+        "book": "book",
+        "paper": "paper",
+        "standard": "standard",
+        "presentation": "presentation",
+        "news": "article",
+    }.get(category, "document")
+
+
+def _stage_3_2_count_line(
+    *, is_zh: bool, source_kind: str, count: int, is_mineru: bool,
+) -> str:
+    if is_zh:
+        subject = {
+            "book": "本书",
+            "paper": "本文",
+            "standard": "本标准",
+            "presentation": "本演示文稿",
+            "article": "本报道",
+        }.get(source_kind, "本文档")
+        noun = "图表" if is_mineru else "嵌入图"
+        return f"{subject}共抽出 {count} 张{noun}。"
+
+    subject = {
+        "book": "This book",
+        "paper": "This paper",
+        "standard": "This standard",
+        "presentation": "This presentation",
+        "article": "This article",
+    }.get(source_kind, "This document")
+    singular, plural = (
+        ("figure", "figures")
+        if is_mineru else
+        ("embedded image", "embedded images")
+    )
+    noun = singular if count == 1 else plural
+    return f"{subject} contains {count} extracted {noun}."
+
+
 def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
                             method: str = "") -> dict:
     """Append '## Embedded Images' section to the source page.
@@ -36,7 +107,8 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
     # "### Page N") stay English in both cases, matching the rest of the
     # pipeline's FILE-block convention: only prose
     # vocabulary is localized, not structural markup).
-    is_zh = get_output_language(content[:2000]) == "Chinese"
+    is_zh = get_output_language(_stage_3_2_language_sample(content)) == "Chinese"
+    source_kind = _stage_3_2_source_kind(raw_file, config)
 
     # Unified image injection: reads _manifest.json (the single source of truth
     # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
@@ -65,10 +137,12 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
         if images:
             is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
             section = f"## Embedded Images\n\n"
-            if is_zh:
-                section += f"本书共抽出 {len(images)} 张{'图表' if is_mineru else '嵌入图'}。\n\n"
-            else:
-                section += f"This document contains {len(images)} extracted {'figures' if is_mineru else 'embedded images'}.\n\n"
+            section += _stage_3_2_count_line(
+                is_zh=is_zh,
+                source_kind=source_kind,
+                count=len(images),
+                is_mineru=is_mineru,
+            ) + "\n\n"
             # NashSU parity (extract-source-images.ts:buildImageMarkdownSection):
             # group by page under `### Page N`, emit markdown image syntax
             # ![caption](path) with the FULL caption as alt text (sanitized —
@@ -122,11 +196,15 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
 
     if images_in_media:
         section = f"## Embedded Images\n\n"
+        section += _stage_3_2_count_line(
+            is_zh=is_zh,
+            source_kind=source_kind,
+            count=len(images_in_media),
+            is_mineru=True,
+        ) + "\n\n"
         if is_zh:
-            section += f"本书共提取 {len(images_in_media)} 张图表。\n\n"
             section += "| 文件/页码 | Caption |\n|------------|----------|\n"
         else:
-            section += f"This document contains {len(images_in_media)} extracted figures.\n\n"
             section += "| File/Page | Caption |\n|------------|----------|\n"
         for name, cap in images_in_media[:200]:  # cap at 200 rows
             cap_short = cap[:80] + "..." if len(cap) > 80 else cap

@@ -267,8 +267,13 @@ def dedup_intra_source(file_blocks, chunk_analyses, config, *, verbose: bool = F
     Single-chunk sources skip dedup. Returns a dict with the new file_blocks,
     dedup_was_run flag, and before/after concept counts.
     """
-    concept_count_before = sum(1 for p, _ in file_blocks if "/concepts/" in p)
-    entity_count_before = sum(1 for p, _ in file_blocks if "/entities/" in p)
+    # FILE parsing normalizes ``wiki/concepts/x.md`` to ``concepts/x.md``.
+    # Counting only the embedded ``/concepts/`` form made every normalized
+    # single-source run report "0 concepts" even though its blocks were kept.
+    concept_count_before = len(_dedup_extract_concept_blocks(file_blocks))
+    entity_count_before = len(
+        _dedup_extract_concept_blocks(file_blocks, folder="entities")
+    )
     dedup_was_run = len(chunk_analyses) > 1
     if not dedup_was_run:
         print(f"  [stage 2.4] Skipped (single chunk; {concept_count_before} concepts)")
@@ -291,8 +296,10 @@ def dedup_intra_source(file_blocks, chunk_analyses, config, *, verbose: bool = F
     groups = concept_groups + [[i + offset for i in g] for g in entity_groups]
     merge_rules = _dedup_generate_merge_rules(items, groups, config=config)
     file_blocks = _dedup_apply_merge_rules(file_blocks, merge_rules)
-    concept_count_after = sum(1 for p, _ in file_blocks if "/concepts/" in p)
-    entity_count_after = sum(1 for p, _ in file_blocks if "/entities/" in p)
+    concept_count_after = len(_dedup_extract_concept_blocks(file_blocks))
+    entity_count_after = len(
+        _dedup_extract_concept_blocks(file_blocks, folder="entities")
+    )
     if merge_rules:
         print(f"  [stage 2.4] Dedup: {concept_count_before} → {concept_count_after} "
               f"concepts, {entity_count_before} → {entity_count_after} entities "

@@ -64,18 +64,18 @@ def _linkable_relevance_tokens(text: str) -> set:
 
 
 def _rank_linkable_fill(candidates: list[str], reference_texts: list[str]) -> list[str]:
-    """Rank background-fill slugs by relevance to THIS book, best first.
+    """Rank background-fill slugs by relevance to THIS source, best first.
 
     When the fill candidate set exceeds its cap, an ALPHABETICAL cut
     systematically drops late-sorting slugs — CJK sorts after ASCII, so Chinese
     pages vanish first as the wiki grows (observed live 2026-07-02 on the 2.6
     [:1500] cap; same disease as the fixed [:200]/[:300] caps). Instead, score
     each candidate by its best token/CJK-bigram Jaccard overlap against the
-    book's own generated slugs/titles and keep the most relevant.
+    source's own generated slugs/titles and keep the most relevant.
 
     Deterministic and cheap (pure token math, no LLM/network): order is
     (score desc, slug asc). Determinism matters for prompt-hash stability
-    within one ingest — the existing_slugs snapshot is stable during a book's
+    within one ingest — the existing_slugs snapshot is stable during a source's
     run, so the ranked prefix (and hence the conversation-handoff cache key)
     never thrashes between resumes.
     """
@@ -121,7 +121,7 @@ Short pages may merge or drop sections, but never emit one undifferentiated para
 # B5+B6 (M9/M6): appended to the numbered Rules list of both prompts.
 # 9 = D1 slug-language ruling (2026-07-02): slug follows the SOURCE language;
 # 10 = D4 figure-reference ruling (2026-07-02): cited figure numbers link to
-#      the book's source page (needs the per-book source-page slug, hence a
+#      the source page (needs the per-source source-page slug, hence a
 #      builder function instead of a constant).
 def _extra_rules(source_page_slug: str) -> str:
     return f"""7. related frontmatter — EXACT format: prefixed bare slugs, comma-separated,
@@ -129,7 +129,7 @@ def _extra_rules(source_page_slug: str) -> str:
 8. Evidence anchors: formulas/data cite the source's chapter/section/equation/
    figure number (式(5-10), 图2.6, Table 8.1); a value read off a figure's curve
    must be marked "据图X.X".
-9. slug uses the SOURCE language (中文书→中文slug, English book→English kebab);
+9. slug uses the SOURCE language (中文源→中文slug, English source→English kebab);
    English terms belong in title, not slug, EXCEPT established acronyms
    (mti, cfar, dds) which may stay; never mixed 中英双拼 slugs.
 10. When body text cites a figure number (图2.6 / Fig. 3-1), link it to the
@@ -139,7 +139,7 @@ def _extra_rules(source_page_slug: str) -> str:
 
 
 def _source_page_slug(file_path: Path, config: Config) -> str:
-    """Wikilink stem of this book's source page: sources/<raw-rel-sans-ext>."""
+    """Wikilink stem of this source's page: sources/<raw-rel-sans-ext>."""
     try:
         rel = file_path.relative_to(config.raw_root).with_suffix("")
     except ValueError:
@@ -667,7 +667,7 @@ def _stage_2_4_build_prompt(
             must_link.add(slug)
     # Background fill: other existing wiki pages, bounded so the prompt stays a
     # reasonable size. Never displaces a must-link target. When candidates
-    # exceed the room, keep the most RELEVANT to this book (token/CJK-bigram
+    # exceed the room, keep the most RELEVANT to this source (token/CJK-bigram
     # overlap with this chunk's names + prior generated slugs) instead of an
     # alphabetical prefix, which systematically dropped late-sorting (CJK)
     # slugs — see _rank_linkable_fill (deterministic, prompt-hash stable).
@@ -716,7 +716,7 @@ def _stage_2_4_build_prompt(
         related_pages_str = "(none)"
 
     # P1 (2026-06-27): ground every page in THIS chunk's raw source text. This is
-    # what gives full-concept fidelity for books of ANY size — each chunk's
+    # what gives full-concept fidelity for sources of ANY size — each chunk's
     # concepts are generated with their exact source passage present, so the model
     # uses the source's own formulas/notation/examples, not training-memory.
     if chunk_text.strip():
@@ -749,11 +749,11 @@ def _stage_2_4_build_prompt(
     return f"""{language_directive}
 
 # Role
-You are generating wiki pages for ONE chunk of a book. Previous chunks have
+You are generating wiki pages for ONE chunk of a source. Previous chunks have
 already been processed — their pages are listed below. Do NOT regenerate them.
 
 # Source
-Book: {file_path.stem}
+Source: {file_path.stem}
 Chunk: {chunk_index + 1}
 
 {template_section}
@@ -885,7 +885,7 @@ def _stage_2_4_build_all_prompt(
     the source's OWN wording/formulas/examples instead of generic training-memory
     knowledge — NashSU parity (buildGenerationPrompt feeds trimmed sourceContext).
     Verified via the Hennessy A/B: analysis-only produced a wrong Amdahl's-Law
-    formula (the popular p/n form) instead of the book's Fraction_enhanced form.
+    formula (the popular p/n form) instead of the source's Fraction_enhanced form.
     """
     existing_refs = existing_refs or {}
     existing_slugs = list_existing_slugs(config)
@@ -1007,9 +1007,9 @@ def _stage_2_4_build_all_prompt(
 
     concept_str = "\n".join(concept_lines) if concept_lines else "(none)"
     entity_str = "\n".join(entity_lines) if entity_lines else "(none)"
-    # Must-link targets (this book's slugs, Stage 2.3 existing_refs, related
+    # Must-link targets (this source's slugs, Stage 2.3 existing_refs, related
     # pages) are always kept; the background fill of other existing wiki pages
-    # is bounded — ranked by relevance to this book when over the room, not
+    # is bounded — ranked by relevance to this source when over the room, not
     # cut alphabetically (which systematically dropped late-sorting CJK slugs;
     # see _rank_linkable_fill — deterministic, prompt-hash stable).
     must_link = set()
@@ -1100,13 +1100,13 @@ def _stage_2_4_build_all_prompt(
     return f"""{language_directive}
 
 # Role
-You are generating wiki pages for ALL chunks of a book in ONE pass. The analysis
+You are generating wiki pages for ALL chunks of a source in ONE pass. The analysis
 recommendations below contain key page candidates, not an exhaustive term
 inventory. Generate only genuinely important recommended pages that are new or
 marked UPDATE EXISTING PAGE.
 
 # Source
-Book: {file_path.stem}
+Source: {file_path.stem}
 Chunks: {len(chunk_analyses)}
 {template_section}{source_section}{schema_context_section}{formulas_section}{schema_section}
 # Existing wiki associations (Stage 2.3):
