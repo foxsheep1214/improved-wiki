@@ -9,10 +9,10 @@ Two architectural differences from NashSU are by design, NOT gaps:
      `parse_file_blocks` first, then validates the relative path
      (e.g. "concepts/foo.md"). So the "must start with wiki/" cases are ported
      against the stripped form.
-  2. NashSU `parseFileBlocks` returns `{blocks, warnings}` and KEEPS the `wiki/`
-     prefix on `block.path`. The skill returns `list[(path, content)]` with the
-     `wiki/` prefix stripped, and surfaces warnings via stderr prints rather
-     than a `warnings` array.
+  2. NashSU `parseFileBlocks` returns `{blocks, warnings, truncatedPaths}` and
+     KEEPS the `wiki/` prefix on `block.path`. The skill's detailed parser
+     returns the same three signals with the prefix stripped; its compatibility
+     facade returns only `list[(path, content)]`.
 
 Parser gaps closed 2026-06-19:
   G1–G4 (tolerant markers): case-insensitive + whitespace-tolerant markers,
@@ -259,10 +259,9 @@ class TestParseFileBlocksStreamWarnings(unittest.TestCase):
     """H2/H6: stream-truncation and empty-path warnings (NashSU parity).
 
     The skill prints warnings via stdout rather than returning a warnings[]
-    array. These tests capture stdout to verify the warnings fire.
-    Note: unlike NashSU which DROPS unclosed blocks, the skill keeps them
-    (defensive: partial content > nothing). The key parity is that warnings
-    are surfaced, not silently lost.
+    array through the compatibility facade. The detailed parser also exposes
+    ``truncated_paths`` for the targeted repair stage. Unclosed content is
+    dropped, matching current NashSU; it is never published as a partial page.
     """
 
     def test_warns_unclosed_final_block_truncation(self):
@@ -276,12 +275,11 @@ class TestParseFileBlocksStreamWarnings(unittest.TestCase):
             "# Mixture of Exp",  # stream cut here — no closer
         ])
         with capture_parse_stdout() as buf:
-            blocks = _core.parse_file_blocks(text)
-        # Both blocks are extracted (skill keeps partial content, unlike NashSU
-        # which drops unclosed blocks — defensive choice).
-        got = [p for p, _ in blocks]
+            parsed = _core.parse_file_blocks_detailed(text)
+        got = [p for p, _ in parsed.blocks]
         self.assertIn("entities/qwen.md", got)
-        self.assertIn("concepts/moe.md", got)
+        self.assertNotIn("concepts/moe.md", got)
+        self.assertEqual(parsed.truncated_paths, ["concepts/moe.md"])
         # Unclosed block is surfaced as a stdout warning.
         # The skill strips the wiki/ prefix from paths (architectural diff),
         # so the warning references "concepts/moe.md" not "wiki/concepts/moe.md".
@@ -312,12 +310,17 @@ class TestParseFileBlocksStreamWarnings(unittest.TestCase):
             "---END FILE---",
         ])
         with capture_parse_stdout() as buf:
-            blocks = _core.parse_file_blocks(text)
-        # All three blocks are extracted (a, broken, c).
-        got = [p for p, _ in blocks]
+            parsed = _core.parse_file_blocks_detailed(text)
+        # The malformed middle page is dropped and surfaced for targeted
+        # repair; the later complete page remains recoverable.
+        got = [p for p, _ in parsed.blocks]
         self.assertIn("concepts/a.md", got)
-        self.assertIn("concepts/broken.md", got)
+        self.assertNotIn("concepts/broken.md", got)
         self.assertIn("concepts/c.md", got)
+        self.assertEqual(
+            parsed.truncated_paths,
+            ["concepts/broken.md"],
+        )
         # broken block triggers a warning about missing END FILE.
         output = buf.getvalue()
         self.assertIn("concepts/broken.md", output)

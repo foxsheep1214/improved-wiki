@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 
 from _config import Config
+from _core import canonical_source_path
+from _file_block_repair import repair_truncated_file_blocks
 from _llm_api import call_anthropic_protocol
 from _language import build_language_directive
 from _schema import load_purpose_md, load_schema_md, schema_prompt_text
@@ -115,6 +117,84 @@ def _stage_2_6_validate_source_file_block(
         )
 
 
+def source_analysis_text(
+    global_digest: dict,
+    chunk_analyses: list[dict] | None = None,
+    chunk_claims: list | None = None,
+) -> str:
+    """Serialize the complete Stage 2 analysis for deterministic recovery.
+
+    NashSU's fallback source page preserves its full analysis rather than
+    cutting it to a summary-sized prefix.  improved-wiki's equivalent analysis
+    is the rolled-up digest plus every per-chunk analysis.  ``chunk_claims`` is
+    retained as a compatibility fallback for older callers that do not carry
+    the full chunk list.
+    """
+    payload: dict = {"global_digest": global_digest}
+    if chunk_analyses is not None:
+        payload["chunk_analyses"] = chunk_analyses
+    elif chunk_claims is not None:
+        payload["chunk_claims"] = chunk_claims
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def build_fallback_source_summary_content(
+    source_identity: str,
+    analysis_text: str,
+    date: str,
+) -> str:
+    """Build NashSU's deterministic minimum source-summary page."""
+    source_yaml = json.dumps(source_identity, ensure_ascii=False)
+    title_yaml = json.dumps(
+        f"Source: {source_identity}",
+        ensure_ascii=False,
+    )
+    return "\n".join([
+        "---",
+        "type: source",
+        f"title: {title_yaml}",
+        f"created: {date}",
+        f"updated: {date}",
+        f"sources: [{source_yaml}]",
+        "tags: []",
+        "related: []",
+        "---",
+        "",
+        f"# Source: {source_identity}",
+        "",
+        analysis_text or "(Analysis not available)",
+        "",
+    ])
+
+
+def build_fallback_source_summary(
+    source_rel: str,
+    source_identity: str,
+    analysis_text: str,
+    date: str,
+) -> str:
+    """Wrap the deterministic source summary in one exact FILE block."""
+    content = build_fallback_source_summary_content(
+        source_identity,
+        analysis_text,
+        date,
+    )
+    return (
+        f"---FILE:wiki/sources/{source_rel}.md---\n"
+        f"{content.rstrip()}\n"
+        "---END FILE---\n"
+    )
+
+
+def _serialize_file_blocks(blocks: list[tuple[str, str]]) -> str:
+    return "\n\n".join(
+        f"---FILE:{path if path.startswith('wiki/') else f'wiki/{path}'}---\n"
+        f"{content.rstrip()}\n"
+        "---END FILE---"
+        for path, content in blocks
+    )
+
+
 def stage_2_6_source_page(
     global_digest: dict,
     file_path: Path,
@@ -127,6 +207,7 @@ def stage_2_6_source_page(
     generated_concepts: list[str] | None = None,
     generated_entities: list[str] | None = None,
     chunk_claims: list | None = None,
+    chunk_analyses: list[dict] | None = None,
 ) -> tuple[str, str]:
     """Stage 2.6: generate one NashSU-style source summary page.
 
@@ -375,11 +456,57 @@ venue: {venue_yaml}
 """
 
     gen_tokens = config.compute_max_tokens(8192)
-    response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens, label="source page")
-    response = _normalize_source_frontmatter(
-        response, authors_yaml, year_yaml, url_yaml, venue_yaml,
+    response, stop_reason = call_anthropic_protocol(
+        prompt,
+        config,
+        max_tokens=gen_tokens,
+        label="source page",
     )
-    _stage_2_6_validate_source_file_block(response, source_rel)
+    repair = repair_truncated_file_blocks(
+        response,
+        original_prompt=prompt,
+        source_identity=canonical_source_path(file_path, config),
+        config=config,
+        max_tokens=config.compute_max_tokens(8192),
+        label="stage 2.6",
+        llm_call=call_anthropic_protocol,
+    )
+    candidate = _serialize_file_blocks(repair.blocks)
+    candidate = _normalize_source_frontmatter(
+        candidate, authors_yaml, year_yaml, url_yaml, venue_yaml,
+    )
+    fallback_reason = ""
+    if repair.unrecovered_paths:
+        fallback_reason = (
+            "targeted repair did not recover "
+            + ", ".join(repair.unrecovered_paths)
+        )
+    else:
+        try:
+            _stage_2_6_validate_source_file_block(candidate, source_rel)
+        except RuntimeError as exc:
+            fallback_reason = str(exc)
+
+    if fallback_reason:
+        analysis_text = source_analysis_text(
+            global_digest,
+            chunk_analyses=chunk_analyses,
+            chunk_claims=chunk_claims,
+        )
+        candidate = build_fallback_source_summary(
+            source_rel,
+            canonical_source_path(file_path, config),
+            analysis_text,
+            time.strftime("%Y-%m-%d"),
+        )
+        _stage_2_6_validate_source_file_block(candidate, source_rel)
+        stop_reason = "fallback-source-summary"
+        print(
+            "  [stage 2.6] Generated deterministic source-summary fallback "
+            f"from complete Stage 2 analysis ({fallback_reason})"
+        )
+
+    response = candidate
     if verbose:
         print(f"[stage 2.6] Source page generated ({len(response):,} chars, stop={stop_reason})")
     else:

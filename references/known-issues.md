@@ -17,8 +17,8 @@
 ### `detect_language()` 非拉丁文字阈值过低，几个杂散字符就能误判全书语言
 `_language.py::detect_language()` 的非拉丁脚本判定阈值只是 `max_count >= 2`，而英文本身纯 ASCII、不计入对照基准。实测：某书扉页的外文图书馆公章（OCR 出十几个非拉丁字符）导致全书正文被误判成该语言，各生成 stage 收到错误的 "MANDATORY OUTPUT LANGUAGE" 指令，而全书 99%+ 是英文——与已记录的"São Paulo 陷阱"（`improved-wiki-language-detect-false-positive` 内存条目）同一类假阳性，但触发方式更直接。Greek 分支已有"孤立单字符不算希腊语"的保护（`_has_greek_word_run`），其他非拉丁脚本分支没有。**当前规避**：生成阶段人工判断源文本主体语言、忽略错误的语言指令；项目级可用 `IMPROVED_WIKI_OUTPUT_LANGUAGE=English` 强制覆盖整本书。**未修复**：给非拉丁脚本分支加类似 Greek 的保护（改动前需先补测试用例，避免影响现有中文等双语页面的检测）。
 
-### Stage 2.6 source 页偶发整体丢失 section 结构（单次事件 2026-07-07，根因未锁定）
-现象：一本书首次摄入的 source 页落盘后不走模板（自创标题、必需 section 大面积缺失），但归档的 Stage 2.6 conversation 响应本身完全合规——损坏发生在生成"之后"、写盘"之前/期间"，日志粒度不足以锁定具体代码，此后未复现。现有防线：`_stage_2_6_validate_required_sections()` 硬门禁（doctype-aware 必需 H2 清单，缺失即 raise），覆盖"LLM 自创结构"这一失败模式；写盘窗口本身仍无写盘后校验。**行动项：如再复现，保留当次 `.llm-wiki/conversation/<hash>/` 目录不清理，为根因排查留证据。**
+### Stage 2.6 source 页曾在生成后、写盘前异常丢失内容（单次事件 2026-07-07，根因未锁定）
+历史现象：归档的 Stage 2.6 conversation 响应完整，但首次落盘 source 页与响应不一致。source summary 现已按 NashSU 改为自由结构，不再用固定 H2 判断质量；当前防线是：(1) 未闭合 FILE 块丢弃并做一次 exact-path targeted repair；(2) 最终 source block 做 exact-path/frontmatter/END/non-empty 结构校验；(3) 仍缺失时从**完整 Stage 2 analysis**确定性写 fallback；(4) Stage 3.1 写盘前再做同一 fallback gate。**行动项：如再出现“完整响应与落盘内容不一致”，保留当次 `.llm-wiki/conversation/<hash>/` 与 progress 文件，继续追写盘窗口根因。**
 
 ## Design decisions (not bugs)
 

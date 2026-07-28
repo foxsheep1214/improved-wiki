@@ -1,7 +1,6 @@
 """_ingest_prepare.py — Stage 0-2 synthesis / source-page prep (extracted from ingest.py)."""
 from __future__ import annotations
 
-import json
 import re
 import time
 from pathlib import Path
@@ -9,6 +8,7 @@ from pathlib import Path
 from _config import Config
 from _core import (
     PrepareStopAfter,
+    canonical_source_path,
     detect_template_type,
     load_template,
     set_current_file as _set_current_file,
@@ -34,7 +34,12 @@ from _stage_1_extract import (
 from _stage_1_3_caption import _stage_1_3_inline_captions
 from _stage_1_2_images import validate_stage_1_2_artifact
 from _stage_1_3_caption import validate_stage_1_3_artifact
-from _stage_2_6_source_page import stage_2_6_source_page
+from _stage_2_6_source_page import (
+    _stage_2_6_validate_source_file_block,
+    build_fallback_source_summary,
+    source_analysis_text,
+    stage_2_6_source_page,
+)
 from _stage_2_9_comparison import (
     stage_2_9_comparison_generation,
     stage_2_9_append_source_backlinks,
@@ -103,8 +108,17 @@ def _prepare_source_page(
     verbose: bool, source_context: str = "",
     associations: dict | None = None,
     chunk_claims: list | None = None,
+    chunk_analyses: list[dict] | None = None,
 ) -> list:
     """Stage 2.6: generate one NashSU-style source summary and merge it."""
+    try:
+        source_rel_stem = str(
+            raw_file.relative_to(config.raw_root).with_suffix("")
+        )
+    except ValueError:
+        source_rel_stem = raw_file.stem
+    source_identity = canonical_source_path(raw_file, config)
+
     if progress and "source_page_response" in progress:
         source_page_response = progress["source_page_response"]
         print(f"  [stage 2.6] (cached) Source page already generated")
@@ -134,10 +148,33 @@ def _prepare_source_page(
             associations=associations,
             generated_concepts=_gen_concepts, generated_entities=_gen_entities,
             chunk_claims=chunk_claims,
+            chunk_analyses=chunk_analyses,
         )
 
-    if not source_page_response:
-        return file_blocks
+    try:
+        _stage_2_6_validate_source_file_block(
+            source_page_response,
+            source_rel_stem,
+        )
+    except RuntimeError as exc:
+        # Cache compatibility and final guard: a pre-policy response may be
+        # empty/malformed even though fresh Stage 2.6 now handles this itself.
+        # Match NashSU by writing a deterministic source page from the complete
+        # analysis instead of pausing or inventing a fixed-section stub.
+        source_page_response = build_fallback_source_summary(
+            source_rel_stem,
+            source_identity,
+            source_analysis_text(
+                global_digest,
+                chunk_analyses=chunk_analyses,
+                chunk_claims=chunk_claims,
+            ),
+            time.strftime("%Y-%m-%d"),
+        )
+        print(
+            "  [stage 2.6] Replaced missing/malformed cached source response "
+            f"with deterministic analysis fallback ({exc})"
+        )
 
     source_blocks = parse_file_blocks(source_page_response)
     if source_blocks:
@@ -145,26 +182,10 @@ def _prepare_source_page(
         print(f"  [stage 2.6] Source page block merged ({len(file_blocks)} total)")
         return file_blocks
 
-    # LLM didn't use FILE block format — generate placeholder
-    try:
-        _raw_rel = raw_file.relative_to(config.raw_root)
-    except ValueError:
-        _raw_rel = Path(raw_file.name)
-    source_rel = f"sources/{_raw_rel.with_suffix('.md')}"
-    book_meta = global_digest.get("book_meta", {})
-    title = book_meta.get("title", raw_file.stem) if isinstance(book_meta, dict) else raw_file.stem
-    stub = f"---\ntype: source\ntitle: \"{title}\"\n"
-    stub += f"created: {time.strftime('%Y-%m-%d')}\nupdated: {time.strftime('%Y-%m-%d')}\n"
-    stub += f"tags: []\nrelated: []\nsources: [\"raw/{_raw_rel}\"]\n---\n\n"
-    stub += f"**Title:** {title}\n**Author:** {raw_file.stem}\n\n"
-    stub += f"## Global Digest\n\n```yaml\n{json.dumps(global_digest, ensure_ascii=False, indent=2)[:4000]}\n```\n\n"
-    stub += f"## Key Concepts\n\n"
-    for path, _ in file_blocks:
-        if "concepts/" in path:
-            stub += f"- [[{Path(path).stem}]]\n"
-    file_blocks.append((source_rel, stub))
-    print(f"  [stage 2.6] Placeholder source page generated ({len(file_blocks)} total)")
-    return file_blocks
+    raise RuntimeError(
+        "Stage 2.6 deterministic source fallback could not be parsed; "
+        "refusing to continue without a source page."
+    )
 
 def _do_prepare(
     raw_file: Path, config: Config,
@@ -579,7 +600,9 @@ def _do_prepare(
                     # list one-for-one or target a fixed count.
                     chunk_claims=[c for ca in (chunk_analyses or [])
                                   if isinstance(ca, dict)
-                                  for c in (ca.get("claims") or [])])
+                                  for c in (ca.get("claims") or [])],
+                    chunk_analyses=chunk_analyses,
+                )
             _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations,
                                           is_query_bridge=_is_query_bridge)
 

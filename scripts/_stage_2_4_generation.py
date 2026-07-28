@@ -22,7 +22,7 @@ from _llm_api import (
     _retry_jitter,
     call_anthropic_protocol,
 )
-from _parse import parse_file_blocks
+from _file_block_repair import repair_truncated_file_blocks
 from _stage_2_base import (
     _stage_2_title_cjk_bigrams,
     _stage_2_title_words,
@@ -980,8 +980,9 @@ def stage_2_4_generate_all(
 ) -> tuple[list[tuple[str, str]], list[str], str | None]:
     """Single-shot generation: ONE LLM call for all chunks (NashSU parity, 2026-06-27).
 
-    Returns (file_blocks, generated_slugs, stop_reason). A truncated or malformed
-    response fails visibly; NashSU does not use a per-item backfill quota.
+    Returns (file_blocks, generated_slugs, stop_reason). An unclosed FILE path
+    gets one NashSU-style targeted repair; an unrecovered or malformed response
+    fails visibly. No per-item coverage backfill or page quota is used.
     """
     valid = [ca for ca in chunk_analyses if isinstance(ca, dict) and "error" not in ca]
     existing_refs = existing_refs or {}
@@ -1030,7 +1031,21 @@ def stage_2_4_generate_all(
                 print("  [generate-all] single-shot generating (all chunks)...", flush=True)
             response, stop_reason = call_anthropic_protocol(
                 prompt, config, max_tokens=gen_tokens, label="single-shot generation")
-            blocks = parse_file_blocks(response)
+            repair = repair_truncated_file_blocks(
+                response,
+                original_prompt=prompt,
+                source_identity=canonical_source_path(file_path, config),
+                config=config,
+                max_tokens=config.compute_max_tokens(8192),
+                label="stage 2.4",
+                llm_call=call_anthropic_protocol,
+            )
+            blocks = repair.blocks
+            if repair.unrecovered_paths:
+                raise RuntimeError(
+                    "Stage 2.4 targeted FILE repair did not recover: "
+                    + ", ".join(repair.unrecovered_paths)
+                )
             dt = time.time() - t0
             generated_slugs: list[str] = []
             for path, _ in blocks:
@@ -1040,11 +1055,6 @@ def stage_2_4_generate_all(
             tag = f" (retry #{attempt})" if attempt > 0 else ""
             print(f"  [generate-all] OK{tag} — {len(blocks)} blocks "
                   f"({len(response):,} chars, {stop_reason}) {dt:.0f}s")
-            sr = str(stop_reason).lower()
-            if "length" in sr or "max_tok" in sr or "max_output" in sr:
-                raise RuntimeError(
-                    f"Stage 2.4 single-shot output was truncated ({stop_reason}); "
-                    "refusing to publish a partial key-page set.")
             if not blocks:
                 raise RuntimeError(
                     "Stage 2.4 produced 0 FILE blocks despite uncovered key "
@@ -1131,13 +1141,23 @@ def stage_2_4_generate_chunk(
                       f"({concepts_n}c/{entities_n}e/{schema_candidates_n}s)...",
                       flush=True)
             response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens, label=f"chunk {chunk_idx+1} generation")
-            blocks = parse_file_blocks(response)
-            dt = time.time() - t0
-            sr = str(stop_reason or "").lower()
-            if "length" in sr or "max_tok" in sr or "max_output" in sr:
+            repair = repair_truncated_file_blocks(
+                response,
+                original_prompt=prompt,
+                source_identity=canonical_source_path(file_path, config),
+                config=config,
+                max_tokens=config.compute_max_tokens(8192),
+                label=f"stage 2.4 chunk {chunk_idx + 1}",
+                llm_call=call_anthropic_protocol,
+            )
+            blocks = repair.blocks
+            if repair.unrecovered_paths:
                 raise RuntimeError(
-                    f"Stage 2.4 chunk {chunk_idx + 1} output was truncated "
-                    f"({stop_reason}); refusing to publish a partial key-page set.")
+                    f"Stage 2.4 chunk {chunk_idx + 1} targeted FILE repair "
+                    "did not recover: "
+                    + ", ".join(repair.unrecovered_paths)
+                )
+            dt = time.time() - t0
             if not blocks:
                 raise RuntimeError(
                     f"Stage 2.4 chunk {chunk_idx + 1} produced 0 FILE blocks "

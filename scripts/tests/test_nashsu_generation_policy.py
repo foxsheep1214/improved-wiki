@@ -160,5 +160,66 @@ class TestGenerationSelection(unittest.TestCase):
         self.assertEqual(entities, ["Key System"])
 
 
+class TestGenerationTruncationRepair(unittest.TestCase):
+    def test_chunk_generation_repairs_exact_unclosed_file(self):
+        analysis = {
+            "concepts_found": [{
+                "name": "Key Method",
+                "importance": "core",
+                "definition": "Central method.",
+                "key_details": [],
+            }],
+            "entities_found": [],
+            "schema_typed_candidates": [],
+            "formulas": [],
+        }
+        truncated = (
+            "---FILE:wiki/concepts/key-method.md---\n"
+            "---\ntype: concept\ntitle: Key Method\n---\npartial"
+        )
+        repaired = (
+            "---FILE:wiki/concepts/key-method.md---\n"
+            "---\ntype: concept\ntitle: Key Method\n---\ncomplete\n"
+            "---END FILE---\n"
+        )
+        calls: list[str] = []
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            index = len(calls)
+            calls.append(prompt)
+            return (
+                (truncated, "end_turn")
+                if index == 0
+                else (repaired, "end_turn")
+            )
+
+        original = generation.call_anthropic_protocol
+        generation.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                cfg = _config(tmp)
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                blocks = generation.stage_2_4_generate_chunk(
+                    analysis,
+                    0,
+                    [],
+                    cfg.raw_root / "book.pdf",
+                    cfg,
+                    chunk_text="source text",
+                )
+        finally:
+            generation.call_anthropic_protocol = original
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual([path for path, _ in blocks], [
+            "concepts/key-method.md",
+        ])
+        self.assertIn("complete", blocks[0][1])
+        self.assertIn("- wiki/concepts/key-method.md", calls[1])
+        self.assertNotIn("per-concept", calls[1].lower())
+
+
 if __name__ == "__main__":
     unittest.main()

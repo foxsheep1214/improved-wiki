@@ -21,6 +21,7 @@ publication, and completion lifecycle are authoritative in `delegate-mode.md`.
 | 2.2 | `Stage-2-2-Chunk-N-*.md` | Valid YAML containing chunk index, entities, concepts, claims, formulas, existing-wiki connections, and the five-field `updated_global_digest` |
 | 2.4 | `Stage-2-4-Generation-*.md` | Exact requested `---FILE:wiki/<path>--- … ---END FILE---` blocks |
 | 2.6 | `Stage-2-6-SourcePage-*.md` | One non-empty source-page FILE block at the exact requested path; headings are source-driven |
+| FILE repair | `Stage-2-TruncatedFileRepair-*.md` | Exactly one complete FILE block for every requested path and no unrequested paths |
 | 2.9 | `Stage-2-9-ComparisonReview-*.md` | Comparison FILE blocks or the exact zero-comparison sentinel |
 | 3.4 | `Stage-3-4-Review-*.md` | Strict YAML array of real findings; empty `[]` is valid |
 | Page merge | `LLM-task-*.md` | Merged body without frontmatter; preserve richer facts and wikilinks |
@@ -70,11 +71,19 @@ For each prompt:
 Validate all results in the wave, atomically publish them, then re-invoke. Do
 not serialize normal Stage 2.4 operation and do not exceed `--parallel`.
 
+If a returned FILE opener has no matching END marker, ingest drops that
+partial body and emits one `Stage-2-TruncatedFileRepair-*` handoff. Answer only
+the listed paths, preserving them exactly. The repair allow-list rejects extra
+pages, so this mechanism must never be used to fill concept coverage or reach a
+page count. An unrecovered key/comparison page pauses the ingest.
+
 ## Source, comparisons, and review
 
 Stage 2.6 validates one exact-path, closed, non-empty FILE block. Choose the
 smallest useful source-driven structure; summarize core material and do not
-enumerate every generated page or per-chunk claim.
+enumerate every generated page or per-chunk claim. If its targeted FILE repair
+still fails, ingest creates NashSU's deterministic minimum source page from the
+complete Stage 2 analysis; no additional handoff is needed.
 
 Stage 2.9 comparisons need a why-compare section, a table with at least four
 useful dimensions, a selection guide, and see-also links. Use the language

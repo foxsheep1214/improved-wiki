@@ -217,6 +217,17 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
                   "for duplicates.\n\n### Concept 1: ...\n")
         self.assertEqual(_infer_stage(prompt), "Stage-2-4-DedupConfirm")
 
+    def test_truncated_file_repair_has_distinct_label(self):
+        prompt = (
+            "# Role\n"
+            "You are repairing truncated wiki FILE blocks from an earlier "
+            "generation.\n"
+        )
+        self.assertEqual(
+            _infer_stage(prompt),
+            "Stage-2-TruncatedFileRepair",
+        )
+
     def test_non_directive_prompt_untouched(self):
         # Prompts that do NOT open with the directive must infer exactly as
         # before, so their slug/cache key is unchanged across this fix.

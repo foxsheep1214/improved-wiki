@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -220,12 +221,49 @@ def parse_simple_yaml(text: str):
     return value
 
 
-def parse_file_blocks(response: str) -> list[tuple[str, str]]:
-    """Extract NashSU or legacy FILE blocks from an LLM response."""
+@dataclass
+class FileBlockParseResult:
+    """Structured result for NashSU-style FILE-block parsing.
+
+    ``truncated_paths`` contains safe wiki-relative paths whose FILE opener was
+    seen but whose END FILE marker never arrived.  Those partial bodies are
+    deliberately excluded from ``blocks`` so the caller can regenerate exactly
+    the missing paths instead of publishing incomplete Markdown.
+    """
+
+    blocks: list[tuple[str, str]]
+    warnings: list[str]
+    truncated_paths: list[str]
+
+
+def parse_file_blocks_detailed(response: str) -> FileBlockParseResult:
+    """Extract complete NashSU or legacy FILE blocks and surface truncation.
+
+    This mirrors NashSU's current parser contract: an unclosed FILE block is
+    reported and dropped rather than treated as a valid page.  Unlike the
+    upstream parser, a later FILE opener is also treated as a recovery boundary,
+    allowing a malformed middle block to be repaired without losing subsequent
+    complete blocks.
+    """
     from _schema import is_safe_ingest_path
 
     response = response.replace("\r\n", "\n")
     blocks: list[tuple[str, str]] = []
+    warnings: list[str] = []
+    truncated_paths: list[str] = []
+
+    def warn(message: str) -> None:
+        warnings.append(message)
+        print(f"  [parse] {message}")
+
+    def note_truncated(path: str, boundary: str) -> None:
+        warn(
+            f'FILE block "{path}" was not closed before {boundary} — likely '
+            "truncation (model hit max_tokens, timeout, or connection "
+            "dropped). Block dropped."
+        )
+        if path not in truncated_paths:
+            truncated_paths.append(path)
 
     file_header_re = re.compile(
         r"^---\s*FILE:\s*(wiki/)?(.+?)\s*---\s*$",
@@ -280,17 +318,11 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
             file_match = file_header_re.match(line)
             if file_match:
                 if current_path is not None:
-                    content = "\n".join(current_lines).rstrip() + "\n"
-                    print(
-                        f'  [parse] FILE block "{current_path}" was not closed '
-                        "before next block — likely missing END FILE marker. "
-                        "Block kept as-is."
-                    )
-                    blocks.append((current_path, content))
+                    note_truncated(current_path, "the next FILE block")
                 path = file_match.group(2).strip()
                 if not path:
-                    print(
-                        "  [parse] FILE block with empty path skipped "
+                    warn(
+                        "FILE block with empty path skipped "
                         "(LLM omitted the path after ---FILE:)."
                     )
                     current_path = None
@@ -315,7 +347,7 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
                         path = corrected
                         break
                 if not is_safe_ingest_path(path):
-                    print(f"  [parse] unsafe path rejected: {path}")
+                    warn(f"unsafe path rejected: {path}")
                     current_path = None
                     current_lines = []
                     continue
@@ -326,17 +358,11 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
         if current_path is not None:
             current_lines.append(line)
 
-    if current_path is not None and current_lines:
-        print(
-            f'  [parse] FILE block "{current_path}" was not closed before '
-            "end of stream — likely truncation (model hit max_tokens, "
-            "timeout, or connection dropped). Block kept as-is."
-        )
-        content = "\n".join(current_lines).rstrip() + "\n"
-        blocks.append((current_path, content))
+    if current_path is not None:
+        note_truncated(current_path, "end of stream")
 
     if blocks:
-        return blocks
+        return FileBlockParseResult(blocks, warnings, truncated_paths)
 
     legacy_header_re = re.compile(
         r"^###\s+File\s+(\d+):\s*([^\n]+\.md)\s*$",
@@ -357,7 +383,12 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
         if not path.endswith(".md"):
             continue
         if not is_safe_ingest_path(path):
-            print(f"  [parse] unsafe path rejected: {path}")
+            warn(f"unsafe path rejected: {path}")
             continue
         blocks.append((path, content))
-    return blocks
+    return FileBlockParseResult(blocks, warnings, truncated_paths)
+
+
+def parse_file_blocks(response: str) -> list[tuple[str, str]]:
+    """Compatibility facade returning only complete FILE blocks."""
+    return parse_file_blocks_detailed(response).blocks

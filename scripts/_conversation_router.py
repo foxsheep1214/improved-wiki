@@ -292,6 +292,8 @@ def _infer_stage(prompt: str) -> str:
         if idx != -1:
             scan = stripped[idx + 1:]
     head = scan[:500]
+    if "repairing truncated wiki FILE blocks" in head:
+        return "Stage-2-TruncatedFileRepair"
     if "generating wiki pages" in head.lower() or ("Synthesis" in head and "FILE blocks" in head):
         return "Stage-2-4-Generation"
     if "review agent" in head or "可疑项" in head:

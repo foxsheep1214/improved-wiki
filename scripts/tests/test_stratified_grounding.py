@@ -1,8 +1,9 @@
 """Tests for the A6 big-book grounding de-bias (audit H2, 2026-07-02).
 
 Covers the stratified per-chapter source sampler used for Stage 2.9
-grounding (_ingest_prepare), the chapter-scaled comparison cap and the
-max_tokens truncation retry (Stage 2.9). No network — the LLM call is spied.
+grounding (_ingest_prepare), the chapter-scaled comparison cap and
+NashSU-style exact-path FILE truncation repair. No network — the LLM call is
+spied.
 
 (The per-chunk claims-quota case was removed 2026-07-12 with Stage 2.7 —
 NashSU parity.)
@@ -100,14 +101,14 @@ class TestTruncationRetry(unittest.TestCase):
     _RESP = ('---FILE:wiki/comparisons/a-vs-b.md---\n'
              '---\ntitle: "A vs B"\n---\nbody\n---END FILE---')
 
-    def _run(self, stops):
-        """Run stage 2.9 with a spied LLM returning self._RESP with the given
-        stop reasons in order; returns (blocks, number of LLM calls)."""
+    def _run(self, responses):
+        """Run Stage 2.9 with ordered ``(response, stop_reason)`` pairs."""
         calls = []
 
         def _spy(prompt, config, max_tokens=None, label=None):
+            index = len(calls)
             calls.append(prompt)
-            return self._RESP, stops[min(len(calls) - 1, len(stops) - 1)]
+            return responses[min(index, len(responses) - 1)]
 
         config = SimpleNamespace(raw_root=Path("/tmp/raw"),
                                  wiki_dir=Path("/tmp/nonexistent-wiki-b4"),
@@ -123,19 +124,31 @@ class TestTruncationRetry(unittest.TestCase):
         return blocks, len(calls)
 
     def test_normal_stop_makes_single_call(self):
-        blocks, n_calls = self._run(["end_turn"])
+        blocks, n_calls = self._run([(self._RESP, "end_turn")])
         self.assertEqual(n_calls, 1)
         self.assertEqual(len(blocks), 1)
 
-    def test_max_tokens_stop_retries_once(self):
-        blocks, n_calls = self._run(["max_tokens", "end_turn"])
+    def test_closed_block_needs_no_repair_even_if_stop_says_max_tokens(self):
+        blocks, n_calls = self._run([(self._RESP, "max_tokens")])
+        self.assertEqual(n_calls, 1)
+        self.assertEqual(len(blocks), 1)
+
+    def test_unclosed_block_gets_one_targeted_repair_call(self):
+        truncated = self._RESP.replace("---END FILE---", "")
+        blocks, n_calls = self._run([
+            (truncated, "end_turn"),
+            (self._RESP, "end_turn"),
+        ])
         self.assertEqual(n_calls, 2)
         self.assertEqual(len(blocks), 1)
 
-    def test_still_truncated_keeps_parsed_blocks_no_third_call(self):
-        blocks, n_calls = self._run(["max_tokens", "max_tokens"])
-        self.assertEqual(n_calls, 2, "retry exactly once")
-        self.assertEqual(len(blocks), 1)
+    def test_unrecovered_block_pauses_instead_of_publishing_partial(self):
+        truncated = self._RESP.replace("---END FILE---", "")
+        with self.assertRaisesRegex(RuntimeError, "did not recover"):
+            self._run([
+                (truncated, "end_turn"),
+                ("malformed repair", "end_turn"),
+            ])
 
 
 if __name__ == "__main__":

@@ -455,9 +455,10 @@ def _generate_all_chunks(
         print(f"  [generate] {i + 1}/{chunk_total} [per-chunk, grounded]")
     print(f"  [generate] {chunk_total}/{chunk_total} per-chunk grounded done "
           f"[{time.time() - t_start:.0f}s]")
-    # No single stop_reason for the per-chunk path. A failed or truncated chunk
-    # raises inside stage_2_4_generate_chunk, so a partial key-page set cannot be
-    # mistaken for successful completion.
+    # No single stop_reason for the per-chunk path. An unclosed FILE block first
+    # gets one exact-path repair; a failed/unrecovered chunk then raises inside
+    # stage_2_4_generate_chunk, so a partial key-page set cannot be mistaken for
+    # successful completion.
     return all_file_blocks, generated_slugs, None
 
 

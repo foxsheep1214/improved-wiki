@@ -73,8 +73,12 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 - Stage 2.6 writes one concise, free-form source summary. It links only
   materially relevant pages and selects core claims; it does not dump all
   generated pages/chunk claims or require a fixed H2 set.
-- A truncated generation is a hard pause, not a trigger to inflate output with
-  per-concept fallback calls.
+- An unclosed `FILE` block is dropped and gets one exact-path targeted repair
+  call. Unrequested repair pages are rejected; an unrecovered key/comparison
+  page pauses instead of publishing partial content.
+- If the source summary is still missing or malformed, write NashSU's
+  deterministic fallback from the complete Stage 2 analysis. Neither recovery
+  path is a per-concept coverage backfill or a page-count mechanism.
 
 ### Parallelism
 
@@ -118,6 +122,9 @@ Policy and rationale: `references/delegate-mode.md`. Per-stage result formats:
 
 There is no silent quality fallback:
 
+- FILE repair and the guaranteed source-summary fallback are explicit,
+  logged NashSU recovery paths; they never fabricate extra concept/entity
+  coverage.
 - Captioning requires the configured VLM provider; optional VLM-to-VLM failover
   is allowed only when explicitly configured and logged.
 - Embeddings require the configured local stack.

@@ -17,7 +17,6 @@ from _progress import (
     is_stage_done,
     get_stage_payload,
     mark_stage_done,
-    unmark_stage_done,
     load_cache,
     save_cache,
     clear_progress,
@@ -44,6 +43,10 @@ from _stage_3_write import (
 )
 from _stage_3_2_inject_images import stage_3_2_inject_images
 from _stage_3_4_review import stage_3_4_review_suggestions
+from _stage_2_6_source_page import (
+    build_fallback_source_summary_content,
+    source_analysis_text,
+)
 from _stage_validators import validate_stage_outputs
 from _enrich_wikilinks import enrich_wikilinks_batch
 
@@ -430,6 +433,61 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         if enrich_enabled and not is_listing:
             enrich_candidates.append((rel_path, full_path))
 
+    if not source_block and not query_bridge:
+        # Current NashSU guarantees a source summary even when the generation
+        # omitted or malformed its source FILE block. Mirror that final write
+        # guard here as well as in Stage 2.6, using the COMPLETE Stage 2
+        # analysis (never a shortened digest stub and never a per-concept
+        # fallback). This also repairs older cached prepared artifacts.
+        fallback_progress = load_progress(config, h) or {}
+        fallback_digest = (
+            global_digest
+            if global_digest
+            else fallback_progress.get("global_digest", {})
+        )
+        fallback_chunks = (
+            chunk_analyses
+            if chunk_analyses
+            else fallback_progress.get("chunk_analyses")
+        )
+        fallback_content = build_fallback_source_summary_content(
+            canonical_source,
+            source_analysis_text(
+                fallback_digest,
+                chunk_analyses=fallback_chunks,
+            ),
+            today_str,
+        )
+        try:
+            # NashSU's fallback is a deterministic write, not another semantic
+            # merge/generation turn. A source path belongs to this one source,
+            # so replacement is the correct recovery behavior.
+            stage_3_1_write_wiki_file(
+                source_path,
+                fallback_content,
+                config,
+                merge=False,
+            )
+        except OSError as exc:
+            print(f"  [write] HARD ERROR: source fallback — {exc}")
+            hard_failures.append("missing-source-page")
+        else:
+            source_ref = PageRef.parse(
+                source_path,
+                config.wiki_root,
+                config.wiki_dir,
+            ).project_relative
+            if source_ref not in files_written_paths:
+                files_written_paths.append(source_ref)
+            source_block = (
+                source_path.relative_to(config.wiki_dir).as_posix(),
+                fallback_content,
+            )
+            print(
+                "  [write] source summary missing — wrote deterministic "
+                "fallback from complete Stage 2 analysis"
+            )
+
     # A partial write is diagnostic state, never a resumable "done" state.
     # Do not run enrichment/review/aggregate or create write markers when any
     # FILE block failed to persist.
@@ -467,29 +525,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             if rel_path in enriched_pages:
                 atomic_write(full_path, enriched_pages[rel_path])
                 print(f"  [enrich] {rel_path} (+wikilinks)")
-
-    if not source_block and not query_bridge:
-        # A source page is part of NashSU's generation contract. Do not hide a
-        # missing/malformed Stage 2.6 result behind a deterministic outline or
-        # fixed-section placeholder: pause visibly so the generation can be
-        # repaired and resumed without publishing a different content policy.
-        print(f"  [write] HARD ERROR: generated source page is missing "
-              f"({source_path.name})")
-        hard_failures.append("missing-source-page")
-
-    if hard_failures:
-        # write_loop_done may already have been set before an enrichment
-        # handoff. A missing source page invalidates that marker: 3.1 is not
-        # complete and must be retried after Stage 2.6 is repaired.
-        unmark_stage_done(config, h, "write_loop_done")
-        partial_refs = canonical_page_refs(
-            files_written_paths, config.wiki_root, config.wiki_dir)
-        bind_page_refs(config, h, partial_refs)
-        return {
-            "status": "hard-error",
-            "hard_failures": hard_failures,
-            "files_written": partial_refs,
-        }
 
     # Refresh the finer-grained marker after the generated source block has
     # been confirmed. This closes the small window where the pre-enrichment

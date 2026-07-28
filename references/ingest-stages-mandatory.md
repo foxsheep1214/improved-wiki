@@ -11,7 +11,7 @@ improved-wiki 流水线 = **15 个 active Stage（含 Phase 0 前置门，跨 4 
 
 **执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 串行调度，agent 只答 prompt、无法跳过任何 stage（2.9 的跳过条件也是代码内置判断）。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。唯一仍靠 agent 自觉的规则：不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。（Stage 0.1 命名检查已于 2026-07-08 接入 `_do_prepare`——每个候选文件在 0.2 去重前自动过 `stage_0_1_check_file`，违规或项目无命名规则即 raise。）
 
-> **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。完整政策见 SKILL.md「No-silent-fallback policy」段。唯一例外：cache/stage-progress 状态文件损坏 → 告警+重置。
+> **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。完整政策见 SKILL.md「No-silent-fallback policy」段。显式恢复路径只有：cache/stage-progress 状态损坏时告警+重置；未闭合 FILE 块的一次 exact-path 定向修复；缺失 source summary 时从完整 Stage 2 analysis 写确定性恢复页。后二者对齐 NashSU，都会打印日志，且绝不补 concept/entity 数量。
 
 ## 阶段编号 → 代码函数
 
@@ -114,10 +114,10 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **并行生成（2026-07-09 默认开启；2026-07-23 加并发上限）**：多 chunk 时用预计算 slug 清单（`_build_gen_inventory`，slug = slugify(name)，取自已缓存的 2.2 分析）取代"chunk N+1 靠 chunk N 实际产出的 slug 去重"——去重是确定性引用查表，不是像 2.2 rolling digest 那样的内容依赖，NashSU 本身也不对生成分 chunk（一次整书调用），没有"必须串行"的先例要对齐。一次 ingest.py 调用最多吐出 `--parallel N` 个仍缺答案的 generation prompt；主对话并发派该波的 fresh sub-agent，写回后 re-invoke 进入下一波（10 chunks、N=4 → 4+4+2）。`N=1` 才显式串行，N≥剩余 chunk 数仍一次全发。选项退出：`IMPROVED_WIKI_PARALLEL_GEN=0`/`false`/`no`/`off` 回退旧的严格串行累积路径（排查回归时用）。
 - **子步骤（生成前）· 增量关联验证**：`stage_2_3_resolve_proposed_connections` 拿 2.2 chunk 分析自报的 `connections_to_existing_wiki` 去磁盘验证（确认被引用的 concept/entity/source 页真实存在），产出 verified `incremental_associations` 作为 2.4 生成的 Linkable pages 列表——只允许 LLM wikilink 到真实存在的页面，防止幻觉链接。wiki 为空时跳过。
 - **子步骤（生成后收尾）· 源内概念去重**（原 Stage 2.5，已并入 2.4）：对同一本书内部概念去重合并（防同名异义重复页）。**embedding 语义初筛**（cosine ≥0.82，复用 `_dedup_embedding.candidate_pairs`，取代旧的词级 Jaccard，能抓跨语言/同义重复如 傅里叶变换 vs Fourier transform）+ LLM 逐组确认，失败保守不合并。**无回退**：embedding stack 不可用则 `raise` 暂停（不退回 Jaccard）。跳过条件：单 chunk 书。go/no-go：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。
-- **子步骤（生成后）· 源页生成**：所有 chunk 生成完，`stage_2_6_source_page` 从 global digest、源文本上下文和 per-chunk claim candidates 生成**一个简洁、自由结构的 source summary**，并入 file_blocks。只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。与 NashSU Step 2 的 source summary 内容契约对齐。go/no-go：恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END marker 完整且正文非空。
+- **子步骤（生成后）· 源页生成**：所有 chunk 生成完，`stage_2_6_source_page` 从 global digest、源文本上下文和 per-chunk claim candidates 生成**一个简洁、自由结构的 source summary**，并入 file_blocks。只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。与 NashSU Step 2 的 source summary 内容契约对齐。若 source FILE 块未闭合，先 exact-path 定向修复；若仍缺失/不合规，使用 NashSU deterministic fallback，把完整 Stage 2 analysis 原样保留到最低限度 source 页（不截断、不另调 LLM）。go/no-go：最终恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END marker 完整且正文非空。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
 - **go/no-go**：`stages.file_blocks_generated ≥ 1`；source page FILE block 存在；概念页路径在 `wiki/concepts/` 下。
-- **失败处理**：0 个新 concept 可以是合法结果（无 key candidate 或均已存在）；输出截断/存在未覆盖 key candidate 却无 FILE block 时硬暂停，不运行“逐 concept 全量补齐”。
+- **失败处理**：0 个新 concept 可以是合法结果（无 key candidate 或均已存在）。解析器丢弃未闭合的 FILE block，并把其安全路径交给一次 targeted repair handoff；repair 只接受请求路径，额外页面全部丢弃。若 key/comparison 路径仍未恢复则硬暂停；绝不运行“逐 concept 全量补齐”。
 
 ### Stage 2.7 · Query Auto-Generation（已移除，对齐 NashSU，2026-07-12）
 - **原作用**：基于 2.4 的 concept/entity 生成 0-5 个开放问题 query 页 + 跨源 query 解析收尾（原 2.8）+ queries/index.md 维护。
@@ -135,8 +135,8 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## Phase 3：Write & Enrich
 
 ### Stage 3.1 · Write files（含 source page gate）
-- **作用**：Phase 3 唯一磁盘写入入口。先 source page gate（无 source 页则从 digest 生成 stub 追加），再原子写盘（.tmp → rename）。
-- **go/no-go**：任一 FILE block 或 source placeholder 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
+- **作用**：Phase 3 唯一磁盘写入入口。先 source page gate；若 LLM/旧缓存仍未提供 source 页，按 NashSU 从**完整 Stage 2 analysis**（滚动 digest + 全部 chunk analyses，不截断）生成确定性最低限度 source summary，再原子写盘（.tmp → rename）。
+- **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
 
 ### Stage 3.2 · 图片注入
 - **作用**：在 source 页末尾追加 `## Embedded Images` 段，列出所有图 + caption。
@@ -205,7 +205,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 |-------|---------|
 | 2.2 | chunk 分析结果齐全且无 error；滚动汇总 digest 含 5 必需 key 且类型正确（无 ≥1 concept 数量门槛；`_verify_stage_2_1_digest` 函数名是 2.1 时代遗留） |
 | 2.4 | ≥1 FILE block；source page FILE block 存在；路径正确（`_verify_stage_2_4_file_blocks`，**写盘前** in-memory 检查） |
-| 2.6 | 恰好一个 exact-path source FILE block，frontmatter/END marker 完整且正文非空（`_stage_2_6_validate_source_file_block`）；不检查固定 H2 或 claim 数 |
+| 2.6 | 首次响应先解析完整 FILE block；未闭合 exact path 做一次 targeted repair；仍缺失/错误则从完整 Stage 2 analysis 生成 deterministic fallback。最终必须恰好一个 exact-path、frontmatter/END 完整且正文非空的 source block；不检查固定 H2 或 claim 数 |
 | 3.1–3.2 | 写入无 hard failure；required media 全量注入后才写 `write_phase` |
 | 3.4 | review YAML 严格 schema + wiki 内安全路径；整批先验后写 |
 | 3.5 | log source/hash 与 index source link 两个确定性 postcondition |

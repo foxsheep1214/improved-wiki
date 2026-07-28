@@ -316,6 +316,12 @@ def parse_file_blocks(response: str) -> list[tuple[str, str]]:
 
     return _parse_file_blocks(response)
 
+
+def parse_file_blocks_detailed(response: str):
+    from _parse import parse_file_blocks_detailed as _parse_file_blocks_detailed
+
+    return _parse_file_blocks_detailed(response)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Shared utilities (used by multiple stage modules)
 # ══════════════════════════════════════════════════════════════════════════════

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from _config import Config
 from _core import canonical_source_path
+from _file_block_repair import repair_truncated_file_blocks
 from _llm_api import call_anthropic_protocol
-from _parse import parse_file_blocks
 from _schema import load_purpose_md, load_schema_md, schema_prompt_text
 from _stage_2_base import _stage_2_frontmatter_title
 from _language import build_language_directive, get_output_language
@@ -255,20 +255,24 @@ def stage_2_9_comparison_generation(
         # exception into response="" also hid programming errors and silently
         # skipped all comparisons. Let it propagate (aligned with 2.6);
         # ConversationPending passes through as before.
-        _stop = ""
-        response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)
-        # A6: a max_tokens stop means the tail comparison block was cut and
-        # would be silently dropped by parse_file_blocks — warn and retry once.
-        if response and _stop == "max_tokens":
-            print("[stage 2.9] ⚠️  response truncated (stop=max_tokens) — retrying once")
-            try:
-                response, _stop = call_anthropic_protocol(prompt, config, max_tokens=comp_tokens)
-            except Exception as e:
-                print(f"[stage 2.9] retry failed: {e} — keeping truncated response")
-            if _stop == "max_tokens":
-                print("[stage 2.9] ⚠️  still truncated — keeping complete blocks only")
+        response, _stop = call_anthropic_protocol(
+            prompt, config, max_tokens=comp_tokens)
         if response:
-            blocks = parse_file_blocks(response)
+            repair = repair_truncated_file_blocks(
+                response,
+                original_prompt=prompt,
+                source_identity=canonical_source_path(file_path, config),
+                config=config,
+                max_tokens=comp_tokens,
+                label="stage 2.9",
+                llm_call=call_anthropic_protocol,
+            )
+            if repair.unrecovered_paths:
+                raise RuntimeError(
+                    "Stage 2.9 targeted FILE repair did not recover: "
+                    + ", ".join(repair.unrecovered_paths)
+                )
+            blocks = repair.blocks
             if blocks:
                 print(f"[stage 2.9] {len(blocks)} comparison page(s)")
                 for path, _ in blocks:

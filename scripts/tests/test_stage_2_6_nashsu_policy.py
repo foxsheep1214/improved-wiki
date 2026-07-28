@@ -148,5 +148,86 @@ class TestPromptPolicy(unittest.TestCase):
         self.assertIn("related: []", normalized)
 
 
+class TestSourceFallbackAndTruncationRepair(unittest.TestCase):
+    DIGEST = {
+        "book_meta": {"title": "Book"},
+        "outline": [],
+        "key_concepts": [],
+        "key_entities": [],
+        "key_claims": [],
+    }
+
+    def _run(self, responses, chunk_analyses=None):
+        calls: list[str] = []
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            index = len(calls)
+            calls.append(prompt)
+            return responses[min(index, len(responses) - 1)]
+
+        original = s26.call_anthropic_protocol
+        s26.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                cfg = _config(tmp)
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                result = s26.stage_2_6_source_page(
+                    self.DIGEST,
+                    cfg.raw_root / "book.pdf",
+                    cfg,
+                    chunk_analyses=chunk_analyses,
+                )
+        finally:
+            s26.call_anthropic_protocol = original
+        return result, calls
+
+    def test_missing_source_block_gets_deterministic_fallback(self):
+        tail = "TAIL-OF-COMPLETE-ANALYSIS"
+        (response, stop_reason), calls = self._run(
+            [("The model omitted its FILE block.", "end_turn")],
+            chunk_analyses=[{"chunk_index": 1, "evidence": tail}],
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(stop_reason, "fallback-source-summary")
+        self.assertIn("Source: raw/book.pdf", response)
+        self.assertIn(tail, response)
+        s26._stage_2_6_validate_source_file_block(response, "book")
+
+    def test_truncated_source_block_is_targeted_then_recovered(self):
+        truncated = (
+            "---FILE:wiki/sources/book.md---\n"
+            "---\ntype: source\ntitle: Book\n---\npartial"
+        )
+        (response, stop_reason), calls = self._run([
+            (truncated, "end_turn"),
+            (_page("## Repaired\n\nComplete source page."), "end_turn"),
+        ])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(stop_reason, "end_turn")
+        self.assertIn("Complete source page.", response)
+        self.assertIn("- wiki/sources/book.md", calls[1])
+        self.assertIn("repairing truncated wiki FILE blocks", calls[1])
+
+    def test_unrecovered_source_block_falls_back_with_full_analysis(self):
+        tail = "ANALYSIS-TAIL-MUST-SURVIVE"
+        truncated = "---FILE:wiki/sources/book.md---\npartial"
+        (response, stop_reason), calls = self._run(
+            [
+                (truncated, "end_turn"),
+                ("repair also malformed", "end_turn"),
+            ],
+            chunk_analyses=[{
+                "chunk_index": 1,
+                "large": "x" * 20_000 + tail,
+            }],
+        )
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(stop_reason, "fallback-source-summary")
+        self.assertIn(tail, response)
+        self.assertNotIn("... (truncated)", response)
+
+
 if __name__ == "__main__":
     unittest.main()
