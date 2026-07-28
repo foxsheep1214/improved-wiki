@@ -37,13 +37,15 @@ Active order:
 1.1 text/OCR → 1.2 images → 1.3 captions
 2.2 serial chunk analysis + rolling digest
 → 2.3 existing-wiki association
-→ 2.4 grounded page generation + in-source dedup
-→ 2.6 source page → 2.9 comparisons
+→ 2.4 grounded key/schema-typed page generation + in-source dedup
+→ 2.6 source page
 → 3.1 write/merge → 3.2 media injection → 3.4 review
 → 3.5 aggregate repair → 3.7 embeddings → ingested marker
 ```
 
-Stage 2.7 query generation is retired. Review suggestions are handled by
+Stage 2.7 query generation and the dedicated Stage 2.9 comparison generator are
+retired. Comparison/synthesis/finding/thesis/methodology use Stage 2.2→2.4's
+shared schema-typed lifecycle. Review suggestions are handled by
 `process-reviews`; Graph remains a separate explicit command. The authoritative
 stage gates are in `references/ingest-stages-mandatory.md`.
 
@@ -51,7 +53,7 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 
 - Require `<project>/schema.md`; its scoped `## Page Types` table is the
   authoritative `frontmatter type → wiki directory` map.
-- Inject the semantic schema into Stage 2.2, 2.4, 2.6, 2.9, and 3.4 prompts,
+- Inject the semantic schema into Stage 2.2, 2.4, 2.6, and 3.4 prompts,
   matching NashSU. Exclude improved-wiki's machine-only raw naming YAML from
   LLM context while still enforcing it at Stage 0.1.
 - Load optional `<project>/purpose.md` into the same prompts: schema defines
@@ -67,15 +69,20 @@ stage gates are in `references/ingest-stages-mandatory.md`.
   prerequisites are not page candidates.
 - No concept-page, entity-page, or claim-count target exists. `mentioned`
   concepts are analysis context only and never reserve a generated slug.
-- Stage 2.4 generates the recommended key pages after association/dedup. It
-  never invents supplementary foundational pages or automatically backfills
-  every analyzed term.
+- Stage 2.4 generates the recommended key and schema-typed pages after
+  association/dedup. Comparison, synthesis, finding, thesis, methodology, and
+  custom declared types follow the same selection, routing, grounding, and FILE
+  generation path. Schema semantics remain mandatory: for example, a synthesis
+  requires real multi-source evidence.
+- There is no per-type page quota or separate comparison cap. Stage 2.4 never
+  invents supplementary foundational pages or automatically backfills every
+  analyzed term.
 - Stage 2.6 writes one concise, free-form source summary. It links only
   materially relevant pages and selects core claims; it does not dump all
   generated pages/chunk claims or require a fixed H2 set.
 - An unclosed `FILE` block is dropped and gets one exact-path targeted repair
-  call. Unrequested repair pages are rejected; an unrecovered key/comparison
-  page pauses instead of publishing partial content.
+  call. Unrequested repair pages are rejected; an unrecovered recommended
+  key/schema-typed page pauses instead of publishing partial content.
 - If the source summary is still missing or malformed, write NashSU's
   deterministic fallback from the complete Stage 2 analysis. Neither recovery
   path is a per-concept coverage backfill or a page-count mechanism.
@@ -123,7 +130,7 @@ Policy and rationale: `references/delegate-mode.md`. Per-stage result formats:
 There is no silent quality fallback:
 
 - FILE repair and the guaranteed source-summary fallback are explicit,
-  logged NashSU recovery paths; they never fabricate extra concept/entity
+  logged NashSU recovery paths; they never fabricate extra key/schema-typed
   coverage.
 - Captioning requires the configured VLM provider; optional VLM-to-VLM failover
   is allowed only when explicitly configured and logged.

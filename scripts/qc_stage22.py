@@ -107,7 +107,16 @@ def check(txt_file: Path) -> tuple[bool, str]:
         entities_body,
         re.MULTILINE,
     )
-    placeholders = [name for name in concepts + entities if PLACEHOLDER.search(name)]
+    typed_body = _indented_yaml_block(text, "schema_typed_candidates")
+    typed = re.findall(
+        r"^\s+(?:-\s*)?name:\s*[\"']?(.+?)[\"']?\s*$",
+        typed_body,
+        re.MULTILINE,
+    )
+    placeholders = [
+        name for name in concepts + entities + typed
+        if PLACEHOLDER.search(name)
+    ]
     if placeholders:
         return False, f"placeholder names: {placeholders[:3]}"
     n_claims = len(CLAIM_LINE.findall(text))
@@ -117,7 +126,7 @@ def check(txt_file: Path) -> tuple[bool, str]:
                        f"evidence anchor")
     return True, (
         f"OK ({len(concepts)} key concepts, {len(entities)} key entities, "
-        f"{n_claims} claims, {size} bytes)"
+        f"{len(typed)} schema-typed candidates, {n_claims} claims, {size} bytes)"
     )
 
 

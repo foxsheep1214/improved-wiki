@@ -856,9 +856,9 @@ def _scan_wiki_inventory(wiki_dir: Path) -> dict[str, list[tuple[str, str]]]:
 
 
 def rebuild_index_deterministic(wiki_dir: Path) -> str:
-    """Rebuild index.md in NashSU 0.6.5's application-owned format.
+    """Rebuild index.md in NashSU 0.6.6's application-owned format.
 
-    The 0.6.5 Rust implementation groups pages by frontmatter ``type``, sorts
+    The 0.6.6 Rust implementation groups pages by frontmatter ``type``, sorts
     groups alphabetically, sorts pages by display title, and always writes the
     full wiki-relative target (without ``.md``). Full targets are essential
     when a concept and comparison share the same filename stem.
@@ -1017,7 +1017,7 @@ def stage_3_5_aggregate_repair(
             or f"[[{source_target}]]" in current_index
         ):
             return
-        # Accept both the 0.6.5 type header and legacy bilingual headers.
+        # Accept both the 0.6.6 type header and legacy bilingual headers.
         m = re.search(
             r"(?mi)^##\s+(?:source|Sources(?:（来源）)?)\s*$",
             current_index,

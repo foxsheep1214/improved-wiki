@@ -10,16 +10,20 @@ capabilities that don't exist yet and are intentionally deferred.
 **优先级:** 低-中(能力增强,非阻断;ingest 主链质量已达标)。
 **状态:** 未开始。调研已完成(2026-07-02)。
 
-### 现状 / gap(2026-07-02 调研确认)
+### 现状 / gap（2026-07-28 按 NashSU 0.6.6 更新）
 
-- `comparison` 仅**源内**(Stage 2.9,只用当前书自己的概念);`finding` / `methodology` /
-  `thesis` / `synthesis` 只走 Stage 2.2 的 `schema_typed_candidates` —— 仅当**单一源的单个
-  chunk 字面包含**该内容时才生成。
-- **跨源/跨页的 `synthesis` / `thesis`(把多本书、多页合成一个新结论或假设)目前没有任何
-  自动机制。** 全库唯一的跨源工具 `cross_source_dedup.py` 只合并去重、不造新页;`schema.md`
-  写了"证据够了在 synthesis 页里解决矛盾"但**无代码实现,纯手工**。
-- NashSU 同样没有:其唯一真合成器 `deep-research.ts` 合成的是**新抓的外部 web 结果**(不是
-  已有 wiki 页),且手动触发。→ 这是整个 Karpathy 范式的共同边界,**不是 bug**。
+- 普通 ingest 已把 `comparison` / `synthesis` / `finding` / `methodology` /
+  `thesis` 统一接入 Stage 2.2 `schema_typed_candidates` → Stage 2.4 FILE
+  generation；不再有独立 Stage 2.9。候选可使用滚动 digest 做跨 chunk
+  连续判断，但仍必须由当前输入的真实来源证据支撑。
+- Deep Research 页本身整合多个真实来源，因此 auto-ingest 时可合法产生
+  synthesis/thesis；一本书的多个章节或 chunk 仍不能冒充多个来源。
+- **仍缺少的是主动扫描既有 wiki 多页/多书、再自动创造新的 synthesis /
+  thesis 的机制。** `cross_source_dedup.py` 只合并去重；普通单源 ingest
+  不会读取整库正文来主动做新结论。
+- NashSU 0.6.6 同样没有既有 wiki 的自动全库合成器；`deep-research.ts`
+  合成的是用户主动触发后取得的多来源研究结果。这个 roadmap 项仍是新增
+  peer capability，不是 ingest 对齐缺陷。
 
 ### 参考实现(GitHub 调研)
 

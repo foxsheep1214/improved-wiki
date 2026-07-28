@@ -98,7 +98,7 @@ class TestInjectImagesLanguage(unittest.TestCase):
     def test_structural_headings_stay_english_regardless_of_body_language(self):
         # "## Embedded Images" / "### Page N" are structural markup, not
         # prose — they must stay English even on a Chinese-body page (matches
-        # the rest of the pipeline's convention, e.g. _stage_2_9_comparison.py
+        # the rest of the pipeline's FILE-block convention
         # only localizes prose vocabulary, never structural headings).
         with tempfile.TemporaryDirectory() as d:
             result = _run(Path(d), _CHINESE_BODY)

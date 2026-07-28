@@ -25,6 +25,7 @@ from _progress import (
 )
 from _schema import (
     list_existing_slugs,
+    load_purpose_md,
     load_schema_md,
     schema_candidate_routes,
 )
@@ -45,13 +46,14 @@ from _stage_2_4_generation import (
 from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_1_digest
 from _task_manifest import bind_chunk_plan
 
-CHUNK_PLAN_SCHEMA_VERSION = 2
+CHUNK_PLAN_SCHEMA_VERSION = 3
 CHUNKER_VERSION = "token-bounded-heading-aware-v2"
+ANALYSIS_POLICY_VERSION = "nashsu-0.6.6-schema-typed-v1"
 
 _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_2_done",
     "stage_2_3_done",
-    "stage_2_9_done",
+    "stage_2_9_done",  # legacy name: Stage 2.4 closing + Stage 2.6 tail
     "write_loop_done",
     "write_phase",
     "ingested",
@@ -138,6 +140,9 @@ def _build_chunk_plan(
     return {
         "schema_version": CHUNK_PLAN_SCHEMA_VERSION,
         "chunker_version": CHUNKER_VERSION,
+        "analysis_policy_version": ANALYSIS_POLICY_VERSION,
+        "schema_sha256": _text_sha256(load_schema_md(config)),
+        "purpose_sha256": _text_sha256(load_purpose_md(config)),
         "source_text_sha256": _text_sha256(extracted_text),
         "source_text_length": len(extracted_text),
         "context_size": config.context_size,
@@ -159,6 +164,9 @@ def _chunk_checkpoint_mismatch(progress: dict, current_plan: dict) -> str | None
         for key in (
             "schema_version",
             "chunker_version",
+            "analysis_policy_version",
+            "schema_sha256",
+            "purpose_sha256",
             "source_text_sha256",
             "source_text_length",
             "context_size",
@@ -236,10 +244,10 @@ def _assert_chunk_count_alignment(chunk_meta: list, chunk_analyses: list) -> Non
 
 
 def _parse_accumulated_to_dict(accumulated) -> dict:
-    """Parse the rolled-up accumulated_digest back to a dict for 2.4/2.6/2.9.
+    """Parse the rolled-up accumulated_digest back to a dict for 2.4/2.6.
 
     2.2's per-chunk updated_global_digest refines accumulated_digest across
-    chunks (NashSU rolling-digest parity). 2.4/2.6/2.9 consume the
+    chunks (NashSU rolling-digest parity). 2.4/2.6 consume the
     structured fields (book_meta/outline/key_concepts/key_claims/key_entities),
     so the final accumulated value must be a dict. Returns {} for empty/corrupt.
     """
@@ -664,7 +672,7 @@ def _run_chunk_pipeline(
             raise PrepareStopAfter("1.5")
         # Restore the persisted roll-up digest. A pre-roll-up cache (no valid
         # persisted global_digest) would silently feed an empty digest to
-        # 2.4/2.6/2.9 — same pattern as the stage_2_3_done restore above:
+        # 2.4/2.6 — same pattern as the stage_2_3_done restore above:
         # warn, invalidate the marker, and fall through to re-run 2.2.
         _digest_cached = progress.get("global_digest")
         _digest_keys = {"book_meta", "outline", "key_concepts", "key_claims", "key_entities"}
@@ -672,7 +680,7 @@ def _run_chunk_pipeline(
             print("  [stage 2.2] ⚠️  stage_2_2_done set but no valid rolled-up "
                   "global_digest persisted (pre-roll-up cache?) — invalidating "
                   "marker and re-running chunk analysis (prevents an empty "
-                  "digest reaching 2.4/2.6/2.9).")
+                  "digest reaching 2.4/2.6).")
             unmark_stage_done(config, _h, "stage_2_2_done")
         else:
             global_digest = _digest_cached
@@ -719,11 +727,11 @@ def _run_chunk_pipeline(
     # can stop here and the later spine run restores chunk_analyses without
     # re-analyzing. 2.2 is wiki-independent \u2014 safe to cache before 2.3+ runs.
     # Roll the final accumulated_digest up into global_digest (dict) for
-    # 2.4/2.6/2.9. Persist so a cached resume restores it.
+    # 2.4/2.6. Persist so a cached resume restores it.
     global_digest = _parse_accumulated_to_dict(accumulated_digest)
 
     # Verify the rolled-up digest has the 5 required keys (book_meta/outline/
-    # key_concepts/key_claims/key_entities) that 2.4/2.6/2.9 consume.
+    # key_concepts/key_claims/key_entities) that 2.4/2.6 consume.
     # Migrated from Stage 2.1 (removed 2026-07-08): the gate now runs on the
     # 2.2 roll-up instead of the former whole-book prior.
     if chunk_analyses and not analyze_only:
@@ -791,15 +799,17 @@ def _generate_from_analyses(
         stage_2_3_detect_incremental_associations,
         stage_2_3_resolve_proposed_connections,
     )
+    schema_text = load_schema_md(config)
     incremental_associations = stage_2_3_detect_incremental_associations(
-        config.wiki_dir, chunk_analyses)
+        config.wiki_dir, chunk_analyses, schema_text=schema_text)
     if incremental_associations:
-        print(f"  [stage 2.3] {len(incremental_associations)} new concept(s) "
+        print(f"  [stage 2.3] {len(incremental_associations)} new candidate(s) "
               f"match existing wiki pages \u2192 fed into generation prompt")
     else:
         print(f"  [stage 2.3] No existing-wiki associations (first source or no overlap)")
 
-    related_pages = stage_2_3_resolve_proposed_connections(config.wiki_dir, chunk_analyses)
+    related_pages = stage_2_3_resolve_proposed_connections(
+        config.wiki_dir, chunk_analyses, schema_text=schema_text)
     if related_pages:
         print(f"  [stage 2.3] {len(related_pages)} proposed connection(s) to "
               f"existing wiki resolved \u2192 fed into generation prompt")

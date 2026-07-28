@@ -12,8 +12,8 @@ Maps to the 2026-06-25 concept/entity/query loss bug:
   ``file_blocks`` by re-parsing ``raw_response`` — but raw_response was
   "\n".join(parsed FILE-block BODIES), bodies WITHOUT the ---FILE:...---
   wrappers, so parse_file_blocks() returned [] and silently dropped every
-  concept/entity page. 2.6 then wrote only the source page; 2.7/2.9 had no
-  concepts to work on. Fix: persist ``file_blocks`` directly and restore it;
+  concept/entity page. 2.6 then wrote only the source page. Fix: persist
+  ``file_blocks`` directly and restore it;
   raw_response was removed. Guard: if the marker is set but no ``file_blocks``
   artifact exists, invalidate the marker and re-run instead of returning [].
 """
@@ -281,6 +281,30 @@ class TestChunkPipelineResume(unittest.TestCase):
                     text, {}, raw, cfg, "template", progress, verbose=False)
             self.assertFalse(_core.is_stage_done(cfg, h, "stage_2_2_done"))
 
+    def test_changed_schema_invalidates_stage_2_2_analysis_plan(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            text = "schema-sensitive source text\n" * 100
+            chunk_meta, _ = _ingest_chunks._build_chunk_meta(text, cfg)
+            old_plan = _ingest_chunks._build_chunk_plan(text, cfg, chunk_meta)
+
+            cfg.wiki_root.mkdir(parents=True, exist_ok=True)
+            (cfg.wiki_root / "schema.md").write_text(
+                "## Page Types\n\n"
+                "| Type | Directory |\n"
+                "|---|---|\n"
+                "| finding | wiki/findings/ |\n",
+                encoding="utf-8",
+            )
+            new_plan = _ingest_chunks._build_chunk_plan(text, cfg, chunk_meta)
+
+            self.assertEqual(
+                _ingest_chunks._chunk_checkpoint_mismatch(
+                    {"chunk_plan_v2": old_plan}, new_plan),
+                "ChunkPlanV2 field changed: schema_sha256",
+            )
+
 
 class TestPrefetchBoundary(unittest.TestCase):
     """analyze_only (prefetch) runs Stage 2.2 then stops at the 2.2/2.3 boundary,
@@ -387,7 +411,7 @@ class TestPrefetchBoundary(unittest.TestCase):
     def test_spine_invalidates_pre_rollup_cache_and_reruns_2_2(self):
         """A cached 2.2 WITHOUT a persisted roll-up digest (pre-roll-up cache)
         is invalidated and re-analyzed instead of silently feeding an empty
-        digest to 2.4/2.6/2.7/2.9."""
+        digest to 2.4/2.6."""
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _make_config(tmp)

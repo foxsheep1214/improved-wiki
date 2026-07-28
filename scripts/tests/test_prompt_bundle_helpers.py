@@ -1,9 +1,4 @@
-"""Audit 三/B (2026-07-02) prompt-bundle helpers.
-
-Two read-only helpers were introduced alongside the prompt-text edits:
-  - _stage_2_4_generation._top_wiki_tags   (B3 / M10: inject wiki's top tags)
-  - _stage_2_9_comparison._existing_comparisons (B4 / H1: inject existing
-    comparison slug+title so 2.9 refuses same-topic twins)
+"""Audit 三/B (2026-07-02) Stage 2.4 prompt-bundle helpers.
 
 Stdlib unittest only.
 """
@@ -18,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import _core  # noqa: E402
 import _stage_2_4_generation as gen  # noqa: E402
-import _stage_2_9_comparison as comp  # noqa: E402
 
 
 def _make_config(tmp: Path) -> _core.Config:
@@ -97,56 +91,5 @@ class TestTopWikiTags(unittest.TestCase):
 
             self.assertIn("数据处理", section)
             self.assertIn("reuse", section.lower())
-
-
-class TestExistingComparisons(unittest.TestCase):
-    def test_returns_slug_title_pairs_sorted(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-            w = cfg.wiki_dir
-            _write(w / "comparisons" / "mti-vs-pulse-doppler.md",
-                   '---\ntype: comparison\ntitle: "MTI vs Pulse Doppler"\n---\n# MTI vs PD\n')
-            _write(w / "comparisons" / "ekf-vs-ukf.md",
-                   '---\ntype: comparison\ntitle: "EKF vs UKF"\n---\n# EKF vs UKF\n')
-            # excluded: index anchor and _-prefixed system file
-            _write(w / "comparisons" / "index.md", "---\ntype: index\n---\n")
-            _write(w / "comparisons" / "_audit.md", "---\ntype: x\n---\n")
-
-            pairs = comp._existing_comparisons(cfg)
-
-            self.assertEqual(pairs, [
-                ("ekf-vs-ukf", "EKF vs UKF"),
-                ("mti-vs-pulse-doppler", "MTI vs Pulse Doppler"),
-            ])
-
-    def test_title_falls_back_to_stem(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-            _write(cfg.wiki_dir / "comparisons" / "no-title.md", "# body only\n")
-
-            pairs = comp._existing_comparisons(cfg)
-
-            self.assertEqual(pairs, [("no-title", "no-title")])
-
-    def test_missing_dir_returns_empty(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-
-            self.assertEqual(comp._existing_comparisons(cfg), [])
-
-    def test_injected_into_prompt(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-            (cfg.raw_root).mkdir(parents=True, exist_ok=True)
-            _write(cfg.wiki_dir / "comparisons" / "mti-vs-pulse-doppler.md",
-                   '---\ntype: comparison\ntitle: "MTI vs Pulse Doppler"\n---\n# x\n')
-
-            prompt = comp._stage_2_9_build_prompt_in_source(
-                ["concept-a", "concept-b"], cfg.raw_root / "book.pdf", cfg)
-
-            self.assertIn("comparisons/mti-vs-pulse-doppler — MTI vs Pulse Doppler", prompt)
-            self.assertIn("do NOT create twins", prompt)
-
-
 if __name__ == "__main__":
     unittest.main()

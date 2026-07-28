@@ -551,7 +551,7 @@ You are analyzing content from: **{heading_path}**
 
     language_directive = build_language_directive(chunk_text)
 
-    # NashSU v0.6.5/current policy: identify only genuinely important key
+    # NashSU v0.6.6 policy: identify only genuinely important key
     # entities/concepts and stay "thorough but concise". There is deliberately no
     # per-character target, minimum count, completeness ledger, or instruction to
     # turn every mentioned building block into a page candidate.
@@ -624,10 +624,16 @@ Analyze THIS CHUNK of the book. Extract:
    15,000 characters — anything beyond is hard-truncated before the next
    chunk sees it.
 6. **Schema-typed page candidates** — use only the eligible type→directory
-   mappings in the authoritative schema block above (e.g. finding, decision,
-   methodology), and only when this chunk genuinely contains matching content.
-   NEVER invent goals, habits, journal entries, decisions, findings, hypotheses,
-   or other records that are not present in the source.
+   mappings in the authoritative schema block above (for example finding,
+   methodology, thesis, comparison, or synthesis). Recommend a page only when
+   the current source evidence genuinely satisfies that type's schema semantics.
+   A later chunk may recommend a comparison or other typed page when THIS chunk
+   plus the accumulated digest substantively establish it; the digest is
+   continuity evidence, not permission to invent facts. A synthesis candidate
+   still requires actual multi-source evidence as declared by the schema — two
+   chapters from one source do not make a synthesis. NEVER invent goals, habits,
+   journal entries, decisions, findings, hypotheses, or other records that are
+   not present in the source.
 
 # Output (YAML only, in ```yaml block)
 ```yaml
@@ -712,15 +718,17 @@ connections_to_existing_wiki:
   - existing_page: "..."
     relationship: "extends" | "contrasts" | "applies" | "cites"
 
-# Schema-typed page candidates (NashSU parity). ONLY use eligible mappings
-# listed in the authoritative schema block, and only when this chunk genuinely
-# contains matching content. Leave empty (`[]`) when no eligible type fits.
+# Schema-typed page candidates (NashSU 0.6.6 parity). ONLY use eligible mappings
+# listed in the authoritative schema block, and only when the current source
+# evidence satisfies that type's schema semantics. Cross-chunk candidates may
+# use the accumulated digest for continuity. Leave empty (`[]`) when no eligible
+# type fits.
 # NEVER invent goals/habits/journal/decisions/findings/hypotheses.
 schema_typed_candidates:
-  - type: "finding" | "decision" | "methodology" | "..."   # a schema-declared type
+  - type: "finding" | "methodology" | "thesis" | "comparison" | "synthesis" | "..."   # a schema-declared type
     name: "..."        # short specific kebab-case-friendly name (3-6 words)
     folder: "findings"  # the wiki/<folder>/ the page should land in
-    rationale: "..."    # one sentence: why this chunk supports this typed page
+    rationale: "..."    # one sentence: why the source evidence supports this typed page
 
 updated_global_digest: |
   # Compact Global Digest (after chunk {chunk_index + 1}/{chunk_total}) — NashSU parity
@@ -728,9 +736,11 @@ updated_global_digest: |
   # useful prior cross-chunk context. Keep the whole digest well under 15,000
   # chars — overflow is hard-truncated. Condense or drop peripheral detail under
   # budget pressure; retain stable names for concepts/entities that remain
-  # genuinely important, and keep key_claims to the source's core arguments.
-  # MUST contain these 5 top-level keys. The FIRST chunk ESTABLISHES book_meta
-  # and outline; later chunks refine them and append to the other three.
+  # genuinely important, keep key_claims to the source's core arguments, and
+  # retain only genuinely supported schema-typed candidates needed by later
+  # chunks. MUST contain the first 5 top-level keys below; the optional sixth
+  # carries typed-candidate continuity. The FIRST chunk ESTABLISHES book_meta
+  # and outline; later chunks refine them and append to the other fields.
   book_meta:
     title: "..."
     authors: ["..."]
@@ -748,8 +758,12 @@ updated_global_digest: |
   key_claims:
     - claim: "..."        # ONE line; keep only the book's MAIN arguments here
       evidence: "..."
+  schema_typed_candidates:
+    - type: "..."
+      name: "..."
+      rationale: "..."    # compact; omit weak or unsupported candidates
 
-# Do NOT propose new wiki pages — that's Stage 2
+# Do not turn this compact digest into an additional exhaustive page inventory.
 ```
 """
 

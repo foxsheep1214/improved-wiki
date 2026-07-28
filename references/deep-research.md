@@ -187,12 +187,11 @@ python3 "$SKILL_DIR/scripts/ingest.py" wiki/queries/<slug>.md
 The ingest entry-point accepts a `wiki/queries/` path directly (NashSU `autoIngest` parity, path-agnostic): the pipeline ingests `wiki/queries/<slug>.md` in place — no `raw/queries/` copy step (removed 2026-07-16; the ~20 `relative_to(raw_root)` source-identity call sites now route through `_core.canonical_source_path`/`source_cache_key`, which resolve a `wiki/queries/` path to `wiki/queries/<rel>` directly instead of faking a `raw/` path). `is_query_bridge_source` still recognizes a pre-2026-07-16 `raw/queries/<slug>.md` bridge copy for backward compatibility with older wikis, but no new ones are created.
 
 The ingest pipeline will:
-1. **Stage 2.2**: Analyze the research page → extract key entities/concepts
-2. **Stage 2.4**: Generate entity/concept pages for newly discovered items
-3. **Stage 2.9**: Generate comparison pages if relevant
-4. **Stage 3.4 (review)**: Generate review items — some may become new research topics (process via process-reviews)
-5. **Stage 3.5**: Update index/log/overview
-6. **Stage 3.7**: Embed the new pages
+1. **Stage 2.2**: Analyze the research page → extract key entities/concepts and genuinely supported schema-typed candidates
+2. **Stage 2.4**: Generate the recommended key/schema-typed pages, including comparison or multi-source synthesis when the research evidence supports them
+3. **Stage 3.4 (review)**: Generate review items — some may become new research topics (process via process-reviews)
+4. **Stage 3.5**: Update index/log/overview
+5. **Stage 3.7**: Embed the new pages
 
 This is what turns "a saved search result" into "integrated knowledge."
 

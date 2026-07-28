@@ -208,6 +208,7 @@ def stage_2_6_source_page(
     generated_entities: list[str] | None = None,
     chunk_claims: list | None = None,
     chunk_analyses: list[dict] | None = None,
+    generated_pages: list[str] | None = None,
 ) -> tuple[str, str]:
     """Stage 2.6: generate one NashSU-style source summary page.
 
@@ -307,7 +308,8 @@ relevant existing/generated pages."""
             str(x.get("name", "") if isinstance(x, dict) else x).strip()
             for x in list(key_concepts) + list(key_entities)
         ]
-        _refs = (list(generated_concepts or []) + list(generated_entities or [])
+        _refs = (list(generated_pages or [])
+                 + list(generated_concepts or []) + list(generated_entities or [])
                  + [n for n in _ref_names if n])
         linkable = sorted(_rank_linkable_fill(linkable, _refs)[:1500])
     linkable_str = "\n".join(f"  - [[{s}]]" for s in linkable) if linkable else "(none — write concepts as plain text, do NOT invent [[wikilinks]])"
@@ -321,7 +323,7 @@ relevant existing/generated pages."""
         f"# Linkable pages\n{linkable_str}\n"
     )
 
-    # P1 parity with Stage 2.4/2.9 (2026-06-27): ground the source summary in
+    # P1 parity with Stage 2.4 (2026-06-27): ground the source summary in
     # the raw source (trimmed to budget) so it uses the source's own wording,
     # formulas, numbers, and structure — not training memory.
     if source_context.strip():

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """rebuild_index.py — deterministic, LLM-free full rebuild of wiki/index.md.
 
-Scans the on-disk page inventory and writes NashSU 0.6.5's application-owned
+Scans the on-disk page inventory and writes NashSU 0.6.6's application-owned
 index format: pages grouped by frontmatter type, full wiki-relative link
 targets, display-title aliases, and title-sorted entries. Full paths preserve
 unambiguous links when different page types share a filename stem.

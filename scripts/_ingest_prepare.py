@@ -1,7 +1,6 @@
 """_ingest_prepare.py — Stage 0-2 synthesis / source-page prep (extracted from ingest.py)."""
 from __future__ import annotations
 
-import re
 import time
 from pathlib import Path
 
@@ -40,10 +39,6 @@ from _stage_2_6_source_page import (
     source_analysis_text,
     stage_2_6_source_page,
 )
-from _stage_2_9_comparison import (
-    stage_2_9_comparison_generation,
-    stage_2_9_append_source_backlinks,
-)
 from _stage_validators import (
     verify_stage_0,
     StageValidationError,
@@ -54,52 +49,21 @@ from _ingest_chunks import _run_chunk_pipeline
 from normalize_raw_names import stage_0_1_check_file
 from _task_manifest import ensure_task_manifest
 
-# ── A6 (audit H2): big-book grounding de-bias ──
-# 2.9 grounding was `extracted_text[:source_budget]` — a pure front
-# prefix, so a 1.55M-char book fed only its first ~19% and every
-# comparison skewed to the early chapters. Sample per-chapter heads instead.
-try:
-    from _stage_2_analyze import _CHAPTER_ANCHOR_RE
-except ImportError:  # keep prepare importable if analyze internals move
-    _CHAPTER_ANCHOR_RE = re.compile(
-        r"^#{1,3}\s*(第[一二三四五六七八九十百0-9]+章[^\n]*|Chapter\s+\d+[^\n]*)",
-        re.MULTILINE | re.IGNORECASE)
-
-_CHAPTER_SAMPLE_SEP = "\n\n[…]\n\n"
-
-
 def _stage_2_2_only_requested(config: Config, prefetch_only: bool) -> bool:
     """Whether prepare must stop before wiki-dependent Stage 2.3/2.4."""
     return prefetch_only or _stop_after_stage(config, "1.5")
 
 
-def _split_source_chapters(text: str) -> list[str]:
-    """Split text at chapter anchors (第N章 / Chapter N headings). Front matter
-    before the first anchor is its own segment; [text] when no anchor found."""
-    starts = [m.start() for m in _CHAPTER_ANCHOR_RE.finditer(text)]
-    if not starts:
-        return [text] if text else []
-    bounds = ([0] if starts[0] > 0 else []) + starts + [len(text)]
-    return [seg for seg in (text[s:e] for s, e in zip(bounds, bounds[1:]))
-            if seg.strip()]
-
-
-def _stratified_source_sample(text: str, budget: int) -> str:
-    """Concatenate equal per-chapter head slices up to ``budget`` chars.
-
-    Texts within budget pass through whole; texts without chapter anchors
-    keep the old prefix behavior (nothing to stratify on)."""
-    if len(text) <= budget:
-        return text
-    chapters = _split_source_chapters(text)
-    if len(chapters) <= 1:
-        return text[:budget]
-    sep_total = len(_CHAPTER_SAMPLE_SEP) * (len(chapters) - 1)
-    per_chapter = (budget - sep_total) // len(chapters)
-    if per_chapter <= 0:
-        return text[:budget]
-    sample = _CHAPTER_SAMPLE_SEP.join(ch[:per_chapter] for ch in chapters)
-    return sample[:budget]
+def _count_comparison_blocks(file_blocks: list[tuple[str, str]]) -> int:
+    """Count comparison pages emitted by the shared Stage 2.4 lifecycle."""
+    count = 0
+    for path, _content in file_blocks:
+        normalized = str(path)
+        if normalized.startswith("wiki/"):
+            normalized = normalized[len("wiki/"):]
+        if normalized.startswith("comparisons/"):
+            count += 1
+    return count
 
 
 def _prepare_source_page(
@@ -140,6 +104,7 @@ def _prepare_source_page(
         # pages and never dumps the entire set into the source summary.
         _gen_concepts = [s for s in _linkable if s.startswith("concepts/")]
         _gen_entities = [s for s in _linkable if s.startswith("entities/")]
+        _gen_pages = list(_linkable)
         _linkable.extend(list_existing_slugs(config))
         source_page_response, _ = stage_2_6_source_page(
             global_digest, raw_file, config,
@@ -149,6 +114,7 @@ def _prepare_source_page(
             generated_concepts=_gen_concepts, generated_entities=_gen_entities,
             chunk_claims=chunk_claims,
             chunk_analyses=chunk_analyses,
+            generated_pages=_gen_pages,
         )
 
     try:
@@ -200,8 +166,8 @@ def _do_prepare(
         text/digest, writes no wiki/ state. Safe to run for several books in
         parallel ("prefetch"). ``prefetch_only=True`` runs exactly this segment
         then raises ``PrepareStopAfter("1.5")`` at the Stage 2.2/2.3 boundary.
-      - **Wiki-dependent (2.3–2.9)** — Stage 2.3 reads ``config.wiki_dir`` to
-        link/dedup against existing pages; 2.4–2.9 build on that. MUST run in the
+      - **Wiki-dependent (2.3–2.6)** — Stage 2.3 reads ``config.wiki_dir`` to
+        link/dedup against existing pages; 2.4–2.6 build on that. MUST run in the
         serial spine (one book at a time) so each book sees prior books' written
         pages. ``prefetch_only=False`` (default) runs the full segment, reusing
         cached 2.2.
@@ -480,7 +446,7 @@ def _do_prepare(
             raise PrepareStopAfter("0")
 
         # 2.1 removed: global_digest starts empty; Stage 2.2 rolls it up and
-        # returns the final rolled-up dict (consumed by 2.4/2.6/2.9).
+        # returns the final rolled-up dict (consumed by 2.4/2.6).
         global_digest = {}
 
         # Stage 1.3 → 2 inline (NashSU ingest.ts Step 0.6 parity): rewrite
@@ -528,42 +494,43 @@ def _do_prepare(
             })
             mark_stage_done(config, h, "stage_2_3_done")
 
-        # --stop-after-stage 2 = "concept/entity generation only": halt before
-        # the 2.5-2.9 tail. stage_2_3_done is set so a re-run caches the chunk
-        # pipeline and resumes at 2.5. ("2.0" is the same boundary.)
+        # --stop-after-stage 2 = "key/schema-typed page generation only": halt
+        # before the 2.4 closing/source-page tail. stage_2_3_done is set so a
+        # re-run caches the chunk pipeline and resumes at the tail. ("2.0" is
+        # the same boundary.)
         if _stop_after_stage(config, "2") or _stop_after_stage(config, "2.0"):
             print(f"\n[stop-after-stage] Stage 2 complete — "
                   f"clean exit (--stop-after-stage=2)")
             raise PrepareStopAfter("2")
 
-        # ── Generation tail (2.4 收尾→2.9): dedup → source page → comparisons ──
-        # Cached as ONE segment under stage_2_9_done (marker name kept for
-        # resume-cache compatibility). 2.9 (LLM comparison generation) can fire
-        # ConversationPending; without this cache a resume would re-run the
-        # whole tail from 2.5. On cache hit, restore the tail outputs from the
-        # artifact store and skip the segment.
+        # ── Generation tail: Stage 2.4 closing dedup → Stage 2.6 source page ──
+        # Cached as ONE segment under legacy marker name ``stage_2_9_done`` for
+        # resume compatibility. NashSU 0.6.6 has no dedicated comparison stage:
+        # comparison and synthesis pages are schema-typed Stage 2.4 FILE blocks.
+        # On cache hit, restore the tail outputs from the artifact store.
         #
         # Same guard as the 2.3 cache path: this segment must have persisted a
         # ``file_blocks`` artifact (it always does — see save_progress below).
         # If the marker is set but the artifact is missing (old/partial cache),
-        # honoring it would skip the entire 2.5–2.9 tail with whatever
-        # file_blocks happens to be in scope — dropping source page /
-        # comparisons. Invalidate and re-run the tail instead.
+        # honoring it would skip the closing/source-page tail with whatever
+        # file_blocks happens to be in scope — dropping the source page.
+        # Invalidate and re-run the tail instead.
         _tail_cached = (is_stage_done(config, h, "stage_2_9_done")
                         and (progress or {}).get("file_blocks") is not None)
         if is_stage_done(config, h, "stage_2_9_done") and not _tail_cached:
-            print("  [stage 2.5–2.9] ⚠️  stage_2_9_done set but no persisted "
+            print("  [generation tail] ⚠️  legacy stage_2_9_done marker set "
+                  "but no persisted "
                   "file_blocks artifact — invalidating marker and re-running "
-                  "the 2.5–2.9 tail (prevents silent comparison loss).")
+                  "the closing/source-page tail (prevents silent page loss).")
             unmark_stage_done(config, h, "stage_2_9_done")
         if _tail_cached:
             _pcache = progress or {}
             file_blocks = _pcache.get("file_blocks", file_blocks)
-            comp_count = _pcache.get("comp_count", 0)
+            comp_count = _count_comparison_blocks(file_blocks)
             concept_count_before, concept_count_after = _pcache.get(
                 "concept_merge_stats", (0, 0))
             dedup_was_run = _pcache.get("dedup_was_run", False)
-            print(f"  [stage 2.4–2.9] (cached) tail outputs restored — "
+            print(f"  [generation tail] (cached) outputs restored — "
                   f"{len(file_blocks)} blocks")
         else:
             # Stage 2.4 closing sub-step: in-source concept dedup & merge
@@ -577,9 +544,9 @@ def _do_prepare(
             concept_count_before = _stage_2_5["concept_count_before"]
             concept_count_after = _stage_2_5["concept_count_after"]
 
-            # Source grounding shared by 2.6/2.9 (P1): raw source trimmed to
-            # the model-sized budget. Whole-book synthesis calls, so a budgeted
-            # excerpt is the right analog (cf. the single-chunk 2.4 path).
+            # Stage 2.6 source grounding: raw source trimmed to the model-sized
+            # budget. Stage 2.4 already emitted every recommended schema-typed
+            # page, including comparison/synthesis when the schema permits.
             _src_grounding = (extracted_text or "")[: config.source_budget]
 
             # Stage 2.6: Source page generation + merge — skipped for deep-research
@@ -606,13 +573,6 @@ def _do_prepare(
             _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations,
                                           is_query_bridge=_is_query_bridge)
 
-            # A6 (audit H2): 2.9 uses a stratified per-chapter sample, not
-            # the front prefix — 2.6 keeps the prefix (the audit targets
-            # comparison covering, not the source page digest).
-            _q29_source = _stratified_source_sample(
-                extracted_text or "", config.source_budget)
-            _chapter_count = len(_CHAPTER_ANCHOR_RE.findall(extracted_text or ""))
-
             # (Stage 2.7 query generation + cross-source query resolution
             # removed 2026-07-12 for NashSU parity: NashSU's ingest never
             # generates query pages — wiki/queries/ is fed only by deep
@@ -620,23 +580,12 @@ def _do_prepare(
             # The "open question worth researching" signal flows through
             # Stage 3.4 REVIEW suggestion items (with search_queries).)
 
-            # ── Stage 2.9: Comparison generation ──
-            comp_blocks, _ = stage_2_9_comparison_generation(
-                global_digest, chunk_analyses, file_blocks, raw_file, config,
-                template=template_content, verbose=verbose,
-                source_context=_q29_source,
-                chapter_count=_chapter_count,
-            )
-            if comp_blocks:
-                file_blocks = list(file_blocks) + comp_blocks
-                # A7: backlink the new comparisons from the source page block
-                # (2.9 runs after 2.6 — without this they stay an inlink island).
-                file_blocks = stage_2_9_append_source_backlinks(file_blocks, comp_blocks)
+            # Backward-compatible statistic. Comparison pages now arrive in the
+            # shared Stage 2.4 FILE-block set; there is no separate count cap or
+            # forced source-page backlink section.
+            comp_count = _count_comparison_blocks(file_blocks)
 
-            comp_count = len(comp_blocks)
-
-            # Persist tail outputs + mark the segment done so a 2.9
-            # ConversationPending resume restores instead of re-running.
+            # Persist tail outputs, then set the legacy segment marker.
             save_progress(config, h, {
                 "file_blocks": file_blocks,
                 "comp_count": comp_count,

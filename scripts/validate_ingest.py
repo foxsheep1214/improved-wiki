@@ -258,21 +258,25 @@ def main():
     # ingest no longer generates query pages.)
 
     # ═══════════════════════════════════════════════
-    # Stage 2.9 (cmp): Comparison generation (conditional)
+    # Stage 2.4 typed pages: comparison is optional and schema-driven
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.9 cmp] Comparison generation")
+    print("\n[Stage 2.4 typed] Comparison pages (optional)")
     comparisons_dir = WIKI / "comparisons"
     comp_pages = list(comparisons_dir.glob("*.md")) if comparisons_dir.is_dir() else []
     src_comp_pages = [p for p in comp_pages
                       if SOURCE_SLUG in p.read_text(encoding="utf-8", errors="ignore")] if comp_pages else []
     if entry:
         cg = stages.get("comparisons_generated", 0)
-        fb = stages.get("file_blocks_generated", 0)
-        if fb == 0:
-            note("auto-skipped", "no concept output — Stage 2.9 cmp skipped")
-        else:
-            check(f"{cg} comparison page(s) generated", 0 <= cg <= 2,
-                  f"cache={cg} disk_attributed={len(src_comp_pages)} (0-2 valid; 0 = ---COMPARISONS: 0---)")
+        check(
+            f"{cg} comparison page(s) generated through Stage 2.4",
+            isinstance(cg, int) and cg >= 0,
+            "comparison is a schema-typed candidate; zero is valid and there "
+            "is no dedicated-stage sentinel or numeric cap",
+        )
+        note(
+            "disk attribution",
+            f"{len(src_comp_pages)} comparison page(s) reference this source",
+        )
     else:
         note("no cache entry", f"disk comparisons/ has {len(comp_pages)} page(s) total")
 

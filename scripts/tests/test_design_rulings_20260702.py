@@ -6,14 +6,11 @@
   D2 — book-level granularity switch: Stage 2.2 injects a COARSE directive
        ONLY when Stage 2.1 classified book_meta.granularity == "manual".
   D4 — figure references link to the book's source page (never bare numbers).
-  D6 — Stage 2.9 section headings follow the content language (fixed Chinese
-       vocabulary for Chinese sources, English otherwise).
 
 Stdlib unittest only.
 """
 from __future__ import annotations
 
-import os
 import sys
 import tempfile
 import unittest
@@ -22,9 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import _core  # noqa: E402
-import _language  # noqa: E402
 import _stage_2_4_generation as gen  # noqa: E402
-import _stage_2_9_comparison as comp  # noqa: E402
 import _stage_2_analyze as analyze  # noqa: E402
 
 
@@ -41,17 +36,6 @@ def _make_config(tmp: Path) -> _core.Config:
         source_budget=100000, target_chars=60000, target_tokens=30000,
         max_tokens=8192, conversation_prefix="ab12cd34",
     )
-
-
-class _EnvIsolatedCase(unittest.TestCase):
-    """Neutralize IMPROVED_WIKI_OUTPUT_LANGUAGE so detection is exercised."""
-
-    def setUp(self):
-        self._saved = os.environ.pop(_language.OUTPUT_LANGUAGE_ENV, None)
-
-    def tearDown(self):
-        if self._saved is not None:
-            os.environ[_language.OUTPUT_LANGUAGE_ENV] = self._saved
 
 
 class TestD1D4GenerationRules(unittest.TestCase):
@@ -127,44 +111,5 @@ class TestD2GranularitySwitch(unittest.TestCase):
 
             self.assertIn("COARSE granularity", manual)
             self.assertNotIn("COARSE granularity", textbook)
-
-
-class TestD6ComparisonHeadings(_EnvIsolatedCase):
-    def test_chinese_source_uses_chinese_headings(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-            (cfg.raw_root).mkdir(parents=True, exist_ok=True)
-
-            prompt = comp._stage_2_9_build_prompt_in_source(
-                ["动目标显示", "脉冲多普勒"], cfg.raw_root / "book.pdf", cfg,
-                source_context="雷达信号处理中，动目标显示与脉冲多普勒经常被放在一起比较。")
-
-            for heading in ("## 为何对比", "## 对比表", "## 选型指南", "## 参见"):
-                self.assertIn(heading, prompt)
-            for heading in ("## Why Compare", "## Comparison Table",
-                            "## Selection Guide", "## See Also"):
-                self.assertNotIn(heading, prompt)
-
-    def test_english_source_keeps_english_headings(self):
-        with tempfile.TemporaryDirectory() as d:
-            cfg = _make_config(Path(d))
-            (cfg.raw_root).mkdir(parents=True, exist_ok=True)
-
-            prompt = comp._stage_2_9_build_prompt_in_source(
-                ["mti", "pulse-doppler"], cfg.raw_root / "book.pdf", cfg,
-                source_context="MTI and pulse-Doppler radar are frequently compared.")
-
-            for heading in ("## Why Compare", "## Comparison Table",
-                            "## Selection Guide", "## See Also"):
-                self.assertIn(heading, prompt)
-            self.assertNotIn("## 为何对比", prompt)
-
-    def test_headings_helper_fixed_vocabularies(self):
-        self.assertEqual(comp._stage_2_9_headings("纯中文样本文字，足够判定语言。"),
-                         ("为何对比", "对比表", "选型指南", "参见"))
-        self.assertEqual(comp._stage_2_9_headings("plain English sample text"),
-                         ("Why Compare", "Comparison Table", "Selection Guide", "See Also"))
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@ def _response(
     *,
     concepts: str = "concepts_found: []\n",
     entities: str = "entities_found: []\n",
+    typed: str = "schema_typed_candidates: []\n",
     claims: str = "claims: []\n",
     source_quotes: str = "",
 ) -> str:
@@ -27,6 +28,7 @@ def _response(
         f"{concepts}"
         f"{source_quotes}"
         f"{claims}"
+        f"{typed}"
         "updated_global_digest: |\n"
         "  book_meta: {}\n"
         "  outline: []\n"
@@ -78,6 +80,19 @@ class TestNashSUKeyItemPolicy(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             ok, msg = qc_stage22.check(
                 _write(Path(d), _response(concepts=concepts))
+            )
+        self.assertFalse(ok)
+        self.assertIn("placeholder", msg)
+
+    def test_placeholder_schema_typed_candidate_fails(self):
+        typed = (
+            "schema_typed_candidates:\n"
+            '  - type: "finding"\n'
+            '    name: "Reference Material"\n'
+        )
+        with tempfile.TemporaryDirectory() as d:
+            ok, msg = qc_stage22.check(
+                _write(Path(d), _response(typed=typed))
             )
         self.assertFalse(ok)
         self.assertIn("placeholder", msg)

@@ -42,7 +42,8 @@ source type, or comparison that would materially improve the wiki"）。
 - 测试：`test_stage_2_7_skip.py` / `test_query_resolve_cross_source.py` /
   `test_query_digest_packer.py` 删除；`test_queries_index_backlinks.py` /
   `test_design_rulings_20260702.py` / `test_stratified_grounding.py` 修剪
-- `stage_2_9_done` resume marker 名称保留（缓存兼容）
+- `stage_2_9_done` resume marker 名称保留（缓存兼容；现仅表示 2.4
+  去重收尾 + 2.6 source page tail）
 
 ## 现在 query 页的三个来源
 

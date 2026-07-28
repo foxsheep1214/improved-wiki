@@ -102,18 +102,17 @@ BASE_TYPE_TO_DIR = {
 _SCHEMA_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]*$", re.IGNORECASE)
 _SCHEMA_PROMPT_MAX_CHARS = 12_000
 
-# NashSU's automatic ingest owns these page kinds directly or through a
-# dedicated pipeline stage.  They should remain available in the authoritative
-# schema context, but Stage 2.2 must not re-propose them as custom typed pages:
-# query pages are user/research initiated, comparisons have Stage 2.9, and
-# synthesis is cross-source work rather than a per-source artifact.
+# NashSU 0.6.6's automatic ingest owns source/entity/concept directly. Query
+# pages are user/research initiated and overview is application-maintained.
+# Every other schema-declared type — including comparison and synthesis — is
+# eligible for the shared schema-typed analysis/generation lifecycle. The
+# schema's semantic rules still decide whether the current evidence supports a
+# candidate (for example, synthesis requires multiple sources).
 _INGEST_MANAGED_SCHEMA_TYPES = {
     "source",
     "entity",
     "concept",
     "query",
-    "comparison",
-    "synthesis",
     "overview",
 }
 

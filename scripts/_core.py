@@ -208,7 +208,7 @@ def canonical_source_path(raw_file: Path, config: "Config") -> str:
 
     Single source of truth: every place that writes a ``sources:`` field
     (canonical write in ``_ingest_write.py``, the per-page prompt hints in
-    Stage 2.4/2.6/2.9, the log.md line in Stage 3.5) must call this — not
+    Stage 2.4/2.6, the log.md line in Stage 3.5) must call this — not
     hand-roll an ``f"raw/{rel}"`` string — so they can never drift out of
     sync with each other. A drift would silently defeat
     ``_stage_3_1_canonicalize_sources_field``'s basename-based "already

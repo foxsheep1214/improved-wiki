@@ -79,7 +79,7 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     #
     # Two prompt shapes carry the list, both must be redacted:
     #   1. Inline single-line (legacy 2.1/2.8 prompt shape): "- Existing wiki pages: a, b, c"
-    #   2. Heading + multi-line list (Stage 2.4/2.9/3.4):
+    #   2. Heading + multi-line list (Stage 2.4/3.4):
     #        "# Existing wiki pages ..." followed by indented dash items or a
     #        bare comma-separated line, terminated by a blank line or the next
     #        "#" heading. The old single-line regex only matched shape 1, so
@@ -279,7 +279,8 @@ def _infer_stage(prompt: str) -> str:
     # generation/analysis prompt and runs ~890 chars — it would push the
     # distinctive stage marker past this 500-char window and collapse every
     # generation stage to the generic "LLM-task" label (observed live on the
-    # Printed Circuits Handbook ingest: Stage 2.4/2.6/2.7/2.9 all mislabeled,
+    # Printed Circuits Handbook ingest: several Stage 2 generation prompts were
+    # all mislabeled,
     # which also defeats the per-stage cache-file grouping). When the prompt
     # literally opens with the directive, skip that block and scan the
     # instruction text that follows. Prompts that don't open with it (e.g. the
@@ -311,8 +312,4 @@ def _infer_stage(prompt: str) -> str:
         # numbering was consolidated (2.5/2.8 retired); the stage code already
         # prints "[stage 2.4]" for it, so label its cache files to match.
         return "Stage-2-4-DedupConfirm"
-    if "just generated concept/entity pages for a book" in head:
-        return "Stage-2-9-Comparison"
-    if "review the concepts just generated for a book" in head.lower():
-        return "Stage-2-9-ComparisonReview"
     return "LLM-task"

@@ -133,8 +133,9 @@ class TestSourcePageLinkableRelevance(unittest.TestCase):
             "concepts/跟踪门", "concepts/目标跟踪基础",
         ]
         own = "concepts/多目标跟踪"
+        own_typed = "comparisons/多目标跟踪架构对比"
         linkable = ([f"concepts/aaa-{i:04d}" for i in range(1550)]
-                    + cjk_relevant + [own])
+                    + cjk_relevant + [own, own_typed])
         digest = {
             "book_meta": {"title": "T"}, "outline": [], "key_claims": [],
             "key_concepts": [{"name": "多目标跟踪"}], "key_entities": [],
@@ -170,13 +171,14 @@ class TestSourcePageLinkableRelevance(unittest.TestCase):
                     digest, cfg.raw_root / "book.pdf", cfg,
                     linkable_slugs=linkable,
                     generated_concepts=[own], generated_entities=[],
+                    generated_pages=[own, own_typed],
                 )
         finally:
             s26.call_anthropic_protocol = orig
         self.assertEqual(len(prompts), 1)
-        for slug in cjk_relevant + [own]:
+        for slug in cjk_relevant + [own, own_typed]:
             self.assertIn(f"[[{slug}]]", prompts[0])
-        # 1555 candidates → 1500 kept: the zero-score alphabetical tail goes.
+        # Over 1500 candidates: the zero-score alphabetical tail goes.
         self.assertNotIn("concepts/aaa-1549", prompts[0])
 
 

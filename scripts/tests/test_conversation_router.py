@@ -185,7 +185,8 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
     # Regression (fallout of the c359232 output-language fix): the ~890-char
     # "## ⚠️ MANDATORY OUTPUT LANGUAGE" directive is prepended to every
     # generation/analysis prompt. It pushed the distinctive stage marker past
-    # _infer_stage's 500-char head window, collapsing Stage 2.4/2.6/2.7/2.9 to
+    # _infer_stage's 500-char head window, collapsing Stage 2.4/2.6 and legacy
+    # generation prompts to
     # the generic "LLM-task" label (observed live on the Printed Circuits
     # Handbook ingest — every chunk-generation cache file mis-prefixed). The
     # directive block must be skipped before inferring the stage.

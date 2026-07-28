@@ -1,6 +1,6 @@
 """Tests for rebuild_index_deterministic (rebuild_index.py's core logic).
 
-NashSU parity (llm_wiki 0.6.5 rebuild_wiki_index): a pure frontmatter-scan
+NashSU parity (llm_wiki 0.6.6 rebuild_wiki_index): a pure frontmatter-scan
 index.md rebuild, no LLM call. Covers type grouping, title sort, full relative
 targets, title fallback, and empty-category omission.
 """

@@ -112,6 +112,16 @@ class DigestTransferIsNashSUParity(unittest.TestCase):
             self.assertIn("compact", prompt.lower())
             self.assertNotIn("keep everything from prior chunks", prompt)
 
+    def test_digest_carries_compact_schema_typed_candidate_context(self):
+        with tempfile.TemporaryDirectory() as t:
+            cfg = _cfg(Path(t), target_chars=256_000)
+            prompt = _build(cfg, "prior digest")
+            digest_template = prompt.split("updated_global_digest: |", 1)[1]
+            self.assertIn("schema_typed_candidates:", digest_template)
+            self.assertIn("optional sixth", digest_template)
+            self.assertIn("comparison", prompt)
+            self.assertIn("synthesis candidate", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

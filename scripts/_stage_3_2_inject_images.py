@@ -34,7 +34,7 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
     # page's target language (get_output_language collapses everything to
     # Chinese or English). Structural headings ("## Embedded Images",
     # "### Page N") stay English in both cases, matching the rest of the
-    # pipeline's convention (see _stage_2_9_comparison.py: only prose
+    # pipeline's FILE-block convention: only prose
     # vocabulary is localized, not structural markup).
     is_zh = get_output_language(content[:2000]) == "Chinese"
 

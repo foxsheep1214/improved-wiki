@@ -36,16 +36,17 @@ wiki/
 <project>/purpose.md # 可选；项目目标/范围，与 schema 一同注入 LLM 上下文
 ```
 
-**Schema 驱动路由（NashSU 0.6.5 parity）**：NashSU 通用模板的基础类型是
+**Schema 驱动路由（NashSU 0.6.6 parity）**：NashSU 通用模板的基础类型是
 `entity/concept/source/query/comparison/synthesis/overview`；Research 模板再声明
 `thesis/methodology/finding`。improved-wiki 的兼容常量仍允许这些历史目录，但项目
 `schema.md` 的 `## Page Types` 表才是权威类型映射。完整的语义 schema（排除
-improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/2.6/2.9/3.4；可选
-`purpose.md` 同时注入。Stage 2.2 只把非 pipeline-managed 类型
-（如 finding/methodology/person/decision）作为 `schema_typed_candidates`，并在
-Stage 2.4 按解析后的 type→dir 重新裁决，绝不信任 LLM 自报 folder。
+improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/2.6/3.4；可选
+`purpose.md` 同时注入。Stage 2.2 把除 source/entity/concept/query/overview
+之外的 schema 类型（含 comparison/synthesis/finding/thesis/methodology）
+作为 `schema_typed_candidates`，并在 Stage 2.4 按解析后的 type→dir 重新裁决，
+绝不信任 LLM 自报 folder。
 
-**来源**：NashSU 0.6.5 `templates.ts`（通用/Research 场景 schema）、
+**来源**：NashSU 0.6.6 `templates.ts`（通用/Research 场景 schema）、
 `wiki-schema.ts`（Page Types 结构化解析与路由校验）、`ingest.ts`
 （analysis/generation 全 schema 注入）。
 

@@ -18,11 +18,10 @@ publication, and completion lifecycle are authoritative in `delegate-mode.md`.
 | Stage | Prompt pattern | Required answer |
 |---|---|---|
 | Context probe | `ctxprobe*.md` | Plausible integer context size; only main-conversation exception |
-| 2.2 | `Stage-2-2-Chunk-N-*.md` | Valid YAML containing chunk index, entities, concepts, claims, formulas, existing-wiki connections, and the five-field `updated_global_digest` |
-| 2.4 | `Stage-2-4-Generation-*.md` | Exact requested `---FILE:wiki/<path>--- … ---END FILE---` blocks |
+| 2.2 | `Stage-2-2-Chunk-N-*.md` | Valid YAML containing chunk index, entities, concepts, claims, formulas, existing-wiki connections, schema-typed candidates, and the rolling `updated_global_digest` |
+| 2.4 | `Stage-2-4-Generation-*.md` | Exact requested key/schema-typed `---FILE:wiki/<path>--- … ---END FILE---` blocks |
 | 2.6 | `Stage-2-6-SourcePage-*.md` | One non-empty source-page FILE block at the exact requested path; headings are source-driven |
 | FILE repair | `Stage-2-TruncatedFileRepair-*.md` | Exactly one complete FILE block for every requested path and no unrequested paths |
-| 2.9 | `Stage-2-9-ComparisonReview-*.md` | Comparison FILE blocks or the exact zero-comparison sentinel |
 | 3.4 | `Stage-3-4-Review-*.md` | Strict YAML array of real findings; empty `[]` is valid |
 | Page merge | `LLM-task-*.md` | Merged body without frontmatter; preserve richer facts and wikilinks |
 | Wikilink enrichment | JSON `LLM-task-*.md` | Requested JSON mapping; `{}` is valid when no safe addition exists |
@@ -39,13 +38,15 @@ python3 "$SKILL_DIR/scripts/qc_stage22.py" \
 The answer must:
 
 - identify only genuinely important new/materially updated concepts and
-  entities; an honestly sparse or empty candidate list is valid;
+  entities plus genuinely supported schema-typed candidates; an honestly sparse
+  or empty candidate list is valid;
 - avoid placeholder names such as “chunk 3”, “technical content”, or
-  “reference material”;
+  “reference material” in every candidate list;
 - give every emitted claim a non-empty evidence anchor; `source_quotes` is
   optional audit support rather than a quota;
-- carry a complete five-field rolling digest:
-  `book_meta`, `outline`, `key_entities`, `key_concepts`, `key_claims`;
+- carry the five required rolling-digest fields
+  (`book_meta`, `outline`, `key_entities`, `key_concepts`, `key_claims`) and,
+  when relevant, a compact optional `schema_typed_candidates` continuity list;
 - remain grounded in the current chunk, not memory of earlier prompts.
 
 First chunk establishes book metadata and outline. Later chunks refine and
@@ -63,6 +64,9 @@ For each prompt:
 - generate only the recommended key owner slugs requested by that prompt,
   excluding ALREADY COVERED/SKIP items and never adding supplementary pages;
 - do not pad or split concepts to reach a FILE-block count;
+- for comparison, synthesis, finding, thesis, methodology, and custom typed
+  candidates, preserve the exact path/type and satisfy the semantic and
+  frontmatter rules in the embedded schema;
 - write definitions, mechanisms, equations, constraints, and source-specific
   evidence rather than generic summaries;
 - preserve proper nouns and technical identifiers;
@@ -74,10 +78,10 @@ not serialize normal Stage 2.4 operation and do not exceed `--parallel`.
 If a returned FILE opener has no matching END marker, ingest drops that
 partial body and emits one `Stage-2-TruncatedFileRepair-*` handoff. Answer only
 the listed paths, preserving them exactly. The repair allow-list rejects extra
-pages, so this mechanism must never be used to fill concept coverage or reach a
-page count. An unrecovered key/comparison page pauses the ingest.
+pages, so this mechanism must never be used to fill coverage or reach a page
+count. An unrecovered recommended key/schema-typed page pauses the ingest.
 
-## Source, comparisons, and review
+## Source, schema-typed pages, and review
 
 Stage 2.6 validates one exact-path, closed, non-empty FILE block. Choose the
 smallest useful source-driven structure; summarize core material and do not
@@ -85,9 +89,11 @@ enumerate every generated page or per-chunk claim. If its targeted FILE repair
 still fails, ingest creates NashSU's deterministic minimum source page from the
 complete Stage 2 analysis; no additional handoff is needed.
 
-Stage 2.9 comparisons need a why-compare section, a table with at least four
-useful dimensions, a selection guide, and see-also links. Use the language
-requested by the prompt.
+Comparison pages are ordinary Stage 2.4 schema-typed outputs. Follow the
+project schema and the source evidence; there is no dedicated Stage 2.9 prompt,
+fixed heading set, zero sentinel, or numeric comparison cap. Synthesis pages
+must use real multi-source evidence rather than treating multiple chunks from
+one source as multiple sources.
 
 Stage 3.4 runs after pages are written. Each item requires:
 
