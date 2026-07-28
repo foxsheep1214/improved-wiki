@@ -56,7 +56,10 @@ class InitialsGuard(unittest.TestCase):
             wiki = _mk_wiki(Path(t))
             assoc = _detect(wiki, "J. P. Hansen")
             self.assertIn("J. P. Hansen", assoc)
-            self.assertIn("j-p-hansen", assoc["J. P. Hansen"])
+            self.assertIn(
+                "entities/j-p-hansen",
+                assoc["J. P. Hansen"],
+            )
 
     def test_guard_helper_semantics(self):
         self.assertTrue(s23._stage_2_3_initials_mismatch("W. W. Hansen", "j-p-hansen"))

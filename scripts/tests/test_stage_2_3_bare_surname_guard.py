@@ -64,7 +64,7 @@ class BareSurnameGuard(unittest.TestCase):
             wiki = _mk_wiki(Path(t))
             assoc = _detect(wiki, "J. W. Taylor")
             matches = assoc.get("J. W. Taylor", [])
-            self.assertNotIn("taylor", matches)
+            self.assertNotIn("entities/taylor", matches)
 
     def test_already_initialed_existing_page_still_associates_normally(self):
         # t-t-taylor.md legitimately carries initials — unaffected by this
@@ -72,7 +72,10 @@ class BareSurnameGuard(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             wiki = _mk_wiki(Path(t))
             assoc = _detect(wiki, "T. T. Taylor")
-            self.assertIn("t-t-taylor", assoc.get("T. T. Taylor", []))
+            self.assertIn(
+                "entities/t-t-taylor",
+                assoc.get("T. T. Taylor", []),
+            )
 
     def test_bare_name_still_associates_with_bare_existing_page(self):
         # Both sides equally vague — not this guard's problem to solve;
@@ -80,7 +83,7 @@ class BareSurnameGuard(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             wiki = _mk_wiki(Path(t))
             assoc = _detect(wiki, "Taylor")
-            self.assertIn("taylor", assoc.get("Taylor", []))
+            self.assertIn("entities/taylor", assoc.get("Taylor", []))
 
     def test_guard_helper_semantics(self):
         self.assertTrue(

@@ -327,6 +327,97 @@ class TestSchemaTypedCandidates(unittest.TestCase):
             self.assertEqual(slugs, [])
             self.assertIn("ALREADY COVERED", "\n".join(lines))
 
+    def test_same_route_existing_candidate_is_an_update_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_WITH_EXTRAS,
+                encoding="utf-8",
+            )
+            analysis = {
+                "schema_typed_candidates": [{
+                    "type": "methodology",
+                    "name": "Controlled Trial",
+                    "rationale": "the source materially extends the protocol",
+                }],
+            }
+            lines, slugs = gen._schema_candidate_inventory(
+                [analysis],
+                cfg,
+                {"Controlled Trial": ["methodology/established-trial"]},
+                [],
+            )
+            self.assertEqual(
+                slugs,
+                [("Controlled Trial", "methodology/established-trial")],
+            )
+            rendered = "\n".join(lines)
+            self.assertIn("UPDATE EXISTING PAGE", rendered)
+            self.assertNotIn("do NOT generate", rendered)
+
+    def test_cross_route_association_remains_link_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_WITH_EXTRAS,
+                encoding="utf-8",
+            )
+            analysis = {
+                "schema_typed_candidates": [{
+                    "type": "methodology",
+                    "name": "Controlled Trial",
+                    "rationale": "protocol",
+                }],
+            }
+            lines, slugs = gen._schema_candidate_inventory(
+                [analysis],
+                cfg,
+                {"Controlled Trial": ["concepts/controlled-trial"]},
+                [],
+            )
+            self.assertEqual(slugs, [])
+            rendered = "\n".join(lines)
+            self.assertIn("CROSS-TYPE ASSOCIATION", rendered)
+            self.assertIn("[[concepts/controlled-trial]]", rendered)
+
+    def test_generic_same_route_existing_page_is_generated_as_update(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            prompt = gen._stage_2_4_build_prompt(
+                {
+                    "concepts_found": [{
+                        "name": "Thermal Resistance",
+                        "importance": "core",
+                        "definition": "A materially expanded definition.",
+                        "key_details": ["New source-grounded detail"],
+                    }],
+                    "entities_found": [],
+                },
+                "chunk text",
+                0,
+                cfg.raw_root / "book.pdf",
+                cfg,
+                existing_refs={
+                    "Thermal Resistance": [
+                        "concepts/thermal-resistance",
+                    ],
+                },
+            )
+            self.assertIn(
+                "(slug: concepts/thermal-resistance) "
+                "[core; UPDATE EXISTING PAGE]",
+                prompt,
+            )
+            self.assertIn(
+                "new OR marked UPDATE EXISTING PAGE",
+                prompt,
+            )
+
     def test_schema_candidate_outranks_same_name_generic_concept(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)

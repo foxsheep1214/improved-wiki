@@ -227,15 +227,14 @@ def merge_page_content(
     page_path: str = "",
     source_file: str = "",
     backup_fn: Optional[Callable] = None,
+    replace_existing_body: bool = False,
 ) -> str:
     """Three-layer merge matching NashSU page-merge.ts.
 
     Layer 1: Union frontmatter array fields (always, zero-cost).
-    Layer 2: If bodies differ, call merger_fn (LLM) to produce unified body.
+    Layer 2: For a page solely owned by the current source, replace its stale
+             body; otherwise call merger_fn (LLM) to produce a unified body.
     Layer 3: Lock type/title/created to existing values.
-
-    Fallback: if LLM fails or body shrinks below threshold, return
-    array-merged-only result with backup.
     """
     # Fast path 1: brand-new page
     if not existing_content:
@@ -252,6 +251,22 @@ def merge_page_content(
     from _frontmatter_array import normalize_block_arrays
     array_merged = normalize_block_arrays(
         merge_array_fields_into_content(new_content, existing_content))
+
+    # NashSU 0.6.6 corrected-source behavior: if the caller proved that every
+    # existing source reference resolves to this same source, the newly
+    # generated body supersedes the stale one. Merging would preserve retracted
+    # wording forever. Array unions and locked identity fields still survive.
+    if replace_existing_body:
+        if backup_fn:
+            try:
+                backup_fn(existing_content)
+            except Exception:
+                pass
+        old_fm = parse_frontmatter(existing_content)[0]
+        replacement = lock_fields(array_merged, old_fm)
+        fm, body = parse_frontmatter(replacement)
+        fm["updated"] = time.strftime("%Y-%m-%d")
+        return write_frontmatter(fm, body)
 
     # Fast path 3: bodies identical (only frontmatter arrays differed)
     # Strip the auto-injected ## Embedded Images section first: it is an

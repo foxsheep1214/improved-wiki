@@ -294,7 +294,15 @@ from _frontmatter import (
 )
 
 
-def _stage_3_1_merge_page_content(existing_text: str, new_text: str, config: Config) -> str:
+def _stage_3_1_merge_page_content(
+    existing_text: str,
+    new_text: str,
+    config: Config,
+    *,
+    page_path: str = "",
+    source_file: str = "",
+    replace_existing_body: bool = False,
+) -> str:
     """NashSU 3-layer merge: delegates to _frontmatter.merge_page_content.
 
     Layers: array-union → LLM body merge → lock fields.
@@ -353,6 +361,43 @@ with duplicates consolidated and new information integrated.
         new_content=new_text,
         existing_content=existing_text if existing_text else None,
         merger_fn=llm_merger,
+        page_path=page_path,
+        source_file=source_file,
+        replace_existing_body=replace_existing_body,
+    )
+
+
+def _stage_3_1_source_reference_identity(value: str) -> str:
+    """Normalize source frontmatter references for ownership comparison."""
+    ref = str(value or "").strip().replace("\\", "/").strip("/").lower()
+    for marker in ("/raw/sources/", "/raw/"):
+        if marker in f"/{ref}":
+            ref = f"/{ref}".split(marker, 1)[1]
+            break
+    for prefix in ("raw/sources/", "raw/"):
+        if ref.startswith(prefix):
+            ref = ref[len(prefix):]
+            break
+    return ref.strip("/")
+
+
+def _stage_3_1_is_owned_only_by_source(
+    content: str,
+    canonical_source: str,
+) -> bool:
+    """Whether every non-empty ``sources`` entry is the current source.
+
+    This is deliberately identity-based, not basename-based: two books in
+    different raw subdirectories may share a filename and must not be treated
+    as the same owner.
+    """
+    sources = parse_frontmatter_array(content, "sources")
+    if not sources:
+        return False
+    expected = _stage_3_1_source_reference_identity(canonical_source)
+    return bool(expected) and all(
+        _stage_3_1_source_reference_identity(source) == expected
+        for source in sources
     )
 
 
@@ -798,13 +843,32 @@ def stage_3_1_normalize_page_links(
     return content
 
 
-def stage_3_1_write_wiki_file(path: Path, content: str, config: Config | None = None, merge: bool = False) -> None:
+def stage_3_1_write_wiki_file(
+    path: Path,
+    content: str,
+    config: Config | None = None,
+    merge: bool = False,
+    *,
+    source_file: str = "",
+) -> None:
     content = _stage_3_1_sanitize_ingested_content(content)
     if config is not None:
         _stage_3_1_backup_existing_page(path, config)
         if merge and path.exists():
             existing = path.read_text(encoding="utf-8")
-            content = _stage_3_1_merge_page_content(existing, content, config)
+            replace_existing_body = bool(
+                source_file
+                and _stage_3_1_is_owned_only_by_source(
+                    existing, source_file)
+            )
+            content = _stage_3_1_merge_page_content(
+                existing,
+                content,
+                config,
+                page_path=str(path),
+                source_file=source_file,
+                replace_existing_body=replace_existing_body,
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, content)
 

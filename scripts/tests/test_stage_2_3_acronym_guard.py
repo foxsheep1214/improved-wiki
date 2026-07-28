@@ -54,7 +54,7 @@ class Stage23AcronymGuardDetect(unittest.TestCase):
             chunks = [{"concepts_found": [{"name": "MTI"}], "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("MTI", assoc)
-            self.assertIn("mti", assoc["MTI"])
+            self.assertIn("concepts/mti", assoc["MTI"])
 
     def test_full_name_jaccard_still_matched(self):
         """Full-name match with long shared tokens is untouched by the guard."""
@@ -66,7 +66,10 @@ class Stage23AcronymGuardDetect(unittest.TestCase):
                        "entities_found": [{"name": "David K. Barton"}]}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("David K. Barton", assoc)
-            self.assertIn("david-k-barton", assoc["David K. Barton"])
+            self.assertIn(
+                "entities/david-k-barton",
+                assoc["David K. Barton"],
+            )
 
     def test_cjk_exact_slug_still_matched(self):
         """CJK exact slug-form equality is unaffected by the guard.
@@ -81,7 +84,7 @@ class Stage23AcronymGuardDetect(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("多普勒频移", assoc)
-            self.assertIn("多普勒频移", assoc["多普勒频移"])
+            self.assertIn("concepts/多普勒频移", assoc["多普勒频移"])
 
     def test_shared_cjk_acronym_match_kept(self):
         """Acronym-token Jaccard where the CJK parts DO overlap keeps matching."""
@@ -92,7 +95,10 @@ class Stage23AcronymGuardDetect(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("RAM 吸波材料", assoc)
-            self.assertIn("雷达吸波材料-ram", assoc["RAM 吸波材料"])
+            self.assertIn(
+                "concepts/雷达吸波材料-ram",
+                assoc["RAM 吸波材料"],
+            )
 
 
 class Stage23PureCjkExactMatch(unittest.TestCase):
@@ -111,7 +117,7 @@ class Stage23PureCjkExactMatch(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("多普勒频移", assoc)
-            self.assertIn("多普勒频移", assoc["多普勒频移"])
+            self.assertIn("concepts/多普勒频移", assoc["多普勒频移"])
 
     def test_pure_cjk_non_match_still_not_detected(self):
         with tempfile.TemporaryDirectory() as d:

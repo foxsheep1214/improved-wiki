@@ -65,7 +65,10 @@ class Stage23CjkNearDupeDetection(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("匹配滤波器理论", assoc)
-            self.assertIn("匹配滤波器-matched-filter", assoc["匹配滤波器理论"])
+            self.assertIn(
+                "concepts/匹配滤波器-matched-filter",
+                assoc["匹配滤波器理论"],
+            )
 
     def test_unrelated_cjk_titles_not_matched(self):
         with tempfile.TemporaryDirectory() as d:
@@ -98,7 +101,10 @@ class Stage23CjkNearDupeDetection(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("卡尔曼滤波 Kalman Filter", assoc)
-            self.assertIn("kalman-filter", assoc["卡尔曼滤波 Kalman Filter"])
+            self.assertIn(
+                "concepts/kalman-filter",
+                assoc["卡尔曼滤波 Kalman Filter"],
+            )
 
     def test_cjk_suffix_variant_matched(self):
         """卡尔曼滤波 vs 卡尔曼滤波器 (器-suffix variant) — the audit's live
@@ -110,7 +116,10 @@ class Stage23CjkNearDupeDetection(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("卡尔曼滤波", assoc)
-            self.assertIn("卡尔曼滤波器", assoc["卡尔曼滤波"])
+            self.assertIn(
+                "concepts/卡尔曼滤波器",
+                assoc["卡尔曼滤波"],
+            )
 
 
 if __name__ == "__main__":

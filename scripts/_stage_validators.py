@@ -162,8 +162,9 @@ def _verify_stage_2_4_file_blocks(
         print(f"  ⚠️  Stage 2: {len(sources_pages)} FILE blocks in wiki/sources/ — "
               f"only 1 source page expected, rest may be misplaced concepts")
 
-    # NashSU has no minimum page-count target. A source-only result, or zero new
-    # concept pages after association with existing pages, is therefore valid.
+    # NashSU has no minimum page-count target. A source-only result is valid
+    # when analysis has no actionable new/update candidate (for example, only
+    # cross-type associations or candidates owned by another chunk).
 
 
 def validate_stage_outputs(

@@ -74,6 +74,13 @@ stage gates are in `references/ingest-stages-mandatory.md`.
   custom declared types follow the same selection, routing, grounding, and FILE
   generation path. Schema semantics remain mandatory: for example, a synthesis
   requires real multi-source evidence.
+- A Stage 2.3 match in the candidate's own schema route is an exact **update
+  target**, not a reason to skip the candidate: Stage 2.4 emits that existing
+  FILE path and Stage 3.1 merges it. A cross-type association remains link-only
+  so one subject is not duplicated into a second generic/type-specific page.
+- On corrected-source re-ingest, Stage 3.1 replaces the stale body of a page
+  owned solely by that source while preserving locked fields and array unions.
+  Multi-source pages still use the semantic merger so other sources survive.
 - There is no per-type page quota or separate comparison cap. Stage 2.4 never
   invents supplementary foundational pages or automatically backfills every
   analyzed term.

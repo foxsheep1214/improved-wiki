@@ -416,7 +416,13 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         do_merge = full_path.exists() and not is_listing
 
         try:
-            stage_3_1_write_wiki_file(full_path, content, config, merge=do_merge)
+            stage_3_1_write_wiki_file(
+                full_path,
+                content,
+                config,
+                merge=do_merge,
+                source_file=canonical_source,
+            )
         except OSError as e:
             print(f"  [write] HARD ERROR: {rel_path} — {e}")
             hard_failures.append(rel_path)

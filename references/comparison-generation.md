@@ -17,6 +17,9 @@ Stage 2.2 schema_typed_candidates
 - Stage 2.2 只在来源真正展开了可复用的多维比较时推荐 comparison。
 - Stage 2.4 使用候选中经 schema 重新解析后的 exact type/path；忽略 LLM
   自报 folder，并遵守 schema 的 frontmatter 与语义要求。
+- 若 Stage 2.3 命中已有 `comparisons/<slug>`，它是 exact update target：
+  Stage 2.4 仍输出该 FILE 路径，Stage 3.1 再按来源所有权执行替换或多来源
+  merge；不能把“已有 comparison”解释成永久跳过。
 - 与所有 key/schema-typed 页面相同：没有数量目标、最低数量或最高数量。
 - 候选清单不再使用旧的 per-chunk 40 / all-chunks 120 展示截断。
 - comparison 内容结构由来源和 schema 决定，不强制 Why Compare、四维表、

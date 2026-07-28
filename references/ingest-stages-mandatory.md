@@ -115,12 +115,12 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再逐 chunk 统一生成分析推荐的 key 概念/实体与项目 schema-typed 页（源锚定；≤1 chunk 走单发）。comparison、synthesis、finding、thesis、methodology 不再有旁路或专门 stage。**不是** analyze→generate 逐 chunk 交错——全部分析在前，生成在后（2.3 夹在中间，需要全量分析结果）。完整语义 schema 以 AUTHORITATIVE 形式注入；每个 genuinely supported 的 `schema_typed_candidate` 在生成前按结构化 `type→dir` 重新解析，忽略 LLM 自报的 folder。`mentioned`、passing/background 项不进入 owner inventory，也不允许生成“补充基础页”。
 - **schema 语义与数量**：每类候选都必须满足项目 schema 的语义门（例如 finding 要证据锚点、methodology 要可复用条件/步骤、thesis 要可证伪、comparison 要真实多维对比、synthesis 要真实多来源）。不设各类型条数目标、下限或上限，也不再截断 typed candidate 清单（旧 per-chunk 40 / all-chunks 120 展示上限已移除）。
 - **并行生成（2026-07-09 默认开启；2026-07-23 加并发上限）**：多 chunk 时用预计算 slug 清单（`_build_gen_inventory`，slug = slugify(name)，取自已缓存的 2.2 分析）取代"chunk N+1 靠 chunk N 实际产出的 slug 去重"——去重是确定性引用查表，不是像 2.2 rolling digest 那样的内容依赖，NashSU 本身也不对生成分 chunk（一次整书调用），没有"必须串行"的先例要对齐。一次 ingest.py 调用最多吐出 `--parallel N` 个仍缺答案的 generation prompt；主对话并发派该波的 fresh sub-agent，写回后 re-invoke 进入下一波（10 chunks、N=4 → 4+4+2）。`N=1` 才显式串行，N≥剩余 chunk 数仍一次全发。选项退出：`IMPROVED_WIKI_PARALLEL_GEN=0`/`false`/`no`/`off` 回退旧的严格串行累积路径（排查回归时用）。
-- **子步骤（生成前）· 增量关联验证**：`stage_2_3_resolve_proposed_connections` 拿 2.2 chunk 分析自报的 `connections_to_existing_wiki` 去磁盘验证（确认被引用的 concept/entity/source 页真实存在），产出 verified `incremental_associations` 作为 2.4 生成的 Linkable pages 列表——只允许 LLM wikilink 到真实存在的页面，防止幻觉链接。wiki 为空时跳过。
+- **子步骤（生成前）· 增量关联验证**：`stage_2_3_detect_incremental_associations` 将候选与真实页面匹配并保留 type-prefixed exact path；同类型命中是 **UPDATE EXISTING** 目标，2.4 必须用该现有路径输出 FILE 块，不能因“已存在”跳过来源的新贡献。跨类型命中只链接、不另建重复页；schema-typed 候选只在其声明 route 内匹配，避免 generic 页误压制 typed 页。`stage_2_3_resolve_proposed_connections` 另将 2.2 自报的 `connections_to_existing_wiki` 去磁盘验证，作为 Linkable pages；两者都不接受幻觉路径。wiki 为空时自然无关联。
 - **子步骤（生成后收尾）· 源内概念去重**（原 Stage 2.5，已并入 2.4）：对同一本书内部概念去重合并（防同名异义重复页）。**embedding 语义初筛**（cosine ≥0.82，复用 `_dedup_embedding.candidate_pairs`，取代旧的词级 Jaccard，能抓跨语言/同义重复如 傅里叶变换 vs Fourier transform）+ LLM 逐组确认，失败保守不合并。**无回退**：embedding stack 不可用则 `raise` 暂停（不退回 Jaccard）。跳过条件：单 chunk 书。go/no-go：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。
 - **子步骤（生成后）· 源页生成**：所有 chunk 生成完，`stage_2_6_source_page` 从 global digest、源文本上下文和 per-chunk claim candidates 生成**一个简洁、自由结构的 source summary**，并入 file_blocks。只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。与 NashSU Step 2 的 source summary 内容契约对齐。若 source FILE 块未闭合，先 exact-path 定向修复；若仍缺失/不合规，使用 NashSU deterministic fallback，把完整 Stage 2 analysis 原样保留到最低限度 source 页（不截断、不另调 LLM）。go/no-go：最终恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END marker 完整且正文非空。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
 - **go/no-go**：`stages.file_blocks_generated ≥ 1`；source page FILE block 存在；概念页路径在 `wiki/concepts/` 下。
-- **失败处理**：0 个新 key/schema-typed 页可以是合法结果（无候选或均已存在）。解析器丢弃未闭合的 FILE block，并把其安全路径交给一次 targeted repair handoff；repair 只接受请求路径，额外页面全部丢弃。若任一推荐路径仍未恢复则硬暂停；绝不运行“逐条目全量补齐”。
+- **失败处理**：0 个新/更新 key/schema-typed 页可以是合法结果（无候选、均由其他 chunk 覆盖，或只有跨类型 link-only 关联）。同类型已有页不是合法的跳过理由。解析器丢弃未闭合的 FILE block，并把其安全路径交给一次 targeted repair handoff；repair 只接受请求路径，额外页面全部丢弃。若任一推荐路径仍未恢复则硬暂停；绝不运行“逐条目全量补齐”。
 
 ### Stage 2.7 · Query Auto-Generation（已移除，对齐 NashSU，2026-07-12）
 - **原作用**：基于 2.4 的 concept/entity 生成 0-5 个开放问题 query 页 + 跨源 query 解析收尾（原 2.8）+ queries/index.md 维护。
@@ -139,6 +139,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 3.1 · Write files（含 source page gate）
 - **作用**：Phase 3 唯一磁盘写入入口。先 source page gate；若 LLM/旧缓存仍未提供 source 页，按 NashSU 从**完整 Stage 2 analysis**（滚动 digest + 全部 chunk analyses，不截断）生成确定性最低限度 source summary，再原子写盘（.tmp → rename）。
+- **NashSU 0.6.6 更新语义**：同路径已有页若 `sources` 全部解析为当前来源，说明它只由该来源拥有；纠正来源重摄取时用新正文替换旧正文，同时 union `sources/tags/related`、锁定 `type/title/created` 并更新时间，避免被撤回的旧表述经 merge 永久残留。只要存在其他来源，仍走三层 page-merge，保留其他来源贡献。两条路径都先备份旧页。
 - **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
 
 ### Stage 3.2 · 图片注入

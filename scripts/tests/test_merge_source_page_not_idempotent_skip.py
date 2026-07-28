@@ -87,6 +87,31 @@ class SourcePageAlwaysCallsMerger(unittest.TestCase):
         self.assertFalse(called, "concept-page idempotent-skip fast path must still fire")
         self.assertIn("Already-merged body from A and B", result)
 
+    def test_explicit_sole_source_replacement_skips_merger(self):
+        existing = _page(
+            "concept",
+            "## Definition\nObsolete wording that the corrected source retracts.\n",
+        )
+        new = _page(
+            "concept",
+            "## Definition\nCorrected source-grounded wording.\n",
+        )
+        called = []
+
+        def merger(prev_content, merged_content, source_file):
+            called.append(True)
+            return merged_content
+
+        result = merge_page_content(
+            new,
+            existing,
+            merger_fn=merger,
+            replace_existing_body=True,
+        )
+        self.assertFalse(called)
+        self.assertIn("Corrected source-grounded wording", result)
+        self.assertNotIn("Obsolete wording", result)
+
 
 if __name__ == "__main__":
     unittest.main()

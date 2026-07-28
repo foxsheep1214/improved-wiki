@@ -324,6 +324,92 @@ def _schema_typed_context_section(analyses: list[dict]) -> str:
     )
 
 
+def _normalize_existing_ref(value: object) -> str:
+    """Normalize a Stage 2.3 target to a wiki-relative bare slug path."""
+    ref = str(value or "").strip().replace("\\", "/").strip("/")
+    if ref.startswith("wiki/"):
+        ref = ref[len("wiki/"):]
+    if ref.endswith(".md"):
+        ref = ref[:-3]
+    return ref.strip("/")
+
+
+def _existing_targets(name: str, existing_refs: dict) -> list[str]:
+    """Return normalized, stable-deduplicated association targets for ``name``."""
+    values = existing_refs.get(name, []) or []
+    if isinstance(values, str):
+        values = [values]
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        ref = _normalize_existing_ref(value)
+        if ref and ref not in seen:
+            seen.add(ref)
+            out.append(ref)
+    return out
+
+
+def _same_route_existing_target(
+    name: str,
+    folder: str,
+    existing_refs: dict,
+) -> str | None:
+    """Resolve an association that is safe to update in its declared route.
+
+    Legacy bare-stem associations deliberately remain link-only: without their
+    directory, we cannot prove that the existing page has the same type.
+    Fresh Stage 2.3 output is always prefixed.
+    """
+    prefix = f"{folder.strip('/')}/"
+    return next(
+        (ref for ref in _existing_targets(name, existing_refs)
+         if ref.startswith(prefix)),
+        None,
+    )
+
+
+def _candidate_was_generated(full_slug: str, generated_slugs: list[str]) -> bool:
+    """Whether another chunk already owns/generated this deterministic target."""
+    normalized = {_normalize_existing_ref(slug) for slug in generated_slugs}
+    stem = full_slug.rsplit("/", 1)[-1]
+    return full_slug in normalized or stem in normalized
+
+
+def _candidate_requires_file(
+    name: str,
+    folder: str,
+    existing_refs: dict,
+    generated_slugs: list[str] | None = None,
+) -> bool:
+    """True for a new page or a same-type existing page that needs an update."""
+    canonical = f"{folder}/{slugify(name)}"
+    if generated_slugs and _candidate_was_generated(canonical, generated_slugs):
+        return False
+    refs = _existing_targets(name, existing_refs)
+    return not refs or _same_route_existing_target(name, folder, existing_refs) is not None
+
+
+def _schema_candidate_targets_by_name(
+    analyses: list[dict],
+    config: Config,
+) -> dict[str, str]:
+    """First eligible schema route for each candidate name."""
+    routes = schema_candidate_routes(load_schema_md(config))
+    targets: dict[str, str] = {}
+    for analysis in analyses:
+        if not isinstance(analysis, dict):
+            continue
+        for candidate in analysis.get("schema_typed_candidates", []) or []:
+            if not isinstance(candidate, dict):
+                continue
+            name = str(candidate.get("name", "")).strip()
+            folder = routes.get(str(candidate.get("type", "")).strip())
+            stem = slugify(name)
+            if name and folder and stem:
+                targets.setdefault(name, f"{folder}/{stem}")
+    return targets
+
+
 def _schema_candidate_inventory(
     analyses: list[dict],
     config: Config,
@@ -338,7 +424,6 @@ def _schema_candidate_inventory(
     lines: list[str] = []
     slugs: list[tuple[str, str]] = []
     seen_stems: set[str] = set()
-    generated = set(generated_slugs)
     for analysis in analyses:
         for cand in analysis.get("schema_typed_candidates", []) or []:
             if not isinstance(cand, dict):
@@ -355,18 +440,29 @@ def _schema_candidate_inventory(
             if stem in seen_stems:
                 continue
             seen_stems.add(stem)
-            if name in existing_refs and existing_refs[name]:
-                target = existing_refs[name][0]
-                lines.append(
-                    f"  - {name} → ALREADY COVERED by [[{target}]]: "
-                    f"do NOT generate; wikilink ONLY as [[{target}]]"
-                )
-            elif full_slug in generated or stem in generated:
+            if _candidate_was_generated(full_slug, generated_slugs):
                 lines.append(
                     f"  - {name} (slug: {full_slug}) [ALREADY COVERED — SKIP]"
                 )
+                continue
+
+            target = _same_route_existing_target(
+                name, folder, existing_refs)
+            refs = _existing_targets(name, existing_refs)
+            rationale = str(cand.get("rationale", "")).strip()
+            if target:
+                lines.append(
+                    f"  - {name} (slug: {target}) "
+                    f"[{cand_type}; UPDATE EXISTING PAGE]: {rationale}"
+                )
+                slugs.append((name, target))
+            elif refs:
+                target = refs[0]
+                lines.append(
+                    f"  - {name} → CROSS-TYPE ASSOCIATION [[{target}]]: "
+                    f"do NOT create a duplicate page; wikilink ONLY as [[{target}]]"
+                )
             else:
-                rationale = str(cand.get("rationale", "")).strip()
                 lines.append(
                     f"  - {name} (slug: {full_slug}) [{cand_type}]: {rationale}"
                 )
@@ -406,10 +502,8 @@ def _stage_2_4_build_prompt(
     schema_candidate_lines, schema_candidate_slugs = _schema_candidate_inventory(
         [chunk_analysis], config, existing_refs, generated_slugs
     )
-    schema_candidate_targets = {
-        target.rsplit("/", 1)[-1]: target
-        for _name, target in schema_candidate_slugs
-    }
+    schema_candidate_targets = _schema_candidate_targets_by_name(
+        [chunk_analysis], config)
     schema_candidates_str = (
         "\n".join(schema_candidate_lines) if schema_candidate_lines else "(none)"
     )
@@ -426,44 +520,54 @@ def _stage_2_4_build_prompt(
             defn = c.get("definition", "")
             details = c.get("key_details", [])
             slug = slugify(name)
-            # SKIP when generated by a prior chunk OR when Stage 2.3 found an
-            # existing-page overlap. Skipping the overlap concept here keeps its
-            # NEW slug out of the linkable list so the LLM links to the EXISTING
-            # page instead of a never-generated new slug (broken wikilink).
-            if name in existing_refs and existing_refs[name]:
-                # Issue 2 fix: show the EXISTING slug as the canonical wikilink
-                # target so the LLM links there instead of the never-written
-                # concepts/{own-slug} (which would be a broken link).
-                existing_slug = existing_refs[name][0]
-                concept_lines.append(
-                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
-                    f"do NOT generate a page; wikilink ONLY as [[{existing_slug}]] "
-                    f"(never [[concepts/{slug}]])"
-                )
-            elif slug in schema_candidate_targets:
+            if name in schema_candidate_targets:
                 concept_lines.append(
                     f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} "
-                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    f"[ROUTED AS {schema_candidate_targets[name]} BY SCHEMA — "
                     "SKIP GENERIC CONCEPT]"
                 )
-            elif slug in generated_slugs:
+            elif _candidate_was_generated(
+                    f"concepts/{slug}", generated_slugs):
                 concept_lines.append(
-                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} [ALREADY COVERED — SKIP]"
+                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} "
+                    "[ALREADY COVERED — SKIP]"
                 )
             else:
-                concept_lines.append(
-                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}"
-                )
-                concept_slugs.append((name, f"concepts/{slug}"))
-                concept_slug_stems.add(slug)
-                for d in details[:3]:
-                    concept_lines.append(f"      • {d}")
+                existing_slug = _same_route_existing_target(
+                    name, "concepts", existing_refs)
+                refs = _existing_targets(name, existing_refs)
+                if existing_slug:
+                    concept_lines.append(
+                        f"  - {name} (slug: {existing_slug}) [{imp}; "
+                        f"UPDATE EXISTING PAGE]: {defn}"
+                    )
+                    concept_slugs.append((name, existing_slug))
+                    concept_slug_stems.add(slug)
+                    for d in details[:3]:
+                        concept_lines.append(f"      • {d}")
+                elif refs:
+                    existing_slug = refs[0]
+                    concept_lines.append(
+                        f"  - {name} → CROSS-TYPE ASSOCIATION "
+                        f"[[{existing_slug}]]: do NOT create a duplicate page; "
+                        f"wikilink ONLY as [[{existing_slug}]] "
+                        f"(never [[concepts/{slug}]])"
+                    )
+                else:
+                    concept_lines.append(
+                        f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}"
+                    )
+                    concept_slugs.append((name, f"concepts/{slug}"))
+                    concept_slug_stems.add(slug)
+                    for d in details[:3]:
+                        concept_lines.append(f"      • {d}")
 
     # Issue 4: collect prior-chunk concept slug stems too, so an entity sharing
     # a concept's slug is deduped (concept page takes precedence over entity).
     for s in generated_slugs:
-        if s.startswith("concepts/"):
-            concept_slug_stems.add(s.split("/", 1)[1])
+        normalized = _normalize_existing_ref(s)
+        if normalized.startswith("concepts/"):
+            concept_slug_stems.add(normalized.split("/", 1)[1])
 
     entity_lines = []
     entity_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
@@ -472,19 +576,15 @@ def _stage_2_4_build_prompt(
             name = e.get("name", "")
             sig = e.get("significance", "")
             slug = slugify(name)
-            if name in existing_refs and existing_refs[name]:
-                existing_slug = existing_refs[name][0]
-                entity_lines.append(
-                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
-                    f"do NOT generate; wikilink ONLY as [[{existing_slug}]]"
-                )
-            elif slug in schema_candidate_targets:
+            if name in schema_candidate_targets:
                 entity_lines.append(
                     f"  - {name} (slug: entities/{slug}): {sig} "
-                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    f"[ROUTED AS {schema_candidate_targets[name]} BY SCHEMA — "
                     "SKIP GENERIC ENTITY]"
                 )
-            elif slug in generated_slugs or slug in concept_slug_stems:
+            elif (_candidate_was_generated(
+                    f"entities/{slug}", generated_slugs)
+                    or slug in concept_slug_stems):
                 # Issue 4: a concept page for this slug already exists (this chunk
                 # or a prior one) — skip the duplicate entity page; wikilink to
                 # the concept page instead.
@@ -493,10 +593,27 @@ def _stage_2_4_build_prompt(
                     f"[DUPLICATE OF CONCEPT concepts/{slug} — SKIP]"
                 )
             else:
-                entity_lines.append(
-                    f"  - {name} (slug: entities/{slug}): {sig}"
-                )
-                entity_slugs.append((name, f"entities/{slug}"))
+                existing_slug = _same_route_existing_target(
+                    name, "entities", existing_refs)
+                refs = _existing_targets(name, existing_refs)
+                if existing_slug:
+                    entity_lines.append(
+                        f"  - {name} (slug: {existing_slug}) "
+                        f"[UPDATE EXISTING PAGE]: {sig}"
+                    )
+                    entity_slugs.append((name, existing_slug))
+                elif refs:
+                    existing_slug = refs[0]
+                    entity_lines.append(
+                        f"  - {name} → CROSS-TYPE ASSOCIATION "
+                        f"[[{existing_slug}]]: do NOT create a duplicate page; "
+                        f"wikilink ONLY as [[{existing_slug}]]"
+                    )
+                else:
+                    entity_lines.append(
+                        f"  - {name} (slug: entities/{slug}): {sig}"
+                    )
+                    entity_slugs.append((name, f"entities/{slug}"))
 
     # Stage 2.2 has already curated key candidates. Do not impose a second,
     # arbitrary line/count cap here: pass every recommended candidate while
@@ -542,11 +659,8 @@ def _stage_2_4_build_prompt(
         else:
             must_link.add(f"concepts/{s}")
             must_link.add(f"entities/{s}")
-    # existing_refs values are bare stems for EXISTING pages the LLM links to
-    # instead of regenerating.
-    for slugs in existing_refs.values():
-        for s in slugs:
-            must_link.add(s)
+    for name in existing_refs:
+        must_link.update(_existing_targets(name, existing_refs))
     for rp in (related_pages or []):
         slug = rp.get("slug") if isinstance(rp, dict) else None
         if slug:
@@ -570,16 +684,19 @@ def _stage_2_4_build_prompt(
     if template:
         template_section = f"\n# Document Type\n<template>\n{template[:1500]}\n</template>\n"
 
-    # Stage 2.3 feed-back: concepts in this source that already exist in the wiki.
-    # The LLM should wikilink to these instead of regenerating them.
+    # Stage 2.3 feedback: same-type pages are update targets; cross-type pages
+    # are link-only associations. The per-candidate lines carry that distinction.
     if existing_refs:
         ref_lines = []
         # Sort for deterministic prompt text → stable conversation-handoff cache
         # key. Without sorting, set/dict iteration order (Python hash randomization)
         # varies across runs, changing the prompt hash and re-prompting Stage 2.4
         # forever (cache never hits on resume).
-        for name, slugs in sorted(existing_refs.items()):
-            links = ", ".join("[[{}]]".format(s) for s in slugs)
+        for name in sorted(existing_refs):
+            links = ", ".join(
+                "[[{}]]".format(s)
+                for s in _existing_targets(name, existing_refs)
+            )
             ref_lines.append("  - {} → already exists as: {}".format(name, links))
         existing_refs_str = "\n".join(ref_lines)
     else:
@@ -643,7 +760,9 @@ Chunk: {chunk_index + 1}
 {chunk_source_section}{schema_context_section}{formulas_section}{schema_section}# Pages already generated by previous chunks (SKIP these):
 {generated_str}
 
-# Existing wiki pages that overlap (Stage 2.3 — DO NOT regenerate; wikilink to them):
+# Existing wiki associations (Stage 2.3):
+# - same-type target → generate its exact FILE path as an UPDATE
+# - cross-type target → do not duplicate; wikilink only
 {existing_refs_str}
 
 # Related (not duplicate) existing pages — wikilink to these where relevant, but still generate the recommended new pages below:
@@ -659,8 +778,10 @@ Chunk: {chunk_index + 1}
 {schema_candidates_str}
 
 # NashSU generation policy
-- Generate standalone pages only for the genuinely important key candidates
-  recommended by the analysis and not marked ALREADY COVERED/SKIP.
+- Generate FILE blocks for genuinely important recommended candidates that are
+  new OR marked UPDATE EXISTING PAGE. The writer will merge update blocks into
+  their exact existing paths.
+- Do not generate candidates marked ALREADY COVERED/SKIP or CROSS-TYPE.
 - Do not create pages for passing mentions, background prerequisites, or extra
   "foundational" terms that were not recommended.
 - There is no page-count target. Do not pad or split one coherent topic merely
@@ -738,8 +859,8 @@ updated: {time.strftime('%Y-%m-%d')}
 ---END FILE---
 {schema_output_section}
 
-Generate the recommended key pages that are not marked
-[ALREADY COVERED]/[SKIP]. Start with the first FILE block.
+Generate the recommended new and UPDATE EXISTING key pages that are not marked
+[ALREADY COVERED]/[SKIP]/CROSS-TYPE. Start with the first FILE block.
 """
 
 
@@ -772,10 +893,8 @@ def _stage_2_4_build_all_prompt(
     schema_candidate_lines, schema_candidate_slugs = _schema_candidate_inventory(
         chunk_analyses, config, existing_refs, []
     )
-    schema_candidate_targets = {
-        target.rsplit("/", 1)[-1]: target
-        for _name, target in schema_candidate_slugs
-    }
+    schema_candidate_targets = _schema_candidate_targets_by_name(
+        chunk_analyses, config)
     schema_candidates_str = (
         "\n".join(schema_candidate_lines)
         if schema_candidate_lines else "(none)"
@@ -801,25 +920,41 @@ def _stage_2_4_build_all_prompt(
             imp = c.get("importance", "core")
             defn = c.get("definition", "")
             details = c.get("key_details", [])
-            if name in existing_refs and existing_refs[name]:
-                existing_slug = existing_refs[name][0]
-                concept_lines.append(
-                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
-                    f"do NOT generate a page; wikilink ONLY as [[{existing_slug}]] "
-                    f"(never [[concepts/{slug}]])"
-                )
-            elif slug in schema_candidate_targets:
+            if name in schema_candidate_targets:
                 concept_lines.append(
                     f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} "
-                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    f"[ROUTED AS {schema_candidate_targets[name]} BY SCHEMA — "
                     "SKIP GENERIC CONCEPT]"
                 )
             else:
-                concept_lines.append(f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}")
-                concept_slugs.append((name, f"concepts/{slug}"))
-                concept_slug_stems.add(slug)
-                for d in details[:3]:
-                    concept_lines.append(f"      • {d}")
+                existing_slug = _same_route_existing_target(
+                    name, "concepts", existing_refs)
+                refs = _existing_targets(name, existing_refs)
+                if existing_slug:
+                    concept_lines.append(
+                        f"  - {name} (slug: {existing_slug}) [{imp}; "
+                        f"UPDATE EXISTING PAGE]: {defn}"
+                    )
+                    concept_slugs.append((name, existing_slug))
+                    concept_slug_stems.add(slug)
+                    for d in details[:3]:
+                        concept_lines.append(f"      • {d}")
+                elif refs:
+                    existing_slug = refs[0]
+                    concept_lines.append(
+                        f"  - {name} → CROSS-TYPE ASSOCIATION "
+                        f"[[{existing_slug}]]: do NOT create a duplicate page; "
+                        f"wikilink ONLY as [[{existing_slug}]] "
+                        f"(never [[concepts/{slug}]])"
+                    )
+                else:
+                    concept_lines.append(
+                        f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}"
+                    )
+                    concept_slugs.append((name, f"concepts/{slug}"))
+                    concept_slug_stems.add(slug)
+                    for d in details[:3]:
+                        concept_lines.append(f"      • {d}")
 
     seen_entity_slugs: set[str] = set()
     entity_lines: list[str] = []
@@ -836,16 +971,10 @@ def _stage_2_4_build_all_prompt(
                 continue
             seen_entity_slugs.add(slug)
             sig = e.get("significance", "")
-            if name in existing_refs and existing_refs[name]:
-                existing_slug = existing_refs[name][0]
-                entity_lines.append(
-                    f"  - {name} → ALREADY COVERED by [[{existing_slug}]]: "
-                    f"do NOT generate; wikilink ONLY as [[{existing_slug}]]"
-                )
-            elif slug in schema_candidate_targets:
+            if name in schema_candidate_targets:
                 entity_lines.append(
                     f"  - {name} (slug: entities/{slug}): {sig} "
-                    f"[ROUTED AS {schema_candidate_targets[slug]} BY SCHEMA — "
+                    f"[ROUTED AS {schema_candidate_targets[name]} BY SCHEMA — "
                     "SKIP GENERIC ENTITY]"
                 )
             elif slug in concept_slug_stems:
@@ -854,8 +983,27 @@ def _stage_2_4_build_all_prompt(
                     f"[DUPLICATE OF CONCEPT concepts/{slug} — SKIP]"
                 )
             else:
-                entity_lines.append(f"  - {name} (slug: entities/{slug}): {sig}")
-                entity_slugs.append((name, f"entities/{slug}"))
+                existing_slug = _same_route_existing_target(
+                    name, "entities", existing_refs)
+                refs = _existing_targets(name, existing_refs)
+                if existing_slug:
+                    entity_lines.append(
+                        f"  - {name} (slug: {existing_slug}) "
+                        f"[UPDATE EXISTING PAGE]: {sig}"
+                    )
+                    entity_slugs.append((name, existing_slug))
+                elif refs:
+                    existing_slug = refs[0]
+                    entity_lines.append(
+                        f"  - {name} → CROSS-TYPE ASSOCIATION "
+                        f"[[{existing_slug}]]: do NOT create a duplicate page; "
+                        f"wikilink ONLY as [[{existing_slug}]]"
+                    )
+                else:
+                    entity_lines.append(
+                        f"  - {name} (slug: entities/{slug}): {sig}"
+                    )
+                    entity_slugs.append((name, f"entities/{slug}"))
 
     concept_str = "\n".join(concept_lines) if concept_lines else "(none)"
     entity_str = "\n".join(entity_lines) if entity_lines else "(none)"
@@ -871,9 +1019,8 @@ def _stage_2_4_build_all_prompt(
         must_link.add(s)
     for _, s in schema_candidate_slugs:
         must_link.add(s)
-    for slugs in existing_refs.values():
-        for s in slugs:
-            must_link.add(s)
+    for name in existing_refs:
+        must_link.update(_existing_targets(name, existing_refs))
     for rp in (related_pages or []):
         slug = rp.get("slug") if isinstance(rp, dict) else None
         if slug:
@@ -896,8 +1043,11 @@ def _stage_2_4_build_all_prompt(
 
     if existing_refs:
         ref_lines = []
-        for name, slugs in sorted(existing_refs.items()):
-            links = ", ".join("[[{}]]".format(s) for s in slugs)
+        for name in sorted(existing_refs):
+            links = ", ".join(
+                "[[{}]]".format(s)
+                for s in _existing_targets(name, existing_refs)
+            )
             ref_lines.append("  - {} → already exists as: {}".format(name, links))
         existing_refs_str = "\n".join(ref_lines)
     else:
@@ -952,14 +1102,16 @@ def _stage_2_4_build_all_prompt(
 # Role
 You are generating wiki pages for ALL chunks of a book in ONE pass. The analysis
 recommendations below contain key page candidates, not an exhaustive term
-inventory. Generate only genuinely important recommended pages that are not
-marked ALREADY COVERED/SKIP.
+inventory. Generate only genuinely important recommended pages that are new or
+marked UPDATE EXISTING PAGE.
 
 # Source
 Book: {file_path.stem}
 Chunks: {len(chunk_analyses)}
 {template_section}{source_section}{schema_context_section}{formulas_section}{schema_section}
-# Existing wiki pages that overlap (Stage 2.3 — DO NOT regenerate; wikilink to them):
+# Existing wiki associations (Stage 2.3):
+# - same-type target → generate its exact FILE path as an UPDATE
+# - cross-type target → do not duplicate; wikilink only
 {existing_refs_str}
 
 # Related (not duplicate) existing pages — wikilink to these where relevant, but still generate the recommended new pages below:
@@ -975,8 +1127,10 @@ Chunks: {len(chunk_analyses)}
 {schema_candidates_str}
 
 # NashSU generation policy
-- Generate standalone pages only for genuinely important key candidates
-  recommended by the analysis and not marked ALREADY COVERED/SKIP.
+- Generate FILE blocks for genuinely important recommended candidates that are
+  new OR marked UPDATE EXISTING PAGE. The writer will merge update blocks into
+  their exact existing paths.
+- Do not generate candidates marked ALREADY COVERED/SKIP or CROSS-TYPE.
 - Do not add pages for passing mentions, background prerequisites, or
   supplementary terms that were not recommended.
 - There is no page-count target. Do not pad or split one coherent topic merely
@@ -1047,8 +1201,8 @@ updated: {time.strftime('%Y-%m-%d')}
 ---END FILE---
 {schema_output_section}
 
-Generate the recommended key pages that are not marked
-[ALREADY COVERED]/[SKIP], in one response. Start with the first FILE block.
+Generate the recommended new and UPDATE EXISTING key pages that are not marked
+[ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with the first FILE block.
 """
 
 
@@ -1070,11 +1224,15 @@ def stage_2_4_generate_all(
     """
     valid = [ca for ca in chunk_analyses if isinstance(ca, dict) and "error" not in ca]
     existing_refs = existing_refs or {}
+    schema_targets = _schema_candidate_targets_by_name(valid, config)
     has_concepts = any(
         any(
             isinstance(c, dict)
             and _is_key_concept_candidate(c)
-            and not existing_refs.get(str(c.get("name", "")))
+            and bool(name := str(c.get("name", "")).strip())
+            and name not in schema_targets
+            and _candidate_requires_file(
+                name, "concepts", existing_refs)
             for c in (ca.get("concepts_found", []) or [])
         )
         for ca in valid
@@ -1082,7 +1240,10 @@ def stage_2_4_generate_all(
     has_entities = any(
         any(
             isinstance(e, dict)
-            and not existing_refs.get(str(e.get("name", "")))
+            and bool(name := str(e.get("name", "")).strip())
+            and name not in schema_targets
+            and _candidate_requires_file(
+                name, "entities", existing_refs)
             for e in (ca.get("entities_found", []) or [])
         )
         for ca in valid
@@ -1091,8 +1252,11 @@ def stage_2_4_generate_all(
     has_schema_candidates = any(
         any(
             isinstance(cand, dict)
-            and str(cand.get("type", "")).strip() in candidate_routes
-            and not existing_refs.get(str(cand.get("name", "")))
+            and bool(folder := candidate_routes.get(
+                str(cand.get("type", "")).strip()))
+            and bool(name := str(cand.get("name", "")).strip())
+            and _candidate_requires_file(
+                name, folder, existing_refs)
             for cand in (ca.get("schema_typed_candidates", []) or [])
         )
         for ca in valid
@@ -1175,8 +1339,9 @@ def stage_2_4_generate_chunk(
     """Generate FILE blocks for a single chunk (extracted from stage_2_per_chunk_generation).
 
     Used by the analyze→generate pipeline in _do_prepare. ``existing_refs``
-    (Stage 2.3 output: {concept_name: [wiki_slugs]}) is forwarded to the prompt
-    so the LLM wikilinks to existing pages instead of regenerating them.
+    (Stage 2.3 output: {candidate_name: [type-prefixed wiki slugs]}) is
+    forwarded so the LLM updates same-type targets and only links cross-type
+    associations.
     ``related_pages`` (Stage 2.3's stage_2_3_resolve_proposed_connections
     output: [{"slug": ..., "relationship": ...}]) is forwarded so the LLM
     wikilinks new pages to genuinely *related* (not duplicate) existing pages.
@@ -1185,26 +1350,33 @@ def stage_2_4_generate_chunk(
     generated_slugs from the returned paths.
     """
     existing_refs = existing_refs or {}
+    schema_targets = _schema_candidate_targets_by_name([analysis], config)
     concepts_n = sum(
         1 for c in (analysis.get("concepts_found", []) or [])
         if isinstance(c, dict)
         and _is_key_concept_candidate(c)
-        and not existing_refs.get(str(c.get("name", "")))
-        and slugify(str(c.get("name", ""))) not in generated_slugs
+        and bool(name := str(c.get("name", "")).strip())
+        and name not in schema_targets
+        and _candidate_requires_file(
+            name, "concepts", existing_refs, generated_slugs)
     )
     entities_n = sum(
         1 for e in (analysis.get("entities_found", []) or [])
         if isinstance(e, dict)
-        and not existing_refs.get(str(e.get("name", "")))
-        and slugify(str(e.get("name", ""))) not in generated_slugs
+        and bool(name := str(e.get("name", "")).strip())
+        and name not in schema_targets
+        and _candidate_requires_file(
+            name, "entities", existing_refs, generated_slugs)
     )
     candidate_routes = schema_candidate_routes(load_schema_md(config))
     schema_candidates_n = sum(
         1 for cand in (analysis.get("schema_typed_candidates", []) or [])
         if isinstance(cand, dict)
-        and str(cand.get("type", "")).strip() in candidate_routes
-        and not existing_refs.get(str(cand.get("name", "")))
-        and slugify(str(cand.get("name", ""))) not in generated_slugs
+        and bool(folder := candidate_routes.get(
+            str(cand.get("type", "")).strip()))
+        and bool(name := str(cand.get("name", "")).strip())
+        and _candidate_requires_file(
+            name, folder, existing_refs, generated_slugs)
     )
     if concepts_n == 0 and entities_n == 0 and schema_candidates_n == 0:
         print(f"  [chunk {chunk_idx+1}] (no concepts, entities, or schema candidates — skipped)")

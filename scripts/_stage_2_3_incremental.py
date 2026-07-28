@@ -1,9 +1,9 @@
 """Stage 2.3: Incremental Association Detection
 
 Detects overlap between a new source's concepts/entities/schema-typed
-candidates and existing wiki pages, so downstream stages can avoid generating
-orphan/duplicate pages. Deterministic: word-level title Jaccard + exact slug
-match. (LLM semantic match is a future enhancement.)
+candidates and existing wiki pages, so downstream stages can update same-type
+pages while avoiding cross-type duplicates. Deterministic: word-level title
+Jaccard + exact slug match. (LLM semantic match is a future enhancement.)
 """
 from pathlib import Path
 import re
@@ -106,15 +106,13 @@ def _stage_2_3_bare_surname_mismatch(name: str, existing_title: str) -> bool:
 def _stage_2_3_existing_pages(
     wiki_root: Path,
     routes: list[str],
-    *,
-    prefixed_targets: bool,
 ) -> dict[str, tuple[str, set, set, str]]:
     """Load title-match metadata for the requested wiki routes.
 
-    Generic concept/entity associations retain their historical bare-stem
-    targets for compatibility. Schema-typed candidates use type-prefixed
-    targets because their route is authoritative and basename collisions
-    across types are legitimate.
+    Targets are always type-prefixed. Stage 2.4 needs the real route to
+    distinguish a same-type page that should be updated from a cross-type
+    association that should only be linked. Bare stems erased that distinction
+    for generic concepts/entities and made existing-page updates impossible.
     """
     existing: dict[str, tuple[str, set, set, str]] = {}
     for route in routes:
@@ -127,7 +125,7 @@ def _stage_2_3_existing_pages(
                 title = _stage_2_frontmatter_title(content)
                 if not title:
                     continue
-                target = f"{route}/{f.stem}" if prefixed_targets else f.stem
+                target = f"{route}/{f.stem}"
                 existing[target] = (
                     f.stem,
                     _stage_2_title_words(title),
@@ -177,12 +175,14 @@ def stage_2_3_detect_incremental_associations(
     chunk_analyses: list[dict],
     schema_text: str = "",
 ) -> dict:
-    """Match new candidates only within the page type they would generate.
+    """Match new candidates while preserving the existing page's real route.
 
     A schema-typed candidate takes precedence over a same-name generic
     concept/entity and is compared only with its declared route. Thus an
     existing ``concepts/foo`` cannot incorrectly suppress a new
-    ``findings/foo`` page, while an existing ``findings/foo`` can.
+    ``findings/foo`` page, while an existing ``findings/foo`` can. Generic
+    concept/entity candidates scan both base routes: same-route matches become
+    update targets and cross-route matches remain link-only associations.
     """
     associations: dict[str, list[str]] = {}
     generic_found: set[str] = set()
@@ -208,7 +208,7 @@ def stage_2_3_detect_incremental_associations(
                 typed_found.setdefault(name, route)
 
     generic_existing = _stage_2_3_existing_pages(
-        wiki_root, ["concepts", "entities"], prefixed_targets=False)
+        wiki_root, ["concepts", "entities"])
     for name in generic_found - typed_found.keys():
         matches = _stage_2_3_matching_targets(
             name, generic_existing, canonical_slug=False)
@@ -219,7 +219,7 @@ def stage_2_3_detect_incremental_associations(
     for name, route in typed_found.items():
         if route not in typed_existing_by_route:
             typed_existing_by_route[route] = _stage_2_3_existing_pages(
-                wiki_root, [route], prefixed_targets=True)
+                wiki_root, [route])
         existing = typed_existing_by_route[route]
         matches = _stage_2_3_matching_targets(
             name, existing, canonical_slug=True)

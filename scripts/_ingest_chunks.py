@@ -48,7 +48,7 @@ from _task_manifest import bind_chunk_plan
 
 CHUNK_PLAN_SCHEMA_VERSION = 3
 CHUNKER_VERSION = "token-bounded-heading-aware-v2"
-ANALYSIS_POLICY_VERSION = "nashsu-0.6.6-schema-typed-v1"
+ANALYSIS_POLICY_VERSION = "nashsu-0.6.6-schema-typed-v2-existing-updates"
 
 _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_2_done",
@@ -803,7 +803,7 @@ def _generate_from_analyses(
     incremental_associations = stage_2_3_detect_incremental_associations(
         config.wiki_dir, chunk_analyses, schema_text=schema_text)
     if incremental_associations:
-        print(f"  [stage 2.3] {len(incremental_associations)} new candidate(s) "
+        print(f"  [stage 2.3] {len(incremental_associations)} candidate(s) "
               f"match existing wiki pages \u2192 fed into generation prompt")
     else:
         print(f"  [stage 2.3] No existing-wiki associations (first source or no overlap)")

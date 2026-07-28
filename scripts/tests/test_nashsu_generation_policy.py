@@ -161,6 +161,94 @@ class TestGenerationSelection(unittest.TestCase):
 
 
 class TestGenerationTruncationRepair(unittest.TestCase):
+    def test_same_type_existing_page_is_generated_at_exact_update_path(self):
+        analysis = {
+            "concepts_found": [{
+                "name": "Key Method",
+                "importance": "core",
+                "definition": "Materially expanded by this source.",
+                "key_details": [],
+            }],
+            "entities_found": [],
+            "schema_typed_candidates": [],
+            "formulas": [],
+        }
+        response = (
+            "---FILE:wiki/concepts/established-key-method.md---\n"
+            "---\ntype: concept\ntitle: Key Method\n---\nupdated\n"
+            "---END FILE---\n"
+        )
+        calls: list[str] = []
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            calls.append(prompt)
+            return response, "end_turn"
+
+        original = generation.call_anthropic_protocol
+        generation.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                cfg = _config(tmp)
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                blocks = generation.stage_2_4_generate_chunk(
+                    analysis,
+                    0,
+                    [],
+                    cfg.raw_root / "book.pdf",
+                    cfg,
+                    chunk_text="source text",
+                    existing_refs={
+                        "Key Method": [
+                            "concepts/established-key-method",
+                        ],
+                    },
+                )
+        finally:
+            generation.call_anthropic_protocol = original
+
+        self.assertEqual(
+            [path for path, _ in blocks],
+            ["concepts/established-key-method.md"],
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertIn(
+            "(slug: concepts/established-key-method) "
+            "[core; UPDATE EXISTING PAGE]",
+            calls[0],
+        )
+
+    def test_cross_type_existing_page_is_link_only_without_llm_call(self):
+        analysis = {
+            "concepts_found": [{
+                "name": "Key Method",
+                "importance": "core",
+                "definition": "Central method.",
+                "key_details": [],
+            }],
+            "entities_found": [],
+            "schema_typed_candidates": [],
+            "formulas": [],
+        }
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _config(tmp)
+            cfg.raw_root.mkdir(parents=True)
+            cfg.wiki_dir.mkdir(parents=True)
+            blocks = generation.stage_2_4_generate_chunk(
+                analysis,
+                0,
+                [],
+                cfg.raw_root / "book.pdf",
+                cfg,
+                chunk_text="source text",
+                existing_refs={
+                    "Key Method": ["entities/key-method"],
+                },
+            )
+        self.assertEqual(blocks, [])
+
     def test_chunk_generation_repairs_exact_unclosed_file(self):
         analysis = {
             "concepts_found": [{

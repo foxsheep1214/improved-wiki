@@ -62,7 +62,8 @@ Stage 2.4 may be answered concurrently within the wave emitted by `ingest.py`.
 For each prompt:
 
 - generate only the recommended key owner slugs requested by that prompt,
-  excluding ALREADY COVERED/SKIP items and never adding supplementary pages;
+  including exact paths marked UPDATE EXISTING PAGE, while excluding
+  ALREADY COVERED/SKIP/CROSS-TYPE items and never adding supplementary pages;
 - do not pad or split concepts to reach a FILE-block count;
 - for comparison, synthesis, finding, thesis, methodology, and custom typed
   candidates, preserve the exact path/type and satisfy the semantic and
