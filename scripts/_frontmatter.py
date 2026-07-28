@@ -326,8 +326,25 @@ def merge_page_content(
     if (_new_fm.get("type") != "source"
             and _src_set(parse_frontmatter(existing_content)[0]).issuperset(_new_srcs)
             and _new_srcs):
-        # Keep the existing (already-merged) body; union frontmatter arrays.
-        return merge_array_fields_into_content(existing_content, new_content)
+        # Keep the existing (already-merged) body and its stable array order,
+        # adding only genuinely new incoming array values.  Calling the normal
+        # merge helper with the arguments reversed keeps the right body but
+        # orders arrays incoming-first, so every crash-resume flips `sources:`
+        # and looks like a real write even though nothing changed.
+        from _frontmatter_array import (
+            merge_lists,
+            parse_frontmatter_array,
+            write_frontmatter_array,
+        )
+        result = existing_content
+        for field in UNION_FIELDS:
+            existing_values = parse_frontmatter_array(result, field)
+            incoming_values = parse_frontmatter_array(new_content, field)
+            merged_values = merge_lists(existing_values, incoming_values)
+            if merged_values != existing_values:
+                result = write_frontmatter_array(
+                    result, field, merged_values)
+        return result
 
     # Layer 2: LLM merge (if merger provided)
     if merger_fn:

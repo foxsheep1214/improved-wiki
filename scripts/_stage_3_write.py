@@ -895,8 +895,8 @@ def stage_3_1_write_wiki_file(
     source_page_slug: str | None = None,
 ) -> None:
     content = _stage_3_1_sanitize_ingested_content(content)
+    existing: str | None = None
     if config is not None:
-        _stage_3_1_backup_existing_page(path, config)
         if merge and path.exists():
             existing = path.read_text(encoding="utf-8")
             replace_existing_body = bool(
@@ -923,6 +923,16 @@ def stage_3_1_write_wiki_file(
                     slug_dirs,
                     source_page_slug=source_page_slug,
                 )
+        elif path.exists():
+            existing = path.read_text(encoding="utf-8")
+
+        # Conversation-mode handoffs resume the all-or-nothing write loop from
+        # its first FILE block.  Merge fast paths deliberately return the
+        # already-written page on replay; do not turn that no-op into another
+        # page-history snapshot and atomic rewrite.
+        if existing is not None and content == existing:
+            return
+        _stage_3_1_backup_existing_page(path, config)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, content)
 
