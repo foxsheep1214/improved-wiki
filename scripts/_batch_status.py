@@ -45,10 +45,57 @@ def _batch_status_snapshot(config: Config) -> dict:
             "lease": _worker_lease_state(entry),
         })
 
+    sources = []
+    completed_source_prefixes: set[str] = set()
+    if config.progress_dir.exists():
+        for task_path in sorted(config.progress_dir.glob("*.task.json")):
+            manifest = _read_json_object(task_path) or {}
+            source = manifest.get("source", {})
+            if not isinstance(source, dict):
+                source = {}
+            source_hash = str(source.get("sha256") or "")
+            if not source_hash:
+                continue
+            stage_path = (
+                config.progress_dir / f"{source_hash[:16]}.stages.json")
+            stages = _read_json_object(stage_path) or {}
+            if stages.get("ingested"):
+                # Conversation directories are keyed by the source hash's
+                # final eight characters. Their tasks.json is append-only, so
+                # superseded prompts may remain marked pending even after a
+                # later answer completed the source. Once the authoritative
+                # ingested marker exists, none of that directory's historical
+                # tasks is an actionable handoff.
+                completed_source_prefixes.add(source_hash[-8:])
+                continue
+            markers = sorted(
+                key for key, value in stages.items()
+                if not key.startswith("_")
+                and not key.endswith("__payload")
+                and bool(value)
+            )
+            latest_marker = "none"
+            if markers:
+                latest_marker = max(
+                    markers,
+                    key=lambda key: _safe_float(stages.get(key)),
+                )
+            sources.append({
+                "identity": source.get("identity") or task_path.stem,
+                "source_hash": source_hash,
+                "task_status": manifest.get("status") or "unknown",
+                "markers": markers,
+                "latest_marker": latest_marker,
+                "updated_at": _safe_int(manifest.get("updated_at"), 0) or 0,
+            })
+    sources.sort(key=lambda item: item["updated_at"], reverse=True)
+
     handoffs = []
     conversation_root = config.runtime_dir / "conversation"
     if conversation_root.exists():
         for manifest_path in sorted(conversation_root.glob("*/tasks.json")):
+            if manifest_path.parent.name in completed_source_prefixes:
+                continue
             manifest = _read_json_object(manifest_path) or {}
             tasks = manifest.get("tasks", {})
             if not isinstance(tasks, dict):
@@ -75,43 +122,6 @@ def _batch_status_snapshot(config: Config) -> dict:
                     "answer_ready": ready,
                     "needs_answer": len(pending) - ready,
                 })
-
-    sources = []
-    if config.progress_dir.exists():
-        for task_path in sorted(config.progress_dir.glob("*.task.json")):
-            manifest = _read_json_object(task_path) or {}
-            source = manifest.get("source", {})
-            if not isinstance(source, dict):
-                source = {}
-            source_hash = str(source.get("sha256") or "")
-            if not source_hash:
-                continue
-            stage_path = (
-                config.progress_dir / f"{source_hash[:16]}.stages.json")
-            stages = _read_json_object(stage_path) or {}
-            if stages.get("ingested"):
-                continue
-            markers = sorted(
-                key for key, value in stages.items()
-                if not key.startswith("_")
-                and not key.endswith("__payload")
-                and bool(value)
-            )
-            latest_marker = "none"
-            if markers:
-                latest_marker = max(
-                    markers,
-                    key=lambda key: _safe_float(stages.get(key)),
-                )
-            sources.append({
-                "identity": source.get("identity") or task_path.stem,
-                "source_hash": source_hash,
-                "task_status": manifest.get("status") or "unknown",
-                "markers": markers,
-                "latest_marker": latest_marker,
-                "updated_at": _safe_int(manifest.get("updated_at"), 0) or 0,
-            })
-    sources.sort(key=lambda item: item["updated_at"], reverse=True)
 
     try:
         reservation = load_spine_reservation(config)
