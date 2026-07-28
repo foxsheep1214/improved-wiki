@@ -65,7 +65,7 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # Digest, Stage-2-Synthesis, LLM-task, ...) gives human-readable grouping;
     # the 8-char content hash guarantees distinct prompts get distinct cache
     # files. Without the hash, every call that falls through _infer_stage to
-    # 'LLM-task' (Stage 2.6 source page, per-concept fallback, ...) shares one
+    # 'LLM-task' (Stage 2.6 source page, Stage 2.4 generation, ...) shares one
     # file and the wrong answer gets reused across stages. The hash is
     # deterministic, so replay of the same prompt still hits the cache.
     stage = re.sub(r"[^a-zA-Z0-9]+", "-", _infer_stage(prompt)).strip("-")[:40] or "llm-task"

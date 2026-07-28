@@ -92,16 +92,15 @@ class DigestTransferIsNashSUParity(unittest.TestCase):
             prompt = _build(cfg, "prior digest")
             self.assertIn("stable names", prompt.lower())
 
-    def test_prompt_instructs_gist_compression_under_budget_pressure(self):
-        """A dense book's ledger hits the 15K cap mid-book (observed live:
-        14,828/15,000 at chunk 2/5 on Hansen, 2026-07-09). The template must
-        tell the model HOW to fit: drop older gists to bare names, never drop
-        names — otherwise each answering agent improvises its own policy."""
+    def test_prompt_allows_peripheral_detail_to_drop_under_budget_pressure(self):
+        """NashSU asks for compact cross-chunk context, not an exhaustive name
+        ledger. Peripheral detail may drop while important stable names remain."""
         with tempfile.TemporaryDirectory() as t:
             cfg = _cfg(Path(t), target_chars=256_000)
             prompt = _build(cfg, "prior digest")
-            self.assertIn("bare", prompt.lower())
-            self.assertIn("non-negotiable", prompt.lower())
+            self.assertIn("drop peripheral detail", prompt.lower())
+            self.assertIn("stable names", prompt.lower())
+            self.assertNotIn("names are non-negotiable", prompt.lower())
 
     def test_prompt_instructs_compact_digest_not_verbatim_accumulation(self):
         """The digest instruction must follow NashSU's 'compact document-level

@@ -140,6 +140,26 @@ class TestStage13ArtifactValidation(unittest.TestCase):
 
 
 class TestMineruDurableMediaCache(unittest.TestCase):
+    def test_figure_names_ignore_stale_layout_and_reharvest_children(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            active = root / "_chunk_0000-0032"
+            stale = root / "_chunk_0000-0050"
+            repair = root / "_media_reharvest_v1_hash" / "_chunk_0000-0032"
+            for directory, filename in (
+                (active, "p0001-mineru_active.png"),
+                (stale, "p0001-mineru_stale.png"),
+                (repair, "p0001-mineru_repair.png"),
+            ):
+                directory.mkdir(parents=True, exist_ok=True)
+                (directory / "_mineru_figures.json").write_text(
+                    json.dumps([{"filename": filename}]), encoding="utf-8")
+
+            names = _media_integrity.mineru_figure_names(
+                root, active_chunk_keys={"0000-0032"})
+
+            self.assertEqual(names, {"p0001-mineru_active.png"})
+
     def test_harvest_persists_chunk_local_bytes_for_rebuild(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
@@ -243,6 +263,50 @@ class TestMineruMediaReharvest(unittest.TestCase):
 
 
 class TestCompletedMediaRepair(unittest.TestCase):
+    def test_preserved_canonical_media_is_not_shrunk_to_incomplete_ocr_index(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _config(tmp)
+            raw = tmp / "raw" / "Book" / "book.pdf"
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            raw.write_bytes(b"%PDF fake")
+            media_dir = cfg.wiki_dir / "media" / media_slug(raw, cfg)
+            media_dir.mkdir(parents=True, exist_ok=True)
+            kept = "p0001-mineru_kept.png"
+            retained = "p0002-mineru_retained.png"
+            (media_dir / kept).write_bytes(b"kept")
+            (media_dir / retained).write_bytes(b"retained")
+            ocr_out = cfg.extract_tmp_dir / raw.stem
+            ocr_out.mkdir(parents=True, exist_ok=True)
+
+            with (
+                mock.patch.object(
+                    _media_integrity,
+                    "_stage_1_2_extract_from_mineru",
+                    return_value={"count": 2, "images": [
+                        {"filename": kept}, {"filename": retained},
+                    ]},
+                ) as extract,
+                mock.patch.object(
+                    _media_integrity,
+                    "_stage_1_1_reharvest_media",
+                ) as reharvest,
+            ):
+                result, authoritative = (
+                    _media_integrity.restore_or_reharvest_mineru_media(
+                        raw, cfg, ocr_out,
+                        expected_names={kept},
+                    )
+                )
+
+            # The retained source media remains in scope even when the current
+            # OCR index is incomplete.
+            self.assertEqual(extract.call_args.kwargs["allowed_filenames"], {
+                kept, retained})
+            self.assertEqual(result["count"], 2)
+            self.assertEqual(authoritative, 2)
+            reharvest.assert_not_called()
+
     def test_unfinished_ingest_reharvests_instead_of_accepting_zero(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)

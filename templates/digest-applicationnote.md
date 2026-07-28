@@ -75,7 +75,7 @@ key_concepts:
   - name: "<e.g. Type II compensator>"
     importance: "core"
     wikilink_target: "type-ii-compensator"
-  # 1-3 concepts expected
+  # Include only independently useful key design concepts; no count target
 
 key_claims:
   - claim: "<e.g. 10µH gives best efficiency at 500kHz / 1A load>"
@@ -93,10 +93,12 @@ connections_to_existing_wiki:
 Files to write:
 
 1. **`wiki/sources/<Mfr> - <AN-Number> - <Topic>.md`** — source page
-   - Body: app note metadata, problem, design procedure, key equations, worked example summary, components used, "参见" with concept + entity + datasheet pages
+   - Body: a concise source summary; prioritize the problem, design procedure,
+     key equations, evidence, and useful component relationships, with
+     source-driven headings rather than a mandatory checklist
 
-2. **`wiki/concepts/<slug>.md`** — 1-3 concept pages (the design concepts the app note teaches)
-   - These are the high-value outputs: each app note should add 1-3 reusable design knowledge pages
+2. **`wiki/concepts/<slug>.md`** — pages only for independently useful key design concepts the app note substantively teaches
+   - These are high-value outputs, but an app note has no page quota and may add none when existing pages already cover the ideas
 
 3. **`wiki/entities/<Mfr>.md`** — entity page for the manufacturer (if not already exists)
 

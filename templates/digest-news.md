@@ -1,7 +1,7 @@
 # digest-news.md — Ingest template for web clips and news articles
 
 > **Use this template** when a file lives at `raw/News/<...>/*.md` (or `.pdf` for archived articles).
-> News and web clips are short-lived, low-effort. Output should be 1 source page + 0-2 concept pages. (Auto-marking `status: outdated` after 6 months is a **planned** Lint pass — **not yet implemented**; see below.)
+> News and web clips are short-lived, low-effort. Always create one source page; create concept pages only for genuinely important evergreen ideas the article substantively explains. (Auto-marking `status: outdated` after 6 months is a **planned** Lint pass — **not yet implemented**; see below.)
 
 ---
 
@@ -43,7 +43,7 @@ key_entities:
     wikilink_target: "<existing-slug>"
 
 key_concepts:
-  # 0-2 concepts. News rarely introduces new concepts; it reports on existing ones.
+  # Usually empty: news reports on existing ideas more often than it defines new ones.
   - name: "<e.g. GaN power semiconductors>"
     importance: "mentioned"
     wikilink_target: "GaN-semiconductor"
@@ -62,9 +62,10 @@ related_news_in_wiki:
 Files to write:
 
 1. **`wiki/sources/<Outlet> - <Date> - <Headline-Slug>.md`** — source page
-   - Body: metadata, summary, key facts, bigger picture, "参见"
+   - Body: a concise source summary; prioritize verified key facts, attribution,
+     context, and caveats, using only the sections this article needs
 
-2. **`wiki/concepts/<slug>.md`** — 0-2 concept pages (only if evergreen_value is "high" AND the concept is new to the wiki)
+2. **`wiki/concepts/<slug>.md`** — only if evergreen value is high, the idea is genuinely important, and no existing page covers it
 
 3. **Update `wiki/index.md`**, **`wiki/log.md`**
 
@@ -73,7 +74,7 @@ Files to write:
 ## Type-specific guidance
 
 - **Most news is short-lived**: A product announcement from 6 months ago is history. A market trend from 2 years ago may still be relevant. The `evergreen_value` field is intended to drive a future `status: outdated` decision (**not yet consumed by any code**).
-- **0-2 concept pages is the norm**: don't try to extract 5 concepts from a 500-word article. The article probably only mentions 1-2 concepts, and they're usually already in the wiki.
+- **No concept-page quota**: most news needs none. Do not turn passing mentions into pages; create one only when the article genuinely defines or formalizes an important evergreen idea.
 - **The "bigger_picture" field is the value**: this is what makes a news article worth ingesting. "Company X acquired Y" without context is just trivia. With context ("this consolidates the GaN supply chain"), it's knowledge.
 
 ---
@@ -99,7 +100,7 @@ That would keep the wiki's "current knowledge" view clean while preserving the h
 
 | Symptom | Fix |
 |---|---|
-| LLM produces 3+ concept pages from a short article | Force: "News articles rarely introduce new concepts. Only create a concept page if the article defines or formalizes something that wasn't already in the wiki" |
+| LLM produces trivial concept pages from a short article | Force: "News articles rarely introduce new concepts. Only create a concept page if the article defines or formalizes an important idea that wasn't already in the wiki" |
 | LLM paraphrases quotes | News is full of quotes. Keep them verbatim (with quotation marks) |
 | LLM adds marketing claims as `key_facts` | Distinguish: "Company X claims Y" (vendor's claim, not a fact) vs "Y happened" (verifiable event). The first goes in `key_claims` with a flag; the second goes in `key_facts` |
 

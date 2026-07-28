@@ -104,7 +104,7 @@ def _prepare_source_page(
     associations: dict | None = None,
     chunk_claims: list | None = None,
 ) -> list:
-    """Stage 2.6: generate the source page (dedicated LLM call) and merge into file_blocks."""
+    """Stage 2.6: generate one NashSU-style source summary and merge it."""
     if progress and "source_page_response" in progress:
         source_page_response = progress["source_page_response"]
         print(f"  [stage 2.6] (cached) Source page already generated")
@@ -121,9 +121,9 @@ def _prepare_source_page(
             if _stem.endswith(".md"):
                 _stem = _stem[:-3]
             _linkable.append(_stem)
-        # Generated-this-ingest concept/entity slugs (from 2.4 file_blocks) —
-        # feeds the source page Key Concepts/Entities (NashSU single-tier: list
-        # ALL generated pages, not the curated 2.1 key_concepts).
+        # Generated-this-ingest key-page slugs feed link validation/relevance.
+        # They are not a checklist: Stage 2.6 links only materially relevant
+        # pages and never dumps the entire set into the source summary.
         _gen_concepts = [s for s in _linkable if s.startswith("concepts/")]
         _gen_entities = [s for s in _linkable if s.startswith("entities/")]
         _linkable.extend(list_existing_slugs(config))
@@ -340,13 +340,32 @@ def _do_prepare(
                     mineru_figure_names,
                     restore_or_reharvest_mineru_media,
                 )
-                expected_media = len(mineru_figure_names(ocr_out))
+                # Limit the manifest to the current configured chunk layout.
+                # The durable OCR directory may retain old 50-page chunks from
+                # a prior run alongside today's 32-page chunks; merging them
+                # turns stale history into a fictitious media-loss condition.
+                from _stage_1_1_scanned import MINERU_CHUNK_SIZE
+                try:
+                    import fitz
+                    with fitz.open(raw_file) as _doc:
+                        _active_chunk_keys = {
+                            f"{start}-{min(start + MINERU_CHUNK_SIZE, len(_doc))}"
+                            for start in range(0, len(_doc), MINERU_CHUNK_SIZE)
+                        }
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"[Stage 1.2] cannot determine current minerU chunk "
+                        f"layout for {raw_file.name}: {exc}") from exc
+                expected_names = mineru_figure_names(
+                    ocr_out, active_chunk_keys=_active_chunk_keys)
+                expected_media = len(expected_names)
                 stage_1_2_result, authoritative_count = (
                     restore_or_reharvest_mineru_media(
                         raw_file,
                         config,
                         ocr_out,
                         expected_hint=expected_media,
+                        expected_names=expected_names,
                     )
                 )
                 valid, reason, stage_1_2_result = (
@@ -555,9 +574,9 @@ def _do_prepare(
                     global_digest, raw_file, config, template_content, progress,
                     file_blocks, verbose, source_context=_src_grounding,
                     associations=incremental_associations,
-                    # Full-book claim coverage for Main Arguments (2026-07-02):
-                    # the digest's key_claims skew to the front sample; the 2.2
-                    # chunk claims span every chapter by construction.
+                    # Source-wide claim candidates. Stage 2.6 selects and
+                    # synthesizes only core claims; it does not preserve this
+                    # list one-for-one or target a fixed count.
                     chunk_claims=[c for ca in (chunk_analyses or [])
                                   if isinstance(ca, dict)
                                   for c in (ca.get("claims") or [])])

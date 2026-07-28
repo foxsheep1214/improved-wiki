@@ -20,7 +20,7 @@ publication, and completion lifecycle are authoritative in `delegate-mode.md`.
 | Context probe | `ctxprobe*.md` | Plausible integer context size; only main-conversation exception |
 | 2.2 | `Stage-2-2-Chunk-N-*.md` | Valid YAML containing chunk index, entities, concepts, claims, formulas, existing-wiki connections, and the five-field `updated_global_digest` |
 | 2.4 | `Stage-2-4-Generation-*.md` | Exact requested `---FILE:wiki/<path>--- … ---END FILE---` blocks |
-| 2.6 | `Stage-2-6-SourcePage-*.md` | One source-page FILE block with every doctype-required H2 section |
+| 2.6 | `Stage-2-6-SourcePage-*.md` | One non-empty source-page FILE block at the exact requested path; headings are source-driven |
 | 2.9 | `Stage-2-9-ComparisonReview-*.md` | Comparison FILE blocks or the exact zero-comparison sentinel |
 | 3.4 | `Stage-3-4-Review-*.md` | Strict YAML array of real findings; empty `[]` is valid |
 | Page merge | `LLM-task-*.md` | Merged body without frontmatter; preserve richer facts and wikilinks |
@@ -37,11 +37,12 @@ python3 "$SKILL_DIR/scripts/qc_stage22.py" \
 
 The answer must:
 
-- contain at least five genuine concepts when the source segment supports
-  them, without padding one concept into several;
+- identify only genuinely important new/materially updated concepts and
+  entities; an honestly sparse or empty candidate list is valid;
 - avoid placeholder names such as “chunk 3”, “technical content”, or
   “reference material”;
-- include non-empty source quotes/evidence anchors;
+- give every emitted claim a non-empty evidence anchor; `source_quotes` is
+  optional audit support rather than a quota;
 - carry a complete five-field rolling digest:
   `book_meta`, `outline`, `key_entities`, `key_concepts`, `key_claims`;
 - remain grounded in the current chunk, not memory of earlier prompts.
@@ -58,9 +59,9 @@ memory.
 Stage 2.4 may be answered concurrently within the wave emitted by `ingest.py`.
 For each prompt:
 
-- generate the exact owner-slug inventory requested by that prompt;
-- ensure FILE-block count matches requested slugs, excluding explicit
-  placeholders/sentinels;
+- generate only the recommended key owner slugs requested by that prompt,
+  excluding ALREADY COVERED/SKIP items and never adding supplementary pages;
+- do not pad or split concepts to reach a FILE-block count;
 - write definitions, mechanisms, equations, constraints, and source-specific
   evidence rather than generic summaries;
 - preserve proper nouns and technical identifiers;
@@ -71,8 +72,9 @@ not serialize normal Stage 2.4 operation and do not exceed `--parallel`.
 
 ## Source, comparisons, and review
 
-Stage 2.6 required headings are code-validated. Follow the prompt verbatim; do
-not substitute a generic source summary.
+Stage 2.6 validates one exact-path, closed, non-empty FILE block. Choose the
+smallest useful source-driven structure; summarize core material and do not
+enumerate every generated page or per-chunk claim.
 
 Stage 2.9 comparisons need a why-compare section, a table with at least four
 useful dimensions, a selection guide, and see-also links. Use the language

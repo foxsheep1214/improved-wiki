@@ -4,7 +4,7 @@ CLI re-creation of the interactive human-guided ingest NashSU offered in earlier
 
 ## Why Chat Ingest
 
-Auto-ingest treats every source equally — every concept gets a page, every claim gets equal weight. But you know what matters to you. Chat ingest lets you guide the LLM: emphasize this concept, skip that section, connect to existing pages, flag contradictions you care about.
+Auto-ingest already follows NashSU's key-item policy: it creates pages only for genuinely important concepts/entities and summarizes core claims without a numeric quota. Chat ingest is for additional user judgment — emphasize this concept, skip that section, connect to existing pages, or flag contradictions you care about.
 
 The key insight: **the conversation is the chat.** No separate UI is needed. The calling agent that is talking to you generates the wiki pages, and your guidance is part of the context.
 

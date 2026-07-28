@@ -85,6 +85,49 @@ class TestBatchIngestConversationPrefix(unittest.TestCase):
             self.assertNotIn("", seen_prefixes)
             self.assertEqual(seen_prefixes, [h1, h1, h2, h2])
 
+    def test_resume_skips_completed_prefix_before_reserved_owner(self):
+        """A completed book must not contend for another source's spine."""
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw1 = tmp / "raw" / "Book" / "done.pdf"
+            raw2 = tmp / "raw" / "Book" / "owner.pdf"
+            raw1.parent.mkdir(parents=True, exist_ok=True)
+            raw1.write_bytes(b"%PDF-1.4 fake done")
+            raw2.write_bytes(b"%PDF-1.4 fake owner")
+            h1 = _core.file_sha256(raw1)
+            h2 = _core.file_sha256(raw2)
+
+            seen_prepares = []
+            orig_is_stage_done = ingest.is_stage_done
+            orig_do_prepare = ingest._do_prepare
+            orig_reserve_spine = ingest.reserve_spine
+
+            def _stages(cfg_, h_, stage):
+                if h_ == h1:
+                    return stage in {"ingested", "stage_1_3_done"}
+                return stage == "stage_1_3_done"
+
+            ingest.is_stage_done = _stages
+            ingest.reserve_spine = lambda cfg_, h_, f_, phase: None
+
+            def _fake_prepare(f, cfg_, template_override, verbose, *rest):
+                seen_prepares.append(f)
+                if rest:
+                    raise ingest.PrepareStopAfter("1.5")
+                return None
+
+            ingest._do_prepare = _fake_prepare
+            try:
+                results = ingest.batch_ingest([raw1, raw2], cfg)
+            finally:
+                ingest.is_stage_done = orig_is_stage_done
+                ingest._do_prepare = orig_do_prepare
+                ingest.reserve_spine = orig_reserve_spine
+
+            self.assertEqual([r["status"] for r in results], ["skipped", "skipped"])
+            self.assertEqual(seen_prepares, [raw2, raw2])
+
 
 if __name__ == "__main__":
     unittest.main()

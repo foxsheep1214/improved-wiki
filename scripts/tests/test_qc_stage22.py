@@ -1,10 +1,6 @@
-"""qc_stage22.check() — offline QC for Stage 2.2 chunk-analysis responses.
+"""Offline Stage 2.2 QC without content-count quotas."""
+from __future__ import annotations
 
-Covers the two checks migrated from the removed C1 hard gate (2026-07-08,
-d28ae85): source_quotes present + non-empty, and every claim carrying a
-non-empty evidence anchor. Advisory scanner — flags for re-dispatch, never
-aborts the pipeline.
-"""
 import sys
 import tempfile
 import unittest
@@ -17,168 +13,125 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import qc_stage22
 
 
-PADDING = "# padding line to satisfy the MIN_BYTES size check\n" * 80
-
-CONCEPTS = "\n".join(
-    f'  - name: "real-concept-{i}"\n    definition: "a genuine definition"'
-    for i in range(6)
-)
-
-SOURCE_QUOTES = (
-    "source_quotes: |\n"
-    '  # §2.3.4: "The Barker code of length 13 provides optimal peak sidelobe level."\n'
-    '  # 式(3.6): "Modulating waveform = exp(j*pi*tau*B*t^2)"\n'
-)
-
-CLAIMS_WITH_EVIDENCE = (
-    "claims:\n"
-    '  - claim: "Barker-13 peak sidelobe is -22.3 dB"\n'
-    '    evidence: "§2.3.4, Table 2-1"\n'
-    '  - claim: "LFM time-bandwidth product sets compression gain"\n'
-    '    evidence: "式(3.6), p.88"\n'
-)
-
-
-def _write(tmp: Path, body: str) -> Path:
-    f = tmp / "Stage-2-2-Chunk-1-abcd1234.txt"
-    f.write_text(body, encoding="utf-8")
-    return f
-
-
-def _good_response(source_quotes=SOURCE_QUOTES, claims=CLAIMS_WITH_EVIDENCE) -> str:
+def _response(
+    *,
+    concepts: str = "concepts_found: []\n",
+    entities: str = "entities_found: []\n",
+    claims: str = "claims: []\n",
+    source_quotes: str = "",
+) -> str:
     return (
         "chunk_index: 1\n"
-        f"concepts_found:\n{CONCEPTS}\n"
+        "chunk_total: 1\n"
+        f"{entities}"
+        f"{concepts}"
         f"{source_quotes}"
         f"{claims}"
-        f"{PADDING}"
+        "updated_global_digest: |\n"
+        "  book_meta: {}\n"
+        "  outline: []\n"
+        "  key_entities: []\n"
+        "  key_concepts: []\n"
+        "  key_claims: []\n"
     )
 
 
-class TestExistingChecks(unittest.TestCase):
-    def test_good_response_passes(self):
-        with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), _good_response()))
-            self.assertTrue(ok, msg)
+def _write(tmp: Path, body: str) -> Path:
+    path = tmp / "Stage-2-2-Chunk-1-abcd1234.txt"
+    path.write_text(body, encoding="utf-8")
+    return path
 
-    def test_thin_response_fails_on_size(self):
-        with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), "concepts_found: []\n"))
-            self.assertFalse(ok)
-            self.assertIn("size", msg)
 
-    def test_entity_names_do_not_count_as_concepts(self):
-        entities = "\n".join(
-            f'  - name: "entity-{i}"\n    description: "a real entity"'
-            for i in range(10)
-        )
-        body = (
-            "chunk_index: 1\n"
-            f"entities_found:\n{entities}\n"
-            "concepts_found: []\n"
-            f"{SOURCE_QUOTES}"
-            f"{CLAIMS_WITH_EVIDENCE}"
-            f"{PADDING}"
+class TestNashSUKeyItemPolicy(unittest.TestCase):
+    def test_sparse_response_with_zero_candidates_passes(self):
+        with tempfile.TemporaryDirectory() as d:
+            ok, msg = qc_stage22.check(_write(Path(d), _response()))
+        self.assertTrue(ok, msg)
+        self.assertIn("0 key concepts", msg)
+
+    def test_source_quotes_are_optional(self):
+        claims = (
+            "claims:\n"
+            '  - claim: "A core result"\n'
+            '    evidence: "§2.1"\n'
         )
         with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), body))
-            self.assertFalse(ok)
-            self.assertIn("0 concepts", msg)
+            ok, msg = qc_stage22.check(
+                _write(Path(d), _response(claims=claims, source_quotes=""))
+            )
+        self.assertTrue(ok, msg)
 
-    def test_reported_count_only_uses_concepts_section(self):
-        entities = "\n".join(
-            f'  - name: "entity-{i}"\n    description: "a real entity"'
-            for i in range(4)
-        )
-        concepts_with_blank_lines = CONCEPTS.replace(
-            '    definition: "a genuine definition"\n  - name:',
-            '    definition: "a genuine definition"\n\n  - name:',
-        )
-        body = (
-            "chunk_index: 1\n"
-            f"entities_found:\n{entities}\n"
-            f"concepts_found:\n{concepts_with_blank_lines}\n"
-            f"{SOURCE_QUOTES}"
-            f"{CLAIMS_WITH_EVIDENCE}"
-            f"{PADDING}"
+    def test_missing_required_structure_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            ok, msg = qc_stage22.check(
+                _write(Path(d), "concepts_found: []\n")
+            )
+        self.assertFalse(ok)
+        self.assertIn("missing top-level", msg)
+
+    def test_placeholder_candidate_fails(self):
+        concepts = (
+            "concepts_found:\n"
+            '  - name: "Technical Content"\n'
+            '    importance: "core"\n'
         )
         with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), body))
-            self.assertTrue(ok, msg)
-            self.assertIn("6 concepts", msg)
+            ok, msg = qc_stage22.check(
+                _write(Path(d), _response(concepts=concepts))
+            )
+        self.assertFalse(ok)
+        self.assertIn("placeholder", msg)
 
-
-class TestSourceQuotesCheck(unittest.TestCase):
-    def test_missing_source_quotes_fails(self):
-        with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), _good_response(source_quotes="")))
-            self.assertFalse(ok)
-            self.assertIn("source_quotes", msg)
-
-    def test_empty_source_quotes_block_fails(self):
-        # Field present but the block scalar has no content lines.
-        empty = "source_quotes: |\nclaims_follow_immediately: true\n"
-        with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), _good_response(source_quotes=empty)))
-            self.assertFalse(ok)
-            self.assertIn("source_quotes", msg)
-
-
-class TestEvidenceCheck(unittest.TestCase):
     def test_claim_without_evidence_fails(self):
         claims = (
             "claims:\n"
-            '  - claim: "Barker-13 peak sidelobe is -22.3 dB"\n'
-            '    evidence: "§2.3.4, Table 2-1"\n'
-            '  - claim: "an ungrounded assertion"\n'
+            '  - claim: "An ungrounded assertion"\n'
         )
         with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), _good_response(claims=claims)))
-            self.assertFalse(ok)
-            self.assertIn("evidence", msg)
+            ok, msg = qc_stage22.check(
+                _write(Path(d), _response(claims=claims))
+            )
+        self.assertFalse(ok)
+        self.assertIn("evidence", msg)
 
     def test_empty_evidence_value_fails(self):
         claims = (
             "claims:\n"
-            '  - claim: "Barker-13 peak sidelobe is -22.3 dB"\n'
+            '  - claim: "An ungrounded assertion"\n'
             '    evidence: ""\n'
         )
         with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), _good_response(claims=claims)))
-            self.assertFalse(ok)
-            self.assertIn("evidence", msg)
-
-    def test_no_claims_at_all_is_not_flagged_by_evidence_check(self):
-        # Short chunks may legitimately carry few claims; claim-count policing
-        # is not this check's job — it only enforces evidence coverage.
-        with tempfile.TemporaryDirectory() as d:
-            ok, msg = qc_stage22.check(_write(Path(d), _good_response(claims="claims: []\n")))
-            self.assertTrue(ok, msg)
-
+            ok, msg = qc_stage22.check(
+                _write(Path(d), _response(claims=claims))
+            )
+        self.assertFalse(ok)
+        self.assertIn("evidence", msg)
 
 
 class TestChunkNumTolerance(unittest.TestCase):
-    """2026-07-12: a glob-matched file without a numeric chunk index must not
-    crash the sort key (re.search(...).group on None)."""
-
     def test_numeric_name(self):
-        self.assertEqual(qc_stage22._chunk_num(Path("Stage-2-2-Chunk-7.txt")), 7)
+        self.assertEqual(
+            qc_stage22._chunk_num(Path("Stage-2-2-Chunk-7.txt")), 7
+        )
 
     def test_non_numeric_name_returns_none(self):
-        self.assertIsNone(qc_stage22._chunk_num(Path("Stage-2-2-Chunk-copy.txt")))
+        self.assertIsNone(
+            qc_stage22._chunk_num(Path("Stage-2-2-Chunk-copy.txt"))
+        )
 
 
 class TestSingleFileCli(unittest.TestCase):
-    """The per-handoff gate must ignore stale responses in the same directory."""
-
     def test_file_scope_checks_only_requested_response(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
-            good = _write(tmp, _good_response())
+            good = _write(tmp, _response())
             (tmp / "Stage-2-2-Chunk-2-stale.txt").write_text(
-                "concepts_found: []\n", encoding="utf-8")
+                "concepts_found: []\n", encoding="utf-8"
+            )
             out = StringIO()
-            with patch.object(sys, "argv", ["qc_stage22.py", "--file", str(good)]):
+            with patch.object(
+                sys, "argv", ["qc_stage22.py", "--file", str(good)]
+            ):
                 with redirect_stdout(out):
                     rc = qc_stage22.main()
             self.assertEqual(rc, 0, out.getvalue())
@@ -188,7 +141,8 @@ class TestSingleFileCli(unittest.TestCase):
     def test_file_scope_rejects_missing_path(self):
         err = StringIO()
         with patch.object(
-            sys, "argv",
+            sys,
+            "argv",
             ["qc_stage22.py", "--file", "/definitely/missing/response.txt"],
         ):
             with redirect_stderr(err):

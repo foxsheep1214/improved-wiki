@@ -60,6 +60,22 @@ stage gates are in `references/ingest-stages-mandatory.md`.
   LLM-supplied folder string. Auto-correct known type/directory mismatches at
   write time rather than losing a valid page.
 
+### NashSU generation policy
+
+- Stage 2.2 identifies new or materially updated **key** entities/concepts and
+  core claims. Be thorough but concise; passing mentions and background
+  prerequisites are not page candidates.
+- No concept-page, entity-page, or claim-count target exists. `mentioned`
+  concepts are analysis context only and never reserve a generated slug.
+- Stage 2.4 generates the recommended key pages after association/dedup. It
+  never invents supplementary foundational pages or automatically backfills
+  every analyzed term.
+- Stage 2.6 writes one concise, free-form source summary. It links only
+  materially relevant pages and selects core claims; it does not dump all
+  generated pages/chunk claims or require a fixed H2 set.
+- A truncated generation is a hard pause, not a trigger to inflate output with
+  per-concept fallback calls.
+
 ### Parallelism
 
 - Stage 2.2 is serial: chunk N+1 consumes chunk N's validated rolling digest.

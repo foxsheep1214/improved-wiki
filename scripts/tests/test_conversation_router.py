@@ -138,7 +138,7 @@ class TestConversationHandoff(unittest.TestCase):
 
     def test_distinct_prompts_get_distinct_slugs(self):
         # Regression: _infer_stage maps several distinct Stage-2 calls
-        # (source page, main generation, per-concept fallback) to the same
+        # (source page and main generation) to the same
         # 'LLM-task' stage name. They must still get distinct cache files,
         # or the source-page answer gets reused for concept/entity generation
         # (wrong content → 0 valid blocks). A content-hash suffix guarantees

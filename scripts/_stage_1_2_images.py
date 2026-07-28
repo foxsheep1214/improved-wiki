@@ -598,6 +598,12 @@ def _stage_1_2_extract_from_mineru(
     for cand in sorted(out_dir.rglob("_media_bytes")):
         if cand.is_dir() and cand not in img_source_dirs:
             img_source_dirs.append(cand)
+    # For an analysis-only re-ingest, the canonical media directory is the
+    # preserved source of truth.  Include it when a caller supplied a
+    # source-bound filename allow-list, so valid kept media is not masked by
+    # incomplete transient minerU byte caches.
+    if allowed_filenames is not None and media_dir not in img_source_dirs:
+        img_source_dirs.append(media_dir)
 
     # Harvest minerU image_caption from content_list.json.
     # Keyed by image basename so we can attach during copy.
@@ -635,7 +641,12 @@ def _stage_1_2_extract_from_mineru(
                     continue
                 seen_source_names.add(img_path.name)
                 dest = media_dir / img_path.name
-                shutil.copy2(img_path, dest)
+                # A source-bound keep-media directory may itself be the
+                # selected input.  It is already canonical, so copying it onto
+                # itself would raise SameFileError and falsely turn a valid
+                # analysis-only re-ingest into a media-repair failure.
+                if img_path != dest:
+                    shutil.copy2(img_path, dest)
                 meta = caption_map.get(img_path.name, {})
                 # NOTE (2026-06-24): no .caption.txt sidecar is written here.
                 # minerU's image_caption is a figure label, not a description —

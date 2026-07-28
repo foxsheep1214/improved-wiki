@@ -117,9 +117,11 @@ connections_to_existing_wiki:
 Files to write:
 
 1. **`wiki/sources/<Mfr> - <Ref-Design-Name>.md`** — source page
-   - Body: design ID, specifications, measured performance, schematic description, key components table, design decisions, design notes, "参见"
+   - Body: a concise source summary; prioritize the design goal, specifications,
+     measured evidence, architecture, and consequential design decisions, with
+     source-driven structure rather than a fixed checklist
 
-2. **`wiki/concepts/<slug>.md`** — 1-5 concept pages (the topology, key sub-circuits)
+2. **`wiki/concepts/<slug>.md`** — pages only for genuinely important reusable ideas such as the topology or a materially explained sub-circuit; no count target
    - These are higher-value than the source page: they capture the design knowledge in a reusable form
 
 3. **Update `wiki/index.md`**, **`wiki/log.md`**, **`wiki/overview.md`**

@@ -23,7 +23,6 @@ from _llm_api import (
     call_anthropic_protocol,
 )
 from _parse import parse_file_blocks
-from _retry import call_with_retry
 from _stage_2_base import (
     _stage_2_title_cjk_bigrams,
     _stage_2_title_words,
@@ -33,18 +32,26 @@ from _language import build_language_directive
 from _frontmatter_array import parse_frontmatter_array
 from _paths import iter_wiki_pages
 
-# NashSU parity: the accumulating "already generated" context fed into each
-# chunk's prompt is BOUNDED, mirroring NashSU's trimLongText(globalDigest). The
-# full generated_slugs list still drives per-concept SKIP membership checks and
-# the (independently capped) Linkable list, so dedup quality is unaffected — only
-# the displayed "SKIP these" block is windowed to the most-recent N. Matches the
-# per-concept fallback's existing generated_slugs[:50] cap.
+# The accumulating "already generated" context fed into each chunk's prompt is
+# bounded, mirroring NashSU's trimLongText(globalDigest). The full
+# generated_slugs list still drives SKIP membership and the independently capped
+# Linkable list; only the displayed context is windowed.
 GENERATED_DISPLAY_MAX = 50
 
 # Soft cap on the displayed Linkable-pages list. Must-link targets (this chunk's
 # slugs, prior-chunk pages, Stage 2.3 existing_refs, related pages) are always
 # kept; only the background fill of other existing wiki pages is bounded by this.
 _LINKABLE_TOTAL_CAP = 400
+
+
+def _is_key_concept_candidate(item: dict) -> bool:
+    """Whether a Stage 2.2 concept is eligible for standalone generation.
+
+    `mentioned` is retained only as optional analysis context. NashSU generates
+    pages for key ideas identified in analysis, not for every term encountered.
+    Missing importance defaults to eligible for backward-compatible checkpoints.
+    """
+    return str(item.get("importance", "core")).strip().lower() != "mentioned"
 
 
 def _linkable_relevance_tokens(text: str) -> set:
@@ -351,6 +358,8 @@ def _stage_2_4_build_prompt(
     concept_slug_stems: set[str] = set()  # for entity-dedup (Issue 4)
     for c in concepts:
         if isinstance(c, dict):
+            if not _is_key_concept_candidate(c):
+                continue
             name = c.get("name", "")
             imp = c.get("importance", "core")
             defn = c.get("definition", "")
@@ -428,16 +437,11 @@ def _stage_2_4_build_prompt(
                 )
                 entity_slugs.append((name, f"entities/{slug}"))
 
-    # NOTE: these caps are LINE counts, but each concept emits a header line PLUS
-    # up to 3 key_detail bullets (~4 lines/concept). A low cap therefore silently
-    # truncates the TAIL concepts of a dense chunk from the GENERATE list while
-    # they remain in the linkable list (concept_slugs, uncapped) → broken links to
-    # never-generated pages. The Stage 2.2 density guideline targets up to ~40
-    # concepts/chunk (≈160 lines), so the cap must sit well above that; ingest is
-    # not token-sensitive and the chunk text already dominates the prompt. Bumped
-    # 100→480 / 30→160 (2026-06-30) so realistic high-density chunks are never cut.
-    concept_str = "\n".join(concept_lines[:480]) if concept_lines else "(none)"
-    entity_str = "\n".join(entity_lines[:160]) if entity_lines else "(none)"
+    # Stage 2.2 has already curated key candidates. Do not impose a second,
+    # arbitrary line/count cap here: pass every recommended candidate while
+    # excluding `mentioned` concepts above.
+    concept_str = "\n".join(concept_lines) if concept_lines else "(none)"
+    entity_str = "\n".join(entity_lines) if entity_lines else "(none)"
 
     # Display only the most-recent window (NashSU-bounded); the full list is still
     # used for SKIP membership (above) and the Linkable list (below), so older
@@ -576,23 +580,22 @@ Chunk: {chunk_index + 1}
 # Related (not duplicate) existing pages — wikilink to these where relevant, but still generate full new pages for the concepts/entities below:
 {related_pages_str}
 
-# Concepts found in this chunk (generate a page for each — skip ALREADY COVERED):
+# Key concept page candidates recommended by the analysis:
 {concept_str}
 
-# Entities found in this chunk (generate a page for key ones — skip ALREADY COVERED):
+# Key entity page candidates recommended by the analysis:
 {entity_str}
 {_ENTITY_RULES_SECTION}
-# Schema-typed pages found in this chunk (NashSU parity — generate at wiki/<folder>/<slug>.md when NOT already covered; skip ALREADY COVERED):
+# Key schema-typed page candidates recommended by the analysis:
 {schema_candidates_str}
 
-# Supplementary foundational pages (use sparingly)
-If THIS chunk clearly defines or depends on a foundational concept that is NOT in
-the lists above AND is NOT in the Linkable pages list below (i.e. no existing page
-covers it), you MAY generate a page for it at a new `wiki/concepts/<kebab-slug>.md`
-path. Only do this for genuinely page-worthy building blocks the source actually
-explains — never for passing mentions. Give it a short, specific kebab-case slug
-and a `type: concept` frontmatter like the others. Do NOT [[wikilink]] to any slug
-that is not either in the Linkable list or a page you generate in THIS response.
+# NashSU generation policy
+- Generate standalone pages only for the genuinely important key candidates
+  recommended by the analysis and not marked ALREADY COVERED/SKIP.
+- Do not create pages for passing mentions, background prerequisites, or extra
+  "foundational" terms that were not recommended.
+- There is no page-count target. Do not pad or split one coherent topic merely
+  to increase the number of FILE blocks.
 
 # ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
 - Your FIRST line of output MUST start with `---FILE:wiki/`
@@ -663,277 +666,8 @@ updated: {time.strftime('%Y-%m-%d')}
 
 ---END FILE---
 
-Generate a page for EVERY concept listed above that is NOT marked [ALREADY COVERED]. Go!
-"""
-
-
-# ── Per-concept fallback (when per-chunk returns 0 blocks) ──
-
-# Maximum concepts per LLM call in fallback mode.
-# Above this, concepts are split into multiple calls.
-PER_CONCEPT_BATCH_MAX = 4
-
-
-def _stage_2_4_per_concept_fallback(
-    chunk_analyses: list[dict],
-    global_digest: dict,
-    file_path: Path,
-    config: Config,
-    template: str = "",
-    verbose: bool = False,
-    pre_existing_slugs: list[str] | None = None,
-) -> tuple[dict, str, list[tuple[str, str]]]:
-    """Generate each concept in its own small LLM call.
-
-    Used when per-chunk generation returns 0 FILE blocks (e.g. chunk has
-    too many concepts for a single call to complete within max_tokens/timeout).
-    Each concept gets a focused prompt with just its definition + context from
-    the chunk that found it.
-
-    pre_existing_slugs: slugs already generated by prior per-chunk calls.
-    When provided (barrier-free fallback), these concepts are skipped so the
-    fallback only generates what was missed — avoids duplicate LLM calls.
-    """
-    unique_concepts, unique_entities = _stage_2_4_extract_names(chunk_analyses)
-    all_file_blocks: list[tuple[str, str]] = []
-    all_responses: list[str] = []
-    generated_slugs: list[str] = list(pre_existing_slugs) if pre_existing_slugs else []
-    gen_tokens = config.compute_max_tokens(8192)
-    t0 = time.time()
-    total = len(unique_concepts) + len(unique_entities)
-
-    # Build concept→chunk_analysis map for targeted context
-    concept_to_chunk: dict[str, int] = {}
-    for idx, analysis in enumerate(chunk_analyses):
-        for c in analysis.get("concepts_found", []):
-            name = c.get("name", c) if isinstance(c, dict) else str(c)
-            concept_to_chunk[name] = idx
-
-    print(f"[stage 2.4] Per-concept fallback: {len(unique_concepts)} concepts + "
-          f"{len(unique_entities)} entities, {PER_CONCEPT_BATCH_MAX} per batch, "
-          f"max_tokens={gen_tokens}")
-
-    n = 0
-    existing_slugs = list_existing_slugs(config)
-
-    def _generate_one(kind: str, name: str, prompt: str) -> None:
-        """Generate ONE fallback page (concept or entity).
-
-        Single-item failure is tolerated by design (print ❌; the coverage
-        stats record the gap) — the fallback IS the remedial layer, so a
-        failed item must not kill the backfill of the remaining ones.
-        """
-        nonlocal n
-        t_call = time.time()
-        try:
-            response, stop_reason = call_with_retry(
-                lambda: call_anthropic_protocol(prompt, config, max_tokens=gen_tokens),
-                max_retries=3, base_wait=2.0, label=f"fallback {kind}")
-        except Exception as e:
-            print(f"  [{kind} {n+1}/{total}] ❌ {e}")
-            return
-        all_responses.append(response)
-        blocks = parse_file_blocks(response)
-        all_file_blocks.extend(blocks)
-        n += 1
-        pct = n * 100 // total
-        dt = time.time() - t_call
-        print(f"  [{kind} {n}/{total}] {name[:50]} → "
-              f"{len(blocks)} blocks ({len(response):,} chars, {stop_reason}) "
-              f"{dt:.0f}s [{pct}%]")
-        for path, _content in blocks:
-            s = file_block_slug(path)
-            if s not in generated_slugs:
-                generated_slugs.append(s)
-
-    for concept_name in unique_concepts:
-        chunk_idx = concept_to_chunk.get(concept_name, 0)
-        analysis = chunk_analyses[chunk_idx] if chunk_idx < len(chunk_analyses) else chunk_analyses[0]
-
-        # Extract concept details from the chunk analysis
-        concept_info = None
-        for c in analysis.get("concepts_found", []):
-            name = c.get("name", c) if isinstance(c, dict) else str(c)
-            if name == concept_name:
-                concept_info = c if isinstance(c, dict) else {"name": c}
-                break
-
-        slug = slugify(concept_name)
-        if slug in generated_slugs:
-            continue
-
-        prompt = _stage_2_4_build_per_concept_prompt(
-            concept_info, slug, file_path, config, global_digest,
-            analysis, generated_slugs, existing_slugs, template,
-        )
-        _generate_one("concept", concept_name, prompt)
-
-    for entity_name in unique_entities[:min(len(unique_entities), 20)]:
-        slug = slugify(entity_name)
-        if slug in generated_slugs:
-            continue
-        prompt = _stage_2_4_build_per_entity_prompt(
-            entity_name, slug, file_path, config, global_digest,
-            existing_slugs, template,
-        )
-        _generate_one("entity", entity_name, prompt)
-
-    # NOTE: no source-page generation here (removed 2026-07-12). The caller
-    # (_generate_from_analyses) filters "sources/" blocks out of the fallback
-    # output, and Stage 2.6 generates the real source page — the block this
-    # segment produced was always discarded (one wasted LLM call per fallback).
-
-    combined = "\n".join(all_responses)
-    concept_blocks = [b for b in all_file_blocks if "concepts/" in b[0]]
-    entity_blocks = [b for b in all_file_blocks if "entities/" in b[0]]
-
-    print(f"[stage 2.4] Per-concept fallback done — {time.time()-t0:.0f}s, "
-          f"{len(all_file_blocks)} blocks ({len(concept_blocks)}c/{len(entity_blocks)}e)")
-
-    analysis = {
-        "book_meta": global_digest.get("book_meta", {}),
-        "outline": global_digest.get("outline", []),
-        "concepts_identified": len(unique_concepts),
-        "concepts_generated": len(concept_blocks),
-        "entities_generated": len(entity_blocks),
-        "coverage_pct": round(len(concept_blocks) / max(len(unique_concepts), 1), 2),
-        "total_chunks": len(chunk_analyses),
-        "method": "per-concept-fallback",
-    }
-    return analysis, combined, all_file_blocks
-
-
-def _stage_2_4_build_per_concept_prompt(
-    concept_info: dict,
-    slug: str,
-    file_path: Path,
-    config: Config,
-    global_digest: dict,
-    chunk_analysis: dict,
-    generated_slugs: list[str],
-    existing_slugs: list[str],
-    template: str = "",
-) -> str:
-    """Build a focused prompt for generating ONE concept page."""
-    name = concept_info.get("name", slug)
-    definition = concept_info.get("definition", "")
-    importance = concept_info.get("importance", "core")
-    details = concept_info.get("key_details", [])[:5]
-
-    raw_rel = canonical_source_path(file_path, config)
-
-    # Sibling concepts from same chunk (for wikilinks)
-    siblings = []
-    for c in chunk_analysis.get("concepts_found", []):
-        cn = c.get("name", c) if isinstance(c, dict) else str(c)
-        if cn != name:
-            siblings.append(cn)
-
-    template_section = ""
-    if template:
-        template_section = f"\n# Document Type\n<template>\n{template[:800]}\n</template>\n"
-
-    language_directive = build_language_directive(
-        " ".join([str(name), str(definition), *map(str, details)]))
-    return f"""{language_directive}
-
-# Role
-Generate ONE wiki concept page. Output ONLY this one page, then stop.
-
-{template_section}
-# Concept to Generate
-- Name: {name}
-- Importance: {importance}
-- Definition: {definition}
-{f"- Key Details: " + "; ".join(details) if details else ""}
-
-# Context from Source
-Source: {file_path.stem}
-{f"Sibling concepts in this section (use [[wikilinks]]): {', '.join(siblings[:10])}" if siblings else ""}
-
-# Already Generated (skip these — use [[wikilinks]]):
-{', '.join(generated_slugs[:50]) or "(none yet)"}
-
-# Existing Wiki Pages (avoid duplicates):
-{', '.join(existing_slugs[:50]) or "(none)"}
-
-# ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCK
-Your FIRST line MUST be `---FILE:wiki/concepts/{slug}.md---`
-Do NOT write preamble, analysis, or commentary. Parser IGNORES non-FILE text.
-
-# Output Format — EXACT
----FILE:wiki/concepts/{slug}.md---
----
-type: concept
-title: "{name}"
-tags: [...]
-related: []
-sources: ["{raw_rel}"]
-created: {time.strftime('%Y-%m-%d')}
-updated: {time.strftime('%Y-%m-%d')}
----
-
-# {name}
-
-(Detailed content — explain the concept, include key details, use [[wikilinks]])
-
----END FILE---
-
-Generate the page NOW. Start with ---FILE:...
-"""
-
-
-def _stage_2_4_build_per_entity_prompt(
-    entity_name: str,
-    slug: str,
-    file_path: Path,
-    config: Config,
-    global_digest: dict,
-    existing_slugs: list[str],
-    template: str = "",
-) -> str:
-    """Build a focused prompt for generating ONE entity page."""
-    raw_rel = canonical_source_path(file_path, config)
-
-    language_directive = build_language_directive(
-        f"{entity_name} " + json.dumps(global_digest, ensure_ascii=False))
-    return f"""{language_directive}
-
-# Role
-Generate ONE wiki entity page. Output ONLY this one page, then stop.
-
-# Entity to Generate
-- Name: {entity_name}
-
-# Source
-Document: {file_path.stem}
-
-# Existing Wiki Pages (avoid duplicates):
-{', '.join(existing_slugs[:50]) or "(none)"}
-
-# ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCK
-Your FIRST line MUST be `---FILE:wiki/entities/{slug}.md---`
-Do NOT write preamble, analysis, or commentary.
-
-# Output Format — EXACT
----FILE:wiki/entities/{slug}.md---
----
-type: entity
-title: "{entity_name}"
-tags: [...]
-related: []
-sources: ["{raw_rel}"]
-created: {time.strftime('%Y-%m-%d')}
-updated: {time.strftime('%Y-%m-%d')}
----
-
-# {entity_name}
-
-(Description, significance, key attributes, related concepts using [[wikilinks]])
-
----END FILE---
-
-Generate the page NOW. Start with ---FILE:...
+Generate the recommended key pages that are not marked
+[ALREADY COVERED]/[SKIP]. Start with the first FILE block.
 """
 
 
@@ -983,6 +717,8 @@ def _stage_2_4_build_all_prompt(
             continue
         for c in ca.get("concepts_found", []):
             if not isinstance(c, dict):
+                continue
+            if not _is_key_concept_candidate(c):
                 continue
             name = c.get("name", "")
             slug = slugify(name)
@@ -1048,12 +784,8 @@ def _stage_2_4_build_all_prompt(
                 entity_lines.append(f"  - {name} (slug: entities/{slug}): {sig}")
                 entity_slugs.append((name, f"entities/{slug}"))
 
-    # Same line-vs-concept caveat as _stage_2_4_build_prompt: these are LINE caps
-    # and each concept emits ~4 lines, so a low cap silently drops tail concepts
-    # (which stay linkable → broken links). Single-shot covers a whole small book
-    # in one prompt, so allow generous headroom. Bumped 200→800 / 60→200 (2026-06-30).
-    concept_str = "\n".join(concept_lines[:800]) if concept_lines else "(none)"
-    entity_str = "\n".join(entity_lines[:200]) if entity_lines else "(none)"
+    concept_str = "\n".join(concept_lines) if concept_lines else "(none)"
+    entity_str = "\n".join(entity_lines) if entity_lines else "(none)"
     # Must-link targets (this book's slugs, Stage 2.3 existing_refs, related
     # pages) are always kept; the background fill of other existing wiki pages
     # is bounded — ranked by relevance to this book when over the room, not
@@ -1137,9 +869,10 @@ def _stage_2_4_build_all_prompt(
     return f"""{language_directive}
 
 # Role
-You are generating wiki pages for ALL chunks of a book in ONE pass. The complete
-concept/entity lists aggregated across every chunk are below. Generate a page for
-each one that is NOT marked ALREADY COVERED — in a single response.
+You are generating wiki pages for ALL chunks of a book in ONE pass. The analysis
+recommendations below contain key page candidates, not an exhaustive term
+inventory. Generate only genuinely important recommended pages that are not
+marked ALREADY COVERED/SKIP.
 
 # Source
 Book: {file_path.stem}
@@ -1151,22 +884,22 @@ Chunks: {len(chunk_analyses)}
 # Related (not duplicate) existing pages — wikilink to these where relevant, but still generate full new pages for the concepts/entities below:
 {related_pages_str}
 
-# Concepts found across ALL chunks (generate a page for each — skip ALREADY COVERED):
+# Key concept page candidates recommended across all chunks:
 {concept_str}
 
-# Entities found across ALL chunks (generate a page for key ones — skip ALREADY COVERED / DUPLICATE):
+# Key entity page candidates recommended across all chunks:
 {entity_str}
 {_ENTITY_RULES_SECTION}
-# Schema-typed pages found across ALL chunks (use the exact schema route and
-# frontmatter type; skip ALREADY COVERED):
+# Key schema-typed page candidates recommended across all chunks:
 {schema_candidates_str}
 
-# Supplementary foundational pages (use sparingly)
-If the source clearly defines a foundational concept NOT in the lists above AND NOT
-in the Linkable pages list below, you MAY generate a page for it at a new
-`wiki/concepts/<kebab-slug>.md`. Only for genuinely page-worthy building blocks the
-source actually explains — never for passing mentions. Do NOT [[wikilink]] to any
-slug that is not either in the Linkable list or a page you generate in THIS response.
+# NashSU generation policy
+- Generate standalone pages only for genuinely important key candidates
+  recommended by the analysis and not marked ALREADY COVERED/SKIP.
+- Do not add pages for passing mentions, background prerequisites, or
+  supplementary terms that were not recommended.
+- There is no page-count target. Do not pad or split one coherent topic merely
+  to increase the number of FILE blocks.
 
 # ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
 - Your FIRST line of output MUST start with `---FILE:wiki/`
@@ -1230,7 +963,8 @@ updated: {time.strftime('%Y-%m-%d')}
 
 ---END FILE---
 
-Generate a page for EVERY concept listed above that is NOT marked [ALREADY COVERED], in ONE response. Go!
+Generate the recommended key pages that are not marked
+[ALREADY COVERED]/[SKIP], in one response. Start with the first FILE block.
 """
 
 
@@ -1246,18 +980,34 @@ def stage_2_4_generate_all(
 ) -> tuple[list[tuple[str, str]], list[str], str | None]:
     """Single-shot generation: ONE LLM call for all chunks (NashSU parity, 2026-06-27).
 
-    Replaces the per-chunk generation loop. Returns (file_blocks, generated_slugs,
-    stop_reason). The per-concept fallback (caller-side) catches any concepts the
-    single shot missed, including output-truncation gaps.
+    Returns (file_blocks, generated_slugs, stop_reason). A truncated or malformed
+    response fails visibly; NashSU does not use a per-item backfill quota.
     """
     valid = [ca for ca in chunk_analyses if isinstance(ca, dict) and "error" not in ca]
-    has_concepts = any(ca.get("concepts_found") for ca in valid)
-    has_entities = any(ca.get("entities_found") for ca in valid)
+    existing_refs = existing_refs or {}
+    has_concepts = any(
+        any(
+            isinstance(c, dict)
+            and _is_key_concept_candidate(c)
+            and not existing_refs.get(str(c.get("name", "")))
+            for c in (ca.get("concepts_found", []) or [])
+        )
+        for ca in valid
+    )
+    has_entities = any(
+        any(
+            isinstance(e, dict)
+            and not existing_refs.get(str(e.get("name", "")))
+            for e in (ca.get("entities_found", []) or [])
+        )
+        for ca in valid
+    )
     candidate_routes = schema_candidate_routes(load_schema_md(config))
     has_schema_candidates = any(
         any(
             isinstance(cand, dict)
             and str(cand.get("type", "")).strip() in candidate_routes
+            and not existing_refs.get(str(cand.get("name", "")))
             for cand in (ca.get("schema_typed_candidates", []) or [])
         )
         for ca in valid
@@ -1291,10 +1041,14 @@ def stage_2_4_generate_all(
             print(f"  [generate-all] OK{tag} — {len(blocks)} blocks "
                   f"({len(response):,} chars, {stop_reason}) {dt:.0f}s")
             sr = str(stop_reason).lower()
-            if "length" in sr or "max_tokens" in sr:
-                print(f"  [generate-all] ⚠️ response truncated ({stop_reason}) — "
-                      f"some pages may be missing; per-concept fallback will fill gaps "
-                      f"if zero concept blocks result.")
+            if "length" in sr or "max_tok" in sr or "max_output" in sr:
+                raise RuntimeError(
+                    f"Stage 2.4 single-shot output was truncated ({stop_reason}); "
+                    "refusing to publish a partial key-page set.")
+            if not blocks:
+                raise RuntimeError(
+                    "Stage 2.4 produced 0 FILE blocks despite uncovered key "
+                    "page candidates.")
             if verbose:
                 print(f"    response: {response[:500]}...")
             return blocks, generated_slugs, stop_reason
@@ -1305,8 +1059,11 @@ def stage_2_4_generate_all(
                 time.sleep(wait)
                 continue
             print(f"  [generate-all] FAILED: {e}")
-            return [], [], None
-    return [], [], None
+            raise RuntimeError(
+                "Stage 2.4 single-shot generation failed after "
+                f"{attempt + 1} attempt(s): {type(e).__name__}: {e}"
+            ) from e
+    raise RuntimeError("Stage 2.4 single-shot generation exhausted retries")
 
 
 def stage_2_4_generate_chunk(
@@ -1333,13 +1090,27 @@ def stage_2_4_generate_chunk(
     Returns list of (path, content) tuples.  Caller should append slugs to
     generated_slugs from the returned paths.
     """
-    concepts_n = len(analysis.get("concepts_found", []))
-    entities_n = len(analysis.get("entities_found", []))
+    existing_refs = existing_refs or {}
+    concepts_n = sum(
+        1 for c in (analysis.get("concepts_found", []) or [])
+        if isinstance(c, dict)
+        and _is_key_concept_candidate(c)
+        and not existing_refs.get(str(c.get("name", "")))
+        and slugify(str(c.get("name", ""))) not in generated_slugs
+    )
+    entities_n = sum(
+        1 for e in (analysis.get("entities_found", []) or [])
+        if isinstance(e, dict)
+        and not existing_refs.get(str(e.get("name", "")))
+        and slugify(str(e.get("name", ""))) not in generated_slugs
+    )
     candidate_routes = schema_candidate_routes(load_schema_md(config))
     schema_candidates_n = sum(
         1 for cand in (analysis.get("schema_typed_candidates", []) or [])
         if isinstance(cand, dict)
         and str(cand.get("type", "")).strip() in candidate_routes
+        and not existing_refs.get(str(cand.get("name", "")))
+        and slugify(str(cand.get("name", ""))) not in generated_slugs
     )
     if concepts_n == 0 and entities_n == 0 and schema_candidates_n == 0:
         print(f"  [chunk {chunk_idx+1}] (no concepts, entities, or schema candidates — skipped)")
@@ -1362,6 +1133,15 @@ def stage_2_4_generate_chunk(
             response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens, label=f"chunk {chunk_idx+1} generation")
             blocks = parse_file_blocks(response)
             dt = time.time() - t0
+            sr = str(stop_reason or "").lower()
+            if "length" in sr or "max_tok" in sr or "max_output" in sr:
+                raise RuntimeError(
+                    f"Stage 2.4 chunk {chunk_idx + 1} output was truncated "
+                    f"({stop_reason}); refusing to publish a partial key-page set.")
+            if not blocks:
+                raise RuntimeError(
+                    f"Stage 2.4 chunk {chunk_idx + 1} produced 0 FILE blocks "
+                    "despite uncovered key page candidates.")
             tag = f" (retry #{attempt})" if attempt > 0 else ""
             print(f"  [chunk {chunk_idx+1}] generate OK{tag} — "
                       f"{concepts_n}c/{entities_n}e/{schema_candidates_n}s → "
@@ -1399,8 +1179,9 @@ def _stage_2_4_extract_names(chunk_analyses: list[dict]) -> tuple[list[str], lis
                 raise RuntimeError(
                     "Stage 2.4 received an unvalidated concepts_found item; "
                     "re-run Stage 2.2.")
-            name = c.get("name", "")
-            all_concepts.append(name)
+            if _is_key_concept_candidate(c):
+                name = c.get("name", "")
+                all_concepts.append(name)
         for e in a.get("entities_found") or []:
             if not isinstance(e, dict):
                 raise RuntimeError(

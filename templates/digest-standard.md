@@ -1,7 +1,7 @@
 # digest-standard.md — Ingest template for industry standards
 
 > **Use this template** when a file lives at `raw/Standard/<...>/*.pdf`.
-> Standards (IEEE, IEC, MIL-STD, GB) are formal normative documents. Focus on clause structure, definitions, and conformance criteria. Often produces many "term" pages.
+> Standards (IEEE, IEC, MIL-STD, GB) are formal normative documents. Focus on clause structure, definitions, and conformance criteria; do not turn the glossary into a page-per-term dump.
 
 ---
 
@@ -36,7 +36,7 @@ clause_structure:
   # ...
 
 key_definitions:
-  # The glossary entries — these become concept pages
+  # Genuinely important glossary entries that may warrant concept pages
   - term: "<e.g. MIB (Management Information Base)>"
     definition: "<verbatim from clause 3.1>"
     clause: "3.1"
@@ -91,10 +91,12 @@ connections_to_existing_wiki:
 Files to write:
 
 1. **`wiki/sources/<SDO> - <Std-Number> - <Year>.md`** — source page
-   - Body: standard metadata, scope, clause structure, key requirements table, conformance criteria, "参见"
+   - Body: a concise source summary; prioritize scope, central requirements,
+     evidence-bearing clause references, and conformance implications, with
+     source-driven headings rather than a mandatory outline
 
-2. **`wiki/concepts/<term-slug>.md`** — one page per **key definition** in the glossary
-   - Standards often have 30-100 definitions; extract the 5-15 most important ones as concept pages
+2. **`wiki/concepts/<term-slug>.md`** — pages only for genuinely important definitions that are independently useful beyond this source
+   - A long glossary does not imply many pages; there is no numeric target
 
 3. **`wiki/entities/<SDO>.md`** — entity page for the SDO (if not already in wiki)
 
@@ -116,7 +118,7 @@ Files to write:
 | Symptom | Fix |
 |---|---|
 | LLM paraphrases normative "shall" statements | Force: "Every requirement field must be a VERBATIM copy of the standard's text. Do not rephrase" |
-| Too many concept pages (one per term) | Filter by `importance: "core"` in the analysis. Standard defines 100 terms, but only 5-15 are worth their own page |
+| Too many concept pages (one per term) | Keep only genuinely important, independently useful definitions; passing or source-local terms stay in the source summary |
 | Clause structure is incomplete | Standards are large. The LLM may only read the first 30 pages. Prompt: "Make sure you have the full TOC. If not, say which clauses are missing" |
 
 ---

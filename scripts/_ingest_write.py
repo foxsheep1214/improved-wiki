@@ -469,77 +469,18 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 print(f"  [enrich] {rel_path} (+wikilinks)")
 
     if not source_block and not query_bridge:
-        # Build NashSU-quality source page from digest data (no LLM needed)
-        book_meta = analysis.get("book_meta", {})
-        outline = analysis.get("outline", [])
-        key_claims = analysis.get("key_claims", [])
-        title = book_meta.get("title", raw_file.stem)
-        authors = book_meta.get("authors", [])
-        year = book_meta.get("year", "")
-        publisher = book_meta.get("publisher", "")
-
-        lines = [
-            "---",
-            "type: source",
-            f'title: "{title}"',
-            f"created: {today_str}",
-            f"updated: {today_str}",
-            "tags: []",
-            "related: []",
-            f'sources: ["{canonical_source}"]',
-            "---",
-            "",
-            f"# {title}",
-            "",
-        ]
-        if authors:
-            lines.append(f"**Authors:** {', '.join(str(a) for a in authors[:5])}")
-        if year:
-            lines.append(f"**Year:** {year}")
-        if publisher:
-            lines.append(f"**Publisher:** {publisher}")
-        lines.append("")
-
-        if outline:
-            lines.append("## Table of Contents & Key Concepts")
-            lines.append("")
-            for ch in outline[:40]:
-                if isinstance(ch, dict):
-                    ch_title = ch.get("title", "")
-                    topics = ch.get("key_topics", [])
-                    topics_str = ", ".join(str(t) for t in topics[:4]) if topics else ""
-                else:
-                    ch_title = str(ch)
-                    topics_str = ""
-                lines.append(f"1. **{ch_title}**" + (f" — {topics_str}" if topics_str else ""))
-            lines.append("")
-
-        if key_claims:
-            lines.append("## Key Takeaways")
-            lines.append("")
-            for claim in key_claims[:10]:
-                if isinstance(claim, dict):
-                    lines.append(f"- {claim.get('claim', str(claim))}")
-                else:
-                    lines.append(f"- {str(claim)}")
-            lines.append("")
-
-        placeholder_content = "\n".join(lines) + "\n"
-        try:
-            stage_3_1_write_wiki_file(source_path, placeholder_content, config)
-            files_written_paths.append(PageRef.parse(
-                source_path,
-                config.wiki_root,
-                config.wiki_dir,
-            ).project_relative)
-        except OSError as e:
-            print(f"  [write] HARD ERROR: source-placeholder ({source_path.name}) — {e}")
-            hard_failures.append("source-placeholder")
+        # A source page is part of NashSU's generation contract. Do not hide a
+        # missing/malformed Stage 2.6 result behind a deterministic outline or
+        # fixed-section placeholder: pause visibly so the generation can be
+        # repaired and resumed without publishing a different content policy.
+        print(f"  [write] HARD ERROR: generated source page is missing "
+              f"({source_path.name})")
+        hard_failures.append("missing-source-page")
 
     if hard_failures:
         # write_loop_done may already have been set before an enrichment
-        # handoff. A failed source placeholder invalidates that marker: 3.1 is
-        # not complete and must be retried.
+        # handoff. A missing source page invalidates that marker: 3.1 is not
+        # complete and must be retried after Stage 2.6 is repaired.
         unmark_stage_done(config, h, "write_loop_done")
         partial_refs = canonical_page_refs(
             files_written_paths, config.wiki_root, config.wiki_dir)
@@ -550,9 +491,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             "files_written": partial_refs,
         }
 
-    # Refresh the finer-grained marker after a deterministic source
-    # placeholder has been added. This closes the small window where the
-    # pre-enrichment marker contained only generated FILE blocks.
+    # Refresh the finer-grained marker after the generated source block has
+    # been confirmed. This closes the small window where the pre-enrichment
+    # marker contained only non-source FILE blocks.
     if not write_phase_done:
         files_written_paths = canonical_page_refs(
             files_written_paths, config.wiki_root, config.wiki_dir)

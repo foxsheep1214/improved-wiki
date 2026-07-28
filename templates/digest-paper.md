@@ -1,7 +1,7 @@
 # digest-paper.md — Ingest template for academic / industry papers
 
 > **Use this template** when a file lives at `raw/Paper/<...>/*.pdf`.
-> Differs from `digest-book.md` only in: (1) lighter output (2-5 concepts vs 10-50), (2) no chapter structure, (3) focuses on methodology + results + comparison to related work.
+> Differs from `digest-book.md` in emphasis, not a page quota: no chapter structure, and stronger focus on methodology, results, and comparison to related work.
 
 ---
 
@@ -64,7 +64,7 @@ connections_to_existing_wiki:
     relationship: "extends" | "applies" | "cites" | "contrasts"
 
 recommended_wiki_structure:
-  new_concept_pages:  # 2-5 expected
+  new_concept_pages:  # genuinely important standalone concepts only; no count target
     - slug: "<concept-slug>"
       rationale: "<why this needs its own page>"
   new_entity_pages:
@@ -85,12 +85,14 @@ reproducibility:
 Files to write (lighter than book):
 
 1. **`wiki/sources/<Authors> - <Year> - <Short-Title>.md`** — source page
-   - Body: paper metadata, problem statement, methodology, key results, comparison table, "参见"
+   - Body: a concise source summary; prioritize the problem, methodology, key
+     results, evidence, and caveats, but choose only useful sections rather
+     than following a fixed checklist
 
-2. **`wiki/concepts/<slug>.md`** — 2-5 concept pages
+2. **`wiki/concepts/<slug>.md`** — pages only for key ideas the paper introduces or applies non-trivially
    - Smaller than book concepts: focus on the paper's novel contribution, not background
 
-3. **`wiki/entities/<slug>.md`** — 1-3 entity pages (the paper's authors, if notable)
+3. **`wiki/entities/<slug>.md`** — pages only for key named things materially discussed (authors only when genuinely notable in context)
 
 4. **Update `wiki/index.md`**, **`wiki/log.md`**, **`wiki/overview.md`**
 

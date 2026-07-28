@@ -521,11 +521,11 @@ def _stage_2_2_build_prompt(
     # NOT scaled to the model context (chunk size scales; the digest does not) —
     # paired with a "compact document-level digest" instruction so the LLM
     # condenses rather than accumulates verbatim (see the updated_global_digest
-    # template below). Detail is NOT lost by this: each chunk's full analysis
-    # (concepts/claims/formulas) is persisted in chunk_analyses and flows to
-    # 2.4 (per-chunk generation) and 2.6 (chunk_claims) separately — the digest
-    # is only the lightweight continuity channel. Earlier fixed caps (6K, 24K)
-    # and an interim dynamic cap (target_chars) predate this parity decision.
+    # template below). Detail is NOT lost by this: each chunk's full analysis is
+    # persisted in chunk_analyses; Stage 2.4 selects eligible key page candidates
+    # and Stage 2.6 synthesizes core claims separately. The digest is only the
+    # lightweight continuity channel. Earlier fixed caps (6K, 24K) and an
+    # interim dynamic cap (target_chars) predate this parity decision.
     if len(digest_str) > _DIGEST_PROMPT_CAP:
         digest_str = digest_str[:_DIGEST_PROMPT_CAP] + "\n... (truncated)"
     if existing_slugs is None:
@@ -551,20 +551,18 @@ You are analyzing content from: **{heading_path}**
 
     language_directive = build_language_directive(chunk_text)
 
-    # Extraction-completeness guideline (2026-07-02): keep the behavioral
-    # anti-under-extraction nudge but DROP the former per-char concept-COUNT target
-    # (~1 concept/20K chars). Concept density is a property of content, not char
-    # count, and a numeric target invited padding / concept-splitting. NashSU gives
-    # no count target at all; this is the closest content-driven form — quality over
-    # count. The chunk-size mention stays only to anchor "read all of it, section by
-    # section", not to imply a quota.
+    # NashSU v0.6.5/current policy: identify only genuinely important key
+    # entities/concepts and stay "thorough but concise". There is deliberately no
+    # per-character target, minimum count, completeness ledger, or instruction to
+    # turn every mentioned building block into a page candidate.
     density_hint = (
         f"This chunk is ~{len(chunk_text):,} characters"
         + (f" spanning **{heading_path}**" if heading_path else "")
-        + ". Enumerate it **section by section** so no part is under-extracted: list "
-        "every genuine page-worthy concept the source defines or materially uses. "
-        "Quality over count — do NOT pad with trivial mentions, do NOT split one "
-        "concept into several, and do NOT skip a real concept to keep the list short."
+        + ". Be thorough but concise. Focus on what is genuinely important: identify "
+        "new or materially updated key concepts/entities, not an inventory of every "
+        "term, prerequisite, or passing mention. There is no numeric target; do not "
+        "pad, split one coherent topic into several entries, or copy background "
+        "knowledge merely because it appears in the text."
     )
 
     return f"""{language_directive}
@@ -579,12 +577,11 @@ it for continuity and to avoid re-writing the same *prose* twice.
 Keep stable names consistent with the existing wiki and prior digest: when this
 chunk re-encounters a concept/entity already named there, reuse that EXACT name
 (stable names → stable slugs → downstream dedup works).
-It is NOT a list of existing wiki pages: a concept named here has NOT necessarily
-been turned into a page yet. Do NOT drop a page-worthy concept from
-`concepts_found` just because its name appears in this digest — that includes
-foundational / "preliminaries" concepts (the well-known building blocks a new
-method is built from). Deduplication against REAL existing pages happens
-downstream (Stage 2.3/2.4), not here. When in doubt, LIST the concept.
+It is prior cross-chunk context, not a checklist to reproduce. If this chunk
+materially updates an earlier concept/entity, reuse its stable name and record
+the update. Otherwise do not repeat it merely to keep an exhaustive inventory.
+Deduplication against REAL existing pages still happens downstream
+(Stage 2.3/2.4).
 
 ```yaml
 {digest_str}
@@ -605,30 +602,23 @@ downstream (Stage 2.3/2.4), not here. When in doubt, LIST the concept.
 
 Analyze THIS CHUNK of the book. Extract:
 
-1. Every concept this chunk defines, derives, or materially relies on — INCLUDING
-   foundational / "preliminaries" concepts the source treats as background (e.g. the
-   building-block techniques a new method is built from). Each distinct building
-   block the source actually defines or uses deserves its own concept entry. Do NOT
-   collapse several distinct concepts into one page, and do NOT skip a concept merely
-   because it is "well known" or already named in the digest — downstream dedup
-   (Stage 2.3/2.4) will link it to an existing page if one already exists.
-   Granularity gate: a CONCEPT must be reusable beyond this single device/product.
-   Chip-level or board-level implementation details (connector pinouts, board
-   designators, one unit's internal signals) are NOT concepts — record them as
-   entities or fold them into the system-level concept page.
-2. All **entities** — specific *named* things identified by their name, not by a
-   definition: people, organizations, products/systems, standards. (Tie-breaker:
-   a named *theoretical or statistical model*, *method*, or *technique* — e.g. the
-   Swerling model, chi-square fluctuation model, matched filter — is a CONCEPT, not
-   an entity. Reserve "entity" for named people, organizations, products/systems,
-   and standards.)
-3. Key claims, formulas, data points
+1. **Key concepts** — theories, methods, techniques, and phenomena that are new
+   or materially updated in this chunk and genuinely important to understanding
+   the source. Recommend a standalone page only when the topic is coherent,
+   reusable, and substantively explained or applied. Exclude passing mentions,
+   prerequisites used only as background, and facets better kept together on one
+   page. Chip/board implementation details are not concepts; fold them into the
+   relevant system page or entity.
+2. **Key entities** — people, organizations, products/systems, standards, tools,
+   or datasets that are central or materially discussed, not every proper noun.
+   A named theoretical/statistical model, method, or technique (e.g. Swerling
+   model, matched filter) is a CONCEPT, not an entity.
+3. Core claims/findings, their evidence, formulas, and material data points
 4. Connections to existing wiki pages (if any)
 5. An **Updated Global Digest** — a COMPACT document-level digest that
    incorporates this chunk and preserves prior cross-chunk context. This is a
-   continuity ledger, NOT an archive: every concept/entity NAME from the prior
-   digest must survive (so later chunks know what is already covered), but keep
-   each entry to ONE short line — condense prior definitions/claims freely.
+   continuity digest, NOT an archive. Preserve the prior cross-chunk context
+   needed to interpret later chunks, but condense or drop peripheral detail.
    Your full per-chunk detail is already saved separately (concepts_found /
    claims / formulas above); do NOT duplicate it here. Target well under
    15,000 characters — anything beyond is hard-truncated before the next
@@ -668,19 +658,17 @@ concepts_found:
   - name: "..."
     importance: "core" | "supporting" | "mentioned"
     definition: "..."      # the concept's definition as stated in the book
-    key_details: ["...", "..."]   # 2-4 key facts / formulas / design rules
+    key_details: ["...", "..."]   # concise source-grounded facts/formulas/rules; [] is valid
 
 # ⚠️  CONCEPT NAMING RULES:
 #   - name MUST be a SHORT, SPECIFIC topic (3-6 words), e.g. "DC-Link Voltage Control", "IGBT Thermal Modeling"
 #   - NEVER use the book title or filename as a concept name
 #   - NEVER include "Chunk N", "Chapter N" or page numbers in the name
-#   - If the chunk covers multiple topics, list each topic as a SEPARATE concept
+#   - Create separate entries only for independently useful topics; keep facets
+#     of one coherent topic together
 #   - Use the actual technical term from the book, not a generic description
-#   - key_details: 2-4 key facts per concept. If a concept needs more than
-#     that, it is NOT one concept: it is several disjoint topics bundled into
-#     one umbrella page. Split it — e.g. "unit conversions", "Doppler shift",
-#     "radar horizon" and "modulation types" are FOUR concepts, not four
-#     key_details of one "fundamentals" page.
+#   - `mentioned` is context only and will not become a standalone page. Prefer
+#     omitting such items unless retaining the name prevents ambiguity.
 
 # ⚠️  CLAIM EXTRACTION RULES (ground every claim in the source text):
 #   1. READ the <extracted_text> for THIS chunk before listing claims.
@@ -693,21 +681,17 @@ concepts_found:
 #      use the most specific anchor available. (Front-matter chunks — preface,
 #      TOC, colophon before chapter 1 — may cite the preface/section name when
 #      no numbered anchor exists in the text.)
-#   3. Minimum 3 claims per chunk (more for dense technical chapters).
-#      Exception: front-matter chunks (preface/TOC/colophon before chapter 1)
-#      need only 1 substantive claim.
+#   3. Keep only core claims/findings. Their number is determined by the source;
+#      zero is valid for a chunk with no substantive claim. Never pad to a quota.
 #   4. Claims must be falsifiable/actionable assertions (quantitative results,
 #      design rules, comparative verdicts, limits, mechanisms) — NOT scope
 #      descriptions or bare definitions.
-#   5. Before listing claims, quote 2-3 key sentences from the source text
-#      that you read (verbatim, with their section/equation anchor) to prove
-#      you grounded them in the actual text. Place these quotes in the
-#      `source_quotes` field below.
+#   5. `source_quotes` is optional audit support, not a count gate. Include a
+#      short exact excerpt only when it materially helps verify a claim.
 
 source_quotes: |
-  # 2-3 verbatim key sentences from THIS chunk's source text, with their
-  # section/equation/figure anchor. This proves you read the text before
-  # extracting claims. Example:
+  # Optional short verbatim excerpt(s) from THIS chunk with a precise anchor.
+  # Leave empty when the claims' evidence anchors are sufficient. Example:
   # §2.3.4: "The Barker code of length 13 provides optimal peak sidelobe
   # level of -1/N for code length N."
   # 式(3.6): "Modulating waveform = exp(j*pi*tau*B*t^2)"
@@ -740,13 +724,11 @@ schema_typed_candidates:
 
 updated_global_digest: |
   # Compact Global Digest (after chunk {chunk_index + 1}/{chunk_total}) — NashSU parity
-  # A compact continuity ledger, not an archive: every prior concept/entity
-  # NAME survives, but each entry is ONE short line (condense prior prose;
-  # full detail already lives in each chunk's own analysis). Keep the whole
-  # digest well under 15,000 chars — overflow is hard-truncated.
-  # When approaching the budget, compress OLDER entries' gists down to bare
-  # names (names are non-negotiable, gists are droppable), keep book_meta +
-  # outline intact, and keep key_claims to the book's MAIN arguments only.
+  # A compact document-level digest that incorporates this chunk and preserves
+  # useful prior cross-chunk context. Keep the whole digest well under 15,000
+  # chars — overflow is hard-truncated. Condense or drop peripheral detail under
+  # budget pressure; retain stable names for concepts/entities that remain
+  # genuinely important, and keep key_claims to the source's core arguments.
   # MUST contain these 5 top-level keys. The FIRST chunk ESTABLISHES book_meta
   # and outline; later chunks refine them and append to the other three.
   book_meta:
@@ -845,10 +827,10 @@ def normalize_and_validate_chunk_analysis(
         concept["importance"] = importance
         concept["definition"] = _analysis_nonempty_string(
             concept.get("definition"), f"{prefix}.definition")
-        details = concept.get("key_details")
-        if not isinstance(details, list) or not details:
+        details = concept.get("key_details", [])
+        if not isinstance(details, list):
             raise ChunkAnalysisValidationError(
-                f"{prefix}.key_details must be a non-empty list")
+                f"{prefix}.key_details must be a list")
         concept["key_details"] = [
             _analysis_nonempty_string(item, f"{prefix}.key_details")
             for item in details
@@ -875,9 +857,12 @@ def normalize_and_validate_chunk_analysis(
                     f"{prefix}.confidence must be high/medium/low")
             claim["confidence"] = confidence
 
-    if normalized["claims"]:
-        normalized["source_quotes"] = _analysis_nonempty_string(
-            normalized.get("source_quotes"), "source_quotes")
+    if "source_quotes" in normalized:
+        if normalized.get("source_quotes") not in (None, ""):
+            normalized["source_quotes"] = _analysis_nonempty_string(
+                normalized.get("source_quotes"), "source_quotes")
+        else:
+            normalized["source_quotes"] = ""
 
     for position, formula in enumerate(normalized["formulas"], 1):
         prefix = f"formulas[{position}]"

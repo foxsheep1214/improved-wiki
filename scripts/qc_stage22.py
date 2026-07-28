@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QC gate for Stage 2.2 chunk-analysis responses — detects placeholder/thin analysis.
+"""QC gate for Stage 2.2 chunk-analysis responses — detects malformed/placeholder analysis.
 
 Generalized from the ad-hoc script that caught the Skolnik incident (2026-07-07):
 a driving sub-agent chained past the L4 cap (delegate-mode.md, max 2 handoffs per
@@ -10,11 +10,11 @@ ideally before deciding whether to chain the next handoff or hand back to the
 parent — to catch degradation at the cheapest point, before it propagates into
 Stage 2.4's generated pages.
 
-Checks: response size, real-concept count, placeholder names, source_quotes
-present + non-empty, and every claim carrying a non-empty evidence anchor
-(the last two migrated from the C1 hard gate removed 2026-07-08 — advisory
-here: a flagged chunk means delete the .txt and re-dispatch, never a
-pipeline abort).
+Checks: required structural fields, placeholder candidate names, and every
+claim carrying a non-empty evidence anchor. There is deliberately no response
+size, concept-count, claim-count, or source-quote quota: NashSU asks for key
+items and says to be thorough but concise, so an honestly sparse chunk is valid.
+A flagged chunk means delete the .txt and re-dispatch, never a pipeline abort.
 
 Usage:
     python3 scripts/qc_stage22.py                       # scans IMPROVED_WIKI_ROOT (or cwd)
@@ -37,22 +37,21 @@ _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir
 
-MIN_CONCEPTS = 5
-MIN_BYTES = 3000
 PLACEHOLDER = re.compile(
     r"(?i)chunk \d|handbook content|reference material|technical content|"
     r"book content|comprehensive.*content"
 )
-# source_quotes / evidence coverage (migrated from the removed C1 hard gate,
-# 2026-07-08 d28ae85 — advisory here, never a pipeline abort). The block-scalar
-# body is the indented lines following "source_quotes: |".
-SOURCE_QUOTES_BLOCK = re.compile(
-    r"^source_quotes:\s*\|[^\n]*\n((?:[ \t]+\S[^\n]*\n?)*)", re.MULTILINE)
 CLAIM_LINE = re.compile(r"^\s*-\s*claim:", re.MULTILINE)
 # A non-empty evidence value: optional quote, then a real character. Matches
 # entries in both `claims:` and the digest's `key_claims:` — claim lines are
 # counted from the same sections, so coverage compares like with like.
 EVIDENCE_LINE = re.compile(r"^\s*evidence:\s*[\"']?[^\"'\s]", re.MULTILINE)
+REQUIRED_TOP_LEVEL = (
+    "entities_found",
+    "concepts_found",
+    "claims",
+    "updated_global_digest",
+)
 
 
 def _chunk_num(p: Path):
@@ -89,29 +88,37 @@ def _indented_yaml_block(text: str, key: str) -> str:
 def check(txt_file: Path) -> tuple[bool, str]:
     text = txt_file.read_text(encoding="utf-8", errors="replace")
     size = len(text)
+    missing = [
+        key for key in REQUIRED_TOP_LEVEL
+        if not re.search(rf"^{re.escape(key)}\s*:", text, re.MULTILINE)
+    ]
+    if missing:
+        return False, f"missing top-level field(s): {', '.join(missing)}"
+
     concepts_body = _indented_yaml_block(text, "concepts_found")
     concepts = re.findall(
         r"^\s*-\s*name:\s*[\"']?(.+?)[\"']?\s*$",
         concepts_body,
         re.MULTILINE,
     )
-    placeholders = [c for c in concepts if PLACEHOLDER.search(c)]
-    if size < MIN_BYTES:
-        return False, f"size {size} < {MIN_BYTES}"
-    if len(concepts) < MIN_CONCEPTS:
-        return False, f"only {len(concepts)} concepts (< {MIN_CONCEPTS})"
+    entities_body = _indented_yaml_block(text, "entities_found")
+    entities = re.findall(
+        r"^\s*-\s*name:\s*[\"']?(.+?)[\"']?\s*$",
+        entities_body,
+        re.MULTILINE,
+    )
+    placeholders = [name for name in concepts + entities if PLACEHOLDER.search(name)]
     if placeholders:
         return False, f"placeholder names: {placeholders[:3]}"
-    quotes = SOURCE_QUOTES_BLOCK.search(text)
-    if not quotes or not quotes.group(1).strip():
-        return False, ("source_quotes missing or empty (2-3 verbatim sentences "
-                       "with section/equation anchors required)")
     n_claims = len(CLAIM_LINE.findall(text))
     n_evidence = len(EVIDENCE_LINE.findall(text))
     if n_evidence < n_claims:
         return False, (f"only {n_evidence}/{n_claims} claims carry a non-empty "
                        f"evidence anchor")
-    return True, f"OK ({len(concepts)} concepts, {n_claims} claims, {size} bytes)"
+    return True, (
+        f"OK ({len(concepts)} key concepts, {len(entities)} key entities, "
+        f"{n_claims} claims, {size} bytes)"
+    )
 
 
 def main() -> int:

@@ -38,6 +38,11 @@ class DigestNoChunkPlan(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             v._verify_stage_2_1_digest(broken, Path("book.pdf"))
 
+    def test_empty_key_concept_list_is_valid(self):
+        sparse = dict(_DIGEST)
+        sparse["key_concepts"] = []
+        v._verify_stage_2_1_digest(sparse, Path("book.pdf"))
+
 
 if __name__ == "__main__":
     unittest.main()

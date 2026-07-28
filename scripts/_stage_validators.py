@@ -50,18 +50,18 @@ def _verify_or_die(condition: bool, stage: str, msg: str) -> None:
 
 
 def _verify_stage_2_1_digest(global_digest: dict, raw_file: Path) -> None:
-    """Verify global digest has required structural keys."""
+    """Verify global digest shape without imposing content-count quotas."""
     required_keys = {"book_meta", "outline", "key_concepts", "key_claims", "key_entities"}
     missing = required_keys - set(global_digest.keys())
     _verify_or_die(len(missing) == 0, "Stage 1",
                    f"Global digest missing required keys: {missing}. "
                    f"Got keys: {list(global_digest.keys())[:8]}. "
                    f"LLM may have returned malformed YAML for {raw_file.name}.")
-    # Verify at least some concepts were identified
-    key_concepts = global_digest.get("key_concepts", [])
-    _verify_or_die(len(key_concepts) >= 1, "Stage 1",
-                   f"Global digest found 0 key_concepts for {raw_file.name}. "
-                   f"Book may be too short or LLM output was incomplete.")
+    _verify_or_die(isinstance(global_digest.get("book_meta"), dict), "Stage 1",
+                   f"Global digest book_meta is not a mapping for {raw_file.name}.")
+    for key in ("outline", "key_concepts", "key_claims", "key_entities"):
+        _verify_or_die(isinstance(global_digest.get(key), list), "Stage 1",
+                       f"Global digest {key} is not a list for {raw_file.name}.")
 
 
 def _verify_stage_2_2_chunks(
@@ -115,10 +115,18 @@ def _verify_stage_2_2_chunks(
                 f"Duplicate chunk_id in analysis cache: {chunk_id}.",
             )
             seen_ids.add(chunk_id)
-    # Warn if any chunk is suspiciously empty
-    empty_chunks = [i for i, c in enumerate(chunk_analyses) if not c.get("concepts_found") and not c.get("entities_found")]
+    # A chunk may legitimately introduce no new key page candidates. Warn only
+    # when it contains no substantive analysis signal at all.
+    empty_chunks = [
+        i for i, c in enumerate(chunk_analyses)
+        if not any(c.get(key) for key in (
+            "concepts_found", "entities_found", "claims", "formulas",
+            "schema_typed_candidates",
+        ))
+    ]
     if empty_chunks:
-        print(f"  ⚠️  Stage 2.2: {len(empty_chunks)}/{len(chunk_analyses)} chunks have no concepts or entities found")
+        print(f"  ⚠️  Stage 2.2: {len(empty_chunks)}/{len(chunk_analyses)} "
+              f"chunks contain no substantive analysis items")
 
 
 def _verify_stage_2_4_file_blocks(
@@ -154,19 +162,8 @@ def _verify_stage_2_4_file_blocks(
         print(f"  ⚠️  Stage 2: {len(sources_pages)} FILE blocks in wiki/sources/ — "
               f"only 1 source page expected, rest may be misplaced concepts")
 
-    # Coverage check: warn if concept generation is sparse
-    concept_file_blocks = [p for p, _ in file_blocks if "concepts/" in p]
-    # Reasonable minimum: any non-trivial book should produce at least 5 concept pages
-    # OR have most of its concepts already covered by existing wiki overlap —
-    # a replay pass that correctly skips regenerating already-written concepts
-    # (Stage 2.3's existing_refs) isn't a coverage failure (confirmed live:
-    # Plett BMS Vol.2's final pass had 0 new concept blocks because all 20 of
-    # its concepts already existed in the wiki from an earlier pass).
-    n_overlap = len(incremental_associations) if incremental_associations else 0
-    if len(concept_file_blocks) < 5 and len(concept_file_blocks) + n_overlap < 5 and len(file_blocks) >= 1:
-        print(f"  ⚠️  Stage 2: only {len(concept_file_blocks)} concept pages generated "
-              f"({n_overlap} existing-wiki overlaps). "
-              f"Consider re-running with larger token budget or checking prompt output.")
+    # NashSU has no minimum page-count target. A source-only result, or zero new
+    # concept pages after association with existing pages, is therefore valid.
 
 
 def validate_stage_outputs(

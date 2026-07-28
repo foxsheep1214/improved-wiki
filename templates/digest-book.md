@@ -62,11 +62,11 @@ The LLM takes the analysis and writes these files:
 
 1. **`wiki/sources/<Title> - <Year> - <Author>.md`** — the source page
    - Frontmatter: `type: source`, `title`, `created`, `updated`, `tags`, `related: []`, `sources: ["raw/Book/<file>.pdf"]`
-   - Body: book metadata table, chapter outline, summary, key claims, reading notes, "参见" with all new concept/entity pages
+   - Body: a concise source summary with only the most relevant concept/entity links; it is not a generated-page inventory
 
-2. **`wiki/concepts/<slug>.md`** — one page per key concept (10-50 expected for a book)
+2. **`wiki/concepts/<slug>.md`** — pages only for genuinely important key concepts recommended by the analysis; no numeric target
    - Frontmatter: `type: concept`, `title`, `created`, `updated`, `tags`, `related: [...]`, `sources: ["raw/Book/<file>.pdf"]`
-   - Body: definition, derivation/algorithm, examples, "参见" with 3+ related pages
+   - Body: definition, derivation/algorithm, examples, and useful related pages
 
 3. **`wiki/entities/<slug>.md`** — one page per key entity
    - Same frontmatter as concept but `type: entity`
@@ -82,10 +82,12 @@ The LLM takes the analysis and writes these files:
 
 ## Field-level guidance
 
-- **`key_concepts[].importance: "core"`** → MUST have a wiki page. Default for any concept mentioned >5 times in the book.
-- **`key_concepts[].importance: "supporting"`** → SHOULD have a wiki page, or merge into a related concept page.
-- **`key_concepts[].importance: "mentioned"`** → OK to skip, just note in the source page.
-- **`key_entities`** — every person / org / system / model / standard / device that's central to the book's argument gets a page. Briefly mentioned people (one sentence) do not.
+- **`key_concepts[].importance: "core"`** → recommend a standalone page when the source substantively explains or applies it.
+- **`key_concepts[].importance: "supporting"`** → recommend a page only when independently useful; otherwise keep it within the related core page.
+- **`key_concepts[].importance: "mentioned"`** → analysis context only; do not generate a standalone page or force it into the source summary.
+- **`key_entities`** — recommend pages for people / orgs / systems / models /
+  standards / devices that are genuinely central to the book's argument.
+  Briefly mentioned people (one sentence) do not qualify.
 - **`chunk_plan.estimated_total_chunks`** — chunk 大小由上下文窗口动态计算（`_core.py _compute_chunk_targets`：默认 token ceiling 64K，可用 `IMPROVED_WIKI_TARGET_TOKENS_CEIL` 覆盖），不是固定 60K。文本量不足一个 chunk 预算的书（如短 datasheet、应用笔记）仍得 1 chunk — Stage 2.2 is never skipped.
 - **`connections_to_existing_wiki`** (in Stage 2.2 per-chunk analysis, not Stage 2.1) — be conservative. Only flag clear conflicts, not subtle differences in framing. False positives pollute the LLM-curated review queue.
 
@@ -95,7 +97,7 @@ The LLM takes the analysis and writes these files:
 
 | Symptom | Fix |
 |---|---|
-| LLM produces 100+ concept pages, mostly trivial | The `importance` field is too permissive. Re-prompt with "only `core` concepts get their own page; merge `supporting` into related pages" |
+| LLM produces many trivial concept pages | Re-prompt with NashSU's rule: "Be thorough but concise. Focus on what's genuinely important"; exclude passing mentions/background and keep coherent facets together |
 | LLM uses `[[雷达原理]]` instead of `[[雷达原理 - 2009 - 张光义]]` | Frontmatter's `related: []` array is auto-included in the prompt. Make sure it has the full stems |
 | LLM invents chapter structure not in the book | The extracted text may have failed OCR for chapter pages. Re-run minerU on those pages and re-Ingest |
 | `wiki/overview.md` is rewritten too aggressively | The LLM was told to "update if major claim added". Tighten the prompt: "only add a 1-sentence summary to overview.md under an existing section" |

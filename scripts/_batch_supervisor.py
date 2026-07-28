@@ -761,6 +761,20 @@ def _batch_ingest_under_coordinator(
             config.conversation_prefix = h[-8:]
             print(f"\n[batch] book {i}/{total_books} — {f.name}", flush=True)
 
+            # A resumed batch retains the logical Stage 2.3+ reservation for
+            # the first unfinished book.  Do not let an already-finalized book
+            # ahead of that owner enter the write-spine path: reserve_spine()
+            # correctly rejects it as a different owner, but that used to make
+            # every resume stop at the first completed source.  The authoritative
+            # completion marker is sufficient here; _do_prepare() already
+            # performs the deeper stale-marker/source-page reconciliation when
+            # a source is not finalized.
+            if is_stage_done(config, h, "ingested"):
+                print(f"[batch] {i}/{total_books} skipped "
+                      f"(already complete) — {f.name}", flush=True)
+                results.append({"status": "skipped", "raw_file": str(f)})
+                continue
+
             if not is_stage_done(config, h, "stage_1_3_done"):
                 print(f"[batch] waiting for bg extract (Phase 0/1) — {f.name}", flush=True)
                 entry = bg_state.get(h)

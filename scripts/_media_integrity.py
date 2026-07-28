@@ -36,12 +36,27 @@ def _cache_entry(raw_file: Path, config: Config) -> tuple[dict, dict]:
     return cache, entry if isinstance(entry, dict) else {}
 
 
-def mineru_figure_names(out_dir: Path) -> set[str]:
-    """Return unique figure filenames retained in per-chunk OCR manifests."""
+def mineru_figure_names(
+    out_dir: Path,
+    *,
+    active_chunk_keys: set[str] | None = None,
+) -> set[str]:
+    """Return figure names from one OCR run's direct chunk manifests.
+
+    ``extract-tmp/<stem>`` is durable across retries and, historically, across
+    minerU chunk-size changes.  It can therefore contain complete but stale
+    layouts such as both 50-page and 32-page chunks.  A recursive scan merges
+    those runs and inflates the media-completeness expectation.  Callers that
+    know the current chunk layout must pass ``active_chunk_keys``; repair
+    caches are deliberately excluded in all cases.
+    """
     names: set[str] = set()
     if not out_dir.is_dir():
         return names
-    for manifest_path in out_dir.rglob("_mineru_figures.json"):
+    for manifest_path in out_dir.glob("_chunk_*/_mineru_figures.json"):
+        chunk_key = manifest_path.parent.name.removeprefix("_chunk_")
+        if active_chunk_keys is not None and chunk_key not in active_chunk_keys:
+            continue
         try:
             entries = json.loads(manifest_path.read_text(encoding="utf-8"))
         except Exception:
@@ -62,12 +77,28 @@ def _recoverable_mineru_count(raw_file: Path, config: Config) -> int:
         config.extract_tmp_dir / raw_file.stem))
 
 
+def canonical_mineru_figure_names(raw_file: Path, config: Config) -> set[str]:
+    """Return the preserved, source-bound minerU image bytes on disk.
+
+    For ``--keep-media`` re-ingests this directory is intentionally retained;
+    unlike OCR scratch manifests it is scoped to exactly one source and is the
+    strongest available evidence of media that must not be discarded.
+    """
+    media_dir = config.wiki_dir / "media" / media_slug(raw_file, config)
+    return {
+        path.name
+        for path in media_dir.glob("p*-mineru_*.*")
+        if path.is_file() and not path.name.endswith(".caption.txt")
+    }
+
+
 def restore_or_reharvest_mineru_media(
     raw_file: Path,
     config: Config,
     ocr_out: Path,
     *,
     expected_hint: int = 0,
+    expected_names: set[str] | None = None,
 ) -> tuple[dict, int]:
     """Restore minerU bytes, or re-run an isolated full media harvest.
 
@@ -76,10 +107,20 @@ def restore_or_reharvest_mineru_media(
     empty/partial manifest: missing transient bytes trigger the source-bound,
     resumable media-only re-harvest path.
     """
-    if expected_hint <= 0:
+    # Preserved canonical bytes are source-bound and therefore stronger than
+    # scratch manifests.  In particular, an analysis-only ``--keep-media``
+    # re-ingest must never shrink its media set merely because a newer OCR
+    # layout retained incomplete figure indexes.  Current-run manifest names
+    # are unioned in so genuinely missing expected bytes still trigger repair.
+    canonical_names = canonical_mineru_figure_names(raw_file, config)
+    authoritative_names = canonical_names | (expected_names or set())
+    allowed_filenames = authoritative_names if authoritative_names else None
+    if authoritative_names:
+        expected_hint = len(authoritative_names)
+    elif expected_hint <= 0:
         expected_hint = len(mineru_figure_names(ocr_out))
     stage_1_2 = _stage_1_2_extract_from_mineru(
-        ocr_out, config, raw_file)
+        ocr_out, config, raw_file, allowed_filenames=allowed_filenames)
     if expected_hint <= 0 or stage_1_2.get("count") == expected_hint:
         return stage_1_2, max(expected_hint, stage_1_2.get("count", 0))
 

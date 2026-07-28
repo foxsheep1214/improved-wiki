@@ -43,7 +43,7 @@ key_entities:
     wikilink_target: "<existing-slug>"
 
 key_concepts:
-  # Presentations usually introduce 1-3 concepts, more if it's a tutorial
+  # Include only genuinely important concepts the deck introduces or develops
   - name: "<concept>"
     importance: "core"
     wikilink_target: "<concept-slug>"
@@ -68,9 +68,11 @@ recommendations_from_speaker:
 Files to write:
 
 1. **`wiki/sources/<Speaker> - <Venue> - <Year> - <Title>.md`** — source page
-   - Body: deck metadata, talk type, per-slide summary (collapsed or as a table), key claims, recommendations, "参见"
+   - Body: a concise source summary; prioritize the talk's central claims,
+     evidence, and recommendations. Include slide-level detail only when it
+     materially supports those points; do not impose a fixed section set.
 
-2. **`wiki/concepts/<slug>.md`** — 1-3 concept pages (only the genuinely new concepts)
+2. **`wiki/concepts/<slug>.md`** — pages only for genuinely important new or materially developed concepts; no count target
 
 3. **Update `wiki/index.md`**, **`wiki/log.md`**, **`wiki/overview.md`**
 
@@ -79,7 +81,8 @@ Files to write:
 ## Type-specific guidance
 
 - **Presentations are condensed**: don't try to extract every detail. Focus on the **take-aways** (usually the conclusion slide) and the **novel concepts** introduced.
-- **Per-slide summary should be a table**: it's the most scannable form. The user will come back to the deck to look at specific slides.
+- **Slide-level detail is selective**: use a compact table only when it helps
+  locate evidence for central claims; do not inventory every slide.
 - **Speaker's recommendations are valuable**: if the speaker says "use X for Y", that's an opinion worth recording.
 - **No worked examples** (usually): presentations don't have the depth of papers. Don't try to extract them.
 

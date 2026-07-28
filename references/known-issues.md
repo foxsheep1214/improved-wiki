@@ -64,7 +64,7 @@ Chunk 窗口末端落在受保护 block（表格/代码块）内部时曾无条�
 `_stage_2_4_generation.py` 原按**行数**截断 GENERATE 列表（每概念约 4 行，实际只放得下约 25-34 个），而可链接 slug 列表本身不受限。chunk 分析密度提升后，密集 chunk 的尾部概念被静默从生成列表剔除、但仍留在可链接列表里——产生指向"从未生成"页面的死链。已修：上限大幅提高（分chunk 480/160，单发 800/200）。**教训**：这类上限必须按概念数算（或留出 ≫ 密度×4 的余量），绝不能是纯行数截断。
 
 ### Stage 2.6 源页偶发缺失 authors/year/url/venue（已缓解，非彻底修复）
-生成 agent 有时自由发挥自己的格式（如加粗行内署名、metadata 表格）而非照抄 Stage 2.6 模板，pipeline 又原样写盘不校验 frontmatter，字段就此缺失——**这是 agent 未遵循问题，不是代码 bug**。缓解：`_normalize_source_frontmatter()` 在 agent 响应之后跑一遍，从已算出的 `*_meta` YAML 回填缺失的 authors/year/url/venue，并从该 chunk 刚生成的 concept/entity slug 回填空的 `related: []`。**排查手法**：对比归档的 `Stage-2-6-SourcePage-*.md`（提示词）与对应 `.txt`（响应），区分"模板本身缺字段"（真 bug）还是"agent 没照做"（此类问题）。
+生成 agent 有时漏掉 source frontmatter 的 bibliographic 字段。缓解：`_normalize_source_frontmatter()` 在 agent 响应之后，从已算出的 `*_meta` YAML 回填缺失的 authors/year/url/venue；`related: []` 按 NashSU 契约是合法值，不再为凑数量自动回填 concept/entity slug。**排查手法**：对比归档的 `Stage-2-6-SourcePage-*.md`（提示词）与对应 `.txt`（响应），区分提示词字段缺失和 agent 未遵循。
 
 ### `_stage_1_2_extract_from_mineru()` 两处硬编码 width/height=0（已修，2026-07-06）
 两个分支（img_source_dir 存在时的正常复制、OCR 缓存续跑的 media_dir 恢复）在构造 manifest 图片条目时把 `"width": 0, "height": 0` 写死，不像 `_stage_1_2_harvest_images()` 那样用 PIL 读真实尺寸——图片文件本身正常，只是元数据没填，caption 失败占位符统一显示"尺寸 0×0"。已修：抽出共享辅助 `_stage_1_2_image_size()`（PIL 读取，读失败兜底 (0,0)），两处硬编码分支改用它；受影响的存量 manifest 已用现存图片文件回填尺寸，无需重跑 VLM。

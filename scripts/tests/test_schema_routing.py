@@ -215,7 +215,10 @@ class TestSchemaTypedCandidates(unittest.TestCase):
             prompt = gen._stage_2_4_build_prompt(
                 chunk_analysis, "chunk text", 0, cfg.raw_root / "book.pdf", cfg,
             )
-            self.assertIn("Schema-typed pages found in this chunk", prompt)
+            self.assertIn(
+                "Key schema-typed page candidates recommended by the analysis",
+                prompt,
+            )
             self.assertIn("people/ada-lovelace", prompt)
             self.assertNotIn("wrong-folder/ada-lovelace", prompt)
             self.assertIn("Ada Lovelace", prompt)
@@ -254,7 +257,10 @@ class TestSchemaTypedCandidates(unittest.TestCase):
                 {"concepts_found": [], "entities_found": []},
                 "chunk text", 0, cfg.raw_root / "book.pdf", cfg,
             )
-            self.assertIn("Schema-typed pages found in this chunk", prompt)
+            self.assertIn(
+                "Key schema-typed page candidates recommended by the analysis",
+                prompt,
+            )
             self.assertIn("(none)", prompt)
 
     def test_candidate_skips_when_prior_chunk_generated_same_stem(self):
