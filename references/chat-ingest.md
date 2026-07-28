@@ -166,7 +166,9 @@ After generation, the calling agent:
 `validate_ingest.py` is **no longer auto-run** (the Stage 4.1 audit was removed for NashSU alignment). It remains an **optional manual check**:
 
 ```bash
-python3 "$SKILL_DIR/scripts/validate_ingest.py"   # optional, manual only
+python3 "$SKILL_DIR/scripts/validate_ingest.py" \
+  --root "$WIKI_ROOT" \
+  --source "<source stem>"   # optional, manual only
 ```
 
 ### Step 6: Present Results

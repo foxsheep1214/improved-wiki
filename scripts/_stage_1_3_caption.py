@@ -281,17 +281,52 @@ def _stage_1_3_preprocess_image(img_path: Path, max_dim: int = 1568) -> str:
 # Context map — NashSU-style before/after text, sourced from minerU content_list
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Module-level cache so the two call sites (per-chunk OCR dispatch + final
-# Stage 1.3) don't rescan the content_list files. Keyed by the mineru-api-out
-# root path. Invalidated only by process restart (a single ingest run does not
-# change the content_list files mid-run).
+# Module-level cache so the OCR finalizer and Stage 1.3 checkpoint wrapper do
+# not rebuild the same context map. Keyed by the current source's media_dir,
+# not the project-wide mineru-api-out tree. Invalidated on process restart (the
+# source's content-list sidecars do not change after OCR finalization).
 _CONTEXT_MAP_CACHE: dict[str, dict[str, dict]] = {}
 
 # Block types that carry describable body text for context anchoring.
 _TEXT_BLOCK_TYPES = ("text", "header", "ref_text", "page_number")
 
 
-def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
+def _stage_1_3_context_from_blocks(
+    blocks: list,
+    basename_to_md5: dict[str, str],
+    ctx_map: dict[str, dict],
+) -> None:
+    """Add image contexts from one source-scoped minerU content list."""
+    for i, block in enumerate(blocks):
+        if not isinstance(block, dict) or block.get("type") not in ("image", "chart"):
+            continue
+        img_path = block.get("img_path", "")
+        if not img_path:
+            continue
+        md5_8 = basename_to_md5.get(os.path.basename(img_path))
+        if not md5_8:
+            continue
+
+        caps = block.get("image_caption", []) or block.get("chart_caption", [])
+        if isinstance(caps, str):
+            caps = [caps]
+        mineru_caption = " ".join(
+            str(c).strip() for c in caps if c and str(c).strip()
+        )
+        ctx_map[md5_8] = {
+            "mineru_caption": mineru_caption,
+            "context_before": _collect_block_text(blocks, i, -1, CONTEXT_CHARS),
+            "context_after": _collect_block_text(blocks, i, +1, CONTEXT_CHARS),
+        }
+
+
+def _stage_1_3_saved_md5(filename: str) -> str:
+    """Extract the content hash embedded in pNNNN-mineru_<md5> filenames."""
+    match = re.search(r"-mineru_([0-9a-fA-F]{8})(?:\.|$)", filename)
+    return match.group(1).lower() if match else ""
+
+
+def _stage_1_3_build_context_map(config: Config, media_dir: Path) -> dict[str, dict]:
     """Scan persisted minerU content_list files and build {md5_8: context}.
 
     For each image/chart block, captures:
@@ -306,19 +341,62 @@ def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
     `p{page}-mineru_{md5_8}.{ext}` files in wiki/media/. This matching is
     robust because harvest saves the raw minerU bytes verbatim.
 
-    Returns {} when no mineru-api-out exists (Path A / PyMuPDF images have no
-    content_list — those images are captioned with the no-context prompt).
+    Prefer the source-scoped content-list sidecars persisted beside the OCR
+    chunk cache. Older checkpoints without those sidecars use a compatibility
+    scan of mineru-api-out, filtered to hashes that actually exist in this
+    source's media directory. This prevents another book's contexts from
+    entering the current caption prompt and avoids reporting a project-wide
+    figure count for one source.
+
+    Returns {} when no matching content_list exists (Path A / PyMuPDF images
+    have no content_list — those images are captioned with the no-context
+    prompt).
     """
     api_out = config.runtime_dir / "mineru-api-out"
-    cache_key = str(api_out)
+    cache_key = str(media_dir)
     if cache_key in _CONTEXT_MAP_CACHE:
         return _CONTEXT_MAP_CACHE[cache_key]
-    if not api_out.exists():
-        _CONTEXT_MAP_CACHE[cache_key] = {}
-        return _CONTEXT_MAP_CACHE[cache_key]
 
-    import hashlib
     ctx_map: dict[str, dict] = {}
+    target_md5s = {
+        md5_8
+        for path in media_dir.iterdir()
+        if path.is_file()
+        for md5_8 in [_stage_1_3_saved_md5(path.name)]
+        if md5_8
+    } if media_dir.is_dir() else set()
+
+    # Current format: every OCR chunk persists its own content list and the
+    # basename→saved-file join metadata under this source's extract cache.
+    source_extract_dir = config.extract_tmp_dir / media_dir.name
+    for cl_path in sorted(source_extract_dir.glob("_chunk_*/_mineru_content_list.json")):
+        figures_path = cl_path.with_name("_mineru_figures.json")
+        try:
+            blocks = json.loads(cl_path.read_text(encoding="utf-8"))
+            figures = json.loads(figures_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(blocks, list) or not isinstance(figures, list):
+            continue
+        basename_to_md5 = {
+            str(item.get("mineru_basename", "")): _stage_1_3_saved_md5(
+                str(item.get("filename", ""))
+            )
+            for item in figures
+            if isinstance(item, dict)
+            and item.get("mineru_basename")
+            and _stage_1_3_saved_md5(str(item.get("filename", "")))
+        }
+        _stage_1_3_context_from_blocks(blocks, basename_to_md5, ctx_map)
+
+    missing_md5s = target_md5s - set(ctx_map)
+    if not missing_md5s or not api_out.exists():
+        _CONTEXT_MAP_CACHE[cache_key] = ctx_map
+        return ctx_map
+
+    # Compatibility for old OCR caches: scan the global UUID output tree, but
+    # retain only contexts whose image bytes match this source's media hashes.
+    import hashlib
     for cl_path in sorted(api_out.glob("*/chunk/hybrid_auto/chunk_content_list.json")):
         try:
             blocks = json.loads(cl_path.read_text(encoding="utf-8"))
@@ -326,10 +404,11 @@ def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
             continue
         if not isinstance(blocks, list):
             continue
-        for i, b in enumerate(blocks):
-            if b.get("type") not in ("image", "chart"):
+        basename_to_md5: dict[str, str] = {}
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("type") not in ("image", "chart"):
                 continue
-            img_path = b.get("img_path", "")
+            img_path = block.get("img_path", "")
             if not img_path:
                 continue
             img_file = cl_path.parent / img_path
@@ -339,20 +418,12 @@ def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
                 md5_8 = hashlib.md5(img_file.read_bytes()).hexdigest()[:8]
             except Exception:
                 continue
-
-            # chart blocks carry their printed label in chart_caption (not
-            # image_caption); read both so a chart's figure label still anchors
-            # the caption.
-            caps = b.get("image_caption", []) or b.get("chart_caption", [])
-            mineru_caption = " ".join(c.strip() for c in caps if c and c.strip())
-
-            before = _collect_block_text(blocks, i, -1, CONTEXT_CHARS)
-            after = _collect_block_text(blocks, i, +1, CONTEXT_CHARS)
-            ctx_map[md5_8] = {
-                "mineru_caption": mineru_caption,
-                "context_before": before,
-                "context_after": after,
-            }
+            if md5_8 in missing_md5s:
+                basename_to_md5[os.path.basename(img_path)] = md5_8
+        _stage_1_3_context_from_blocks(blocks, basename_to_md5, ctx_map)
+        missing_md5s = target_md5s - set(ctx_map)
+        if not missing_md5s:
+            break
     _CONTEXT_MAP_CACHE[cache_key] = ctx_map
     return ctx_map
 
@@ -978,14 +1049,18 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
         print(f"[caption]{label} (cached) All {len(images)} images already captioned")
         return 0
 
-    ctx_map = _stage_1_3_build_context_map(config)
+    ctx_map = _stage_1_3_build_context_map(config, media_dir)
     total_captioned = 0
     pending = first_pending
     for round_idx in range(_MAX_CAPTION_ROUNDS):
         if round_idx == 0:
+            pending_with_context = sum(
+                1 for image in pending
+                if _stage_1_3_saved_md5(str(image.get("filename", ""))) in ctx_map
+            )
             print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
                   f"→ one VLM call each (parallel, max {max_workers} workers, "
-                  f"{len(ctx_map)} figures with context)")
+                  f"{pending_with_context} pending figures with context)")
         else:
             wait = _ROUND_BACKOFF_SECONDS[min(round_idx - 1, len(_ROUND_BACKOFF_SECONDS) - 1)]
             print(f"[caption]{label} round {round_idx+1}/{_MAX_CAPTION_ROUNDS}: "

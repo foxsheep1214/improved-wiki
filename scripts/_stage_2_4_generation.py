@@ -43,6 +43,13 @@ GENERATED_DISPLAY_MAX = 50
 # kept; only the background fill of other existing wiki pages is bounded by this.
 _LINKABLE_TOTAL_CAP = 400
 
+# Stage 2.4 emits only optional key/typed pages; the mandatory source page is
+# generated separately in Stage 2.6. This exact sentinel lets the model abstain
+# when analysis candidates are real but none is important and substantively
+# developed enough to deserve a standalone page or material update. Exact
+# matching preserves the hard failure for empty/truncated/malformed responses.
+_NO_KEY_PAGES_SENTINEL = "NO_KEY_PAGES"
+
 
 def _is_key_concept_candidate(item: dict) -> bool:
     """Whether a Stage 2.2 concept is eligible for standalone generation.
@@ -52,6 +59,11 @@ def _is_key_concept_candidate(item: dict) -> bool:
     Missing importance defaults to eligible for backward-compatible checkpoints.
     """
     return str(item.get("importance", "core")).strip().lower() != "mentioned"
+
+
+def _is_no_key_pages_response(response: str) -> bool:
+    """Whether Stage 2.4 explicitly and cleanly selected zero optional pages."""
+    return response.strip() == _NO_KEY_PAGES_SENTINEL
 
 
 def _linkable_relevance_tokens(text: str) -> set:
@@ -786,9 +798,15 @@ Chunk: {chunk_index + 1}
   "foundational" terms that were not recommended.
 - There is no page-count target. Do not pad or split one coherent topic merely
   to increase the number of FILE blocks.
+- Every candidate remains optional at generation time. If NONE is genuinely
+  important and substantively developed enough for a standalone page or
+  material update, output exactly `{_NO_KEY_PAGES_SENTINEL}` and nothing else.
+  Stage 2.6 generates the mandatory source page separately.
 
-# ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
-- Your FIRST line of output MUST start with `---FILE:wiki/`
+# ⚠️ CRITICAL — START IMMEDIATELY WITH THE RESULT
+- If at least one candidate qualifies, your FIRST line MUST start with
+  `---FILE:wiki/`.
+- Otherwise output exactly `{_NO_KEY_PAGES_SENTINEL}`.
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
 
 # [[wikilink]] Rules — STRICT
@@ -859,8 +877,9 @@ updated: {time.strftime('%Y-%m-%d')}
 ---END FILE---
 {schema_output_section}
 
-Generate the recommended new and UPDATE EXISTING key pages that are not marked
-[ALREADY COVERED]/[SKIP]/CROSS-TYPE. Start with the first FILE block.
+Generate only qualifying new and UPDATE EXISTING key pages that are not marked
+[ALREADY COVERED]/[SKIP]/CROSS-TYPE. Start with the first FILE block, or output
+exactly `{_NO_KEY_PAGES_SENTINEL}` if none qualifies.
 """
 
 
@@ -1135,9 +1154,15 @@ Chunks: {len(chunk_analyses)}
   supplementary terms that were not recommended.
 - There is no page-count target. Do not pad or split one coherent topic merely
   to increase the number of FILE blocks.
+- Every candidate remains optional at generation time. If NONE is genuinely
+  important and substantively developed enough for a standalone page or
+  material update, output exactly `{_NO_KEY_PAGES_SENTINEL}` and nothing else.
+  Stage 2.6 generates the mandatory source page separately.
 
-# ⚠️ CRITICAL — START IMMEDIATELY WITH FILE BLOCKS
-- Your FIRST line of output MUST start with `---FILE:wiki/`
+# ⚠️ CRITICAL — START IMMEDIATELY WITH THE RESULT
+- If at least one candidate qualifies, your FIRST line MUST start with
+  `---FILE:wiki/`.
+- Otherwise output exactly `{_NO_KEY_PAGES_SENTINEL}`.
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
 
 # [[wikilink]] Rules — STRICT
@@ -1201,8 +1226,9 @@ updated: {time.strftime('%Y-%m-%d')}
 ---END FILE---
 {schema_output_section}
 
-Generate the recommended new and UPDATE EXISTING key pages that are not marked
-[ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with the first FILE block.
+Generate only qualifying new and UPDATE EXISTING key pages that are not marked
+[ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with the first FILE
+block, or output exactly `{_NO_KEY_PAGES_SENTINEL}` if none qualifies.
 """
 
 
@@ -1304,9 +1330,15 @@ def stage_2_4_generate_all(
             print(f"  [generate-all] OK{tag} — {len(blocks)} blocks "
                   f"({len(response):,} chars, {stop_reason}) {dt:.0f}s")
             if not blocks:
+                if _is_no_key_pages_response(response):
+                    print(
+                        "  [generate-all] model selected 0 optional key pages; "
+                        "the mandatory source page remains Stage 2.6"
+                    )
+                    return [], [], stop_reason
                 raise RuntimeError(
-                    "Stage 2.4 produced 0 FILE blocks despite uncovered key "
-                    "page candidates.")
+                    "Stage 2.4 produced 0 FILE blocks without the exact "
+                    f"{_NO_KEY_PAGES_SENTINEL} sentinel.")
             if verbose:
                 print(f"    response: {response[:500]}...")
             return blocks, generated_slugs, stop_reason
@@ -1415,9 +1447,15 @@ def stage_2_4_generate_chunk(
                 )
             dt = time.time() - t0
             if not blocks:
+                if _is_no_key_pages_response(response):
+                    print(
+                        f"  [chunk {chunk_idx+1}] generate OK — 0 optional "
+                        "key pages selected; source page remains Stage 2.6"
+                    )
+                    return []
                 raise RuntimeError(
                     f"Stage 2.4 chunk {chunk_idx + 1} produced 0 FILE blocks "
-                    "despite uncovered key page candidates.")
+                    f"without the exact {_NO_KEY_PAGES_SENTINEL} sentinel.")
             tag = f" (retry #{attempt})" if attempt > 0 else ""
             print(f"  [chunk {chunk_idx+1}] generate OK{tag} — "
                       f"{concepts_n}c/{entities_n}e/{schema_candidates_n}s → "

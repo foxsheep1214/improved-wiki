@@ -12,16 +12,20 @@ ingest.py does not write — those artifacts live in progress checkpoints and
 are cleared on successful ingest.
 
 Usage:
-    python3 scripts/validate_ingest.py
-    SOURCE_SLUG=INA1H94-SEP python3 scripts/validate_ingest.py
+    python3 scripts/validate_ingest.py --root /path/to/wiki --source INA1H94-SEP
+    IMPROVED_WIKI_ROOT=/path/to/wiki SOURCE_SLUG=INA1H94-SEP \
+        python3 scripts/validate_ingest.py
 """
+import argparse
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Optional
 
-# === Per-project constants ===
+# === Per-project runtime context ===
+# Defaults keep helper imports side-effect free. main() rebinds these paths from
+# explicit CLI arguments (preferred) or the matching environment variables.
 PROJECT_ROOT = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
 WIKI = PROJECT_ROOT / "wiki"
 # Use shared detection (_paths.py: .llm-wiki/ default, auto-migrates from .iwiki-runtime/)
@@ -35,7 +39,7 @@ from _lint_suggest import (
 )
 from _progress import file_sha256
 RUNTIME = detect_runtime_dir(PROJECT_ROOT)
-SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "ADL8113")
+SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "")
 
 CACHE_PATH = RUNTIME / "ingest-cache.json"
 MEDIA_DIR = WIKI / "media"
@@ -44,6 +48,51 @@ SOURCES_DIR = WIKI / "sources"
 
 # Allow exact cache key override (avoids fragile substring matching)
 CACHE_KEY = os.environ.get("CACHE_KEY", "")
+
+
+def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parse the standalone validator CLI without project-specific defaults."""
+    parser = argparse.ArgumentParser(
+        description="Read-only post-hoc validation for one improved-wiki source.",
+    )
+    parser.add_argument(
+        "--root",
+        default=os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()),
+        help="improved-wiki project root (default: IMPROVED_WIKI_ROOT or cwd)",
+    )
+    parser.add_argument(
+        "--source",
+        default=os.environ.get("SOURCE_SLUG", ""),
+        help="source page stem/cache-key substring (or set SOURCE_SLUG)",
+    )
+    parser.add_argument(
+        "--cache-key",
+        default=os.environ.get("CACHE_KEY", ""),
+        help="exact ingest-cache key when substring matching would be ambiguous",
+    )
+    args = parser.parse_args(argv)
+    if not str(args.source).strip():
+        parser.error("--source is required (or set SOURCE_SLUG)")
+    return args
+
+
+def _configure_runtime(
+    project_root: str | Path,
+    source_slug: str,
+    cache_key: str = "",
+) -> None:
+    """Bind all derived paths to the CLI-selected project and source."""
+    global PROJECT_ROOT, WIKI, RUNTIME, SOURCE_SLUG
+    global CACHE_PATH, MEDIA_DIR, SOURCES_DIR, CACHE_KEY
+
+    PROJECT_ROOT = Path(project_root).expanduser().resolve()
+    WIKI = PROJECT_ROOT / "wiki"
+    RUNTIME = detect_runtime_dir(PROJECT_ROOT)
+    SOURCE_SLUG = str(source_slug).strip()
+    CACHE_KEY = str(cache_key).strip()
+    CACHE_PATH = RUNTIME / "ingest-cache.json"
+    MEDIA_DIR = WIKI / "media"
+    SOURCES_DIR = WIKI / "sources"
 
 
 def _validate_find_cache_entry(slug: str) -> Optional[dict]:
@@ -155,7 +204,9 @@ def _validate_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
     return run_structural_lint(pages, with_suggestions=False)
 
 
-def main():
+def main(argv: Optional[list[str]] = None):
+    args = _parse_args(argv)
+    _configure_runtime(args.root, args.source, args.cache_key)
     results: list[bool] = []
 
     def check(label: str, ok: bool, detail: str = ""):

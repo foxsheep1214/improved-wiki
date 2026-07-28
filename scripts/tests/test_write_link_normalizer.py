@@ -28,6 +28,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(SCRIPTS_DIR) not in sys.path:
@@ -36,8 +37,10 @@ if str(SCRIPTS_DIR) not in sys.path:
 from _stage_3_write import (  # noqa: E402
     stage_3_1_build_slug_dirs,
     stage_3_1_normalize_page_links,
+    stage_3_1_write_wiki_file,
     _stage_3_1_scan_wiki_slug_dirs,
 )
+import _stage_3_write as stage_write  # noqa: E402
 
 # Shared slug→dirs universe (batch ∪ disk shape the builders produce).
 SLUG_DIRS: dict[str, set[str]] = {
@@ -200,6 +203,14 @@ class TestBodyWikilinks(unittest.TestCase):
         out, printed = _run(OWN, content)
         self.assertIn("[[concepts/matched-filter]]", out)
         self.assertEqual(printed, "")  # clean page → silent
+
+    def test_wrong_prefixed_body_link_corrected_to_unique_actual_dir(self):
+        content = _page(
+            body="\n# Title\n\nSee [[sources/book/radar-handbook|source]].\n"
+        )
+        out, printed = _run(OWN, content)
+        self.assertIn("[[sources/Book/radar-handbook|source]]", out)
+        self.assertIn("corrected 1 wrongly-prefixed wikilink", printed)
 
 
 class TestH1Stripping(unittest.TestCase):
@@ -410,6 +421,51 @@ class TestPassThrough(unittest.TestCase):
         dirty = self.CLEAN.replace("[[entities/bell-labs|贝尔实验室]]", "[[bell-labs|贝尔实验室]]")
         out, _ = _run(OWN, dirty)
         self.assertEqual(out, self.CLEAN)  # only the targeted span changed
+
+
+class TestPostMergeNormalization(unittest.TestCase):
+    def test_llm_merge_output_is_normalized_before_atomic_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wiki = root / "wiki"
+            path = wiki / OWN
+            path.parent.mkdir(parents=True)
+            path.write_text(_page(), encoding="utf-8")
+            config = SimpleNamespace(
+                wiki_dir=wiki,
+                runtime_dir=root / "runtime",
+            )
+            merged = _page(
+                'related: ["entities/matched-filter", "[", "]"]',
+                body=(
+                    "\n# Title\n\n"
+                    "See [[sources/book/radar-handbook|source]].\n"
+                ),
+            )
+            with patch.object(
+                stage_write,
+                "_stage_3_1_merge_page_content",
+                return_value=merged,
+            ):
+                stage_3_1_write_wiki_file(
+                    path,
+                    _page(),
+                    config,
+                    merge=True,
+                    normalize_rel_path=OWN,
+                    slug_dirs=SLUG_DIRS,
+                )
+
+            written = path.read_text(encoding="utf-8")
+            self.assertIn(
+                'related: ["concepts/matched-filter"]',
+                written,
+            )
+            self.assertIn(
+                "[[sources/Book/radar-handbook|source]]",
+                written,
+            )
+            self.assertNotIn('related: ["entities/matched-filter"', written)
 
 
 class TestUniverseBuilders(unittest.TestCase):

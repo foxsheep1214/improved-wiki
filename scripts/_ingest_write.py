@@ -422,6 +422,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 config,
                 merge=do_merge,
                 source_file=canonical_source,
+                normalize_rel_path=rel_path if do_merge else "",
+                slug_dirs=_slug_dirs if do_merge else None,
+                source_page_slug=_source_page_slug,
             )
         except OSError as e:
             print(f"  [write] HARD ERROR: {rel_path} — {e}")

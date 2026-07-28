@@ -158,6 +158,73 @@ def _normalize_task_manifest(config: Config, manifest: dict) -> dict:
     if not isinstance(tasks, dict):
         tasks = {}
         manifest["tasks"] = tasks
+
+    # Prompt-policy/code changes intentionally produce a new content-hash slug.
+    # Preserve the old task and files for audit, but once the newer prompt for
+    # the same logical stage/chunk has completed, stop reporting the older task
+    # as an actionable handoff forever. Logical keys are deliberately limited
+    # to stage shapes that have one task per source or an explicit chunk number;
+    # generic/dedup/merge prompts may have several legitimate siblings.
+    conv_dir = _task_manifest_path(config).parent
+    for task in tasks.values():
+        if not isinstance(task, dict) or task.get("logical_key"):
+            continue
+        prompt_name = task.get("prompt_file")
+        if not prompt_name:
+            continue
+        try:
+            prompt = (conv_dir / str(prompt_name)).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        logical_key = _conversation_task_logical_key(prompt)
+        if logical_key:
+            task["logical_key"] = logical_key
+
+    task_order = {slug: index for index, slug in enumerate(tasks)}
+    completed_by_key: dict[str, tuple[str, dict]] = {}
+    for slug, task in tasks.items():
+        if not isinstance(task, dict) or task.get("status") != "completed":
+            continue
+        logical_key = str(task.get("logical_key") or "")
+        if not logical_key:
+            continue
+        prior = completed_by_key.get(logical_key)
+        candidate_order = (
+            int(task.get("created_at", 0) or 0),
+            task_order.get(slug, -1),
+        )
+        prior_order = (
+            int(prior[1].get("created_at", 0) or 0),
+            task_order.get(prior[0], -1),
+        ) if prior is not None else (-1, -1)
+        if candidate_order > prior_order:
+            completed_by_key[logical_key] = (slug, task)
+
+    for slug, task in tasks.items():
+        if not isinstance(task, dict) or task.get("status") != "pending":
+            continue
+        logical_key = str(task.get("logical_key") or "")
+        newer = completed_by_key.get(logical_key)
+        if not logical_key or newer is None:
+            continue
+        newer_slug, newer_task = newer
+        newer_order = (
+            int(newer_task.get("created_at", 0) or 0),
+            task_order.get(newer_slug, -1),
+        )
+        pending_order = (
+            int(task.get("created_at", 0) or 0),
+            task_order.get(slug, -1),
+        )
+        if newer_slug != slug and newer_order > pending_order:
+            task["status"] = "superseded"
+            task["superseded_by"] = newer_slug
+            task["superseded_at"] = int(
+                newer_task.get("completed_at")
+                or newer_task.get("updated_at")
+                or time.time() * 1000
+            )
+
     manifest["pending"] = [
         slug for slug, task in tasks.items()
         if isinstance(task, dict) and task.get("status") == "pending"
@@ -218,6 +285,9 @@ def _mark_task_pending(
         "created_at": created_at,
         "updated_at": now,
     }
+    logical_key = _conversation_task_logical_key(prompt)
+    if logical_key:
+        m["tasks"][slug]["logical_key"] = logical_key
     _save_task_manifest(config, m)
 
 
@@ -249,6 +319,9 @@ def _mark_task_done(
         "updated_at": now,
         "completed_at": prior.get("completed_at", now),
     }
+    logical_key = _conversation_task_logical_key(prompt)
+    if logical_key:
+        m["tasks"][slug]["logical_key"] = logical_key
     _save_task_manifest(config, m)
 
 
@@ -259,6 +332,19 @@ def _is_stale_result(response: str, prompt: str) -> bool:
     if has_yaml or has_files:
         return False
     return any(m in response for m in ["# Role", "You are"]) and len(response) < len(prompt) * 0.8
+
+
+def _conversation_task_logical_key(prompt: str) -> str:
+    """Return a safe supersession key for one-task-per-source/stage shapes."""
+    stage = _infer_stage(prompt)
+    if stage.startswith("Stage-2-2-Chunk-"):
+        return stage
+    if stage == "Stage-2-4-Generation":
+        chunk = re.search(r"^Chunk:\s*(\d+)\s*$", prompt, flags=re.MULTILINE)
+        return f"{stage}:chunk-{chunk.group(1)}" if chunk else f"{stage}:all"
+    if stage in ("Stage-2-6-SourcePage", "Stage-3-4-Review"):
+        return stage
+    return ""
 
 
 def _infer_stage(prompt: str) -> str:

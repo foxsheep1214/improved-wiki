@@ -133,6 +133,8 @@ class TestGenerationSelection(unittest.TestCase):
         self.assertIn("Key System", prompt)
         self.assertNotIn("Background Term", prompt)
         self.assertIn("There is no page-count target", prompt)
+        self.assertIn("NO_KEY_PAGES", prompt)
+        self.assertIn("mandatory source page separately", prompt)
         self.assertNotIn("Supplementary foundational pages", prompt)
         self.assertNotIn("EVERY concept", prompt)
 
@@ -161,6 +163,120 @@ class TestGenerationSelection(unittest.TestCase):
 
 
 class TestGenerationTruncationRepair(unittest.TestCase):
+    def test_chunk_generation_accepts_explicit_zero_key_pages(self):
+        analysis = {
+            "concepts_found": [{
+                "name": "Peripheral Topic",
+                "importance": "supporting",
+                "definition": "Real but not developed enough for a page.",
+                "key_details": [],
+            }],
+            "entities_found": [],
+            "schema_typed_candidates": [],
+            "formulas": [],
+        }
+        calls: list[str] = []
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            calls.append(prompt)
+            return "NO_KEY_PAGES\n", "end_turn"
+
+        original = generation.call_anthropic_protocol
+        generation.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                cfg = _config(tmp)
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                blocks = generation.stage_2_4_generate_chunk(
+                    analysis,
+                    0,
+                    [],
+                    cfg.raw_root / "book.pdf",
+                    cfg,
+                    chunk_text="A passing treatment of the peripheral topic.",
+                )
+        finally:
+            generation.call_anthropic_protocol = original
+
+        self.assertEqual(blocks, [])
+        self.assertEqual(len(calls), 1)
+        self.assertIn("NO_KEY_PAGES", calls[0])
+
+    def test_single_shot_generation_accepts_explicit_zero_key_pages(self):
+        analysis = {
+            "concepts_found": [{
+                "name": "Peripheral Topic",
+                "importance": "supporting",
+                "definition": "Real but not developed enough for a page.",
+                "key_details": [],
+            }],
+            "entities_found": [],
+            "schema_typed_candidates": [],
+            "formulas": [],
+        }
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            return "NO_KEY_PAGES", "end_turn"
+
+        original = generation.call_anthropic_protocol
+        generation.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                cfg = _config(tmp)
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                blocks, slugs, stop_reason = generation.stage_2_4_generate_all(
+                    [analysis],
+                    cfg.raw_root / "book.pdf",
+                    cfg,
+                    source_context="A passing treatment of the peripheral topic.",
+                )
+        finally:
+            generation.call_anthropic_protocol = original
+
+        self.assertEqual(blocks, [])
+        self.assertEqual(slugs, [])
+        self.assertEqual(stop_reason, "end_turn")
+
+    def test_zero_blocks_without_sentinel_still_fails(self):
+        analysis = {
+            "concepts_found": [{
+                "name": "Key Method",
+                "importance": "core",
+                "definition": "Central method.",
+                "key_details": [],
+            }],
+            "entities_found": [],
+            "schema_typed_candidates": [],
+            "formulas": [],
+        }
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            return "I chose not to create anything.", "end_turn"
+
+        original = generation.call_anthropic_protocol
+        generation.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                cfg = _config(tmp)
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                with self.assertRaisesRegex(RuntimeError, "NO_KEY_PAGES"):
+                    generation.stage_2_4_generate_chunk(
+                        analysis,
+                        0,
+                        [],
+                        cfg.raw_root / "book.pdf",
+                        cfg,
+                        chunk_text="source text",
+                    )
+        finally:
+            generation.call_anthropic_protocol = original
+
     def test_same_type_existing_page_is_generated_at_exact_update_path(self):
         analysis = {
             "concepts_found": [{

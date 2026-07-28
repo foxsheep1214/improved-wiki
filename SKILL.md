@@ -23,7 +23,7 @@ export SKILL_DIR="${SKILL_DIR:-$HOME/.agents/skills/improved-wiki}"
 | Deep research | `/improved-wiki deep-research <topic>` | Confirm one-topic scope; require web search |
 | Lint | `"$SKILL_DIR/scripts/wiki-lint.sh"` | Read-only unless fixes are requested |
 | Graph | `python3 "$SKILL_DIR/scripts/graph.py"` | None |
-| Validate | `python3 "$SKILL_DIR/scripts/validate_ingest.py" ...` | Read-only |
+| Validate | `python3 "$SKILL_DIR/scripts/validate_ingest.py" --root "$WIKI_ROOT" --source "<source stem>"` | Read-only |
 
 Do not assume a particular vendor agent, browser, MCP server, or shell helper.
 If a required capability is missing, report it instead of silently degrading.

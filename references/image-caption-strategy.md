@@ -37,7 +37,7 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
         _stage_1_3_caption_images_batch()  ← unified entry point
                 │
                 ├── per-user cross-process flock  (one caption round globally)
-                ├── _stage_1_3_build_context_map()  (minerU content_list → before/after text)
+                ├── _stage_1_3_build_context_map()  (current source's minerU content_list → before/after text)
                 ├── ThreadPoolExecutor (CAPTION_MAX_WORKERS per-image parallel)
                 │     └── _stage_1_3_caption_one_image_with_failover()
                 │           ├── _stage_1_3_caption_one_image() on PRIMARY (retry x3)
@@ -70,6 +70,14 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
 加上 minerU 自己的 `image_caption`——这些**只作参考、永不直接作为最终 caption**。
 
 这是阻止 VLM 把纯几何图塌缩成印刷 figure label 的关键。
+
+上下文映射必须是 **source-scoped**：Stage 1.2 在当前 source 的每个 OCR chunk 缓存中
+持久化 `_mineru_content_list.json`，并在 `_mineru_figures.json` 记录原始 minerU
+basename；Stage 1.3 只用这两类 sidecar 将本书图片连接到本书正文。旧 checkpoint
+没有这些 sidecar 时，允许扫描历史 `mineru-api-out` 作兼容，但必须先按当前
+`media_dir` 中图片文件名所含的内容哈希过滤，只保留与本书图片字节匹配的上下文，
+也不能把全项目上下文数量报告成本书数量。新 checkpoint 的本地 sidecar 是严格的
+source 边界；旧 checkpoint 的哈希兼容路径只用于恢复，不替代这个边界。
 
 上下文窗口 `CONTEXT_CHARS = 150`，对齐 NashSU 实证调优值：更大窗口带入无关正文、模型要主动过滤、token 成本翻 3 倍而收益微小。
 

@@ -898,14 +898,14 @@ def _stage_1_1_scanned_assemble_manifest(
     """Assemble per-page OCR text into full text and write _manifest.json."""
     page_nums = list(range(total_pages))
     full_text = _stage_1_1_assemble_ocr_text(out_dir, page_nums)
-    total_imgs = sum(len(v) for v in stats.get("images", {}).values())
-    print(f"[ocr] Done — {len(full_text):,} chars OCR text, {total_imgs} images extracted")
 
     slug = media_slug(file_path, config)
     media_dir = config.wiki_dir / "media" / slug
     manifest_path = media_dir / "_manifest.json"
     extracted_figures: list[dict] = []
     for f in sorted(media_dir.glob("p*-mineru_*.*")):
+        if f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            continue
         page_num = 0
         m = re.match(r"p(\d+)-mineru_", f.stem)
         if m:
@@ -914,6 +914,10 @@ def _stage_1_1_scanned_assemble_manifest(
             "filename": f.name, "page": page_num,
             "path": str(f.relative_to(config.wiki_root)),
         })
+    print(
+        f"[ocr] Done — {len(full_text):,} chars OCR text, "
+        f"{len(extracted_figures)} images extracted"
+    )
     if extracted_figures:
         _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, extracted_figures)
         print(f"[ocr] {len(extracted_figures)} extracted figures → _manifest.json")

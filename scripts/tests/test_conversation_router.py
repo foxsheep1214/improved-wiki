@@ -155,6 +155,52 @@ class TestConversationHandoff(unittest.TestCase):
             self.assertEqual(len(md_files), 2,
                              "distinct prompts must get distinct cache files")
 
+    def test_completed_replacement_supersedes_only_same_stage_chunk(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            old_chunk_1 = (
+                "# Role\nYou are generating wiki pages for ONE chunk.\n"
+                "# Source\nSource: book\nChunk: 1\nold policy\n"
+            )
+            chunk_2 = (
+                "# Role\nYou are generating wiki pages for ONE chunk.\n"
+                "# Source\nSource: book\nChunk: 2\ncurrent policy\n"
+            )
+            new_chunk_1 = (
+                "# Role\nYou are generating wiki pages for ONE chunk.\n"
+                "# Source\nSource: book\nChunk: 1\nnew policy\n"
+            )
+
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(old_chunk_1, cfg)
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(chunk_2, cfg)
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(new_chunk_1, cfg)
+
+            conv_dir = cfg.runtime_dir / "conversation" / cfg.conversation_prefix
+            new_prompt_path = next(
+                path for path in conv_dir.glob("*.md")
+                if path.read_text(encoding="utf-8") == new_chunk_1
+            )
+            new_prompt_path.with_suffix(".txt").write_text(
+                "NO_KEY_PAGES", encoding="utf-8"
+            )
+            text, _ = _llm_api.call_anthropic_protocol(new_chunk_1, cfg)
+            self.assertEqual(text, "NO_KEY_PAGES")
+
+            manifest = _load_task_manifest(cfg)
+            by_prompt = {
+                (conv_dir / task["prompt_file"]).read_text(encoding="utf-8"):
+                    task
+                for task in manifest["tasks"].values()
+            }
+            self.assertEqual(by_prompt[old_chunk_1]["status"], "superseded")
+            self.assertEqual(by_prompt[new_chunk_1]["status"], "completed")
+            self.assertEqual(by_prompt[chunk_2]["status"], "pending")
+            self.assertEqual(len(manifest["pending"]), 1)
+
     def test_volatile_wiki_page_list_does_not_invalidate_cache(self):
         # Regression: stage prompts embed an "Existing wiki pages" snapshot
         # that changes as the wiki grows (lint pages, new ingests). Hashing

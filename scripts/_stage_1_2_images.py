@@ -374,6 +374,11 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
                 "path": str(out_path.relative_to(config.wiki_root)),
                 "width": w, "height": h,
                 "source": "mineru-extracted",
+                # Persist the original minerU basename so Stage 1.3 can join
+                # this saved image back to its source-scoped content-list
+                # context without scanning every prior minerU job in the
+                # project.
+                "mineru_basename": img_name,
             })
 
             # NOTE (2026-06-24): minerU's image_caption is NO LONGER written as
@@ -389,6 +394,14 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
         harvest_path = chunk_out / "_mineru_figures.json"
         harvest_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2),
                                 encoding="utf-8")
+        # The global minerU UUID output tree accumulates every source in the
+        # project. Keep the current chunk's content list beside its durable
+        # figure metadata so Stage 1.3 can build a source-scoped context map.
+        context_path = chunk_out / "_mineru_content_list.json"
+        context_path.write_text(
+            json.dumps(all_content, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         print(f"[mineru-figures] {len(saved)} extracted figures saved to {media_dir.name}")
 
     return saved

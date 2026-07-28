@@ -760,7 +760,13 @@ def stage_3_1_normalize_page_links(
     # ── Rules 2 + 3 + 4b: body wikilinks ──
     body_start = fm_end + 4 if has_fm else 0
     head, body = content[:body_start], content[body_start:]
-    counts = {"h1": 0, "self": 0, "prefixed": 0, "twin": 0}
+    counts = {
+        "h1": 0,
+        "self": 0,
+        "prefixed": 0,
+        "rerouted": 0,
+        "twin": 0,
+    }
     unresolved: list[str] = []
     changed = False
 
@@ -791,7 +797,36 @@ def stage_3_1_normalize_page_links(
             changed = True
             return _display_text(inner)
         if "/" in t:
-            return m.group(0)  # already prefixed — leave as-is
+            claimed_dir, stem = t.rsplit("/", 1)
+            dirs = slug_dirs.get(stem)
+            if dirs and claimed_dir in dirs:
+                return m.group(0)
+            if not dirs:
+                # Preserve the historical policy for already-prefixed links
+                # whose target is outside the current inventory. They may be
+                # intentional forward/external wiki references; only reroute
+                # when a unique real target proves the prefix wrong.
+                return m.group(0)
+            if dirs and len(dirs) == 1:
+                resolved = f"{next(iter(dirs))}/{stem}"
+            elif dirs == _CONCEPT_ENTITY_PAIR:
+                resolved = f"concepts/{stem}"
+                counts["twin"] += 1
+            else:
+                unresolved.append(m.group(0))
+                return m.group(0)
+            if resolved in (own_prefixed, own_stem):
+                counts["self"] += 1
+                changed = True
+                return _display_text(inner)
+            counts["rerouted"] += 1
+            changed = True
+            rebuilt = (
+                resolved
+                + (f"#{anchor}" if anchor else "")
+                + (f"|{alias}" if alias else "")
+            )
+            return f"[[{rebuilt}]]"
         dirs = slug_dirs.get(t)
         if dirs and len(dirs) == 1:
             counts["prefixed"] += 1
@@ -832,6 +867,11 @@ def stage_3_1_normalize_page_links(
         _warn(f"body: de-linked {counts['self']} self-link(s)")
     if counts["prefixed"]:
         _warn(f"body: prefixed {counts['prefixed']} bare wikilink(s)")
+    if counts["rerouted"]:
+        _warn(
+            f"body: corrected {counts['rerouted']} wrongly-prefixed "
+            "wikilink(s)"
+        )
     if counts["twin"]:
         _warn(f"body: resolved {counts['twin']} same-stem ambiguity → concepts/")
     if fig_count:
@@ -850,6 +890,9 @@ def stage_3_1_write_wiki_file(
     merge: bool = False,
     *,
     source_file: str = "",
+    normalize_rel_path: str = "",
+    slug_dirs: dict[str, set[str]] | None = None,
+    source_page_slug: str | None = None,
 ) -> None:
     content = _stage_3_1_sanitize_ingested_content(content)
     if config is not None:
@@ -869,6 +912,17 @@ def stage_3_1_write_wiki_file(
                 source_file=source_file,
                 replace_existing_body=replace_existing_body,
             )
+            # The incoming FILE block was normalized before merge, but the LLM
+            # merger can reintroduce malformed related entries or wrong/case-
+            # mismatched body prefixes copied from a legacy page. Normalize the
+            # actual merged result once more before the atomic write.
+            if normalize_rel_path and slug_dirs is not None:
+                content = stage_3_1_normalize_page_links(
+                    normalize_rel_path,
+                    content,
+                    slug_dirs,
+                    source_page_slug=source_page_slug,
+                )
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, content)
 
