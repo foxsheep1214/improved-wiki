@@ -116,7 +116,10 @@ If NO → leave unresolved
 | Before manual review session | Run sweep first to clear stale items |
 | When lint finds many review items | Sweep to reduce noise before investigating |
 
-> **Auto-applies via lint (default-on)**: `wiki-lint.sh` runs `sweep_reviews.py --apply` as a default stage (`SWEEP=true`; skip with `--no-sweep`) — it actually resolves satisfied review items as part of a normal lint run, not just a preview. Same default-on/auto-apply pattern as cross-source dedup (`DEDUP=true`; `cross_source_dedup.py` applies unless `--dry-run` is passed). To preview without mutating, run the standalone script directly with `--dry-run`.
+> **Default via lint**: plain `wiki-lint.sh` invokes
+> `sweep_reviews.py --apply` and may resolve files under `wiki/REVIEW/`.
+> Use `--no-sweep` to disable this stage, `--diagnostic-only` to disable all
+> wiki mutations, or run `sweep_reviews.py --dry-run` directly for a preview.
 
 ## Implementation Notes
 

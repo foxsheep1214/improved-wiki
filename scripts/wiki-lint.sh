@@ -1,14 +1,15 @@
 #!/bin/bash
 # wiki-lint.sh — NashSU parity lint: scan wiki/ for structural + semantic issues.
 #
-# NashSU lint.ts has exactly two functions:
+# NashSU lint has exactly two scan functions:
 #   1. runStructuralLint (always)
-#   2. runSemanticLint  (always, if LLM configured)
+#   2. runSemanticLint  (optional in the v0.6.6 UI)
 #
-# This script mirrors that: structural scan always runs, semantic runs by
-# default (--no-semantic to skip). Fix/sweep/dedup/delete-orphans are separate
-# commands in NashSU and are NOT built into this lint script — use the
-# standalone tools: wiki-lint-fix.py, sweep_reviews.py, cross_source_dedup.py.
+# By user policy, improved-wiki's plain lint command runs structural + semantic
+# scans, routes semantic warnings to REVIEW, fixes frontmatter/links, sweeps
+# resolved reviews, and runs one cross-source dedup round. After those stages
+# finish it stops at a delete-orphans confirmation checkpoint (exit 102); the
+# calling agent must ask the user before running the confirmed orphan preview.
 #
 # Detects:
 #   1. broken-link        — [[wikilink]] points to a non-existent page
@@ -24,22 +25,29 @@
 #   - stdout: summary line
 #
 # Usage:
-#   $ ./wiki-lint.sh                 # structural + semantic + fix + fix-links + sweep + dedup + delete-orphans(PREVIEW)
-#   $ ./wiki-lint.sh --no-semantic    # skip LLM semantic
-#   $ ./wiki-lint.sh --no-fix-links   # skip auto link-fix pass
-#   $ ./wiki-lint.sh --fix           # + auto-fix missing-frontmatter
-#   $ ./wiki-lint.sh --fix-links     # + auto-fix broken-link/orphan/no-outlinks
+#   $ ./wiki-lint.sh                 # full default maintenance, then ask about delete-orphans
+#   $ ./wiki-lint.sh --diagnostic-only # structural + semantic, no wiki mutation
+#   $ ./wiki-lint.sh --structural-only # deterministic structural diagnostic only
+#   $ ./wiki-lint.sh --no-semantic   # skip semantic only; other defaults still run
+#   $ ./wiki-lint.sh --emit-review   # route semantic warnings to wiki/REVIEW/ (default)
+#   $ ./wiki-lint.sh --fix           # auto-fix missing-frontmatter (default)
+#   $ ./wiki-lint.sh --fix-links     # auto-fix broken-link/orphan/no-outlinks (default)
 #                                     (--no-stub mode: broken→review, no bulk stubs;
 #                                      2026-07-10: rewrites need score>=0.9, lower
 #                                      scores → REVIEW/suggestion items instead)
+#   $ ./wiki-lint.sh --sweep         # resolve satisfied review items (default)
+#   $ ./wiki-lint.sh --dedup         # cross-source semantic dedup/merge (default)
+#   $ ./wiki-lint.sh --no-delete-orphans # skip the final confirmation checkpoint
+#   $ ./wiki-lint.sh --delete-orphans-only # confirmed continuation: fresh scan + orphan preview/REVIEW
 #   $ ./wiki-lint.sh --verbose       # show every finding
 #   $ ./wiki-lint.sh --strict        # exit 1 for critical issues
 #   $ ./wiki-lint.sh --json-only     # JSON only, no .md lint pages
 #
 # The delete-orphans stage is PREVIEW + review items only (2026-07-10) — it
-# never deletes. Real delete: wiki-lint-fix.py --delete-orphans --apply.
+# never deletes. Real delete remains a separately confirmed command:
+# wiki-lint-fix.py --delete-orphans --apply.
 #
-# Standalone commands (not built into lint — NashSU parity):
+# The mutation flags above drive these standalone commands:
 #   sweep_reviews.py                 # auto-resolve satisfied review items
 #   cross_source_dedup.py            # cross-source concept dedup
 #   wiki-lint-fix.py --delete-orphans # cascade-delete orphan pages
@@ -49,8 +57,7 @@
 #                                     # content (the semantic pass itself only
 #                                     # sees a 500-char preview per page, batched
 #                                     # blind with no cross-batch memory). Run
-#                                     # after a lint pass, not part of the default
-#                                     # chain — see the module docstring.
+#                                     # after a lint pass; see the module docstring.
 #
 # Exit code:
 #   0 — clean (or with findings but no --strict)
@@ -59,18 +66,21 @@
 #   101 — conversation handoff pending: --semantic, --sweep, or --dedup wrote
 #         a prompt and is waiting for the calling agent's answer. Answer it
 #         (per that sub-script's own conversation dir) and re-invoke
-#         wiki-lint.sh to continue the remaining default stages. (2026-07-10:
+#         wiki-lint.sh with the same flags to continue requested stages. (2026-07-10:
 #         --sweep/--dedup used to swallow this and silently fall through to
 #         later stages without actually applying the sweep/dedup — fixed to
 #         propagate exit 101 the same way --semantic already did.)
+#   102 — all preceding default stages finished; ask the user whether to run
+#         delete-orphans. If approved, invoke --delete-orphans-only. Do not
+#         treat 102 as failure or run the continuation without confirmation.
 #
 # --dedup convergence note (2026-07-12, user-directed): cross_source_dedup.py
 # batches are content-hash keyed, so each merge round shifts the wiki page
 # set and re-invalidates nearly all batches — re-running wiki-lint.sh after
 # answering one round of dedup handoffs tends to re-emit a near-full new
-# batch set rather than shrinking monotonically. Default calling-agent policy:
+# batch set rather than shrinking monotonically. Calling-agent policy:
 # answer ONE round of dedup conversation handoffs, then re-invoke with
-# --no-dedup to move on to the remaining stages. Only keep looping dedup
+# the remaining requested flags but without --dedup. Only keep looping dedup
 # rounds if the user explicitly asks to run it to full convergence. See
 # references/dedup-design.md for the full rationale.
 
@@ -102,10 +112,7 @@ mkdir -p "$RUNTIME_DIR"
 
 LINT_PAGES_DIR="$RUNTIME_DIR/lint"
 if [ -d "$WIKI_DIR/lint" ] && [ "$WIKI_DIR/lint" != "$LINT_PAGES_DIR" ]; then
-    mkdir -p "$LINT_PAGES_DIR"
-    mv "$WIKI_DIR/lint"/*.md "$LINT_PAGES_DIR/" 2>/dev/null || true
-    rmdir "$WIKI_DIR/lint" 2>/dev/null || true
-    echo "[lint] Migrated wiki/lint/ → $LINT_PAGES_DIR" >&2
+    echo "[lint] Legacy wiki/lint/ detected; leaving it untouched during this diagnostic run. New lint pages go to $LINT_PAGES_DIR." >&2
 fi
 LINT_CACHE="$RUNTIME_DIR/lint-cache.json"
 SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
@@ -113,12 +120,13 @@ SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
 # ── Flags ──
 VERBOSE=false
 STRICT=false
-SEMANTIC=true           # NashSU parity: semantic always runs
-AUTO_FIX=true           # --no-fix to skip
-FIX_LINKS=true          # --no-fix-links to skip
-SWEEP=true              # --no-sweep to skip
-DEDUP=true              # --no-dedup to skip
-DELETE_ORPHANS=true     # --no-delete-orphans to skip
+SEMANTIC=true           # semantic remains part of default lint
+EMIT_REVIEW=true        # default: warning semantic findings → REVIEW
+AUTO_FIX=true           # default: repair missing frontmatter
+FIX_LINKS=true          # default: apply safe link fixes / route unsafe ones
+SWEEP=true              # default: resolve satisfied review items
+DEDUP=true              # default: run one cross-source dedup round
+DELETE_ORPHANS=ask      # default: stop after lint and ask the user
 JSON_ONLY=false
 SEMANTIC_LIMIT=""
 SEMANTIC_TOKENS=""
@@ -128,6 +136,8 @@ for arg in "$@"; do
     --strict)     STRICT=true ;;
     --semantic)   SEMANTIC=true ;;
     --no-semantic) SEMANTIC=false ;;
+    --emit-review) EMIT_REVIEW=true ;;
+    --no-emit-review) EMIT_REVIEW=false ;;
     --fix)        AUTO_FIX=true ;;
     --no-fix)     AUTO_FIX=false ;;
     --fix-links)  FIX_LINKS=true ;;
@@ -139,6 +149,32 @@ for arg in "$@"; do
     --no-dedup)    DEDUP=false ;;
     --delete-orphans) DELETE_ORPHANS=true ;;
     --no-delete-orphans) DELETE_ORPHANS=false ;;
+    --diagnostic-only)
+      EMIT_REVIEW=false
+      AUTO_FIX=false
+      FIX_LINKS=false
+      SWEEP=false
+      DEDUP=false
+      DELETE_ORPHANS=false
+      ;;
+    --structural-only)
+      SEMANTIC=false
+      EMIT_REVIEW=false
+      AUTO_FIX=false
+      FIX_LINKS=false
+      SWEEP=false
+      DEDUP=false
+      DELETE_ORPHANS=false
+      ;;
+    --delete-orphans-only)
+      SEMANTIC=false
+      EMIT_REVIEW=false
+      AUTO_FIX=false
+      FIX_LINKS=false
+      SWEEP=false
+      DEDUP=false
+      DELETE_ORPHANS=true
+      ;;
     --semantic-limit=*) SEMANTIC_LIMIT="${arg#*=}" ;;
     --semantic-tokens=*) SEMANTIC_TOKENS="${arg#*=}" ;;
     --help|-h)
@@ -304,17 +340,24 @@ for stem, path in pages.items():
 print(json.dumps(findings, ensure_ascii=False, indent=2))
 PYEOF
 
-# Run structural lint. Guard the cache write: a failed python run leaves a
-# partial/empty .tmp, and a blind `mv` would clobber the last good cache —
-# breaking every downstream --from-cache consumer (fix-links, sweep, dedup).
-if ! python3 "$LINT_SCRIPT" > "$LINT_CACHE.tmp" 2> "$LINT_CACHE.tmp.err"; then
-  echo "[lint] Structural lint failed — keeping previous cache." >&2
-  cat "$LINT_CACHE.tmp.err" >&2
-  rm -f "$LINT_CACHE.tmp" "$LINT_CACHE.tmp.err"
+run_structural_scan() {
+  # Guard the cache write: a failed python run leaves a partial/empty .tmp,
+  # and a blind mv would clobber the last good cache used by fix/orphan stages.
+  if ! python3 "$LINT_SCRIPT" > "$LINT_CACHE.tmp" 2> "$LINT_CACHE.tmp.err"; then
+    echo "[lint] Structural lint failed — keeping previous cache." >&2
+    cat "$LINT_CACHE.tmp.err" >&2
+    rm -f "$LINT_CACHE.tmp" "$LINT_CACHE.tmp.err"
+    return 1
+  fi
+  rm -f "$LINT_CACHE.tmp.err"
+  mv "$LINT_CACHE.tmp" "$LINT_CACHE"
+  return 0
+}
+
+if ! run_structural_scan; then
   exit 1
 fi
-rm -f "$LINT_CACHE.tmp.err"
-mv "$LINT_CACHE.tmp" "$LINT_CACHE"
+CACHE_DIRTY_AFTER_SCAN=false
 
 # ── Summary ──
 SUMMARY_LINE=$(python3 -c "
@@ -396,10 +439,11 @@ print(f'[lint] {written} lint pages → {lint_dir}')
   echo "[lint] Pages: $LINT_PAGE_COUNT findings in $LINT_PAGES_DIR/"
 fi
 
-# ── Phase 2: Semantic lint (NashSU parity: always runs) ──
+# ── Phase 2: Semantic lint (user-selected default; --no-semantic skips) ──
 if [ "$SEMANTIC" = true ]; then
   SEM_ARGS=()
   [ -n "$SEMANTIC_LIMIT" ]  && SEM_ARGS+=(--limit "$SEMANTIC_LIMIT")
+  [ "$EMIT_REVIEW" = true ] && SEM_ARGS+=(--emit-review)
   [ -n "$SEMANTIC_TOKENS" ] && \
     echo "[lint] --semantic: --semantic-tokens is ignored in conversation mode" >&2
   echo "[lint] --semantic: running conversation-mode semantic pass ..."
@@ -461,8 +505,9 @@ print(errors)
   fi
 fi
 
-# ── Opt-in: Auto-fix missing-frontmatter (--fix) ──
+# ── Default maintenance: Auto-fix missing-frontmatter ──
 if [ "$AUTO_FIX" = true ]; then
+  CACHE_DIRTY_AFTER_SCAN=true
   echo "[lint] Auto-fix: repairing missing-frontmatter..."
   TIMESTAMP=$(date +%Y-%m-%d)
   # Progress lines go to stderr; stdout carries ONLY the final count, so
@@ -508,8 +553,9 @@ PYEOF
   echo "[lint] Auto-fix: repaired $FIXED issues"
 fi
 
-# ── Opt-in: Auto-fix links (--fix-links, NashSU handleFix parity) ──
+# ── Default maintenance: Auto-fix links (NashSU handleFix parity) ──
 if [ "$FIX_LINKS" = true ]; then
+  CACHE_DIRTY_AFTER_SCAN=true
   echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
   python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply --no-stub \
     --from-cache "$LINT_CACHE" \
@@ -520,8 +566,9 @@ if [ "$FIX_LINKS" = true ]; then
   fi
 fi
 
-# ── Opt-in: Review sweep (via --all; NashSU sweep-reviews.ts parity) ──
+# ── Default maintenance: Review sweep (NashSU sweep-reviews.ts parity) ──
 if [ "$SWEEP" = true ]; then
+  CACHE_DIRTY_AFTER_SCAN=true
   echo "[lint] Review sweep: resolving satisfied review items..."
   SWEEP_OUT=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
       --project "$WIKI_ROOT" --apply 2>&1 | tail -3)
@@ -535,8 +582,9 @@ if [ "$SWEEP" = true ]; then
   fi
 fi
 
-# ── Opt-in: Cross-source dedup (via --all; NashSU dedup parity) ──
+# ── Default maintenance: Cross-source dedup (NashSU dedup parity) ──
 if [ "$DEDUP" = true ]; then
+  CACHE_DIRTY_AFTER_SCAN=true
   echo "[lint] Cross-source dedup: merging near-duplicate concepts..."
   python3 "$SCRIPT_DIR/cross_source_dedup.py" --project "$WIKI_ROOT" 2>&1 | tail -5
   dedup_rc=${PIPESTATUS[0]}
@@ -548,7 +596,7 @@ if [ "$DEDUP" = true ]; then
   fi
 fi
 
-# ── Opt-in: Orphan cascade delete (NashSU handleDeleteOrphan port) ──
+# ── Human-gated: Orphan preview/review (NashSU handleDeleteOrphan port) ──
 # 2026-07-10 (user-approved lint hardening): PREVIEW + review items by default,
 # never an automatic delete. NashSU's delete is a human-clicked per-item button;
 # the old `--apply` here batch-deleted every orphan unattended — including
@@ -556,7 +604,21 @@ fi
 # that a --fix-links append in this very run had just rescued (the cache
 # predates the fix). Real delete is an explicit, separate step:
 #   wiki-lint-fix.py --delete-orphans --apply --from-cache <cache> --project-root <root>
+if [ "$DELETE_ORPHANS" = ask ]; then
+  echo "[lint] DELETE_ORPHANS_CONFIRMATION_REQUIRED" >&2
+  echo "[lint] All preceding default lint/fix/sweep/dedup stages are complete." >&2
+  echo "[lint] Ask the user: 是否执行 delete-orphans（仅预览并生成 Review，不会删除页面）？" >&2
+  echo "[lint] If approved, run: $0 --delete-orphans-only" >&2
+  exit 102
+fi
+
 if [ "$DELETE_ORPHANS" = true ]; then
+  if [ "$CACHE_DIRTY_AFTER_SCAN" = true ]; then
+    echo "[lint] Refreshing structural cache after wiki mutations before orphan review..."
+    if ! run_structural_scan; then
+      exit 1
+    fi
+  fi
   echo "[lint] Delete-orphans: preview + review items (real delete: wiki-lint-fix.py --delete-orphans --apply)..."
   python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans --emit-review \
     --from-cache "$LINT_CACHE" \

@@ -8,9 +8,9 @@ only log.md). It scans every page's first 500
 chars + frontmatter, sends the concatenated summaries to an LLM, and
 parses ---LINT:type|severity|title--- blocks back into findings.
 
-Findings carry type="semantic" (matching NashSU's 4th structural-lint
-type), with the raw type (contradiction / stale / missing-page /
-suggestion) preserved in the detail string. affectedPages is parsed
+Findings carry type="semantic" (matching NashSU's semantic result type),
+with the raw type (contradiction / stale / missing-page / suggestion /
+term-ambiguity) preserved in the detail string. affectedPages is parsed
 from an optional "PAGES: a, b" line in the body.
 
 Output schema (one item per finding):
@@ -42,6 +42,7 @@ Usage:
   ./wiki-lint-semantic.py              # scan and write lint-semantic.json
   ./wiki-lint-semantic.py --dry-run    # print prompt + summaries, no LLM call
   ./wiki-lint-semantic.py --limit 50   # cap pages sampled (for huge wikis)
+  ./wiki-lint-semantic.py --emit-review # explicitly route warnings to REVIEW/
 
 Exit codes: 0 done; 101 conversation pending (agent answers + re-invokes);
 2 usage error.
@@ -54,6 +55,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -113,8 +115,8 @@ from _core import ConversationPending  # noqa: E402
 from _exit_codes import HANDOFF_PENDING  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
 from _paths import iter_wiki_pages, atomic_write  # noqa: E402
-from _lint_suggest import STATE_FILES  # noqa: E402
-from _review_utils import resolve_review_path  # noqa: E402
+from _lint_suggest import STATE_FILES, _extract_title  # noqa: E402
+from _review_utils import normalize_review_title, resolve_review_path  # noqa: E402
 
 
 def _probe_context_size(state_dir: Path) -> int:
@@ -147,21 +149,62 @@ def resolve_batch_target_chars(state_dir: Path) -> int:
 
 
 # ── core scan ────────────────────────────────────────────────────────────────
-def collect_summaries(wiki_dir: Path, limit: Optional[int] = None) -> list[tuple[str, str]]:
-    """Returns [(short_path, summary_text), ...]. Excludes anchors + state files.
-    Sorts by relative path for determinism (NashSU parity)."""
+def _normalize_for_existence(value: str) -> str:
+    """NashSU 0.6.6 missing-page comparison normalization."""
+    return unicodedata.normalize(
+        "NFKC", normalize_review_title(value)
+    ).strip().lower()
+
+
+def missing_page_already_exists(
+    title: str, existing_page_names: set[str]
+) -> bool:
+    """Use exact normalized equality; substring matching is unsafe."""
+    normalized = _normalize_for_existence(title)
+    return bool(normalized) and normalized in existing_page_names
+
+
+def collect_summary_bundle(
+    wiki_dir: Path, limit: Optional[int] = None
+) -> tuple[list[tuple[str, str]], set[str]]:
+    """Return summaries plus existing basename/title names.
+
+    The summary list may be capped for diagnostics, but the existence set
+    still covers every readable wiki page so the cap cannot create false
+    ``missing-page`` findings.
+    """
     out: list[tuple[str, str]] = []
+    existing_page_names: set[str] = set()
     for rel_str, text in iter_wiki_pages(
         wiki_dir, anchor_files=ANCHOR_FILES, state_files=STATE_FILES,
     ):
-        preview = text[:SUMMARY_CHARS] + ("..." if len(text) > SUMMARY_CHARS else "")
-        out.append((rel_str, preview))
-        if limit and len(out) >= limit:
-            break
+        basename = Path(rel_str).stem
+        if basename:
+            existing_page_names.add(_normalize_for_existence(basename))
+        title = _extract_title(text, rel_str)
+        if title:
+            existing_page_names.add(_normalize_for_existence(title))
+        if limit is None or len(out) < limit:
+            preview = text[:SUMMARY_CHARS] + (
+                "..." if len(text) > SUMMARY_CHARS else ""
+            )
+            out.append((rel_str, preview))
+    return out, existing_page_names
+
+
+def collect_summaries(
+    wiki_dir: Path, limit: Optional[int] = None
+) -> list[tuple[str, str]]:
+    """Compatibility wrapper returning only deterministic page summaries."""
+    out, _ = collect_summary_bundle(wiki_dir, limit=limit)
     return out
 
 
-def parse_lint_blocks(raw: str, now_ms: int) -> list[dict]:
+def parse_lint_blocks(
+    raw: str,
+    now_ms: int,
+    existing_page_names: Optional[set[str]] = None,
+) -> list[dict]:
     """Parse ---LINT:type|severity|title---\n<body>\n---END LINT--- blocks.
     Mirrors NashSU lint.ts L266-291."""
     results: list[dict] = []
@@ -170,6 +213,15 @@ def parse_lint_blocks(raw: str, now_ms: int) -> list[dict]:
         severity = m.group(2).strip().lower()
         title = m.group(3).strip()
         body = m.group(4).strip()
+
+        # NashSU 0.6.6 / #537: the model can incorrectly call an existing
+        # entity a missing page, especially in non-English wikis.
+        if (
+            raw_type == "missing-page"
+            and existing_page_names is not None
+            and missing_page_already_exists(title, existing_page_names)
+        ):
+            continue
 
         # Affected pages (optional PAGES: line)
         pages_match = re.search(r"^PAGES:\s*(.+)$", body, re.MULTILINE)
@@ -219,6 +271,7 @@ def build_prompt(summaries: list[tuple[str, str]]) -> tuple[str, str]:
         "- missing-page: an important concept is heavily referenced but has no dedicated page\n"
         "- suggestion: a question or source worth adding to the wiki\n"
         "- term-ambiguity: same term (slug) used for two genuinely different concepts but not disambiguated — e.g., 'switch' meaning both a mechanical switch and a switching transistor sharing one page/slug\n"
+        "For missing-page findings, Short title must be only the exact missing concept or entity name, without explanatory prefixes or suffixes.\n"
         "\n"
         "Severities:\n"
         "- warning: should be addressed\n"
@@ -304,6 +357,11 @@ def main() -> int:
                         help="Cap number of pages sampled (for huge wikis)")
     parser.add_argument("--output", type=str, default=None,
                         help="Output path (default: <state_dir>/lint-semantic.json)")
+    parser.add_argument(
+        "--emit-review",
+        action="store_true",
+        help="Route warning findings into wiki/REVIEW/ (explicit mutation)",
+    )
     args = parser.parse_args()
 
     root = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
@@ -321,7 +379,9 @@ def main() -> int:
     state_dir = detect_runtime_dir(root)  # handles all fallback logic
     out_path = Path(args.output) if args.output else state_dir / "lint-semantic.json"
 
-    summaries = collect_summaries(wiki_dir, limit=args.limit)
+    summaries, existing_page_names = collect_summary_bundle(
+        wiki_dir, limit=args.limit
+    )
     if not summaries:
         print(f"[semantic-lint] No wiki pages found in {wiki_dir}", file=sys.stderr)
         # Still write an empty findings file so callers don't error
@@ -370,7 +430,9 @@ def main() -> int:
                   f"({len(batch)} pages) — prompt emitted for parallel answering",
                   file=sys.stderr)
             continue
-        batch_findings = parse_lint_blocks(raw, now_ms)
+        batch_findings = parse_lint_blocks(
+            raw, now_ms, existing_page_names=existing_page_names
+        )
         findings.extend(batch_findings)
         print(f"[semantic-lint] Batch {i}/{len(batches)}: {len(batch_findings)} finding(s) "
               f"from {len(batch)} pages ({len(raw):,} chars raw)")
@@ -456,7 +518,8 @@ created: {date_str}
     if written > 0:
         print(f"[semantic-lint] {written} semantic lint pages → {lint_dir}")
 
-    emit_review_for_warnings(wiki_dir, findings)
+    if args.emit_review:
+        emit_review_for_warnings(wiki_dir, findings)
     return 0
 
 

@@ -15,7 +15,7 @@ improved-wiki 有**两种职责不同、不可互换**的去重。它们名字�
 |---|---|---|
 | 范围 | 单源——只看本次 LLM 生成的 file_blocks | 全 wiki——跨所有已消化源 |
 | 目标问题 | LLM 在**同一本书内**把同一概念起两个名 | 跨源累积——多次 ingest 把同一主题命名不同 |
-| 时机 | 写盘前（3.1 之前），是 file_blocks 的**过滤器** | 离线，用户手动 `--dedup` 触发，在多次 ingest 之后 |
+| 时机 | 写盘前（3.1 之前），是 file_blocks 的**过滤器** | 离线，普通 lint 默认触发一轮（`--no-dedup` 可跳过），也可单独手动运行 |
 | 速度要求 | 必须快（inline，阻塞 ingest）| 可慢（离线，LLM 语义扫描）|
 | 激进度 | **保守**——页面还没写，误合并=丢数据，且无备份 | **彻底**——有 backup + report，可回滚，可大胆合并 |
 | 跨引用改写 | **不做**——页面尚未落盘，没有 `[[wikilink]]` 可改 | **必须做**——全 wiki 重写 `[[old-slug]]` + `related:` 指向 canonical |
@@ -57,8 +57,14 @@ Stage 2.3 的标题 Jaccard 匹配曾漏判重音/标点变体（如 "Thévenin'
 
 ## 通过 wiki-lint.sh 驱动跨源去重时：只跑一轮（2026-07-12，user-directed）
 
+普通 `wiki-lint.sh` 默认运行一轮跨源去重；`--no-dedup` 跳过，
+`--diagnostic-only` 则关闭全部 wiki 修改。
+
 `cross_source_dedup.py` 的检测器批次按**内容哈希**分组缓存。每次合并都会改变 wiki 页面集合，导致哈希整体偏移——`wiki-lint.sh` 每次重新调用几乎都会把 34 个检测批次几乎全部标记为 pending（不是仅重扫真正受影响的那几批），即使真实新增重复的数量正在收敛（观测到 34→20 合并、22→4 合并、4 全部合并后又反弹到 31 pending）。
 
-**因此调用方（agent）驱动 `wiki-lint.sh` 的 dedup 阶段时，默认只应答一轮 conversation handoff**（不管这一轮产出的是检测 prompt 还是合并 prompt）。应答完这一轮后，后续对 `wiki-lint.sh` 的重新调用一律带 `--no-dedup`，跳到下一阶段（delete-orphans preview → sweep 收尾），不要为了追求"零新增"而无限循环重新扫描。
+**因此调用方（agent）驱动默认 dedup 阶段时，只应答一轮
+conversation handoff**（不管这一轮产出的是检测 prompt 还是合并
+prompt）。应答完这一轮后，如还请求了其他阶段，用原参数重新调用但
+加上 `--no-dedup`；不要为了追求“零新增”而无限循环重新扫描。
 
 如果用户明确要求"跑到完全收敛"，才继续按原节奏应答后续轮次；否则一轮即止是默认行为。

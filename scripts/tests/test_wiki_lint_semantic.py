@@ -78,6 +78,51 @@ class TestSemanticLintConversation(unittest.TestCase):
                 else:
                     os.environ["IMPROVED_WIKI_ROOT"] = old_root
 
+    def test_warning_to_review_requires_explicit_flag(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            wiki.mkdir()
+            (wiki / "buck.md").write_text(
+                _page("type: concept\ntitle: Buck", "# Buck\nBody."),
+                encoding="utf-8",
+            )
+
+            old_root = os.environ.get("IMPROVED_WIKI_ROOT")
+            old_argv = sys.argv
+            os.environ["IMPROVED_WIKI_ROOT"] = str(root)
+            sys.argv = ["wiki-lint-semantic.py"]
+            try:
+                self.assertEqual(wls.main(), 101)
+                prompt = next(
+                    (root / ".llm-wiki" / "conversation" / "semantic-lint").glob(
+                        "*.md"
+                    )
+                )
+                prompt.with_suffix(".txt").write_text(
+                    "---LINT: stale | warning | Buck data is stale---\n"
+                    "PAGES: buck.md\nRefresh the figures.\n"
+                    "---END LINT---\n",
+                    encoding="utf-8",
+                )
+
+                self.assertEqual(wls.main(), 0)
+                self.assertFalse((wiki / "REVIEW").exists())
+
+                sys.argv = ["wiki-lint-semantic.py", "--emit-review"]
+                self.assertEqual(wls.main(), 0)
+                self.assertTrue(
+                    any((wiki / "REVIEW").rglob("*.md")),
+                    "--emit-review must be the action that mutates wiki/REVIEW/",
+                )
+            finally:
+                sys.argv = old_argv
+                if old_root is None:
+                    os.environ.pop("IMPROVED_WIKI_ROOT", None)
+                else:
+                    os.environ["IMPROVED_WIKI_ROOT"] = old_root
+
 
 class TestBatching(unittest.TestCase):
     def test_chunk_batches_small_returns_single(self):
@@ -146,6 +191,75 @@ class TestLanguageDirectiveInPrompt(unittest.TestCase):
                 os.environ.pop("IMPROVED_WIKI_OUTPUT_LANGUAGE", None)
             else:
                 os.environ["IMPROVED_WIKI_OUTPUT_LANGUAGE"] = old
+
+
+class TestNashsu066MissingPageFilter(unittest.TestCase):
+    def test_prompt_requires_exact_missing_name(self):
+        wls = _load_module()
+        system_prompt, _ = wls.build_prompt([("concepts/a.md", "# A")])
+        self.assertIn(
+            "Short title must be only the exact missing concept or entity name",
+            system_prompt,
+        )
+
+    def test_existing_basename_title_and_nfkc_variant_are_filtered(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as td:
+            wiki = Path(td) / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            (wiki / "concepts" / "维特根斯坦.md").write_text(
+                _page("type: concept\ntitle: Ludwig Wittgenstein", "# 维特根斯坦"),
+                encoding="utf-8",
+            )
+            (wiki / "concepts" / "adler.md").write_text(
+                _page("type: concept\ntitle: 阿德勒", "# 阿德勒"),
+                encoding="utf-8",
+            )
+            (wiki / "concepts" / "abc.md").write_text(
+                _page("type: concept\ntitle: ＡＢＣ", "# ＡＢＣ"),
+                encoding="utf-8",
+            )
+            _, names = wls.collect_summary_bundle(wiki)
+            raw = (
+                "---LINT: missing-page | warning | 维特根斯坦---\n"
+                "body one\n---END LINT---\n"
+                "---LINT: missing-page | warning | 缺失页面：阿德勒---\n"
+                "body two\n---END LINT---\n"
+                "---LINT: missing-page | warning | Missing page: ABC---\n"
+                "body three\n---END LINT---\n"
+                "---LINT: missing-page | warning | 尼采---\n"
+                "body four\n---END LINT---\n"
+            )
+            results = wls.parse_lint_blocks(
+                raw, now_ms=0, existing_page_names=names
+            )
+            self.assertEqual([item["page"] for item in results], ["尼采"])
+
+    def test_exact_match_does_not_drop_unrelated_substring(self):
+        wls = _load_module()
+        names = {wls._normalize_for_existence("AI")}
+        raw = (
+            "---LINT: missing-page | warning | FAIR data governance---\n"
+            "body\n---END LINT---\n"
+        )
+        results = wls.parse_lint_blocks(
+            raw, now_ms=0, existing_page_names=names
+        )
+        self.assertEqual(len(results), 1)
+
+    def test_summary_limit_does_not_limit_existence_index(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as td:
+            wiki = Path(td) / "wiki"
+            wiki.mkdir()
+            (wiki / "a.md").write_text("# A", encoding="utf-8")
+            (wiki / "z.md").write_text(
+                _page("type: concept\ntitle: Existing Z", "# Existing Z"),
+                encoding="utf-8",
+            )
+            summaries, names = wls.collect_summary_bundle(wiki, limit=1)
+            self.assertEqual(len(summaries), 1)
+            self.assertIn(wls._normalize_for_existence("Existing Z"), names)
 
 
 class TestSemanticLintBatchedE2E(unittest.TestCase):

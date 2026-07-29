@@ -8,6 +8,7 @@ Run:  python3 scripts/tests/test_lint_suggest.py
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -101,10 +102,9 @@ class TestRunStructuralLint(unittest.TestCase):
         self.assertIsNone(broken.get("suggested_score"))
 
     def test_with_suggestions_false_skips_slow_suggestion_engine(self):
-        # validate_ingest.py runs over the whole wiki; the O(n^2) suggestion
-        # engine (suggest_related_page / suggest_broken_target) is too slow on
-        # large wikis. with_suggestions=False must still DETECT broken-link /
-        # orphan / no-outlinks but leave suggested_* = None (no suggestion scan).
+        # validate_ingest.py only needs structural detection, not the indexed
+        # candidate/scoring pass. with_suggestions=False must still DETECT
+        # broken-link / orphan / no-outlinks but leave suggested_* = None.
         pages = [
             ("transformer.md", "---\ntitle: Transformer\n---\n# Transformer\nAttention model."),
             ("attention.md", "# Attention\nSee [[transfomer]] for the architecture."),
@@ -174,6 +174,26 @@ class TestRunStructuralLint(unittest.TestCase):
         self.assertIsNone(finding(results, type="broken-link"))
         self.assertIsNone(finding(results, type="orphan", page="transformer.md"))
 
+    def test_normalizes_prefix_suffix_and_backslashes_for_resolution(self):
+        pages = [
+            ("concepts/transformer.md", "# Transformer\nCore page."),
+            ("notes/a.md", "# A\nSee [[wiki/concepts/transformer.md]]."),
+            ("notes/b.md", "# B\nSee [[concepts\\transformer.md]]."),
+            ("notes/c.md", "# C\nSee [[transformer.md]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        broken_targets = {
+            item["broken_target"]
+            for item in results
+            if item["type"] == "broken-link"
+        }
+        self.assertNotIn("wiki/concepts/transformer.md", broken_targets)
+        self.assertNotIn("concepts\\transformer.md", broken_targets)
+        self.assertNotIn("transformer.md", broken_targets)
+        self.assertIsNone(
+            finding(results, type="orphan", page="concepts/transformer.md")
+        )
+
 
 class TestHeadlessApplySafety(unittest.TestCase):
     """The headless --fix-links applier must never auto-write a guessed/aggregate
@@ -209,6 +229,31 @@ class TestHeadlessApplySafety(unittest.TestCase):
         orph = finding(ls.run_structural_lint(pages), type="orphan", page="concepts/lonely.md")
         self.assertIsNotNone(orph)
         self.assertIsNone(orph.get("suggested_source"))
+
+
+class TestNashsu066CandidateIndex(unittest.TestCase):
+    def test_top_candidates_are_stable_and_capped_at_64(self):
+        scores = {index: 1.0 for index in range(100)}
+        candidates = ls._top_candidates(scores, excluded=3)
+        self.assertEqual(len(candidates), ls.MAX_SUGGESTION_CANDIDATES)
+        self.assertEqual(candidates[:5], [0, 1, 2, 4, 5])
+        self.assertNotIn(3, candidates)
+
+    def test_5000_page_cycle_avoids_quadratic_candidate_expansion(self):
+        total = 5_000
+        pages = [
+            (
+                f"entities/page-{index}.md",
+                f"# Page {index}\nshared topic-{index}\n"
+                f"See [[entities/page-{(index + 1) % total}]].",
+            )
+            for index in range(total)
+        ]
+        started = time.perf_counter()
+        findings = ls.run_structural_lint(pages)
+        elapsed = time.perf_counter() - started
+        self.assertEqual(findings, [])
+        self.assertLess(elapsed, 10.0)
 
 
 if __name__ == "__main__":

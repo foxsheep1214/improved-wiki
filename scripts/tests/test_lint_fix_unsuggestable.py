@@ -5,7 +5,7 @@ suggested_source) and no-outlinks (no suggested_target) findings — no stub or
 append action is possible without a suggestion, so they vanished. NashSU
 handleFix routes unsuggestable findings to the Review store; the port now
 matches via _emit_review_for_unsuggestable (called in --no-stub mode, which
-wiki-lint.sh's --fix-links passes by default).
+wiki-lint.sh passes during its default fix-links stage unless disabled).
 
 Stdlib unittest only.
 """

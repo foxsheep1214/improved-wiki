@@ -75,9 +75,10 @@ This is a common idiom: "only run if at least 1GB free".
 
 ## Lint cron (separate, optional)
 
-The ingest cron handles new files. A second cron can run **Lint** periodically. The lint family has four passes:
-- **structural** (`wiki-lint.sh`): broken-link / orphan / no-outlinks / missing-frontmatter — deterministic, cron-safe
-- **semantic** (`wiki-lint-semantic.py`): LLM 判读，走 conversation-mode handoff，需要 agent 作答 — NOT cron-safe
+The ingest cron handles new files. A second cron can run **structural-only
+Lint** periodically. Relevant modes:
+- **structural** (`wiki-lint.sh --structural-only`): broken-link / orphan / no-outlinks / missing-frontmatter — deterministic, cron-safe
+- **full default lint** (plain `wiki-lint.sh`): semantic + Review/fix/sweep/dedup，走 conversation-mode handoff，并在 delete-orphans 前退出 102 等待用户确认 — NOT cron-safe
 - **review sweep** (`sweep_reviews.py`): auto-resolve stale review items — run manually after batch ingests
 - **cross-source dedup** (`cross_source_dedup.py`): 跨源重复页检测/合并 — manual, LLM-confirmed
 
@@ -85,10 +86,12 @@ Only the structural pass belongs in cron:
 
 ```bash
 # Structural lint weekly (Sunday 04:00)
-0 4 * * 0 $SKILL_DIR/scripts/wiki-lint.sh
+0 4 * * 0 $SKILL_DIR/scripts/wiki-lint.sh --structural-only
 ```
 
-`wiki-lint.sh` is a structural lint scanner — see `scripts/wiki-lint.sh` and `references/nashsu-lint-source-analysis.md` for details.
+Plain `wiki-lint.sh` intentionally runs the full maintenance workflow by
+default. Unattended cron must pass `--structural-only`; do not use plain lint
+or any mutating continuation in cron.
 
 ---
 
