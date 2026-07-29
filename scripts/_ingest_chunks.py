@@ -55,6 +55,7 @@ _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_2_done",
     "stage_2_3_done",
     "stage_2_9_done",  # legacy name: Stage 2.4 closing + Stage 2.6 tail
+    "review_prepared",
     "write_loop_done",
     "write_phase",
     "ingested",

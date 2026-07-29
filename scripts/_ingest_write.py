@@ -45,7 +45,10 @@ from _stage_3_write import (
     stage_3_5_aggregate_repair,
 )
 from _stage_3_2_inject_images import stage_3_2_inject_images
-from _stage_3_4_review import stage_3_4_review_suggestions
+from _stage_3_4_review import (
+    stage_3_4_prepare_review_suggestions,
+    stage_3_4_persist_review_suggestions,
+)
 from _stage_2_6_source_page import (
     build_fallback_source_summary_content,
     source_analysis_text,
@@ -399,6 +402,42 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # prompt and fires a spurious SECOND handoff — bug 2026-07-01).
         enrich_candidates = reconstruct_enrich_candidates(
             files_written_paths, config.wiki_dir, _LISTING_PAGES)
+
+    # NashSU Phase-3 order: generate/validate review suggestions from the
+    # in-memory FILE generation BEFORE any page write.  Persistence remains
+    # post-write (after aggregate maintenance and media injection), matching
+    # NashSU's parse/store timing.  Historical resumes whose write loop already
+    # completed reconstruct the same logical input from the bound disk pages.
+    prepared_review: dict | None = None
+    if not is_stage_done(config, h, "review_done"):
+        if is_stage_done(config, h, "review_prepared"):
+            prepared_review = get_stage_payload(
+                config, h, "review_prepared")
+            if not isinstance(prepared_review.get("items_data"), list):
+                raise RuntimeError(
+                    "review_prepared marker has no validated items_data list")
+            print(
+                "[stage 3.4a] review_prepared marker present — restored "
+                f"{len(prepared_review['items_data'])} item(s)")
+        else:
+            prewrite_review_blocks = file_blocks
+            if write_phase_done or write_loop_done:
+                prewrite_review_blocks = (
+                    _reconstruct_blocks_from_disk(config, files_written_paths)
+                    or file_blocks
+                )
+            prepared_review = stage_3_4_prepare_review_suggestions(
+                prewrite_review_blocks,
+                raw_file,
+                config,
+                verbose=verbose,
+            )
+            mark_stage_done(
+                config,
+                h,
+                "review_prepared",
+                payload=prepared_review,
+            )
     _write_blocks = [] if (write_phase_done or write_loop_done) else file_blocks
 
     # A5 write-time link normalizer (audit 2026-07-02, M6): slug→dir universe
@@ -647,7 +686,41 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             "files_written": files_written_paths,
         })
 
-    # Stage 3.2: Image injection
+    # NashSU Phase-3 order: maintain aggregate navigation immediately after
+    # FILE writes and before source-summary image injection / review
+    # persistence.  The marker makes retries idempotent; the aggregate
+    # implementation separately guards log.md against duplicate source/hash
+    # entries for legacy/marker-loss recovery.
+    if is_stage_done(config, h, "aggregate_done"):
+        _aggregate_payload, index_log_files = _validated_marker_page_refs(
+            config, h, "aggregate_done")
+        required_aggregate = {"wiki/log.md", "wiki/index.md"}
+        if not required_aggregate.issubset(set(index_log_files)):
+            raise RuntimeError(
+                "aggregate_done marker does not bind wiki/log.md and "
+                "wiki/index.md")
+        print(
+            f"[stage 3.5] aggregate_done marker present — restored "
+            f"{len(index_log_files)} aggregate page(s)")
+    else:
+        index_log_files = stage_3_5_aggregate_repair(
+            source_path, raw_file, analysis, h, method, config)
+        index_log_files = canonical_page_refs(
+            index_log_files, config.wiki_root, config.wiki_dir)
+        required_aggregate = {"wiki/log.md", "wiki/index.md"}
+        if not required_aggregate.issubset(set(index_log_files)):
+            raise RuntimeError(
+                "Stage 3.5 did not return wiki/log.md and wiki/index.md")
+        bind_page_refs(
+            config,
+            h,
+            files_written_paths + index_log_files,
+        )
+        mark_stage_done(config, h, "aggregate_done", payload={
+            "page_refs": index_log_files,
+        })
+
+    # Stage 3.2: Image injection (after aggregate maintenance, as in NashSU).
     if not write_phase_done:
         stage_3_2_result: dict = {"injected": 0}
         if source_path.exists():
@@ -678,23 +751,20 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 "files_written": files_written_paths,
             }
 
-        # Mark write phase complete so a post-review resume skips 3.1-3.2
-        # (prevents spurious page-merge / re-enrichment / re-injection).
-        bind_page_refs(config, h, files_written_paths)
+        # Mark write phase complete so a post-media resume skips 3.1/3.2.
+        # Aggregate pages already exist in the NashSU-aligned order, so keep
+        # them in the task binding even though the write_phase payload itself
+        # remains scoped to generated pages.
+        bind_page_refs(config, h, files_written_paths + index_log_files)
         mark_stage_done(config, h, "write_phase", payload={
             "files_written": files_written_paths,
             "images_injected": injected_images,
         })
 
-    # Reconstruct the review set from the pages actually on disk. Done on EVERY
-    # pass (not just resumes): by Stage 3.4 the pages are written AND enriched,
-    # so disk content is identical on a fresh run and on any later resume. That
-    # determinism makes the Stage 3.4 conversation-mode prompt hash stable, so a
-    # post-write resume reuses the cached review answer instead of firing a
-    # second redundant review over "0 new pages". It also feeds validation and
-    # cache stats the real on-disk pages even when file_blocks is [] on resume
-    # (fixes false go/no-go failures and zeroed cache stage-stats). Falls back
-    # to the in-memory file_blocks only if nothing was written.
+    # Reconstruct the final disk set for validation/cache accounting. Review
+    # generation already ran pre-write over the original FILE generation; only
+    # persistence happens here, after writes + aggregates + media, matching
+    # NashSU's execution order.
     review_blocks = _reconstruct_blocks_from_disk(config, files_written_paths) or file_blocks
 
     # Total captioned images on disk. stage_1_3_result["captioned"] is NEW
@@ -709,9 +779,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         except OSError:
             _total_captioned = 0
 
-    # Stage 3.4: Review (quality review of generated pages). Persist the exact
-    # review-page set so a later aggregate/cache/embedding retry never calls
-    # the reviewer twice or silently accepts deleted review output.
+    # Stage 3.4b: Persist the pre-write review result. Persist the exact
+    # review-page set so a later cache/embedding retry never calls the reviewer
+    # twice or silently accepts deleted review output.
     if is_stage_done(config, h, "review_done"):
         _review_payload, review_page_refs = _validated_marker_page_refs(
             config, h, "review_done")
@@ -726,15 +796,22 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             f"[stage 3.4] review_done marker present — restored "
             f"{len(review_page_refs)} review page(s)")
     else:
-        stage_3_4_result = stage_3_4_review_suggestions(
-            review_blocks, raw_file, config, verbose=verbose)
+        if prepared_review is None:
+            raise RuntimeError(
+                "Stage 3.4 review persistence reached without a prepared "
+                "pre-write result")
+        stage_3_4_result = stage_3_4_persist_review_suggestions(
+            prepared_review, raw_file, config)
         review_page_refs = canonical_page_refs(
             list(stage_3_4_result.get("page_refs", [])),
             config.wiki_root,
             config.wiki_dir,
         )
         bind_page_refs(
-            config, h, files_written_paths + review_page_refs)
+            config,
+            h,
+            files_written_paths + index_log_files + review_page_refs,
+        )
         mark_stage_done(config, h, "review_done", payload={
             "items": int(stage_3_4_result.get("items", 0) or 0),
             "skipped": bool(stage_3_4_result.get("skipped", False)),
@@ -751,38 +828,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     )
     if go_nogo_warnings:
         _append_ingest_warning_log(config, raw_file, go_nogo_warnings)
-
-    # Stage 3.5: Aggregate repair. The marker makes retries idempotent; the
-    # aggregate implementation separately guards log.md against duplicate
-    # source/hash entries for legacy/marker-loss recovery.
-    if is_stage_done(config, h, "aggregate_done"):
-        _aggregate_payload, index_log_files = _validated_marker_page_refs(
-            config, h, "aggregate_done")
-        required_aggregate = {"wiki/log.md", "wiki/index.md"}
-        if not required_aggregate.issubset(set(index_log_files)):
-            raise RuntimeError(
-                "aggregate_done marker does not bind wiki/log.md and "
-                "wiki/index.md")
-        print(
-            f"[stage 3.5] aggregate_done marker present — restored "
-            f"{len(index_log_files)} aggregate page(s)")
-    else:
-        index_log_files = stage_3_5_aggregate_repair(
-            source_path, raw_file, analysis, h, method, config)
-        index_log_files = canonical_page_refs(
-            index_log_files, config.wiki_root, config.wiki_dir)
-        required_aggregate = {"wiki/log.md", "wiki/index.md"}
-        if not required_aggregate.issubset(set(index_log_files)):
-            raise RuntimeError(
-                "Stage 3.5 did not return wiki/log.md and wiki/index.md")
-        bind_page_refs(
-            config,
-            h,
-            files_written_paths + review_page_refs + index_log_files,
-        )
-        mark_stage_done(config, h, "aggregate_done", payload={
-            "page_refs": index_log_files,
-        })
 
     # Update cache
     rel = source_cache_key(raw_file, config)

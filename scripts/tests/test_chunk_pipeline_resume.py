@@ -237,6 +237,8 @@ class TestChunkPipelineResume(unittest.TestCase):
             }
             _core.mark_stage_done(cfg, h, "stage_2_2_done")
             _core.mark_stage_done(cfg, h, "stage_2_3_done")
+            _core.mark_stage_done(
+                cfg, h, "review_prepared", payload={"items_data": []})
 
             with self.assertRaises(_RecomputeReached):
                 _ingest_chunks._run_chunk_pipeline(
@@ -245,6 +247,7 @@ class TestChunkPipelineResume(unittest.TestCase):
 
             self.assertFalse(_core.is_stage_done(cfg, h, "stage_2_2_done"))
             self.assertFalse(_core.is_stage_done(cfg, h, "stage_2_3_done"))
+            self.assertFalse(_core.is_stage_done(cfg, h, "review_prepared"))
             cached = _core.load_progress(cfg, h)
             self.assertNotIn("chunk_analyses", cached)
 

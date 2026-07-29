@@ -239,9 +239,20 @@ _待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 `resolv
 """
 
 
-def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: Path,
-                                  config: Config, *, verbose: bool = False) -> dict:
-    """Stage 3.4: Run LLM review over newly generated wiki pages (quality assurance).
+def stage_3_4_prepare_review_suggestions(
+    file_blocks: list[tuple[str, str]],
+    raw_file: Path,
+    config: Config,
+    *,
+    verbose: bool = False,
+) -> dict:
+    """Generate and validate review items without writing review artifacts.
+
+    NashSU runs the dedicated review LLM over the in-memory generation before
+    ``writeFileBlocks``.  Persistence happens only after the content pages and
+    image section have been written.  Keeping those operations separate lets
+    ``_do_write`` reproduce that order while retaining improved-wiki's strict
+    YAML/schema validation and resumable conversation cache.
 
     NashSU trigger conditions (ingest.ts): any of —
       - >= 4 FILE blocks
@@ -253,12 +264,8 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
     FILE blocks and never survived parse_file_blocks. So the check was already
     inert; the volume signal now reads directly off ``file_blocks`` instead.
 
-    Output: wiki/REVIEW/<type>/<type>-<topic>-<YYYYMMDD>.md — human-browsable review pages
-    (see _review_utils.review_filename; frontmatter review_id = NashSU content hash).
-    Each page has frontmatter `resolved: false`. When resolved, user changes to true.
-    Resolved pages are KEPT (never auto-deleted) — the content-stable review_id +
-    resolved-wins dedup keeps them resolved across re-ingest (NashSU parity).
-    Also writes review-suggestions.json to runtime dir for tooling.
+    The returned normalized items are persisted later by
+    :func:`stage_3_4_persist_review_suggestions`.
     """
     # Generation-volume signal: total chars across the pages generated this pass.
     # file_blocks content is the full FILE-block content (frontmatter + body) —
@@ -287,7 +294,12 @@ def stage_3_4_review_suggestions(file_blocks: list[tuple[str, str]], raw_file: P
         print(f"[stage 3.4] Skipped — {len(file_blocks)} blocks this pass "
               f"({cumulative_blocks} cumulative across replays), {gen_chars} chars "
               f"(all below NashSU thresholds)")
-        return {"skipped": True, "reason": "below-thresholds"}
+        return {
+            "skipped": True,
+            "reason": "below-thresholds",
+            "items_data": [],
+            "stop_reason": "",
+        }
 
     print(f"[stage 3.4] Running review over {len(file_blocks)} new pages + existing wiki...")
 
@@ -373,9 +385,9 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
             max_retries=3, label="stage-3.4",
         )
     except Exception as e:
-        # No silent degradation to 0 reviews: pages are already safely on disk
-        # (3.4 runs post-write) and the conversation cache makes a resume cheap,
-        # so fail loud and let the operator re-run.
+        # No silent degradation to 0 reviews.  This runs before wiki page
+        # writes, so a handoff/provider failure leaves Phase 3 mutation-free;
+        # the conversation cache makes the resume cheap.
         msg = f"stage 3.4 review LLM call failed after retries: {e}"
         _append_review_failure_log(config, raw_file, [msg])
         raise RuntimeError(msg) from e
@@ -430,6 +442,35 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
         _append_review_failure_log(config, raw_file, [msg])
         raise RuntimeError(msg) from exc
 
+    return {
+        "skipped": False,
+        "reason": "",
+        "items_data": items,
+        "stop_reason": stop_reason,
+    }
+
+
+def stage_3_4_persist_review_suggestions(
+    prepared: dict,
+    raw_file: Path,
+    config: Config,
+) -> dict:
+    """Persist a pre-write review result after page/media writes complete."""
+    if prepared.get("skipped"):
+        return {
+            "items": 0,
+            "skipped": True,
+            "reason": prepared.get("reason", "below-thresholds"),
+            "stop_reason": prepared.get("stop_reason", ""),
+            "page_refs": [],
+        }
+
+    items = prepared.get("items_data")
+    if not isinstance(items, list):
+        raise RuntimeError(
+            "Stage 3.4 prepared review result has no validated items list")
+    stop_reason = str(prepared.get("stop_reason", ""))
+
     # Write review pages to wiki/REVIEW/<review_type>/ (分子目录，一目了然).
     # Filename is human-readable <type>-<topic>-<YYYYMMDD>.md (see
     # _review_utils.review_filename); the canonical identity stays the
@@ -479,6 +520,26 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
 
     return {
         "items": written,
+        "skipped": False,
+        "reason": "",
         "stop_reason": stop_reason,
         "page_refs": page_refs,
     }
+
+
+def stage_3_4_review_suggestions(
+    file_blocks: list[tuple[str, str]],
+    raw_file: Path,
+    config: Config,
+    *,
+    verbose: bool = False,
+) -> dict:
+    """Compatibility wrapper: prepare review items, then persist them.
+
+    The ingest orchestrator calls the two functions separately to match
+    NashSU's pre-write review generation and post-write persistence order.
+    Direct callers retain the historical one-call behavior.
+    """
+    prepared = stage_3_4_prepare_review_suggestions(
+        file_blocks, raw_file, config, verbose=verbose)
+    return stage_3_4_persist_review_suggestions(prepared, raw_file, config)

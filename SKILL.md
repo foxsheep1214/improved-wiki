@@ -71,8 +71,10 @@ Active order:
 → 2.3 existing-wiki association
 → 2.4 grounded key/schema-typed page generation + in-source dedup
 → 2.6 source page
-→ 3.1 write/merge → 3.2 media injection → 3.4 review
-→ 3.5 aggregate repair → 3.7 touched-page embedding upsert → ingested marker
+→ 3.4a pre-write review generation
+→ 3.1 write/merge → 3.5 aggregate repair → 3.2 media injection
+→ 3.4b review persistence → cache
+→ 3.7 touched-page embedding upsert → ingested marker
 ```
 
 Stage 2.7 query generation and the dedicated Stage 2.9 comparison generator are
@@ -201,7 +203,12 @@ There is no silent quality fallback:
   subsequent ingests remain page-scoped.
 - Vector retrieval follows NashSU's optional search behavior: a vector failure
   is surfaced and search continues keyword-only. This does not weaken the
-  mandatory Stage 3.7 ingest gate.
+  mandatory Stage 3.7 ingest gate. NashSU can make ingest embedding optional
+  because keyword + graph retrieval remains usable and its vector index is a
+  search enhancement; improved-wiki intentionally uses a stronger completion
+  contract in which `ingested` means Markdown pages and their semantic index
+  are synchronized. A failed upsert therefore pauses at 3.7 and resumes there
+  instead of declaring a partially indexed source complete.
 - LLM, merge, config, schema, and required-media failures pause the source.
 - Corrupt cache/checkpoint files may warn and rebuild because re-derivation is
   the correct recovery.

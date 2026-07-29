@@ -238,14 +238,17 @@ def _do_prepare(
                     if is_stage_done(config, h, _stage):
                         unmark_stage_done(config, h, _stage)
         # ── write_phase short-circuit (Bug 2 fix, 2026-06-25) ──
-        # If the Stage 3.1-3.2 write phase already completed in a prior run,
+        # If the Stage 3.1/3.5/3.2 write-media phase already completed in a
+        # prior run,
         # skip the entire 2.x pipeline. Re-running Stage 2.4 generation would
         # cache-miss every resume because the generation prompt hash drifts
         # with wiki state (pages written/rewritten), looping forever before
         # _do_write can be reached. _do_write handles write_phase_done by
         # setting _write_blocks=[] and skipping 3.1/3.2, then runs
-        # 3.4-3.7 over the on-disk wiki. chunk_analyses/analysis are not
-        # needed post-write (3.4+ scan the wiki dir, not file_blocks).
+        # the remaining 3.4b/cache/3.7 work over the on-disk wiki. A legacy
+        # checkpoint that predates review_prepared reconstructs the review
+        # input from those bound pages once; new checkpoints restore the
+        # already validated pre-write review items.
         if is_stage_done(config, h, "write_phase"):
             print("  [prepare] write_phase marker present — skipping 2.x prepare")
             extracted_text = (progress or {}).get("extracted_text", "")

@@ -2,8 +2,9 @@
 
 An LLM failure (retries exhausted) or a YAML parse that yields zero items must
 RAISE RuntimeError — not silently degrade to 0 review pages — and append the
-failure to runtime_dir/ingest-warnings.log. Pages are already on disk by 3.4
-(post-write), and the conversation cache makes a resume cheap.
+failure to runtime_dir/ingest-warnings.log. Review generation runs before page
+writes, so a failure leaves Phase 3 mutation-free; the conversation cache makes
+a resume cheap.
 
 Run:  python3 scripts/tests/test_review_failure_raises.py
 """
@@ -99,6 +100,30 @@ class TestReviewFailureRaises(unittest.TestCase):
         result = review.stage_3_4_review_suggestions(_BLOCKS, self.raw_file, self.config)
         self.assertEqual(result.get("items"), 1)
         self.assertEqual(len(result.get("page_refs", [])), 1)
+        self.assertTrue(any((self.config.wiki_dir / "REVIEW").rglob("*.md")))
+
+    def test_prepare_is_pre_write_and_persist_is_post_write(self):
+        yaml_resp = (
+            "```yaml\n"
+            "- id: 1\n"
+            "  type: confirm\n"
+            '  title: "check numbers"\n'
+            '  description: "verify"\n'
+            '  affected_pages: ["concepts/p0.md"]\n'
+            "  severity: low\n"
+            "  search_queries: []\n"
+            "```"
+        )
+        review.call_with_retry = lambda fn, **kw: (yaml_resp, "end_turn")
+
+        prepared = review.stage_3_4_prepare_review_suggestions(
+            _BLOCKS, self.raw_file, self.config)
+        self.assertEqual(len(prepared.get("items_data", [])), 1)
+        self.assertFalse((self.config.wiki_dir / "REVIEW").exists())
+
+        result = review.stage_3_4_persist_review_suggestions(
+            prepared, self.raw_file, self.config)
+        self.assertEqual(result.get("items"), 1)
         self.assertTrue(any((self.config.wiki_dir / "REVIEW").rglob("*.md")))
 
     def test_unknown_type_and_traversal_are_rejected_before_write(self):
