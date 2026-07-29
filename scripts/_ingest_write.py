@@ -536,7 +536,17 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # links (D4 backstop). Loud per-page prints, never silent.
         if basename not in _LISTING_PAGES:
             content = stage_3_1_normalize_page_links(
-                rel_path, content, _slug_dirs, source_page_slug=_source_page_slug)
+                rel_path,
+                content,
+                _slug_dirs,
+                source_page_slug=_source_page_slug,
+                # The candidate inventory is now frozen and complete.  A
+                # Stage 2 candidate omitted from the emitted FILE blocks must
+                # not survive as a dangling link in newly generated content.
+                # The post-merge normalization keeps the legacy/default policy
+                # so existing user-authored forward links remain untouched.
+                strict_missing_targets=True,
+            )
 
         full_path = config.wiki_dir / rel_path
 

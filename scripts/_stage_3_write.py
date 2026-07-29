@@ -686,6 +686,8 @@ def stage_3_1_build_slug_dirs(
 def stage_3_1_normalize_page_links(
     rel_path: str, content: str, slug_dirs: dict[str, set[str]],
     source_page_slug: str | None = None,
+    *,
+    strict_missing_targets: bool = False,
 ) -> str:
     """A5 write-time link normalizer — one pass over a FILE block before write.
 
@@ -695,8 +697,10 @@ def stage_3_1_normalize_page_links(
          by checking which dir the stem exists in (slug_dirs = batch ∪ disk);
          drops entries that resolve nowhere; collapses duplicates.
       2. Bare body wikilinks ``[[foo]]``: prefixed when the stem resolves to
-         exactly ONE dir; ambiguous/missing are left as-is but warned — never
-         de-linked automatically.
+         exactly ONE dir; ambiguous/missing are left as-is but warned.
+         When ``strict_missing_targets`` is enabled for a newly generated FILE
+         block, an already-prefixed target absent from the complete batch ∪
+         disk inventory is de-linked instead of preserving a dangling link.
       3. H1 heading lines: embedded wikilinks stripped to plain text.
       4. Self-links (own slug in body or related) de-linked/removed.
       5. D4 backstop (when ``source_page_slug`` is given): bare figure/table
@@ -796,6 +800,7 @@ def stage_3_1_normalize_page_links(
         "prefixed": 0,
         "rerouted": 0,
         "twin": 0,
+        "missing": 0,
     }
     unresolved: list[str] = []
     changed = False
@@ -832,6 +837,10 @@ def stage_3_1_normalize_page_links(
             if dirs and claimed_dir in dirs:
                 return m.group(0)
             if not dirs:
+                if strict_missing_targets:
+                    counts["missing"] += 1
+                    changed = True
+                    return _display_text(inner)
                 # Preserve the historical policy for already-prefixed links
                 # whose target is outside the current inventory. They may be
                 # intentional forward/external wiki references; only reroute
@@ -904,6 +913,10 @@ def stage_3_1_normalize_page_links(
         )
     if counts["twin"]:
         _warn(f"body: resolved {counts['twin']} same-stem ambiguity → concepts/")
+    if counts["missing"]:
+        _warn(
+            f"body: de-linked {counts['missing']} missing generated target(s)"
+        )
     if fig_count:
         _warn(f"body: wrapped {fig_count} figure/table ref(s) → [[{source_page_slug}]]")
     if unresolved:

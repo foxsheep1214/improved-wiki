@@ -6,6 +6,8 @@ stage_3_1_write_wiki_file:
      prefix against batch ∪ on-disk universe, drop unresolvable with a warn).
   2. Bare body wikilinks [[foo]] → prefixed when uniquely resolvable;
      ambiguous/missing left as-is + warned (never de-linked automatically).
+     Newly generated FILE blocks can opt into strict mode, which de-links
+     already-prefixed targets absent from the frozen batch ∪ disk inventory.
      Exception (fix 2026-07-02): the exact concepts/+entities/ twin pair
      resolves to concepts/ — in body links AND related:.
   3. H1 heading lines: embedded wikilinks stripped to plain text.
@@ -73,11 +75,12 @@ def _page(related_line: str = 'related: []', body: str = "\n# Title\n\nBody.\n")
     )
 
 
-def _run(rel_path: str, content: str, slug_dirs=None):
+def _run(rel_path: str, content: str, slug_dirs=None, **kwargs):
     """Run the normalizer, capturing stdout. Returns (new_content, printed)."""
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        out = stage_3_1_normalize_page_links(rel_path, content, slug_dirs or SLUG_DIRS)
+        out = stage_3_1_normalize_page_links(
+            rel_path, content, slug_dirs or SLUG_DIRS, **kwargs)
     return out, buf.getvalue()
 
 
@@ -198,11 +201,41 @@ class TestBodyWikilinks(unittest.TestCase):
         self.assertIn("[[no-such-page]]", out)  # never de-linked automatically
         self.assertIn("left as-is", printed)
 
+    def test_missing_prefixed_link_preserved_by_default(self):
+        content = _page(
+            body="\n# Title\n\nSee [[concepts/no-such-page|forward ref]].\n")
+        out, printed = _run(OWN, content)
+        self.assertIn("[[concepts/no-such-page|forward ref]]", out)
+        self.assertEqual(printed, "")
+
     def test_already_prefixed_link_untouched(self):
         content = _page(body="\n# Title\n\nSee [[concepts/matched-filter]].\n")
         out, printed = _run(OWN, content)
         self.assertIn("[[concepts/matched-filter]]", out)
         self.assertEqual(printed, "")  # clean page → silent
+
+    def test_missing_prefixed_link_delinked_in_generated_strict_mode(self):
+        content = _page(
+            body=(
+                "\n# Title\n\n"
+                "See [[concepts/no-such-page|the omitted candidate]] and "
+                "[[entities/another-missing]].\n"
+            )
+        )
+        out, printed = _run(
+            OWN, content, strict_missing_targets=True)
+        self.assertIn("See the omitted candidate and another-missing.", out)
+        self.assertNotIn("[[concepts/no-such-page", out)
+        self.assertNotIn("[[entities/another-missing", out)
+        self.assertIn("de-linked 2 missing generated target(s)", printed)
+
+    def test_valid_prefixed_link_kept_in_generated_strict_mode(self):
+        content = _page(
+            body="\n# Title\n\nSee [[concepts/matched-filter|filter]].\n")
+        out, printed = _run(
+            OWN, content, strict_missing_targets=True)
+        self.assertIn("[[concepts/matched-filter|filter]]", out)
+        self.assertEqual(printed, "")
 
     def test_wrong_prefixed_body_link_corrected_to_unique_actual_dir(self):
         content = _page(

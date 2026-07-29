@@ -31,6 +31,10 @@ class TestPhase3NashsuOrder(unittest.TestCase):
             f"Phase 3 calls are out of NashSU order: {ordered_calls}",
         )
 
+    def test_generated_file_blocks_enable_strict_missing_target_policy(self):
+        source = inspect.getsource(ingest_write._do_write)
+        self.assertIn("strict_missing_targets=True", source)
+
 
 if __name__ == "__main__":
     unittest.main()
