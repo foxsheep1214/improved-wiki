@@ -139,6 +139,31 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
             self.assertTrue(person_shared.exists(), "multi-source schema-folder page must be kept")
             self.assertEqual(removed, 1)
 
+    def test_cleanup_reports_deleted_page_paths_for_embedding_cascade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = _make_config(Path(tmp))
+            page = cfg.wiki_root / "wiki" / "concepts" / "single.md"
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text(
+                "---\n"
+                "type: concept\n"
+                "title: Single\n"
+                'sources: ["Book.pdf"]\n'
+                "---\n\n# Single\n",
+                encoding="utf-8",
+            )
+            deleted: list[str] = []
+
+            removed = _source_lifecycle._cleanup_orphan_pages(
+                cfg.wiki_root,
+                "Book",
+                cfg,
+                deleted_page_paths=deleted,
+            )
+
+            self.assertEqual(removed, 1)
+            self.assertEqual(deleted, ["concepts/single.md"])
+
 
 class TestPreserveStageCounters(unittest.TestCase):
     """Cache stage counters must not regress on write_phase-resume passes.

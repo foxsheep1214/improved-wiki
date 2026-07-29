@@ -1,15 +1,4 @@
-"""Embedding input must carry page identity and never split a table.
-
-Two NashSU parity gaps this pins down:
-
-  * embedding.ts:299-308 enriches the embedded text with the page title and
-    the chunk's heading breadcrumb before hashing/embedding, and stores the
-    RAW chunk text in the index. improved-wiki embedded the bare chunk, so a
-    chunk that never repeats its page title carried no page identity in its
-    vector (measured: 33% of HardwareWiki chunks, 46% of RadarWiki).
-  * text-chunker.ts:301-336 marks fenced code and markdown tables
-    indivisible. The old character-window split cut datasheet parameter
-    tables between rows, leaving the trailing half without its header.
+"""Embedding enrichment + NashSU 0.6.6 Markdown chunker regressions.
 
 Stdlib unittest only — no pytest, no network, no embedding backend.
 """
@@ -52,67 +41,64 @@ class TestHeadingPathAt(unittest.TestCase):
     def test_breadcrumb_tracks_the_open_stack(self):
         at = lambda needle: be.heading_path_at(  # noqa: E731
             self.BODY, self.BODY.index(needle))
-        self.assertEqual("Range Resolution", at("intro"))
-        self.assertEqual("Range Resolution > Theory", at("t-body"))
+        self.assertEqual("# Range Resolution", at("intro"))
+        self.assertEqual("# Range Resolution > ## Theory", at("t-body"))
         self.assertEqual(
-            "Range Resolution > Theory > Derivation", at("d-body"))
+            "# Range Resolution > ## Theory > ### Derivation", at("d-body"))
         # A sibling H2 pops the deeper level rather than accumulating it.
-        self.assertEqual("Range Resolution > Practice", at("p-body"))
+        self.assertEqual("# Range Resolution > ## Practice", at("p-body"))
 
     def test_no_heading_yields_empty(self):
         self.assertEqual("", be.heading_path_at("just prose\n", 3))
 
 
-class TestChunkSpans(unittest.TestCase):
-    def test_short_page_is_one_span(self):
+class TestMarkdownChunker(unittest.TestCase):
+    def test_short_page_is_one_chunk(self):
         text = "# Title\n\nshort body\n"
-        self.assertEqual([(0, len(text))], be.chunk_spans(text, max_chars=1500))
+        chunks = be.chunk_markdown(text)
+        self.assertEqual(1, len(chunks))
+        self.assertEqual(text, chunks[0].text)
 
     def test_blank_page_yields_nothing(self):
-        self.assertEqual([], be.chunk_spans("   \n\n  \n", max_chars=1500))
-
-    def assert_no_span_cuts_a_protected_block(self, text):
-        """No span may START or END strictly inside a protected block.
-
-        Asserted against the detected ranges rather than hand-computed
-        offsets: those are the same ranges the chunker honours, so the test
-        cannot drift from the contract by an off-by-one.
-        """
-        from _stage_2_analyze import _stage_2_1_find_protected_ranges
-        protected = _stage_2_1_find_protected_ranges(text)
-        self.assertTrue(protected, "fixture should contain a protected block")
-
-        spans = be.chunk_spans(text, max_chars=1500, overlap=200)
-        self.assertGreater(len(spans), 1, "fixture should need several chunks")
-        for start, end in spans:
-            for lo, hi in protected:
-                for pos, which in ((start, "start"), (end, "end")):
-                    self.assertFalse(
-                        lo < pos < hi,
-                        f"span ({start}, {end}) {which} lands inside "
-                        f"protected block [{lo}, {hi})")
+        self.assertEqual([], be.chunk_markdown("   \n\n  \n"))
 
     def test_table_is_never_split(self):
         table_rows = "\n".join(
             f"| PARAM{i} | {i} mV | typ |" for i in range(120))
-        self.assert_no_span_cuts_a_protected_block(
+        text = (
             "# Datasheet\n\n" + "filler paragraph.\n\n" * 40
             + "| Name | Value | Note |\n|---|---|---|\n" + table_rows
-            + "\n\ntrailing prose\n")
+            + "\n\ntrailing prose\n"
+        )
+        chunks = be.chunk_markdown(text)
+        # NashSU overlap may repeat the table's tail in the following chunk;
+        # the complete atomic table itself must still occur exactly once.
+        table_chunks = [
+            chunk for chunk in chunks
+            if "| Name | Value | Note |" in chunk.text
+        ]
+        self.assertEqual(1, len(table_chunks))
+        self.assertIn("| Name | Value | Note |", table_chunks[0].text)
+        self.assertIn("| PARAM119 |", table_chunks[0].text)
+        self.assertTrue(table_chunks[0].oversized)
 
     def test_fenced_code_is_never_split(self):
         code = "\n".join(f"    line_{i} = {i}" for i in range(200))
-        self.assert_no_span_cuts_a_protected_block(
+        text = (
             "# Guide\n\n" + "prose paragraph.\n\n" * 40
-            + "```python\n" + code + "\n```\n\nafter\n")
+            + "```python\n" + code + "\n```\n\nafter\n"
+        )
+        chunks = be.chunk_markdown(text)
+        code_chunks = [chunk for chunk in chunks if "line_0" in chunk.text]
+        self.assertEqual(1, len(code_chunks))
+        self.assertIn("line_199", code_chunks[0].text)
+        self.assertGreaterEqual(code_chunks[0].text.count("```"), 2)
+        self.assertTrue(code_chunks[0].oversized)
 
-    def test_spans_cover_the_document(self):
-        text = "# T\n\n" + "".join(f"para {i}.\n\n" for i in range(400))
-        spans = be.chunk_spans(text, max_chars=1500, overlap=200)
-        self.assertEqual(0, spans[0][0])
-        self.assertEqual(len(text), spans[-1][1])
-        for (_s1, e1), (s2, _e2) in zip(spans, spans[1:]):
-            self.assertLessEqual(s2, e1, "gap between consecutive spans")
+    def test_default_target_and_hard_limit_match_nashsu(self):
+        chunks = be.chunk_markdown("x" * 3000, overlap_chars=0)
+        self.assertGreaterEqual(len(chunks), 2)
+        self.assertTrue(all(len(chunk.text) <= 1500 for chunk in chunks))
 
 
 class TestBuildChunks(unittest.TestCase):
@@ -135,7 +121,8 @@ class TestBuildChunks(unittest.TestCase):
     }
 
     def test_index_stores_raw_text_but_hashes_the_enriched_text(self):
-        (chunk,) = be.build_chunks([self.PAGE])
+        chunks = be.build_chunks([self.PAGE])
+        chunk = next(c for c in chunks if "Bandwidth sets it." in c["chunk_text"])
         # The index keeps the raw chunk (NashSU stores chunk.text, not the
         # enriched string); only the embedded/hashed text carries identity.
         self.assertFalse(chunk["chunk_text"].startswith("Range Resolution\n\n"))
@@ -156,8 +143,8 @@ class TestBuildChunks(unittest.TestCase):
         chunks = be.build_chunks([dict(self.PAGE, body=body)])
         self.assertGreater(len(chunks), 1)
         paths = {c["heading_path"] for c in chunks}
-        self.assertIn("Range Resolution > Theory", paths)
-        self.assertIn("Range Resolution > Practice", paths)
+        self.assertIn("# Range Resolution > ## Theory", paths)
+        self.assertIn("# Range Resolution > ## Practice", paths)
         # Every chunk's own breadcrumb leads its embedded text.
         for c in chunks:
             self.assertIn(c["heading_path"], c["embed_text"])

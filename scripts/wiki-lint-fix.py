@@ -63,6 +63,7 @@ from _frontmatter_array import (  # noqa: E402
 )
 from _paths import iter_wiki_pages, atomic_write as _atomic_write  # noqa: E402
 from _review_utils import resolve_review_path  # noqa: E402
+from _embedding_store import remove_page_embeddings  # noqa: E402
 
 # Scan universe = NashSU {index, log} (overview/schema stay valid link targets,
 # their outlinks count). The engine exempts aggregates from findings, so the
@@ -258,15 +259,21 @@ def cascade_delete_orphans(
     AGGREGATE_FILES guard, but are still SWEPT for stale refs (index.md listing
     cleanup specifically depends on sweeping index.md).
 
-    EMBEDDING-CHUNK DELETION IS NOT PERFORMED: NashSU cascadeDeleteWikiPage also
-    calls removePageEmbedding to drop LanceDB vector chunks, but this CLI has no
-    access to the desktop app's LanceDB instance. The chunks for a deleted page
-    become phantom hits until the next full re-embed. This divergence is
-    intentional and reported; we do NOT fake the drop.
+    After each successful disk delete, the corresponding LanceDB rows are
+    removed by page id.  The vector cleanup is best-effort/non-critical, like
+    NashSU removePageEmbedding(), so an unavailable index never rolls back the
+    already completed file cascade.
 
     Returns a summary counter.
     """
-    summary = {"deleted": 0, "rewritten": 0, "skipped": 0, "missing": 0}
+    summary = {
+        "deleted": 0,
+        "rewritten": 0,
+        "skipped": 0,
+        "missing": 0,
+        "embedding_rows": 0,
+        "embedding_error": "",
+    }
 
     # Resolve + filter targets. Never delete an aggregate file even if a stale
     # cache somehow surfaced one as an orphan.
@@ -308,6 +315,26 @@ def cascade_delete_orphans(
             print(f"  [delete]   {full.relative_to(wiki_dir)}")
         except OSError as exc:
             print(f"  [warn] failed to delete {full}: {exc}", file=sys.stderr)
+
+    if deleted_paths and not dry_run:
+        embedding_result = remove_page_embeddings(
+            wiki_dir.parent,
+            [path.relative_to(wiki_dir).as_posix() for path in deleted_paths],
+        )
+        summary["embedding_rows"] = embedding_result["rows_removed"]
+        summary["embedding_error"] = embedding_result["error"]
+        if embedding_result["error"]:
+            print(
+                "  [warn] page embedding cleanup failed: "
+                f"{embedding_result['error']}",
+                file=sys.stderr,
+            )
+        elif embedding_result["index_present"]:
+            print(
+                "  [embedding] removed "
+                f"{embedding_result['rows_removed']} chunk row(s) for "
+                f"{embedding_result['matched_pages']} page(s)"
+            )
 
     # Step 3: sweep surviving pages for stale refs.
     deleted_keys = build_deleted_keys(infos)
@@ -732,9 +759,11 @@ def main() -> int:
             wiki_dir, orphan_rels, dry_run=not args.apply)
         print(f"[lint-fix] {mode} (delete-orphans) summary: "
               f"deleted={dsummary['deleted']} rewritten={dsummary['rewritten']} "
-              f"skipped={dsummary['skipped']} missing={dsummary['missing']}")
-        print("[lint-fix] NOTE: embedding chunks for deleted pages are NOT dropped "
-              "(no LanceDB access from CLI); they clear on the next full re-embed.")
+              f"skipped={dsummary['skipped']} missing={dsummary['missing']} "
+              f"embedding_rows={dsummary['embedding_rows']}")
+        if dsummary["embedding_error"]:
+            print("[lint-fix] NOTE: files were deleted, but vector cleanup was "
+                  f"non-critical and failed: {dsummary['embedding_error']}")
         if not args.apply:
             print("[lint-fix] dry-run — no files changed. Re-run with --apply to delete.")
         return 0

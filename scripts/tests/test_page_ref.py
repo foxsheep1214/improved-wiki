@@ -115,6 +115,10 @@ class TestEmbeddingConsumesPageRef(unittest.TestCase):
                     cfg, ["concepts/cache.md"])
 
             self.assertTrue(run.called)
+            command = run.call_args.args[0]
+            self.assertIn("upsert", command)
+            self.assertIn("--page", command)
+            self.assertNotIn("embed", command)
 
     def test_invalid_ref_is_a_hard_failure(self):
         with tempfile.TemporaryDirectory() as d:

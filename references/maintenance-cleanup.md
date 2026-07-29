@@ -89,6 +89,7 @@ python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch
 | `.extract-tmp/` | Legacy back-compat marker checked by `_paths.py` when detecting old `wiki/`-based runtime layout — not an active temp dir on its own | N/A (detection-only path, not written by current code) |
 | `conversation/` | LLM prompt/response handoff files | After ingest completes |
 | `ingest-progress/` | Crash-recovery checkpoints | When no ingest is running |
+| `embed-cache.json` | Legacy pre-NashSU-0.6.6 full-rebuild vector cache; current code ignores it | After confirming no old-version embedding process is running |
 
 **Do NOT delete** (active state):
 - `ingest-cache.json` — dedup hash cache (Stage 3.5)
@@ -99,17 +100,17 @@ python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch
   kernel flocks, not file existence, indicate a live holder
 - `lint-cache.json` / `lint-lock` — lint state
 - `graph.json` — knowledge graph (Graph command output)
-- `embed-cache.json` — embedding cache
 - `lancedb/` — vector database
 - `page-history/` — wiki page version backups (audit/rollback value; 18MB+ typical)
 - `review-suggestions.json` — pending review items
 
 ### LanceDB compaction
 
-Stage 3.7 rewrites the full `wiki_chunks` table after a successful ingest.
-Current improved-wiki automatically compacts the new table and prunes verified
-historical versions after that rewrite, matching NashSU's maintenance behavior.
-The cleanup keeps `delete_unverified=False`, so it never force-deletes files
+Stage 3.7 replaces only the pages written by the current ingest, matching
+NashSU 0.6.6's `embedPage` lifecycle. A full table rebuild happens only through
+the explicit `build_embeddings.py ... embed` command. Successful incremental
+and full writes compact the live table and prune verified historical versions;
+the cleanup keeps `delete_unverified=False`, so it never force-deletes files
 that could belong to another live process.
 
 For a project created before this maintenance was added, first verify no ingest

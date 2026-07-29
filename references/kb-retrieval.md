@@ -47,11 +47,11 @@ improved-wiki 使用 **hybrid 检索**：keyword（CJK bigram 加权，恒在线
 
 ```bash
 build_embeddings.py --project <项目> embed     # 一次性建索引（仅为启用 vector 路径）
-search_wiki.py "查询" --project <项目>          # hybrid 检索（未建索引会因 vector 不可用而暂停，见下）
+search_wiki.py "查询" --project <项目>          # hybrid；vector 不可用时报警并继续 keyword
 search_wiki.py "查询" --project <项目> --keyword-only   # 显式只用 keyword，免 Ollama/索引
 ```
 
-vector 路径的优势：即使查询词和页面用词不同，语义相近也能命中（如 "输出振荡" 匹配到 "PWM 调制方式"）。**注意**：若 Ollama/lancedb 不可用，`search_wiki.py` **报警并暂停**（`return 1`，非静默降级），需修复或显式加 `--keyword-only`（全局 no-fallback 策略）。
+vector 路径的优势：即使查询词和页面用词不同，语义相近也能命中（如 "输出振荡" 匹配到 "PWM 调制方式"）。若 embedding provider/LanceDB 不可用，`search_wiki.py` 会把原因写到 stderr，并按 NashSU 行为在本次查询继续 keyword-only；`--keyword-only` 用于主动跳过 vector。这个搜索降级不适用于 ingest：Stage 3.7 仍是强制完整门禁。
 
 ## 4. 关键词搜索策略
 
@@ -109,7 +109,7 @@ python3 "$SKILL_DIR/scripts/search_wiki.py" "LC谐振导致振铃" \
 ```bash
 python3 "$SKILL_DIR/scripts/build_embeddings.py" --project ~/Documents/知识库/HardwareWiki embed
 ```
-未建索引时 hybrid 会因 vector 不可用而暂停；此时改用 `--keyword-only` 仍可检索。
+未建索引时 hybrid 会报警并自动返回 keyword 结果；也可用 `--keyword-only` 主动避免 vector 探测。
 
 ### 5.2 补充：Read 精读
 

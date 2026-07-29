@@ -493,45 +493,64 @@ def main(argv: Optional[list[str]] = None):
         check("ingest-cache.json has matching entry", False, f"slug={SOURCE_SLUG}")
 
     # ═══════════════════════════════════════════════
-    # Stage 3.7: Embeddings (mandatory attempt — local Ollama bge-m3)
+    # Stage 3.7: Embeddings (mandatory touched-page coverage)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.7] Embeddings (mandatory attempt)")
+    print("\n[Stage 3.7] Embeddings (mandatory touched-page coverage)")
     lance = RUNTIME / "lancedb"
-    embed_cache = RUNTIME / "embed-cache.json"
     lance_present = lance.is_dir() and bool(list(lance.glob("*.lance")))
-
-    # Check embed-cache.json for entries
-    embed_entries = 0
-    embed_cache_exists = False
-    if embed_cache.exists():
+    if lance_present:
         try:
-            with open(embed_cache, "r") as f:
-                ec_data = json.load(f)
-            if isinstance(ec_data, dict):
-                embed_entries = len(ec_data)
-            elif isinstance(ec_data, list):
-                embed_entries = len(ec_data)
-            embed_cache_exists = embed_entries > 0
-        except (json.JSONDecodeError, OSError):
-            embed_cache_exists = False
+            import lancedb
+            import build_embeddings as _be
 
-    if lance_present and embed_cache_exists:
-        check("lancedb table present + embed-cache populated",
-              True, f"{embed_entries} cache entries")
-    elif lance_present and not embed_cache_exists:
-        check("lancedb tables present", True,
-              "WARNING: embed-cache.json empty/missing — embeddings may be stale")
-    elif lance_present or embed_cache_exists:
-        # Partial: one exists but not the other
-        check("lancedb + embed-cache consistency", False,
-              f"lance={'yes' if lance_present else 'no'}, embed-cache={'populated' if embed_cache_exists else 'no'}")
+            db = lancedb.connect(str(lance))
+            table = db.open_table(_be.TABLE_NAME)
+            total_rows = table.count_rows()
+            check("lancedb table present + non-empty",
+                  total_rows > 0, f"{total_rows} chunks")
+
+            refs = list((entry or {}).get("filesWritten", []))
+            _be.ROOT = str(PROJECT_ROOT)
+            _be.WIKI = str(WIKI)
+            pages = _be.collect_pages(refs) if refs else []
+            embedding_config = _be.embedding_config_from_env()
+            chunks = _be.build_chunks(
+                pages,
+                target_chars=embedding_config.target_chars,
+                overlap_chars=embedding_config.overlap_chars,
+            )
+            expected: dict[str, int] = {}
+            for chunk in chunks:
+                pid = chunk["page_id"]
+                expected[pid] = expected.get(pid, 0) + 1
+            mismatches = []
+            for page_id, count_expected in expected.items():
+                predicate = _be._page_filter(page_id)
+                count_actual = table.count_rows(predicate)
+                if count_actual != count_expected:
+                    mismatches.append(
+                        f"{page_id}: expected {count_expected}, found {count_actual}"
+                    )
+            check(
+                "source pages have exact embedding coverage",
+                not mismatches,
+                (
+                    f"{sum(expected.values())} chunks across {len(expected)} pages"
+                    if not mismatches
+                    else "; ".join(mismatches[:5])
+                ),
+            )
+        except Exception as exc:
+            check("lancedb embedding coverage readable", False,
+                  f"{type(exc).__name__}: {exc}")
     else:
         sys.path.insert(0, str(_script_dir))
-        # The capability probe lives in _stage_3_7_embed.py (the old
-        # `from ingest import ...` referenced a name that never existed there
-        # — a latent ImportError only this branch could trigger).
         from _stage_3_7_embed import _stage_3_7_check_embed_capability
-        base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
+        base_url = (
+            os.environ.get("EMBEDDING_ENDPOINT")
+            or os.environ.get("EMBEDDING_BASE_URL")
+            or "http://127.0.0.1:11434/v1"
+        )
         model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
         cap_ok, cap_reason = _stage_3_7_check_embed_capability(base_url, model)
         if cap_ok:

@@ -1,6 +1,8 @@
 # NashSU 搜索与关联架构（源码实证）
 
-> 2026-06-19 直接阅读 NashSU GitHub 源码（github.com/nashsu/llm_wiki）整理。
+> 2026-07-29 以本地 `llm_wiki-0.6.6` 的
+> `src/lib/embedding.ts`、`src/lib/text-chunker.ts`、
+> `src-tauri/src/commands/search.rs` 与 `vectorstore.rs` 重新逐行核对。
 > 用于澄清 improved-wiki "NashSU parity" 声称在搜索/检索侧的实际含义。
 
 ## 两条独立的"语义关联"路径
@@ -36,7 +38,8 @@ improved-wiki 的 `graph.py` 参考 NashSU 最新版本（2026-06-29 重写；�
 
 源文件：`src-tauri/src/commands/search.rs`（Rust），前端入口 `src/lib/search.ts`（TypeScript）
 
-这是 improved-wiki **没有对齐**的部分——improved-wiki 用 Python search_wiki.py + LanceDB，架构不同。
+improved-wiki 用 Python + LanceDB 实现同一数据与排序契约；语言/运行时不同，
+但 chunk、索引更新、page aggregation 与 hybrid fusion 行为已对齐。
 
 #### 搜索流程
 
@@ -97,25 +100,46 @@ vector-only 结果（keyword 没命中的页面）会被 materialize 进结果�
 | keyword 搜索 | 有（CJK bigram + 加权评分） | 有（`_wiki_keyword.keyword_search`，CJK bigram + 加权评分） |
 | vector 搜索 | 有（LanceDB chunk 级） | 有（LanceDB chunk 级，`wiki_chunks` 表） |
 | 融合策略 | RRF (K=60) | RRF (K=60)（`_wiki_keyword.rrf_merge`） |
-| embedding 默认 | 无默认（用户配远程 API） | 本地 Ollama bge-m3 |
-| embedding 后端 | Google/Volcengine/OpenAI 兼容 | OpenAI 兼容（默认 Ollama） |
-| 降级策略 | vector 失败 → 纯 keyword | vector 失败 → **报警并暂停**（`return 1`，不静默降级；需修复或显式 `--keyword-only`） |
-| chunk 级搜索 | 有（page 聚合 blended） | 有（chunk 级直接搜，未做 page 聚合 blended） |
+| embedding 默认 | disabled；用户配置 endpoint/model | 本地 Ollama bge-m3（CLI 有意默认） |
+| embedding 后端 | Google/Volcengine/OpenAI 兼容 | Google/Volcengine/OpenAI 兼容（env 配置，默认 Ollama） |
+| 降级策略 | vector 失败 → 纯 keyword，同时保留 last error | vector 失败 → stderr 明示原因后纯 keyword |
+| chunk 级搜索 | top-K×3（至少 30）后 page 聚合 blended | 同：top-K×3（至少 30）后 page 聚合 blended |
 | 模式上报 | mode: keyword\|vector\|hybrid | mode: keyword\|vector\|hybrid |
 | 全量重建后维护 | compact + prune verified old versions | compact + prune verified old versions（`delete_unverified=False`；失败不使已成功的新索引失效） |
+| ingest 更新 | 只对 written paths 做 page-scoped replace | 同；不再每本书全库 rebuild |
+| chunker | target/max/min/overlap=`1000/1500/200/200`，section-aware，code/table indivisible | `text-chunker.ts` Python 直接移植 |
+| 持久化 vector cache | 无 | 无；旧 `embed-cache.json` 仅为历史遗留且不再读取 |
+| batch response | 校验 count/index/finite/dimension，失败逐条重试 | 同 |
+| request timeout | 8 秒 | 默认 8 秒；`EMBEDDING_TIMEOUT_SECONDS` 可覆盖 |
+| 页面删除 | source/lint cascade 后按 page 删除 vector rows（non-critical） | 同；路径型 page id 避免跨目录同名碰撞 |
 
-**剩余差异**（非阻断）：
-1. NashSU **不内置任何本地模型**——embedding 完全由用户配置远程 API；improved-wiki 默认用本地 Ollama bge-m3 是**自己的添加**，不是 NashSU 的做法
-2. NashSU 的 chunk 级向量搜索会做 **page 聚合**（top-chunk + tail×0.3 blended）；improved-wiki 已是 chunk 级直接搜，但**未做 page 聚合**
-3. embedding 后端可配置性：improved-wiki 目前默认 Ollama，未暴露远程 API 配置开关
+**有意差异**：
+1. NashSU 默认关闭 embedding；improved-wiki CLI 为现有 HardwareWiki/RadarWiki
+   保留本地 Ollama bge-m3 默认。
+2. NashSU ingest 把 embedding 当 non-critical，甚至允许一个 page 只写入部分
+   成功 chunks；improved-wiki 的完成契约更严格：touched page 必须 exact coverage，
+   否则 Stage 3.7 暂停且不置 `ingested`。
+3. NashSU `page_id` 是文件 stem；improved-wiki 使用 wiki-relative path-derived id，
+   避免不同 schema 目录中同名页面相互覆盖。
 
 ## 什么 "NashSU parity" 实际覆盖
 
 improved-wiki 的 "NashSU parity" 声称主要覆盖：
 - ✅ ingest 流程（heading path, overlap, CJK slug, PPTX/DOCX, sources union merge, schema routing, aggregate repair, page merge, wikilink enrichment, source lifecycle）
 - ✅ graph 关联（4 信号 + 双图 retrieval/display + Louvain 社区 + gaps + surprising + filters）— 已对齐（2026-06-29），少数有意 CLI 偏离见上文
-- ✅ 搜索检索 — **已对齐**（hybrid keyword+vector+RRF K=60，本地 Ollama bge-m3；vector 失败**报警暂停**，非静默降级，需显式 `--keyword-only` 才退回纯 keyword）
+- ✅ 搜索检索 — **已对齐**（hybrid keyword+vector+RRF K=60；vector 失败会明确报警并在本次查询继续 keyword-only，`--keyword-only` 可主动跳过 vector）
 
-未来可选增强：
-1. page 聚合（blended：top-chunk + tail×0.3）——chunk 级向量搜索本身已落地，缺的是聚合层
-2. embedding 后端可配置（支持远程 OpenAI 兼容 API，不只 Ollama）
+## 0.6.6 ingest embedding 的实际流程
+
+`ingest.ts` 在写页后逐个调用 `embedPage`；`vector_upsert_chunks` 删除该
+`page_id` 的旧 chunks 后批量加入新 chunks。普通 ingest 不扫描全库。Settings
+中的 “Re-index all” 才走 full rebuild：先准备所有 pages，若任一 page 仍有
+failed chunks 则不 clear live table；全部准备成功后 clear + serialized upsert，
+最后 optimize。
+
+improved-wiki 的 Stage 3.7 采用同一 page-scoped 更新方式。显式 `embed` 则先在
+内存中准备全部 rows，再以一次 LanceDB overwrite 替换 live table，并额外核验
+最终 row count；这是 CLI 环境下对 NashSU clear+serialized-upsert 的等价安全实现。
+source lifecycle 与 lint orphan cascade 删除 Markdown 后，也会按 page id 删除对应
+rows；该清理保持 NashSU 的 non-critical 语义。手工绕过工具直接删文件时没有桌面
+文件监听器，需显式执行 full re-index 才能清掉未知的陈旧 rows。

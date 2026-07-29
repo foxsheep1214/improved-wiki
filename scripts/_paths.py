@@ -34,7 +34,7 @@ def detect_runtime_dir(wiki_root: Path) -> Path:
     Priority:
       1. .iwiki-runtime/   auto-migrate to .llm-wiki/ if it still exists
       2. .llm-wiki/        if it exists and has valid content (ingest-cache.json,
-                           ingest-progress/, or embed-cache.json) — preferred over
+                           ingest-progress/, or lancedb/) — preferred over
                            legacy wiki/ even if old state files exist there
       3. wiki/             if old state files exist there (legacy), and .llm-wiki/
                            is empty or doesn't exist
@@ -53,6 +53,7 @@ def detect_runtime_dir(wiki_root: Path) -> Path:
     llm_wiki_indicators = [
         llm_wiki / "ingest-cache.json",
         llm_wiki / "ingest-progress",
+        llm_wiki / "lancedb",
         llm_wiki / "embed-cache.json",
     ]
     if any(p.exists() for p in llm_wiki_indicators):

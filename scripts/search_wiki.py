@@ -5,9 +5,10 @@ Port of NashSU ``search.rs`` hybrid retrieval (GAP-search):
 
   - keyword path: CJK bigram + weighted scoring (``_wiki_keyword``) — always
     runs, no dependencies, works offline.
-  - vector path: LanceDB + local Ollama bge-m3 — runs when available; on any
-    failure (Ollama down, lancedb missing, package absent) it is skipped and
-    search degrades to keyword-only instead of erroring.
+  - vector path: LanceDB + configured embedding endpoint — over-fetches chunks,
+    then applies NashSU 0.6.6 page aggregation (top + bounded tail × 0.3).
+    On failure it reports the error and continues keyword-only, matching
+    NashSU's optional-vector search behavior.
   - fusion: Reciprocal Rank Fusion (K=60) when both paths return; the richer
     keyword snippet wins on overlap.
 
@@ -22,7 +23,6 @@ import argparse
 import json
 import os
 import sys
-import urllib.request
 from pathlib import Path
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -48,20 +48,14 @@ def _vector_search(query: str, project: Path, runtime: Path, top: int):
     except ImportError:
         return [], "lancedb not installed (pip install lancedb)"
 
-    base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
-    model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
-    api_key = os.environ.get("EMBEDDING_API_KEY", "")
-
-    body = json.dumps({"model": model, "input": [query]}).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-    url = f"{base_url.rstrip('/')}/embeddings"
-    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-        qvec = data["data"][0]["embedding"]
+        from build_embeddings import (
+            _aggregate_page_results,
+            embed_with_config,
+            embedding_config_from_env,
+        )
+        config = embedding_config_from_env()
+        qvec = embed_with_config([query], config)[0]
     except Exception as e:
         return [], f"embedding API failed ({e})"
 
@@ -69,7 +63,7 @@ def _vector_search(query: str, project: Path, runtime: Path, top: int):
         import lancedb
         db = lancedb.connect(str(lancedb_dir))
         tbl = db.open_table("wiki_chunks")
-        df = tbl.search(qvec).limit(top).to_pandas()
+        df = tbl.search(qvec).limit(max(top * 3, 30)).to_pandas()
     except Exception as e:
         return [], f"lancedb search failed ({e})"
 
@@ -77,29 +71,30 @@ def _vector_search(query: str, project: Path, runtime: Path, top: int):
         return [], None  # no vector hits, but no error
 
     results = []
-    for _, row in df.iterrows():
-        dist = float(row.get("_distance", 0))
-        sim = 1.0 / (1.0 + dist)
-        title = row.get("title", "") or row.get("heading_path", "") or ""
-        snippet = str(row.get("chunk_text", ""))[:250].replace("\n", " ")
+    for page in _aggregate_page_results(df, top):
+        matched = page.get("matched_chunks") or []
+        best = matched[0] if matched else {}
+        path = page.get("path") or f"{page.get('page_id', '')}.md"
+        title = page.get("title") or best.get("heading_path", "") or ""
+        snippet = str(best.get("chunk_text", ""))[:250].replace("\n", " ")
+        score = float(page.get("score", 0.0))
         results.append({
-            "path": str(row.get("path", "")),
+            "path": str(path),
             "title": title,
             "snippet": snippet,
             "title_match": False,
-            "score": sim,
-            "vector_score": sim,
+            "score": score,
+            "vector_score": score,
+            "matched_chunks": matched,
         })
     return results, None
 
 
 def _warn_vector_unavailable(error: str, project: Path) -> None:
-    """Emit a prominent warning with remediation steps when the vector path
-    can't be used. Goes to stderr. Per skill policy the caller then PAUSES —
-    no silent keyword-only fallback."""
+    """Surface vector failure before NashSU-style keyword-only continuation."""
     bar = "=" * 64
     print(bar, file=sys.stderr)
-    print("⚠️  VECTOR SEARCH UNAVAILABLE — hybrid search cannot run.", file=sys.stderr)
+    print("⚠️  VECTOR SEARCH UNAVAILABLE — continuing keyword-only.", file=sys.stderr)
     print(f"   reason: {error}", file=sys.stderr)
     print("", file=sys.stderr)
     print("To enable hybrid (keyword + vector) search:", file=sys.stderr)
@@ -107,7 +102,7 @@ def _warn_vector_unavailable(error: str, project: Path) -> None:
     print("  2. Pull the embed model:  ollama pull bge-m3", file=sys.stderr)
     print("  3. Build the index:       build_embeddings.py "
           f"--project {project} embed", file=sys.stderr)
-    print("Or set EMBEDDING_BASE_URL / EMBEDDING_MODEL to an OpenAI-compatible", file=sys.stderr)
+    print("Or set EMBEDDING_ENDPOINT / EMBEDDING_MODEL to a configured provider", file=sys.stderr)
     print("endpoint, then rebuild the index.", file=sys.stderr)
     print(bar, file=sys.stderr)
 
@@ -135,14 +130,7 @@ def main() -> int:
     if not args.keyword_only:
         vec_results, vec_error = _vector_search(args.query, project, runtime, args.top)
         if vec_error:
-            # Global skill policy: on alert, PAUSE — do not auto-degrade. Emit
-            # the warning + remediation steps and stop. The user must either fix
-            # the vector path or explicitly re-run with --keyword-only. Keyword
-            # results are NOT returned as a silent fallback.
             _warn_vector_unavailable(vec_error, project)
-            print("\nPaused. Fix the vector path and re-run, or use --keyword-only "
-                  "to explicitly search without vectors.", file=sys.stderr)
-            return 1
 
     # decide mode + fuse
     if kw_results and vec_results:

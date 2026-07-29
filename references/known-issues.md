@@ -40,8 +40,8 @@
 ### 必须用 venv Python（系统 Python 缺 fitz + 版本太旧）
 用 `~/.venv/bin/python3`（需 3.10+，系统 3.9 不支持 PEP 604）。完整说明见 `references/scripting-pitfalls.md` Pitfall 4——这是 #1 首次运行失败原因。
 
-### 删除页面后 LanceDB 留残留向量，需重 embed
-`build_embeddings.py embed` 是 `mode="overwrite"` 全量重建，全 skill 无增量删向量的 API。任何删除——`--delete`（源生命周期）和 lint `--delete-orphans`——都不清向量块，被删页可能在向量搜索里短暂命中（链接已失效），直到下次 `build_embeddings.py embed` 重建即清除。NashSU 用增量 `removePageEmbedding`；CLI 用整表重建达成同一端状态，刻意不移植增量删（YAGNI，且与重建式索引不符）。删除后想立即干净就重跑 embed。
+### 页面删除与 LanceDB 生命周期
+`--delete`（源生命周期）和 lint `--delete-orphans` 现在都在文件成功删除后按 page id 删除 LanceDB rows，保持 NashSU `removePageEmbedding` 的 non-critical 语义；也可显式运行 `build_embeddings.py --project <root> delete --page <wiki-relative.md>`。直接在文件系统中手工删除页面仍没有桌面 watcher 可捕获，因此这种旁路删除后应运行一次显式 full re-index。
 
 ### Wikilink enrichment merge loop after Stage 3.1
 Stage 3.1 写盘后，pipeline 生成多个 `LLM-task-*.md` merge prompt（`.llm-wiki/conversation/<hash>/`），每个让 agent 把已有 wiki 页与新内容合并。re-run 时会重新发现并 re-merge。高效处理：用 `delegate_task` 批量；wikilink 建议 JSON 任务输出 `{}` 可安全跳过（Stage 2.4 已加内联 wikilink 时无质量损失）。
@@ -61,10 +61,10 @@ minerU 32 页/chunk 串行。272 页书（9 chunks）可能超 600s 终端超时
 Prompt 曾用双引号包公式（`formula: "LaTeX"`），未强制 YAML 单引号；含 `\`/`$` 的字符串在双引号 YAML 里会被静默改写或让 `yaml.safe_load` 抛错，fallback parser 拿不到 `concepts_found` → 该 chunk **静默生成 0 个页面**（无报错）。已修：要求含 `\`/`$` 的字段用单引号。**操作陷阱**：改这个 prompt 模板会变更每个 chunk 的 prompt hash，在飞 chunk 结果全部作废（文件名不匹配）；若旧结果内容本身没变，`cp old-hash.txt new-hash.txt` 可免重跑。
 
 ### Stage 3.7 embedding 因路径双重前缀被静默跳过（已修，2026-06-30）
-`files_written` 条目已带 `wiki/` 前缀，旧代码又拼一次 `config.wiki_dir`（已是 `wiki_root/wiki`），产出永不存在的 `wiki/wiki/...` 路径 → `new_files` 恒空 → Stage 3.7 无日志无报错直接返回，`_finalize_book` 却照常打完成标记——**新页面从未被 embed，书标"完成"，lancedb 停留旧状态**。已修：改为先按 `wiki_root` 解析。**诊断信号**：每次 ingest 应看到 `[stage 3.7] Embedding N new pages...`，缺失即说明被跳过（此修复前摄入的项目需手动 `build_embeddings.py --project <root> embed` 补嵌入）。
+`files_written` 条目已带 `wiki/` 前缀，旧代码又拼一次 `config.wiki_dir`（已是 `wiki_root/wiki`），产出永不存在的 `wiki/wiki/...` 路径 → `new_files` 恒空 → Stage 3.7 无日志无报错直接返回，`_finalize_book` 却照常打完成标记——**新页面从未被 embed，书标"完成"，lancedb 停留旧状态**。已修：改为先按 `wiki_root` 解析。**诊断信号**：每次 ingest 应看到 `[stage 3.7] Replacing embeddings for N written pages...`，缺失即说明被跳过（此修复前摄入的项目需手动 `build_embeddings.py --project <root> embed` 补嵌入）。
 
-### 大型 wiki 首次批量补嵌入：超时 + 缓存不收敛（已修，2026-06-30）
-上条修复后首次真实批量嵌入暴露两个叠加 bug：(1) 硬编码 `timeout=300`，大 wiki（6000+ chunk）实测必超时；(2) 缓存只在整批结束后写一次，超时/kill 会丢光本次已算的全部向量——两者叠加导致**永远无法收敛**（反复重做又反复丢失）。已修：超时按页数缩放 `max(600, page_count*2)`；缓存改为每 `SAVE_EVERY=512` chunk 增量存盘。**恢复法**：大型 wiki 首次批量嵌入，先单独跑 `build_embeddings.py --project <root> embed`（无超时上限）清空积压，再跑 `ingest.py`，Stage 3.7 命中热缓存秒级完成。
+### 大型 wiki 首次批量补嵌入：旧全库 rebuild + cache 路径（已被 0.6.6 对齐实现取代）
+旧实现每次 ingest 都触发全库 rebuild，并依赖 `embed-cache.json` 续跑，因此曾出现硬编码超时与缓存未及时落盘导致的不收敛。当前实现不再读取或写入该 cache：普通 ingest 只对 touched pages 做 page-scoped replace；显式 full re-index 会先准备全部 vectors，成功后再整体替换 live table。旧项目升级后应主动 full re-index 一次，使历史 rows 全部采用新的 NashSU chunk 边界；此后每本书只更新其实际写入页面。
 
 ### snap_out 在表格密集书上曾产出异常极小 chunk（已修，2026-06-30）
 Chunk 窗口末端落在受保护 block（表格/代码块）内部时曾无条件整体回退到该 block 起点；表格密集书中一张早早开始的巨表会把 chunk 收缩成表格前的极小片段——不丢数据（下一 chunk 靠 overlap 重新覆盖），但浪费一次 LLM 往返分析近空 chunk。已修：只有回退后仍留下有意义内容（`r[0]-start >= attempted//2`）才回退，否则跳过整个 block。**操作纪律：chunker 边界逻辑只能在书与书之间改，绝不能在书摄入中途改**——chunk 分析按内容 hash 缓存，改边界会废掉当前在飞书的已完成 Stage 2.2/2.4 缓存。

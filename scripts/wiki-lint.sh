@@ -102,6 +102,7 @@ if [ -d "$WIKI_ROOT/.iwiki-runtime" ]; then
     RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
 elif [ -f "$WIKI_ROOT/.llm-wiki/ingest-cache.json" ] || \
      [ -d "$WIKI_ROOT/.llm-wiki/ingest-progress" ] || \
+     [ -d "$WIKI_ROOT/.llm-wiki/lancedb" ] || \
      [ -f "$WIKI_ROOT/.llm-wiki/embed-cache.json" ]; then
     RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
 elif [ -f "$WIKI_DIR/.ingest-cache.json" ] || [ -f "$WIKI_DIR/ingest-cache.json" ] || \

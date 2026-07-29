@@ -5,10 +5,11 @@ Faithful port of NashSU ``src/lib/dedup_embedding.ts``. Pre-filters
 pages by cosine similarity so the downstream LLM duplicate-detector only sees
 a small candidate set instead of the whole wiki in one prompt (GAP-3).
 
-Embeddings reuse improved-wiki's local Ollama bge-m3 stack via
-``build_embeddings.embed_texts`` (OpenAI-compatible ``/v1/embeddings``) — no
-external API key. If too few pages embed successfully, ``candidate_pairs``
-raises so the caller falls back to the full LLM scan (NashSU parity).
+Embeddings reuse improved-wiki's shared configured provider via
+``build_embeddings.embed_texts`` (Google, Volcengine/Doubao, or
+OpenAI-compatible; local Ollama remains the default). If too few pages embed
+successfully, ``candidate_pairs`` raises so the caller falls back to the full
+LLM scan (NashSU parity).
 
 Public API:
   - cosine_similarity(a, b)
@@ -84,24 +85,22 @@ def page_to_embedding_text(page: dict, budget: int = 1500) -> str:
 
 
 def _embed_config() -> tuple[str, str, str]:
-    """Resolve (base_url, model, api_key) from env, matching build_embeddings."""
-    base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
-    model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
-    api_key = os.environ.get("EMBEDDING_API_KEY", "")
-    return base_url, model, api_key
+    """Resolve the shared provider configuration used by normal retrieval."""
+    from build_embeddings import get_embed_config
+
+    return get_embed_config()
 
 
 # Bounded embedding access (2026-07-12, aligned with cross_source_dedup's
-# bounded path): a hard per-request timeout — embed_texts' historical default
-# was an unbounded-in-practice 120s×3-retries per batch — plus a consecutive-
+# bounded path): NashSU's 8-second per-request timeout plus a consecutive-
 # failure circuit breaker so a dead endpoint fails the prefilter fast instead
 # of grinding through every batch.
-EMBED_TIMEOUT_S = 60
+EMBED_TIMEOUT_S = 8
 EMBED_MAX_CONSECUTIVE_FAILURES = 3
 
 
 def embed_pages(pages: list[dict]) -> dict[str, Optional[list[float]]]:
-    """Embed pages via the local Ollama stack. Returns id → vector (or None on
+    """Embed pages via the configured embedding provider. Returns id → vector (or None on
     per-batch failure). Batches of 16; a failed batch is recorded as None for
     its members and the rest continue, so one bad page can't sink the scan.
     EMBED_MAX_CONSECUTIVE_FAILURES failed batches in a row raise

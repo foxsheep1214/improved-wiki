@@ -33,7 +33,7 @@ improved-wiki 流水线 = **14 个 active Stage（含 Phase 0 前置门，跨 4 
 | 3.2 | `stage_3_2_inject_images` | 图片注入 source 页 |
 | 3.4 | `stage_3_4_review_suggestions` | 内容质量审查（运行在已写盘文件上） |
 | 3.5 | `stage_3_5_aggregate_repair` | 聚合修复（index/log/overview）+ 缓存 |
-| 3.7 | `stage_3_7_embed_new_pages` | 嵌入向量化（本地 Ollama bge-m3）— **最后一个 stage**，之后 `_finalize_book` 置完成标记 |
+| 3.7 | `stage_3_7_embed_new_pages` | 嵌入向量化（配置 provider；默认本地 Ollama bge-m3）— **最后一个 stage**，之后 `_finalize_book` 置完成标记 |
 
 Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 （无 Phase 4：post-ingest 验证体检已为对齐 NashSU 移除——NashSU 无此 stage。NashSU 唯一的 ingest 期检查"schema 路由"在写盘期的 Stage 3.1 做；`validate_ingest.py` 保留为独立手动工具。）
@@ -160,11 +160,15 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：log.md 必须含本 source/hash 的 INGEST block，index.md 必须含 source link；两页以 `aggregate_done` 绑定。缓存必须在 review/aggregate markers 之后写入，并与 task manifest 的完整 page refs 一致；overview 是可选修复，不作为完成硬门禁。
 
 ### Stage 3.7 · Embeddings
-- **作用**：把 wiki/ 页面 chunk 化 + embed 写到 LanceDB。默认本地 Ollama bge-m3（`http://127.0.0.1:11434/v1`），无需 export 环境变量。
-- **依赖**：lancedb 已装 + Ollama 运行 + bge-m3 已拉取。
-- **产物**：`lancedb/` 表 + `embed-cache.json`。
-- **go/no-go**：LanceDB 表存在 + 已写 ≥N chunk。
-- **无回退**：stack 缺失 → `raise RuntimeError` 暂停。页面已落盘，修好 stack 后重跑从 3.7 恢复（`write_phase`、`review_done`、`aggregate_done` 分别跳过已完成段）。
+- **作用**：按 NashSU 0.6.6 的 ingest 生命周期，只把本次实际写入/更新的 knowledge pages 重新 chunk，并以 page 为单位替换其 LanceDB rows；不再为每本书隐式全库重建。
+- **chunk/embedding 行为**：NashSU `text-chunker.ts` 直接移植——target/max/min/overlap 默认 `1000/1500/200/200`，按 section→paragraph→line→sentence→space 递归切分，frontmatter 不入向量，fenced code/table 不拆，向量输入为 `title + heading breadcrumb + raw chunk`。OpenAI-compatible batch 必须严格校验数量、index、有限数值和统一维度；batch 失败退回逐条，oversize 按字符边界最多自动减半 3 次。
+- **后端**：默认本地 Ollama bge-m3（兼容旧项目），也接受 `EMBEDDING_ENDPOINT` 指定 Google、Volcengine/Doubao 或 OpenAI-compatible 的完整 request endpoint；并发、batch、chunk 参数均可配置。单请求 timeout 默认与 NashSU 0.6.6 一致为 8 秒，可用 `EMBEDDING_TIMEOUT_SECONDS` 覆盖；旧 `EMBEDDING_BASE_URL` 仍兼容并自动追加 `/embeddings`。
+- **产物**：`.llm-wiki/lancedb/wiki_chunks`。旧 `embed-cache.json` 不再参与 ingest 或 full re-index；文件可作为旧版运行遗留保留，确认无旧 embedding 进程后再人工清理。
+- **go/no-go**：本次 touched page 的每个预期 chunk 都取得合法、同维向量；page replacement 后逐页 row count 必须与预期完全相等。任何 partial response / 缺向量 / 维度不一致 / 写后行数不一致均失败，不得置 `ingested`。
+- **全量重建**：仅显式执行 `build_embeddings.py --project <root> embed`；先准备全部当前 chunk 的向量，全部成功后才 overwrite live table，并验证最终 row count。
+- **删除生命周期**：`ingest.py --delete` 与 lint orphan cascade 在文件成功删除后按 page id 清除对应 rows；清理失败按 NashSU 视为 non-critical 并明确告警。显式单页清理可用 `build_embeddings.py --project <root> delete --page <wiki-relative.md>`。手工旁路删文件后需 full re-index。
+- **升级迁移**：旧索引采用旧 chunk 边界且没有版本元数据，不能安全地与新规则自动判别。升级后先显式 full re-index 一次；之后普通 ingest 才会稳定保持 page-scoped 增量更新。
+- **无回退（ingest）**：stack 缺失或 touched-page coverage 不完整 → `raise RuntimeError` 暂停。页面已落盘，修好后重跑从 3.7 恢复（`write_phase`、`review_done`、`aggregate_done` 分别跳过已完成段）。搜索侧则按 NashSU 报警后 keyword-only，不把搜索降级等同于 ingest 完成。
 - **最终完成门禁**：embedding 前必须同时证明 media 完整、4 个 post-write markers 齐全、cache/source hash/task manifest/page refs 一致、所有页面存在且非空；否则不得置 `ingested`。
 
 ---

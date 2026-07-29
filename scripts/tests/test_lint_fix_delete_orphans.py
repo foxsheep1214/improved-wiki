@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
@@ -61,8 +62,21 @@ class TestCascadeDeleteOrphans(unittest.TestCase):
 
     def test_apply_deletes_and_cascades(self):
         wiki = self._make_wiki()
-        summary = wlf.cascade_delete_orphans(
-            wiki, ["concepts/kv-cache.md"], dry_run=False)
+        with mock.patch.object(
+            wlf,
+            "remove_page_embeddings",
+            return_value={
+                "requested_pages": 1,
+                "matched_pages": 1,
+                "rows_removed": 2,
+                "index_present": True,
+                "error": "",
+            },
+        ) as remove_vectors:
+            summary = wlf.cascade_delete_orphans(
+                wiki, ["concepts/kv-cache.md"], dry_run=False)
+        remove_vectors.assert_called_once()
+        self.assertEqual(summary["embedding_rows"], 2)
         self.assertEqual(summary["deleted"], 1)
         self.assertFalse((wiki / "concepts" / "kv-cache.md").exists())
 
@@ -82,8 +96,10 @@ class TestCascadeDeleteOrphans(unittest.TestCase):
 
     def test_dry_run_changes_nothing(self):
         wiki = self._make_wiki()
-        summary = wlf.cascade_delete_orphans(
-            wiki, ["concepts/kv-cache.md"], dry_run=True)
+        with mock.patch.object(wlf, "remove_page_embeddings") as remove_vectors:
+            summary = wlf.cascade_delete_orphans(
+                wiki, ["concepts/kv-cache.md"], dry_run=True)
+        remove_vectors.assert_not_called()
         self.assertEqual(summary["deleted"], 1)
         # nothing actually removed / rewritten.
         self.assertTrue((wiki / "concepts" / "kv-cache.md").exists())

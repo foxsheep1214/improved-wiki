@@ -6,6 +6,7 @@ delete_source(): removes source page, cache entry, derived concept/entity pages
                  that are exclusively attributable to this source.
 list_source_pages(): list all pages derived from a given source.
 """
+from __future__ import annotations
 
 import json, shutil, time
 from pathlib import Path
@@ -19,6 +20,7 @@ from _schema import (
     BASE_PAGE_DIRS,
 )
 from _frontmatter_array import parse_frontmatter_array
+from _embedding_store import remove_page_embeddings
 
 
 def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: bool = False) -> int:
@@ -49,6 +51,7 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
     rel = source_cache_key(raw_file, config)
 
     removed = 0
+    deleted_embedding_pages: list[str] = []
 
     # 1. Delete source page
     # source_slug_from_raw_path() is the canonical path-derivation helper
@@ -59,6 +62,12 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
     if src_path is None:
         src_path = wiki_root / "wiki" / "sources" / Path(rel).with_suffix(".md")
     if src_path.exists():
+        try:
+            deleted_embedding_pages.append(
+                src_path.relative_to(wiki_root / "wiki").as_posix()
+            )
+        except ValueError:
+            pass
         if not dry_run:
             # Backup before delete
             history_dir = wiki_root / "page-history"
@@ -94,13 +103,37 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
 
     # 3. Clean up derived pages (concepts/entities whose ONLY source is this file)
     source_stem = raw_file.stem
-    derived_count = _cleanup_orphan_pages(wiki_root, source_stem, config, dry_run=dry_run)
+    derived_count = _cleanup_orphan_pages(
+        wiki_root,
+        source_stem,
+        config,
+        dry_run=dry_run,
+        deleted_page_paths=deleted_embedding_pages,
+    )
     removed += derived_count
     if derived_count:
         verb = "Would clean up" if dry_run else "Cleaned up"
         print(f"{tag} {verb} {derived_count} derived pages")
 
-    # 4. Remove media directory (unless keep_media — see docstring)
+    # 4. Remove deleted pages' vector rows. The files remain the source of
+    # truth: this happens only after successful disk deletion and is
+    # best-effort/non-critical, matching NashSU removePageEmbedding().
+    if deleted_embedding_pages and not dry_run:
+        embedding_result = remove_page_embeddings(
+            wiki_root, deleted_embedding_pages
+        )
+        if embedding_result["error"]:
+            print(
+                f"{tag} Warning: page embedding cleanup failed: "
+                f"{embedding_result['error']}"
+            )
+        elif embedding_result["index_present"]:
+            print(
+                f"{tag} Removed {embedding_result['rows_removed']} embedding "
+                f"chunk row(s) for {embedding_result['matched_pages']} page(s)"
+            )
+
+    # 5. Remove media directory (unless keep_media — see docstring)
     slug = media_slug(raw_file, config)
     media_dir = wiki_root / "wiki" / "media" / slug
     if media_dir.exists():
@@ -126,7 +159,13 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
 _NON_PAGE_DIRS = {"media", "raw", "page-history", "chats"}
 
 
-def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bool = False) -> int:
+def _cleanup_orphan_pages(
+    wiki_root: Path,
+    source_stem: str,
+    config,
+    dry_run: bool = False,
+    deleted_page_paths: list[str] | None = None,
+) -> int:
     """Remove derived pages whose ONLY source reference is this book.
 
     Covers concepts, entities, queries, comparisons, findings, methodologies,
@@ -183,6 +222,10 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bo
                     snapshot = page_label.replace("/", "_")
                     shutil.copy2(page, history_dir / f"{ts}_{snapshot}")
                     page.unlink()
+                    if deleted_page_paths is not None:
+                        deleted_page_paths.append(
+                            page.relative_to(wiki_root / "wiki").as_posix()
+                        )
                 print(f"{tag} Deleted orphan page: {page_label}")
                 removed += 1
     return removed

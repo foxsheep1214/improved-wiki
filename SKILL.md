@@ -72,7 +72,7 @@ Active order:
 → 2.4 grounded key/schema-typed page generation + in-source dedup
 → 2.6 source page
 → 3.1 write/merge → 3.2 media injection → 3.4 review
-→ 3.5 aggregate repair → 3.7 embeddings → ingested marker
+→ 3.5 aggregate repair → 3.7 touched-page embedding upsert → ingested marker
 ```
 
 Stage 2.7 query generation and the dedicated Stage 2.9 comparison generator are
@@ -175,11 +175,33 @@ There is no silent quality fallback:
   coverage.
 - Captioning requires the configured VLM provider; optional VLM-to-VLM failover
   is allowed only when explicitly configured and logged.
-- Embeddings require the configured local stack.
-- Every successful Stage 3.7 full LanceDB rewrite runs compact + verified
-  old-version pruning. Maintenance is best-effort so a compact failure does not
-  invalidate the newly rebuilt index; retry manually with
+- Ingest embeddings require the configured stack. The default remains local
+  Ollama/bge-m3, while `EMBEDDING_ENDPOINT` plus provider/model settings can
+  select Google, Volcengine/Doubao, or another OpenAI-compatible exact request
+  endpoint. The per-request timeout defaults to NashSU's 8 seconds and can be
+  overridden with `EMBEDDING_TIMEOUT_SECONDS`; legacy `EMBEDDING_BASE_URL`
+  remains supported as a base URL.
+- Stage 3.7 follows NashSU 0.6.6's page-scoped lifecycle: re-chunk and replace
+  only the pages written by this ingest. Every touched page must have exact
+  chunk coverage before `ingested` may be set. It never performs an implicit
+  full-wiki rebuild and does not use the legacy `embed-cache.json`.
+- `scripts/build_embeddings.py ... embed` is the explicit full re-index route.
+  It prepares every current chunk before overwriting the live table and verifies
+  the final row count. Both incremental and full successful writes run compact
+  + verified old-version pruning. Maintenance is best-effort so a compact
+  failure does not invalidate the successful index write; retry manually with
   `scripts/build_embeddings.py --project <wiki-root> compact`.
+- Source deletion and lint orphan deletion remove the corresponding LanceDB
+  rows after the Markdown delete, using NashSU's non-critical lifecycle
+  semantics. For a manual one-page cleanup use
+  `scripts/build_embeddings.py --project <wiki-root> delete --page <path.md>`.
+  Direct filesystem deletions bypass this lifecycle and require a full re-index.
+- Existing indexes have no chunker-version metadata. After upgrading from the
+  legacy full-rebuild/cache implementation, run one explicit full re-index;
+  subsequent ingests remain page-scoped.
+- Vector retrieval follows NashSU's optional search behavior: a vector failure
+  is surfaced and search continues keyword-only. This does not weaken the
+  mandatory Stage 3.7 ingest gate.
 - LLM, merge, config, schema, and required-media failures pause the source.
 - Corrupt cache/checkpoint files may warn and rebuild because re-derivation is
   the correct recovery.

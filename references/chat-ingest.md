@@ -161,7 +161,7 @@ After generation, the calling agent:
 3. Injects image references into source page (Stage 3.2)
 4. Reviews written pages (Stage 3.4)
 5. Appends to index.md / log.md (Stage 3.5, programmatic)
-6. Embeds new pages (Stage 3.7, local Ollama bge-m3) — final stage
+6. Embeds touched pages (Stage 3.7, configured provider; defaults to local Ollama bge-m3) — final stage
 
 `validate_ingest.py` is **no longer auto-run** (the Stage 4.1 audit was removed for NashSU alignment). It remains an **optional manual check**:
 
