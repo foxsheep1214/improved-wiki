@@ -70,8 +70,60 @@ class ZeroOutlinkGate(unittest.TestCase):
         self.assertIn("concepts/b.md", captured["prompt"])
         self.assertNotIn("concepts/a.md", captured["prompt"])
         self.assertIn("concepts/b.md", result)
-        self.assertIn("[[concepts/matched-filter]]", result["concepts/b.md"])
+        self.assertIn(
+            "[[concepts/matched-filter|matched filter]]",
+            result["concepts/b.md"],
+        )
         self.assertNotIn("concepts/a.md", result)
+
+    def test_enrichment_preserves_surface_text_when_target_differs(self):
+        page = (
+            "findings/margin.md",
+            _page(LONG + " Maximum warpage of about 255 micrometers."),
+        )
+
+        def fake(prompt, config, **kw):
+            return (
+                '{"findings/margin.md": [{"term": "warpage", '
+                '"target": "hybrid-substrate-reliability-modeling"}]}',
+                None,
+            )
+
+        orig = ew.call_anthropic_protocol
+        ew.call_anthropic_protocol = fake
+        try:
+            result = ew.enrich_wikilinks_batch(
+                [page],
+                ["hybrid-substrate-reliability-modeling"],
+                object(),
+            )
+        finally:
+            ew.call_anthropic_protocol = orig
+
+        self.assertIn(
+            "Maximum [[hybrid-substrate-reliability-modeling|warpage]] "
+            "of about 255 micrometers.",
+            result["findings/margin.md"],
+        )
+
+    def test_legacy_repair_handles_two_terms_with_same_target(self):
+        content = _page(
+            "A [[wlcsp-fan-in-redistribution]] architecture mounts balls on "
+            "the [[wlcsp-fan-in-redistribution]]."
+        )
+        suggestions = [
+            {"term": "fan-in WLCSP architecture",
+             "target": "wlcsp-fan-in-redistribution"},
+            {"term": "Cu RDL", "target": "wlcsp-fan-in-redistribution"},
+        ]
+        repaired, count = ew.repair_legacy_bare_enrichment_links(
+            content, suggestions)
+        self.assertEqual(count, 2)
+        self.assertIn(
+            "[[wlcsp-fan-in-redistribution|fan-in WLCSP architecture]]",
+            repaired,
+        )
+        self.assertIn("[[wlcsp-fan-in-redistribution|Cu RDL]]", repaired)
 
 
 if __name__ == "__main__":

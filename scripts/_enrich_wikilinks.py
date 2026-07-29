@@ -74,6 +74,49 @@ def _replace_first_outside_links(body: str, term: str, replacement: str):
     return None
 
 
+def _enrichment_link(target: str, term: str) -> str:
+    """Build a wikilink without changing the source sentence's wording.
+
+    ``term`` is exact body text selected by the enrichment model, while
+    ``target`` is a page slug and may have a very different human-readable
+    title.  A bare ``[[target]]`` therefore changes the rendered sentence
+    (for example, ``Maximum warpage`` became
+    ``Maximum Hybrid Substrate Reliability Modeling``).  Always retain the
+    original surface text as the display alias.
+    """
+    return f"[[{target}|{term}]]"
+
+
+def repair_legacy_bare_enrichment_links(
+    content: str,
+    suggestions: list[dict],
+) -> tuple[str, int]:
+    """Upgrade bare links written by the pre-alias enrichment implementation.
+
+    This migration is intentionally narrow: callers must use it only for pages
+    known to have had zero outlinks before enrichment.  Under that precondition,
+    a matching bare ``[[target]]`` was inserted by this module and can safely be
+    rewritten as ``[[target|term]]``.  Suggestions are processed in order so
+    two distinct terms targeting the same page repair two corresponding links.
+    """
+    content = normalize_block_arrays(content)
+    fm, body = parse_frontmatter(content)
+    repaired = 0
+    for suggestion in suggestions:
+        term = suggestion.get("term", "")
+        target = suggestion.get("target", "")
+        if not term or not target:
+            continue
+        aliased = _enrichment_link(target, term)
+        if aliased in body:
+            continue
+        bare = f"[[{target}]]"
+        if bare in body:
+            body = body.replace(bare, aliased, 1)
+            repaired += 1
+    return write_frontmatter(fm, body), repaired
+
+
 def enrich_wikilinks_batch(
     pages: list[tuple[str, str]],
     existing_slugs: list[str],
@@ -188,7 +231,8 @@ Pages with no suggestions may be omitted from the object.
             # Replace only an occurrence NOT inside an existing [[...]] span,
             # otherwise we produce malformed nested links like
             # [[concepts/[[slug]]-suffix]] (bug found 2026-06-24).
-            new_body = _replace_first_outside_links(body, term, f"[[{target}]]")
+            new_body = _replace_first_outside_links(
+                body, term, _enrichment_link(target, term))
             if new_body is not None:
                 body = new_body
                 changed = True
