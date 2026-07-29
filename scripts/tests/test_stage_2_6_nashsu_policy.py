@@ -294,7 +294,12 @@ class TestSourceFallbackAndTruncationRepair(unittest.TestCase):
             }],
         )
         self.assertEqual(len(calls), 2)
-        self.assertEqual(stop_reason, "fallback-source-summary")
+        # Distinct from the malformed-block fallback above: an unrecovered
+        # truncation is a lost LLM turn, so the caller must skip the cache and
+        # let the next ingest regenerate the page (NashSU ingest.ts:1326-1341).
+        # A merely malformed block is a formatting miss and caches normally.
+        self.assertEqual(
+            stop_reason, "fallback-source-summary-unrecovered-truncation")
         self.assertIn(tail, response)
         self.assertNotIn("... (truncated)", response)
 

@@ -540,7 +540,16 @@ venue: {venue_yaml}
             time.strftime("%Y-%m-%d"),
         )
         _stage_2_6_validate_source_file_block(candidate, source_rel)
-        stop_reason = "fallback-source-summary"
+        # Two different fallbacks, only one of which NashSU refuses to cache.
+        # A malformed-but-complete block is a formatting miss: NashSU writes the
+        # deterministic summary and caches normally. An unrecovered truncation
+        # is a lost LLM turn: NashSU writes the summary but skips the cache so
+        # the next ingest regenerates the real page (ingest.ts:1326-1341).
+        stop_reason = (
+            "fallback-source-summary-unrecovered-truncation"
+            if repair.unrecovered_paths
+            else "fallback-source-summary"
+        )
         print(
             "  [stage 2.6] Generated deterministic source-summary fallback "
             f"from complete Stage 2 analysis ({fallback_reason})"

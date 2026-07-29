@@ -133,6 +133,11 @@ def ingest_one(
         "stage_1_2_result": stage_1_2_result, "stage_1_3_result": stage_1_3_result,
         "template_name": template_name,
         "enrich_enabled": getattr(config, "enrich_enabled", True),
+        # Forward the no-cache signal: _do_write refuses to cache a run whose
+        # source page degraded to the deterministic summary after an
+        # unrecovered truncation, and its non-ok status keeps _finalize_book
+        # (and the `ingested` marker) from running.
+        "source_page_truncated": prepared.get("source_page_truncated", False),
     }
     result = _do_write(prepared, verbose=verbose)
     if result["status"] != "ok":

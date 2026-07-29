@@ -135,6 +135,11 @@ Short pages may merge or drop sections, but never emit one undifferentiated para
 # 10 = D4 figure-reference ruling (2026-07-02): cited figure numbers link to
 #      the source page (needs the per-source source-page slug, hence a
 #      builder function instead of a constant).
+# 11-13 = NashSU subject-attribution rules, verbatim from ingest.ts:2218-2220.
+#      Stage 2.6 carried a weaker paraphrase of these while 2.4 — which
+#      produces nearly every concept/entity page — had none, so a book covering
+#      several devices could silently attach one part's limits or benchmark
+#      numbers to a neighbouring entity's page.
 def _extra_rules(source_page_slug: str) -> str:
     return f"""7. related frontmatter — EXACT format: prefixed bare slugs, comma-separated,
    NO [[ ]] and NO .md — e.g. related: [concepts/matched-filter, entities/bell-labs].
@@ -147,7 +152,16 @@ def _extra_rules(source_page_slug: str) -> str:
 10. When body text cites a figure number (图2.6 / Fig. 3-1), link it to the
     source page: [[{source_page_slug}|据图2.6]] — this source-page link is
     always valid even though it is not in the Linkable list. Never leave a
-    bare figure number pointing nowhere; do NOT embed images."""
+    bare figure number pointing nowhere; do NOT embed images.
+11. Preserve subject boundaries: when a source discusses multiple entities/
+    models/products/methods, keep claims, evaluations, limitations, benchmark
+    results, and recommendations attached to the exact subject they describe.
+12. Do not merge or generalize a claim about one subject into another
+    subject's page solely because they share terms (for example context window
+    size, benchmark name, dataset, architecture, or feature name).
+13. If a page needs to mention another subject for comparison, write it
+    explicitly as a comparison and cite which source/frontmatter `sources`
+    entry supports that statement."""
 
 
 def _source_page_slug(file_path: Path, config: Config) -> str:

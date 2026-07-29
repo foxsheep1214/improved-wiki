@@ -73,8 +73,14 @@ def _prepare_source_page(
     associations: dict | None = None,
     chunk_claims: list | None = None,
     chunk_analyses: list[dict] | None = None,
-) -> list:
-    """Stage 2.6: generate one NashSU-style source summary and merge it."""
+) -> tuple[list, bool]:
+    """Stage 2.6: generate one NashSU-style source summary and merge it.
+
+    Returns ``(file_blocks, source_page_truncated)``. The flag is True when the
+    real source page was lost to an unrecovered truncation and a deterministic
+    summary stood in for it, so the caller can refuse to cache the run
+    (NashSU ingest.ts:1326-1341).
+    """
     try:
         source_rel_stem = str(
             raw_file.relative_to(config.raw_root).with_suffix("")
@@ -83,6 +89,7 @@ def _prepare_source_page(
         source_rel_stem = raw_file.stem
     source_identity = canonical_source_path(raw_file, config)
 
+    _source_page_stop_reason = ""
     if progress and "source_page_response" in progress:
         source_page_response = progress["source_page_response"]
         print(f"  [stage 2.6] (cached) Source page already generated")
@@ -106,7 +113,7 @@ def _prepare_source_page(
         _gen_entities = [s for s in _linkable if s.startswith("entities/")]
         _gen_pages = list(_linkable)
         _linkable.extend(list_existing_slugs(config))
-        source_page_response, _ = stage_2_6_source_page(
+        source_page_response, _source_page_stop_reason = stage_2_6_source_page(
             global_digest, raw_file, config,
             template=template_content, verbose=verbose,
             linkable_slugs=_linkable, source_context=source_context,
@@ -146,7 +153,10 @@ def _prepare_source_page(
     if source_blocks:
         file_blocks = source_blocks + list(file_blocks)
         print(f"  [stage 2.6] Source page block merged ({len(file_blocks)} total)")
-        return file_blocks
+        return file_blocks, (
+            _source_page_stop_reason
+            == "fallback-source-summary-unrecovered-truncation"
+        )
 
     raise RuntimeError(
         "Stage 2.6 deterministic source fallback could not be parsed; "
@@ -515,6 +525,10 @@ def _do_prepare(
         # honoring it would skip the closing/source-page tail with whatever
         # file_blocks happens to be in scope — dropping the source page.
         # Invalidate and re-run the tail instead.
+        # True only when an unrecovered truncation cost us the real source page
+        # and a deterministic summary stood in. A cached tail replays a run that
+        # already made this call, so it stays False there.
+        _source_page_truncated = False
         _tail_cached = (is_stage_done(config, h, "stage_2_9_done")
                         and (progress or {}).get("file_blocks") is not None)
         if is_stage_done(config, h, "stage_2_9_done") and not _tail_cached:
@@ -558,7 +572,7 @@ def _do_prepare(
                 print("  [stage 2.6] Skipped (deep-research query bridge — "
                       "no source page; see references/deep-research.md)")
             else:
-                file_blocks = _prepare_source_page(
+                file_blocks, _source_page_truncated = _prepare_source_page(
                     global_digest, raw_file, config, template_content, progress,
                     file_blocks, verbose, source_context=_src_grounding,
                     associations=incremental_associations,
@@ -612,6 +626,7 @@ def _do_prepare(
             "dedup_was_run": dedup_was_run,
             "incremental_associations": incremental_associations,
             "enrich_enabled": getattr(config, "enrich_enabled", True),
+            "source_page_truncated": _source_page_truncated,
         }
     except Exception as e:
         print(f"  [prepare] ❌ FAILED: {e}")

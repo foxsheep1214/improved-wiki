@@ -16,6 +16,8 @@ Usage:
     IMPROVED_WIKI_ROOT=/path/to/wiki SOURCE_SLUG=INA1H94-SEP \
         python3 scripts/validate_ingest.py
 """
+from __future__ import annotations
+
 import argparse
 import json
 import os

@@ -32,21 +32,41 @@ __all__ = ["sanitize_ingested_file_content"]
 
 
 # ── (1) Strip an outer code fence wrapping the whole document ────────────────
-_OUTER_OPEN_RE = re.compile(r"^[ \t]*```(?:yaml|md|markdown)?[ \t]*\r?\n")
+# The opener tolerates a BOM and blank lines before the fence, and an
+# upper/mixed-case info string (```YAML), matching NashSU's regex exactly
+# (ingest-sanitize.ts:93-95). Without that tolerance a page whose fence was
+# preceded by one blank line kept its ``` first line forever: the frontmatter
+# then failed to parse, so type/graph/index all degraded to `other`, and
+# wiki-lint --fix stacked a placeholder frontmatter block on top of the fence
+# rather than removing it.
+_OUTER_OPEN_RE = re.compile(
+    r"^(?:﻿)?(?:[ \t]*\r?\n)*[ \t]*```(?:yaml|md|markdown)?[ \t]*\r?\n",
+    re.IGNORECASE,
+)
 _OUTER_CLOSE_RE = re.compile(r"\r?\n[ \t]*```[ \t]*\r?\n?\s*$")
+# Models often close the fence right after the frontmatter and continue with an
+# unfenced body. Only strip that shape when the fenced part is exactly one
+# complete `---` block (ingest-sanitize.ts:107-111).
+_OUTER_FRONTMATTER_ONLY_RE = re.compile(
+    r"^(---[ \t]*\r?\n[\s\S]*?^---[ \t]*\r?\n)[ \t]*```[ \t]*(?:\r?\n|$)",
+    re.MULTILINE,
+)
 
 
 def _strip_outer_code_fence(content: str) -> str:
     """Remove a leading ```yaml/```md/```markdown/``` fence + its matching
-    closing fence when it wraps the whole document."""
+    closing fence when it wraps the whole document (or just its frontmatter)."""
     open_m = _OUTER_OPEN_RE.match(content)
     if not open_m:
         return content
     after_open = content[open_m.end():]
     close_m = _OUTER_CLOSE_RE.search(after_open)
-    if not close_m:
+    if close_m:
+        return after_open[: close_m.start()]
+    fm_only = _OUTER_FRONTMATTER_ONLY_RE.match(after_open)
+    if not fm_only:
         return content
-    return after_open[: close_m.start()]
+    return fm_only.group(1) + after_open[fm_only.end():]
 
 
 # ── (2) Strip a stray `frontmatter:` line prefixing the real `---` block ─────

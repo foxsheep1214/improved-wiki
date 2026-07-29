@@ -287,6 +287,13 @@ def parse_file_blocks_detailed(response: str) -> FileBlockParseResult:
     )
 
     lines = response.split("\n")
+    # Fence state is tracked only *inside* a FILE block, mirroring NashSU's
+    # scoping (parseFileBlocks declares fenceMarker in the inner per-block
+    # loop; its outer opener scan is fence-blind).  Hoisting the state to the
+    # whole response let any fence outside a block swallow every opener that
+    # followed: an agent wrapping its entire answer in ```markdown produced
+    # zero blocks *and* zero warnings, and a stray fence between two complete
+    # blocks silently dropped the second one.
     fence_marker: str | None = None
     fence_length = 0
     current_path: str | None = None
@@ -294,7 +301,7 @@ def parse_file_blocks_detailed(response: str) -> FileBlockParseResult:
 
     for line in lines:
         is_fence_line = False
-        fence_match = fence_re.match(line)
+        fence_match = fence_re.match(line) if current_path is not None else None
         if fence_match:
             run = fence_match.group(1)
             char = run[0]

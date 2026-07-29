@@ -26,7 +26,15 @@ from typing import Callable, Optional
 # ── Parse ────────────────────────────────────────────────────────────────────
 
 _FM_RE = re.compile(r"^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)")
-_LEADING_FENCE_RE = re.compile(r"^[ \t]*```(?:yaml|md|markdown)?[ \t]*\r?\n")
+# Tolerates a BOM, blank lines before the fence, and a mixed-case info string,
+# matching the write-time opener in _ingest_sanitize (NashSU
+# ingest-sanitize.ts:93-95). A narrower read-time regex left already-corrupt
+# pages unparseable, so their type/tags/sources stayed invisible to graph,
+# index rebuild and dedup.
+_LEADING_FENCE_RE = re.compile(
+    r"^(?:﻿)?(?:[ \t]*\r?\n)*[ \t]*```(?:yaml|md|markdown)?[ \t]*\r?\n",
+    re.IGNORECASE,
+)
 
 # Canonical shared regexes — single source of truth (per-tool copies had
 # multiplied: the `title:` matcher existed in 8 files, the wikilink extractor
@@ -228,6 +236,7 @@ def merge_page_content(
     source_file: str = "",
     backup_fn: Optional[Callable] = None,
     replace_existing_body: bool = False,
+    already_merged: bool = False,
 ) -> str:
     """Three-layer merge matching NashSU page-merge.ts.
 
@@ -235,6 +244,9 @@ def merge_page_content(
     Layer 2: For a page solely owned by the current source, replace its stale
              body; otherwise call merger_fn (LLM) to produce a unified body.
     Layer 3: Lock type/title/created to existing values.
+
+    ``already_merged`` marks a replayed write: this exact incoming block was
+    merged into this page earlier in the same ingest (see fast path 5).
     """
     # Fast path 1: brand-new page
     if not existing_content:
@@ -292,40 +304,23 @@ def merge_page_content(
         # Keep the existing (enriched) body; only adopt frontmatter array unions.
         return write_frontmatter(parse_frontmatter(array_merged)[0], old_body)
 
-    # Fast path 5: idempotent re-merge. If the existing page's `sources:`
-    # already includes every source in the new content, this collision was
-    # already merged in a prior run — the new body is already incorporated
-    # into the existing page. Returning the existing body (with unioned
-    # arrays) breaks the re-merge loop: write_phase has no per-file marker
-    # (only an all-or-nothing write_phase marker), so a mid-flight crash
-    # makes it re-write every file; the now-merged existing content changes
-    # the merge prompt hash, the conversation cache misses, and the LLM is
-    # asked to re-merge an already-merged page — forever (bug 2026-06-25).
-    def _src_set(fm: dict) -> set:
-        v = fm.get("sources")
-        if not v:
-            return set()
-        if isinstance(v, str):
-            return {v}
-        if isinstance(v, list):
-            return {str(s) for s in v}
-        return set()
-    # Excludes type:source pages: a source page's `sources:` field is a
-    # self-referential singleton (always exactly [this book's own raw file]),
-    # so old-vs-new is trivially equal/superset on EVERY re-ingest of the same
-    # book — this heuristic was designed for concept/entity pages accumulating
-    # contributions across multiple *different* source books (where a genuine
-    # "this book's contribution is already merged in" signal exists), not for
-    # a source page's own re-ingest. Without the exclusion, this fast path
-    # fired unconditionally and silently discarded every re-generated source
-    # page body, keeping only frontmatter array unions (found 2026-07-09 via
-    # a live re-ingest: the body was byte-identical to the pre-re-ingest
-    # version despite a fresh, substantially different LLM-generated body).
-    _new_fm = parse_frontmatter(new_content)[0]
-    _new_srcs = _src_set(_new_fm)
-    if (_new_fm.get("type") != "source"
-            and _src_set(parse_frontmatter(existing_content)[0]).issuperset(_new_srcs)
-            and _new_srcs):
+    # Fast path 5: replay of a FILE block this same ingest already merged.
+    # Conversation mode leaves the write loop on every merge handoff, so the
+    # resumed loop replays from its first block; without this guard the
+    # now-merged existing content changes the merge prompt hash, the
+    # conversation cache misses, and the LLM is asked to re-merge an
+    # already-merged page — forever (bug 2026-06-25).
+    #
+    # Replay is proved by the caller's per-page write ledger, which is keyed on
+    # the exact incoming block bytes (_ingest_write._load_write_ledger). The
+    # previous criterion — "existing `sources:` is a superset of the incoming
+    # ones" — could not tell a replay from a genuine re-ingest of a corrected
+    # source: on any page two or more books contributed to, the superset held
+    # unconditionally, so the freshly generated body was discarded and the
+    # retracted wording survived every later re-ingest. NashSU keeps
+    # multi-source pages on the merger for exactly this reason
+    # (ingest.ts:1938-1939 "their other sources' contributions must survive").
+    if already_merged:
         # Keep the existing (already-merged) body and its stable array order,
         # adding only genuinely new incoming array values.  Calling the normal
         # merge helper with the arguments reversed keeps the right body but

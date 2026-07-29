@@ -302,6 +302,7 @@ def _stage_3_1_merge_page_content(
     page_path: str = "",
     source_file: str = "",
     replace_existing_body: bool = False,
+    already_merged: bool = False,
 ) -> str:
     """NashSU 3-layer merge: delegates to _frontmatter.merge_page_content.
 
@@ -328,8 +329,18 @@ def _stage_3_1_merge_page_content(
         # model (same one chunking uses) rather than a stale fixed number — a
         # fixed 24K silently truncated large source pages (2026-07-09).
         cap = getattr(config, "target_chars", None) or MERGE_PROMPT_BODY_CAP
+        # Rules mirror NashSU buildPageMergeSystemPrompt (ingest.ts:2961-2986).
+        # The two bodies come from *different* source documents, so the merge
+        # is where cross-subject contamination happens: without the attribution
+        # rules an LLM readily folds one source's comparison remarks into
+        # claims about the page subject, or synthesizes two conflicting
+        # findings into one generalized conclusion. The body-shrink threshold
+        # in _frontmatter only catches dropped content, never this.
         prompt = f"""Merge two versions of a wiki page. Preserve ALL unique information from both.
 Do NOT drop claims, entities, formulas, or references from either version.
+Both versions target the same page; one is already on disk, the other was just
+generated from a different source document. Either may mention additional
+subjects for comparison or context.
 
 # Existing page content
 {old_body[:cap]}
@@ -340,7 +351,18 @@ Do NOT drop claims, entities, formulas, or references from either version.
 # Task
 Output the merged page body (no frontmatter, no code fences).
 The merged version should contain everything from both versions,
-with duplicates consolidated and new information integrated.
+with duplicates consolidated and new information integrated, and must:
+- Preserve subject/source boundaries: if either version mentions other
+  entities/models/products/methods for comparison, keep those comparisons
+  attribution-exact and do not fold them into claims about the page subject.
+- When claims conflict or apply to different subjects, keep them separated and
+  say which source version supports each one, instead of synthesizing a single
+  generalized conclusion.
+- When in doubt whether two similar-looking claims describe the same fact,
+  prefer keeping them separate.
+- Keep `[[wikilink]]` references intact.
+- Reorganize sections so the structure is logical for the merged topic, not a
+  concatenation of the two inputs.
 """
         # Give the merge the model's real output budget so it can reproduce both
         # bodies; the old hardcoded 4096 capped output at ~16K chars, itself
@@ -364,6 +386,7 @@ with duplicates consolidated and new information integrated.
         page_path=page_path,
         source_file=source_file,
         replace_existing_body=replace_existing_body,
+        already_merged=already_merged,
     )
 
 
@@ -893,6 +916,7 @@ def stage_3_1_write_wiki_file(
     normalize_rel_path: str = "",
     slug_dirs: dict[str, set[str]] | None = None,
     source_page_slug: str | None = None,
+    already_merged: bool = False,
 ) -> None:
     content = _stage_3_1_sanitize_ingested_content(content)
     existing: str | None = None
@@ -911,6 +935,7 @@ def stage_3_1_write_wiki_file(
                 page_path=str(path),
                 source_file=source_file,
                 replace_existing_body=replace_existing_body,
+                already_merged=already_merged,
             )
             # The incoming FILE block was normalized before merge, but the LLM
             # merger can reintroduce malformed related entries or wrong/case-

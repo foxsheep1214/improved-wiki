@@ -477,14 +477,24 @@ _CAPTION_BY_BASENAME_CACHE: dict[str, dict[str, str]] = {}
 def _stage_1_3_build_caption_by_basename_map(config: Config, media_dir: Path) -> dict[str, str]:
     """Map minerU image basename (e.g. ``<sha256>.jpg``) → VLM caption text.
 
-    Scans persisted minerU content_list files; for each image/chart block,
-    reads the original image bytes (at the block's img_path), md5-hashes them
-    to find the saved ``p<page>-mineru_<md5_8>.jpg`` in ``media_dir``, and
-    reads its ``.caption.txt`` sidecar. The minerU basename is the key because
-    that is what appears in the chunk markdown's ``![](images/<basename>)``.
+    The minerU basename is the key because that is what appears in the chunk
+    markdown's ``![](images/<basename>)``.
 
-    Returns ``{}`` when there is no mineru-api-out (Path A / PyMuPDF images —
-    no chunk markdown image refs to inline).
+    Primary source is this source's persisted extract sidecars, the same ones
+    _stage_1_3_build_context_map reads: ``_mineru_figures.json`` already stores
+    ``mineru_basename`` → saved ``filename`` (written by _stage_1_2_images), so
+    the caption sidecar is one lookup away — no image bytes re-read, no md5
+    recomputation.
+
+    ``runtime_dir/mineru-api-out`` is only a fallback. It is a transient
+    scratch directory keyed by job uuid: once it is cleaned up (or the project
+    moves machines) it is gone, while the sidecars live with the source. Making
+    it the sole input meant inlining silently became a no-op — every image kept
+    an empty alt through Stages 2.2/2.4, so generated pages lost the figure
+    grounding rule D4 depends on.
+
+    Returns ``{}`` when neither source exists (Path A / PyMuPDF images — no
+    chunk markdown image refs to inline).
     """
     cache_key = str(media_dir)
     if cache_key in _CAPTION_BY_BASENAME_CACHE:
@@ -493,6 +503,33 @@ def _stage_1_3_build_caption_by_basename_map(config: Config, media_dir: Path) ->
     import hashlib
     api_out = config.runtime_dir / "mineru-api-out"
     out: dict[str, str] = {}
+
+    source_extract_dir = config.extract_tmp_dir / media_dir.name
+    for figures_path in sorted(
+            source_extract_dir.glob("_chunk_*/_mineru_figures.json")):
+        try:
+            figures = json.loads(figures_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(figures, list):
+            continue
+        for item in figures:
+            if not isinstance(item, dict):
+                continue
+            basename = str(item.get("mineru_basename", ""))
+            filename = str(item.get("filename", ""))
+            if not basename or not filename or basename in out:
+                continue
+            cap_path = media_dir / (filename + ".caption.txt")
+            if not cap_path.exists() or cap_path.stat().st_size < 20:
+                continue
+            try:
+                cap = cap_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if cap and not _stage_1_3_is_caption_failed(cap):
+                out[basename] = cap
+
     if not api_out.exists():
         _CAPTION_BY_BASENAME_CACHE[cache_key] = out
         return out

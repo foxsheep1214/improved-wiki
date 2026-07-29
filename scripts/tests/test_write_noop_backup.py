@@ -77,7 +77,14 @@ class TestNoopWriteBackup(unittest.TestCase):
             self.assertEqual(before_mtime, path.stat().st_mtime_ns)
             self.assertEqual([], _history_pages(cfg))
 
-    def test_idempotent_cross_source_remerge_skips_backup(self):
+    def test_replayed_write_skips_backup(self):
+        """A write the loop already performed (proved by the per-page write
+        ledger, passed in as ``already_merged``) must not snapshot or rewrite.
+
+        The trigger used to be inferred from `sources:` set inclusion, which
+        also matched a genuine re-ingest of a corrected source and silently
+        dropped its new body.
+        """
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _make_config(tmp)
@@ -100,6 +107,7 @@ class TestNoopWriteBackup(unittest.TestCase):
                 cfg,
                 merge=True,
                 source_file="raw/Book/Second.pdf",
+                already_merged=True,
             )
 
             self.assertEqual(existing, path.read_text(encoding="utf-8"))

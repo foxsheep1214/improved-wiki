@@ -1,6 +1,8 @@
 """_ingest_write.py — Stage 3+ file writing + post-ingest (extracted from ingest.py)."""
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from _stage_3_write import (
     _stage_3_1_auto_correct_wiki_path,
     _stage_3_1_schema_route,
     _stage_3_1_canonicalize_sources_field,
+    _stage_3_1_sanitize_ingested_content,
     _stage_3_1_stamp_frontmatter_dates,
     stage_3_1_build_slug_dirs,
     stage_3_1_normalize_page_links,
@@ -142,6 +145,72 @@ def _is_redundant_duplicate_write(full_path, content: str, written_this_run: dic
     return written_this_run.get(full_path) == content
 
 
+def _write_ledger_path(config: Config, source_hash: str) -> Path:
+    return config.runtime_dir / f"write-ledger-{source_hash[:16]}.json"
+
+
+def _blocks_fingerprint(blocks: list[tuple[str, str]]) -> str:
+    """Identity of the exact FILE-block set this write loop consumes."""
+    digest = hashlib.sha256()
+    for rel_path, content in blocks:
+        digest.update(rel_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(content.encode("utf-8")).digest())
+    return digest.hexdigest()
+
+
+def _load_write_ledger(
+    config: Config, source_hash: str, blocks_fp: str
+) -> dict[str, str]:
+    """Pages already written for THIS block set: rel_path → content sha256.
+
+    Conversation mode leaves the write loop on every merge handoff, so the
+    resumed loop replays from its first FILE block. The ledger lets a replayed
+    page skip a second LLM merge (``already_merged`` in merge_page_content).
+
+    It replaces the old "existing `sources:` is a superset of the incoming
+    ones" guess, which could not distinguish a replay from a genuine re-ingest
+    of a corrected source: on a page two or more books contributed to the
+    superset always held, so the freshly generated body was silently dropped.
+
+    A ledger recorded against a different block set is discarded — a re-ingest
+    regenerates the blocks, so its fingerprint changes and every page merges
+    for real.
+    """
+    path = _write_ledger_path(config, source_hash)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(
+            f"⚠️  [write] write ledger {path} unreadable "
+            f"({type(e).__name__}: {e}) — replayed pages will re-merge."
+        )
+        return {}
+    if not isinstance(data, dict) or data.get("blocks_fp") != blocks_fp:
+        return {}
+    pages = data.get("pages")
+    return {str(k): str(v) for k, v in pages.items()} if isinstance(pages, dict) else {}
+
+
+def _record_write_ledger(
+    config: Config, source_hash: str, blocks_fp: str, pages: dict[str, str]
+) -> None:
+    atomic_write(
+        _write_ledger_path(config, source_hash),
+        json.dumps(
+            {"blocks_fp": blocks_fp, "pages": pages},
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+
+
+def _clear_write_ledger(config: Config, source_hash: str) -> None:
+    _write_ledger_path(config, source_hash).unlink(missing_ok=True)
+
+
 def _reconstruct_blocks_from_disk(
     config: Config, files_written_paths: list[str]
 ) -> list[tuple[str, str]]:
@@ -234,6 +303,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     stage_1_3_result = prepared["stage_1_3_result"]
     template_name = prepared["template_name"]
     comp_count = prepared.get("comp_count", 0)
+    source_page_truncated = bool(prepared.get("source_page_truncated", False))
 
     print(f"\n=== [write] {raw_file.name} ===")
 
@@ -344,6 +414,14 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # Duplicate-block guard (redundancy fix 2026-07-09): (path → content)
     # written earlier in THIS loop; see _is_redundant_duplicate_write.
     _written_this_run: dict[Path, str] = {}
+    # Cross-process replay ledger (this loop may be resumed after a merge
+    # handoff); _written_this_run only covers the current process.
+    _blocks_fp = _blocks_fingerprint(_write_blocks)
+    _prior_pages = _load_write_ledger(config, h, _blocks_fp)
+    _ledger_pages = dict(_prior_pages)
+    if _prior_pages:
+        print(f"  [write] write ledger: {len(_prior_pages)} page(s) already "
+              "merged in an earlier pass — replays skip the LLM merge")
 
     for rel_path, content in _write_blocks:
         if ".." in rel_path or rel_path.startswith("/"):
@@ -393,6 +471,13 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 except ImportError:
                     pass
 
+        # Sanitize FIRST, matching NashSU's order (ingest.ts:1846). Both
+        # helpers below bail out on content that does not start with `---`, so
+        # running them ahead of the outer-code-fence strip silently skipped
+        # sources canonicalization and the date stamps on exactly the pages
+        # that needed repair. Sanitizing is idempotent; stage_3_1_write_wiki_file
+        # still calls it for the callers that reach it directly.
+        content = _stage_3_1_sanitize_ingested_content(content)
         content = _stage_3_1_canonicalize_sources_field(content, canonical_source)
         content = _stage_3_1_stamp_frontmatter_dates(content, today_str)
 
@@ -414,6 +499,10 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             continue
 
         do_merge = full_path.exists() and not is_listing
+        # Hash the post-normalization bytes actually handed to the writer, so a
+        # replay (normalization is deterministic) matches exactly.
+        _content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        _already_merged = _prior_pages.get(rel_path) == _content_sha
 
         try:
             stage_3_1_write_wiki_file(
@@ -425,6 +514,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 normalize_rel_path=rel_path if do_merge else "",
                 slug_dirs=_slug_dirs if do_merge else None,
                 source_page_slug=_source_page_slug,
+                already_merged=_already_merged,
             )
         except OSError as e:
             print(f"  [write] HARD ERROR: {rel_path} — {e}")
@@ -432,6 +522,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             continue
 
         _written_this_run[full_path] = content
+        if _ledger_pages.get(rel_path) != _content_sha:
+            _ledger_pages[rel_path] = _content_sha
+            _record_write_ledger(config, h, _blocks_fp, _ledger_pages)
         files_written_paths.append(PageRef.parse(
             full_path, config.wiki_root, config.wiki_dir).project_relative)
         if full_path == source_path:
@@ -753,9 +846,28 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         "fileBlockCount": _merged_stages["file_blocks_generated"],
         "stages": _merged_stages,
     }
+    if source_page_truncated:
+        # NashSU skips the cache entry whenever a truncated path stayed
+        # unrecovered, so the next ingest regenerates the page instead of
+        # replaying the degraded one without another LLM turn
+        # (ingest.ts:1326-1341). The deterministic source summary is already on
+        # disk; withholding the cache is what makes that stand-in temporary.
+        message = (
+            "source page fell back to the deterministic summary after an "
+            "unrecovered truncation — not caching, so the next ingest "
+            "regenerates it"
+        )
+        print(f"  [cache] SKIPPED: {message}")
+        _append_ingest_warning_log(config, raw_file, [message])
+        clear_progress(config, h)
+        _clear_write_ledger(config, h)
+        return {"status": "degraded", "reason": "source-page-truncated",
+                "files_written": all_written_refs}
+
     try:
         save_cache(config, cache)
         clear_progress(config, h)
+        _clear_write_ledger(config, h)
         print(f"  [cache] saved")
     except OSError as e:
         return {"status": "hard-error", "error": str(e),

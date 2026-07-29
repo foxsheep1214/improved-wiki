@@ -186,6 +186,32 @@ class TestParseFileBlocksParity(unittest.TestCase):
         self.assertEqual(len(b), 1)
         self.assertIn("more prose", b[0][1])
 
+    # ── fences *outside* any block must not affect opener scanning ──
+    # NashSU declares fenceMarker inside the per-block loop; its outer opener
+    # scan is fence-blind. The two cases below are what a response-level fence
+    # regression looks like from the caller's side.
+
+    def test_whole_response_wrapped_in_markdown_fence(self):
+        # Agents in handoff mode routinely wrap their entire answer in one
+        # ```markdown fence. Every opener sits "inside" that fence.
+        text = "\n".join([
+            "```markdown",
+            "---FILE: wiki/concepts/alpha.md---", "alpha body", "---END FILE---",
+            "---FILE: wiki/concepts/beta.md---", "beta body", "---END FILE---",
+            "```",
+        ])
+        self.assertEqual(paths(text), ["concepts/alpha.md", "concepts/beta.md"])
+
+    def test_stray_fence_between_blocks_does_not_swallow_successor(self):
+        # An unbalanced fence in prose between two complete blocks previously
+        # left fence state open forever, silently dropping every later block.
+        text = "\n".join([
+            "---FILE: wiki/concepts/alpha.md---", "alpha body", "---END FILE---",
+            "", "Here is an illustrative snippet:", "```", "",
+            "---FILE: wiki/concepts/beta.md---", "beta body", "---END FILE---",
+        ])
+        self.assertEqual(paths(text), ["concepts/alpha.md", "concepts/beta.md"])
+
     # ── path-traversal guard, end-to-end (blocks-level; skill prints, no warnings array) ──
 
     def test_drops_traversal_keeps_legit(self):
