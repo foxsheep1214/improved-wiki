@@ -34,9 +34,14 @@ If a required capability is missing, report it instead of silently degrading.
   `emit-review`, `fix`, `fix-links`, `sweep`, and one `dedup` round.
   `--no-<action>` overrides an individual default.
 - Semantic/sweep/dedup may return exit 101 for conversation handoff. Answer the
-  prompt and resume the exact invocation. After one requested dedup round,
-  continue remaining stages with `--no-dedup` unless the user explicitly asks
-  for full convergence.
+  prompt and resume the exact invocation. Exit-101 re-entry continues one
+  durable logical lint run: semantic performs one complete scan for that run
+  and completed stages are not restarted. Sweep likewise preserves NashSU's
+  single hard budget of at most five 40-item judge batches across re-entry and
+  stops at the first batch that resolves zero items. Use `--reset-lint-run`
+  only to discard an abandoned checkpoint and intentionally start over. After
+  one requested dedup round, continue remaining stages with `--no-dedup`
+  unless the user explicitly asks for full convergence.
 - After all preceding default stages finish, plain lint exits **102** with
   `DELETE_ORPHANS_CONFIRMATION_REQUIRED`. This is a required pause: ask the
   user whether to run delete-orphans. Do not infer consent.
@@ -52,6 +57,8 @@ If a required capability is missing, report it instead of silently degrading.
 - Keep improved-wiki's documented semantic batching/safety extensions; v0.6.6
   parity covers normalized indexed structural suggestions and exact normalized
   filtering of false `missing-page` findings.
+- Graph is a peer command, not a lint phase. `wiki-lint.sh` never invokes
+  `graph.py`; run Graph explicitly when graph artifacts are requested.
 
 ## Ingest contract
 

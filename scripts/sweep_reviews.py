@@ -14,7 +14,8 @@ LLM judge may resolve them, but defaults to keeping them.
 LLM judge (Stage 2) runs in conversation mode (the only text-gen path): it
 writes a prompt file under <runtime>/conversation/review-judge/ and returns
 exit 101; the calling agent answers with the current conversation's model and
-re-invokes. Use --no-llm for a pure rule-based run.
+re-invokes. Its five-batch cap and first-zero-resolved stop condition persist
+across those re-invocations. Use --no-llm for a pure rule-based run.
 
 Usage:
   python3 sweep_reviews.py --project <wiki-root>           # dry-run (report only)
@@ -48,13 +49,15 @@ from _frontmatter import (  # noqa: E402
     parse_frontmatter as _parse_frontmatter_shared,
     extract_frontmatter_title,
 )
-from _paths import atomic_write  # noqa: E402
+from _paths import atomic_write, detect_runtime_dir  # noqa: E402
 from _exit_codes import HANDOFF_PENDING  # noqa: E402
 
 # ── LLM judge constants (verbatim from NashSU sweep-reviews.ts) ──────────────
 JUDGE_BATCH_SIZE = 40
 MAX_JUDGE_BATCHES = 5
 MAX_PAGES_IN_PROMPT = 300
+SWEEP_RUN_STATE = "review-sweep-run.json"
+SWEEP_STATE_VERSION = 1
 
 
 def _parse_frontmatter(text: str) -> Dict[str, Any]:
@@ -320,10 +323,105 @@ def parse_judge_response(raw: str, batch: List[Dict]) -> Set[str]:
     return {rid for rid in resolved_raw if isinstance(rid, str) and rid in valid_ids}
 
 
+def _sweep_state_path(runtime_dir: Path) -> Path:
+    return runtime_dir / SWEEP_RUN_STATE
+
+
+def _new_sweep_state(run_id: str) -> Dict[str, Any]:
+    return {
+        "version": SWEEP_STATE_VERSION,
+        "run_id": run_id,
+        "batch_count": 0,
+        "reviewed_ids": [],
+        "resolved_ids": [],
+        "pending_batch": None,
+        "stop_reason": None,
+        "updated_at": int(time.time()),
+    }
+
+
+def _load_sweep_state(runtime_dir: Path, run_id: str) -> Dict[str, Any]:
+    """Load the current run's durable judge state, or start a fresh one.
+
+    A different ``run_id`` is a genuinely new logical sweep.  Review ordering,
+    prompt cache keys, and wiki-content hashes are deliberately *not* run
+    identities, so they cannot reset the five-batch counter.
+    """
+    path = _sweep_state_path(runtime_dir)
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return _new_sweep_state(run_id)
+    if not isinstance(state, dict):
+        return _new_sweep_state(run_id)
+    if (state.get("version") != SWEEP_STATE_VERSION
+            or state.get("run_id") != run_id):
+        return _new_sweep_state(run_id)
+    if (not isinstance(state.get("batch_count"), int)
+            or state["batch_count"] < 0):
+        return _new_sweep_state(run_id)
+    for key in ("reviewed_ids", "resolved_ids"):
+        value = state.get(key)
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            return _new_sweep_state(run_id)
+    pending_batch = state.get("pending_batch")
+    if pending_batch is not None:
+        if not isinstance(pending_batch, dict):
+            return _new_sweep_state(run_id)
+        items = pending_batch.get("items")
+        if (not isinstance(items, list)
+                or not all(isinstance(item, dict) for item in items)):
+            return _new_sweep_state(run_id)
+        if not isinstance(pending_batch.get("system"), str):
+            return _new_sweep_state(run_id)
+        if not isinstance(pending_batch.get("user"), str):
+            return _new_sweep_state(run_id)
+    return state
+
+
+def _save_sweep_state(runtime_dir: Path, state: Dict[str, Any]) -> None:
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    state["updated_at"] = int(time.time())
+    atomic_write(
+        _sweep_state_path(runtime_dir),
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
+def _clear_sweep_state(runtime_dir: Path, run_id: Optional[str] = None,
+                       *, force: bool = False) -> None:
+    """Remove state only when it belongs to ``run_id`` (or when forced)."""
+    path = _sweep_state_path(runtime_dir)
+    if force or run_id is None:
+        path.unlink(missing_ok=True)
+        return
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        path.unlink(missing_ok=True)
+        return
+    if isinstance(state, dict) and state.get("run_id") == run_id:
+        path.unlink(missing_ok=True)
+
+
+def _judge_item_snapshot(review: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep only prompt/response fields so durable state stays JSON-safe."""
+    return {
+        "review_id": str(review.get("review_id", "")),
+        "type": str(review.get("type", "unknown")),
+        "title": str(review.get("title", "")),
+        "affected_pages": [
+            str(page) for page in (review.get("affected_pages") or [])
+        ],
+        "description": str(review.get("description", "")),
+    }
+
+
 def _llm_judge_reviews(pending: List[Dict],
                        pages: List[Tuple[str, Optional[str]]],
                        runtime_dir: Path,
-                       apply_fn: Optional[Callable[[Set[str]], None]] = None) -> Set[str]:
+                       apply_fn: Optional[Callable[[Set[str]], None]] = None,
+                       run_id: Optional[str] = None) -> Set[str]:
     """Port of NashSU sweep-reviews.ts ``llmJudgeReviews``.
 
     Judge still-pending items in batches of JUDGE_BATCH_SIZE, capped at
@@ -331,41 +429,119 @@ def _llm_judge_reviews(pending: List[Dict],
 
     Conversation mode (the only text-gen path): each batch is one handoff —
     on cache miss, ``make_conversation_llm_call`` writes a prompt file and
-    raises ConversationPending (propagated → exit 101). The content-hashed slug
-    makes each batch independently resumable across re-invokes.
+    raises ConversationPending (propagated → exit 101).
+
+    With ``run_id``, the batch counter, reviewed ids, resolved ids, and exact
+    pending prompt are durable.  Re-entry therefore resumes the same logical
+    batch and can never create a sixth batch because review ordering or the
+    content-addressed cache key changed.  Without ``run_id`` this retains the
+    original in-memory behavior for library callers and unit tests.
 
     Items without a stable ``review_id`` are skipped (the judge keys on id).
     """
     from _core import ConversationPending
     from _llm_call import make_conversation_llm_call
 
-    resolved: Set[str] = set()
     judgeable = [r for r in pending if r.get("review_id")]
     if not judgeable:
-        return resolved
+        if run_id:
+            _clear_sweep_state(runtime_dir, run_id)
+        return set()
 
     llm_call = make_conversation_llm_call(runtime_dir, stage_prefix="review-judge")
-    remaining = list(judgeable)
-    batches = 0
-    while remaining and batches < MAX_JUDGE_BATCHES:
-        batch = remaining[:JUDGE_BATCH_SIZE]
-        remaining = remaining[JUDGE_BATCH_SIZE:]
-        system, user = _build_judge_prompt(batch, pages)
+
+    if run_id is None:
+        resolved: Set[str] = set()
+        remaining = list(judgeable)
+        batches = 0
+        while remaining and batches < MAX_JUDGE_BATCHES:
+            batch = remaining[:JUDGE_BATCH_SIZE]
+            remaining = remaining[JUDGE_BATCH_SIZE:]
+            system, user = _build_judge_prompt(batch, pages)
+            try:
+                raw = llm_call(system, user)
+            except ConversationPending:
+                # Flush already-accumulated resolutions before propagating, so
+                # a later batch's cache-miss doesn't discard earlier work.
+                if apply_fn and resolved:
+                    apply_fn(resolved)
+                raise
+            batch_resolved = parse_judge_response(raw, batch)
+            batches += 1
+            if not batch_resolved:
+                break
+            resolved |= batch_resolved
+        return resolved
+
+    state = _load_sweep_state(runtime_dir, run_id)
+    resolved = set(state["resolved_ids"])
+    reviewed = set(state["reviewed_ids"])
+    if state.get("stop_reason"):
+        # The judge completed but the caller may have crashed before applying
+        # the returned ids. Re-return them without opening another batch; the
+        # outer sweep clears state only after resolution writes/reporting.
+        return resolved
+
+    while True:
+        pending_batch = state.get("pending_batch")
+        if pending_batch is not None:
+            batch = pending_batch["items"]
+            system = pending_batch["system"]
+            user = pending_batch["user"]
+        else:
+            remaining = [
+                _judge_item_snapshot(review)
+                for review in judgeable
+                if review["review_id"] not in reviewed
+            ]
+            if not remaining or state["batch_count"] >= MAX_JUDGE_BATCHES:
+                state["stop_reason"] = (
+                    "max-batches"
+                    if state["batch_count"] >= MAX_JUDGE_BATCHES
+                    else "exhausted"
+                )
+                _save_sweep_state(runtime_dir, state)
+                return resolved
+
+            batch = remaining[:JUDGE_BATCH_SIZE]
+            system, user = _build_judge_prompt(batch, pages)
+            # Count the judge attempt before calling it.  A cache miss that
+            # emits a handoff is still this batch's one real attempt.
+            state["batch_count"] += 1
+            state["pending_batch"] = {
+                "items": batch,
+                "system": system,
+                "user": user,
+            }
+            _save_sweep_state(runtime_dir, state)
+
         try:
             raw = llm_call(system, user)
         except ConversationPending:
-            # Flush already-accumulated resolutions before propagating, so a
-            # later batch's cache-miss doesn't discard earlier batches' work.
             if apply_fn and resolved:
                 apply_fn(resolved)
             raise
+
         batch_resolved = parse_judge_response(raw, batch)
-        batches += 1
-        if not batch_resolved:
-            # Nothing resolved — further batches likely the same. Stop early.
-            break
+        reviewed |= {
+            item["review_id"] for item in batch if item.get("review_id")
+        }
         resolved |= batch_resolved
-    return resolved
+        state["reviewed_ids"] = sorted(reviewed)
+        state["resolved_ids"] = sorted(resolved)
+        state["pending_batch"] = None
+
+        if not batch_resolved:
+            state["stop_reason"] = "zero-resolved"
+            _save_sweep_state(runtime_dir, state)
+            return resolved
+
+        if state["batch_count"] >= MAX_JUDGE_BATCHES:
+            state["stop_reason"] = "max-batches"
+            _save_sweep_state(runtime_dir, state)
+            return resolved
+
+        _save_sweep_state(runtime_dir, state)
 
 
 def _resolve_review(review: Dict, reason: str, dry_run: bool = True) -> bool:
@@ -473,7 +649,8 @@ def _apply_rule_stage(reviews: List[Dict],
     return resolved, still_pending
 
 
-def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -> Dict:
+def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True,
+                  run_id: Optional[str] = None) -> Dict:
     """Main sweep logic. Returns results dict.
 
     Two-stage NashSU port:
@@ -503,6 +680,8 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -
     print(f"  Found {len(reviews)} unresolved review items (after content dedup)")
 
     if not reviews:
+        if run_id:
+            _clear_sweep_state(detect_runtime_dir(wiki_root), run_id)
         print("\n[ok] No pending reviews — nothing to sweep.")
         return {"total": 0, "resolved": 0, "pending": 0, "details": []}
 
@@ -527,7 +706,6 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -
               f"the LLM judge (human_gate: true — human decision only)")
     if use_llm and judge_pool:
         print(f"\n[judge] LLM semantic judge over {len(judge_pool)} pending item(s)...")
-        from _paths import detect_runtime_dir
         runtime_dir = detect_runtime_dir(wiki_root)
         pages = _wiki_page_summaries(wiki_dir)
 
@@ -543,8 +721,16 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -
                             print(f"  [ok] {item.get('title', '')[:60]}")
                             print(f"     -> {item['reason']}")
 
-        resolved_ids = _llm_judge_reviews(judge_pool, pages, runtime_dir,
-                                          apply_fn=_flush_llm_resolved)
+        judge_kwargs: Dict[str, Any] = {}
+        if run_id is not None:
+            judge_kwargs["run_id"] = run_id
+        resolved_ids = _llm_judge_reviews(
+            judge_pool,
+            pages,
+            runtime_dir,
+            apply_fn=_flush_llm_resolved,
+            **judge_kwargs,
+        )
         if resolved_ids:
             kept_pending: List[Dict] = []
             for review in judge_pool:
@@ -555,6 +741,8 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -
                 else:
                     kept_pending.append(review)
             still_pending = kept_pending + human_gated
+    elif run_id:
+        _clear_sweep_state(detect_runtime_dir(wiki_root), run_id)
 
     # Apply resolutions to disk (or dry-run accounting)
     all_resolved = rule_resolved + llm_resolved
@@ -592,7 +780,7 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -
     # never deleted. The resolved twin on disk is what lets normalize_review_items
     # apply "resolved wins" so the item stays resolved across re-ingest.
 
-    return {
+    result = {
         "total": len(reviews),
         "resolved": len(applied),
         "rule_resolved": len(rule_resolved),
@@ -603,6 +791,9 @@ def sweep_reviews(wiki_root: Path, dry_run: bool = True, use_llm: bool = True) -
             "pending_types": by_type_pending,
         },
     }
+    if run_id:
+        _clear_sweep_state(detect_runtime_dir(wiki_root), run_id)
+    return result
 
 
 def main() -> int:
@@ -614,6 +805,15 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Machine-readable JSON output")
     parser.add_argument("--no-llm", action="store_true",
                         help="Skip the LLM semantic judge stage (pure rule-based)")
+    parser.add_argument(
+        "--run-id",
+        help="Logical lint/sweep run id; persists the five-batch cap across exit 101",
+    )
+    parser.add_argument(
+        "--reset-run",
+        action="store_true",
+        help="Discard an abandoned standalone sweep checkpoint before starting",
+    )
     args = parser.parse_args()
 
     wiki_root = Path(args.project).expanduser().resolve()
@@ -621,8 +821,19 @@ def main() -> int:
         print(f"Error: project not found: {wiki_root}", file=sys.stderr)
         return 1
 
+    # A direct CLI sweep is itself one logical run and needs the same durable
+    # exit-101 semantics as a lint-owned sweep.  Lint passes its own run id.
+    run_id = args.run_id or "standalone"
+    if args.reset_run:
+        _clear_sweep_state(detect_runtime_dir(wiki_root), force=True)
+
     try:
-        result = sweep_reviews(wiki_root, dry_run=not args.apply, use_llm=not args.no_llm)
+        result = sweep_reviews(
+            wiki_root,
+            dry_run=not args.apply,
+            use_llm=not args.no_llm,
+            run_id=run_id,
+        )
     except BaseException as exc:
         # ConversationPending (BaseException subclass) → exit 101 so the agent
         # answers the judge prompt and re-invokes (NashSU conversation handoff).

@@ -24,6 +24,7 @@ New source ingested → sweep pending reviews →
 | `buildWikiIndex()` — scans wiki/ for all page IDs + titles | `scripts/sweep_reviews.py` or calling-agent scan |
 | Rule matching: filename / frontmatter title / affectedPages | Same: page path match, title match, affected page existence |
 | LLM semantic judgment for remaining items | Calling agent reads review item + wiki context → judges |
+| Judge at most 5 batches of 40; stop on first zero-resolved batch | Same logical cap; `review-sweep-run.json` persists the count and exact pending prompt across exit-101 re-entry |
 | Auto-resolve + mark `resolved` in the in-memory store (never deleted) | Set `resolved: true` + `resolved_at` + `resolved_reason` in REVIEW .md files — **kept on disk** as an audit trail; the content-stable `review_id` + resolved-wins dedup keeps them resolved across re-ingest |
 
 ## Workflow
@@ -117,7 +118,11 @@ If NO → leave unresolved
 | When lint finds many review items | Sweep to reduce noise before investigating |
 
 > **Default via lint**: plain `wiki-lint.sh` invokes
-> `sweep_reviews.py --apply` and may resolve files under `wiki/REVIEW/`.
+> `sweep_reviews.py --apply --run-id <logical-lint-run>` and may resolve files
+> under `wiki/REVIEW/`. The logical run id—not candidate ordering or a prompt
+> content hash—owns the hard five-batch counter. Re-entering after exit 101
+> resumes the exact pending prompt; it cannot create a sixth batch. The first
+> completed batch with `resolved: []` ends the sweep.
 > Use `--no-sweep` to disable this stage, `--diagnostic-only` to disable all
 > wiki mutations, or run `sweep_reviews.py --dry-run` directly for a preview.
 

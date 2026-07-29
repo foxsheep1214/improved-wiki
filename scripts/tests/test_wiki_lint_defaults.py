@@ -51,12 +51,23 @@ class TestWikiLintDefaults(unittest.TestCase):
             "--diagnostic-only",
             "--structural-only",
             "--delete-orphans-only",
+            "--reset-lint-run",
         ):
             with self.subTest(flag=flag):
                 self.assertIn(flag, _SCRIPT)
 
     def test_plain_scan_does_not_migrate_legacy_wiki_lint_pages(self):
         self.assertNotIn('mv "$WIKI_DIR/lint"', _SCRIPT)
+
+    def test_exit_101_stages_use_one_durable_logical_run(self):
+        self.assertIn("_lint_run_state.py", _SCRIPT)
+        self.assertIn('lint_stage_done "semantic"', _SCRIPT)
+        self.assertIn('lint_mark_done "semantic"', _SCRIPT)
+        self.assertIn('lint_stage_done "sweep"', _SCRIPT)
+        self.assertIn('--run-id "$LINT_RUN_ID"', _SCRIPT)
+
+    def test_graph_is_not_part_of_lint(self):
+        self.assertNotIn("graph.py", _SCRIPT)
 
     def test_noninteractive_checkpoint_waits_then_confirmed_continuation_runs(self):
         with tempfile.TemporaryDirectory() as td:

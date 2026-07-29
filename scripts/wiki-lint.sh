@@ -39,6 +39,7 @@
 #   $ ./wiki-lint.sh --dedup         # cross-source semantic dedup/merge (default)
 #   $ ./wiki-lint.sh --no-delete-orphans # skip the final confirmation checkpoint
 #   $ ./wiki-lint.sh --delete-orphans-only # confirmed continuation: fresh scan + orphan preview/REVIEW
+#   $ ./wiki-lint.sh --reset-lint-run # discard an abandoned exit-101 checkpoint
 #   $ ./wiki-lint.sh --verbose       # show every finding
 #   $ ./wiki-lint.sh --strict        # exit 1 for critical issues
 #   $ ./wiki-lint.sh --json-only     # JSON only, no .md lint pages
@@ -86,6 +87,8 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export SCRIPT_DIR
 WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
 WIKI_DIR="$WIKI_ROOT/wiki"
 export WIKI_DIR
@@ -130,6 +133,9 @@ DELETE_ORPHANS=ask      # default: stop after lint and ask the user
 JSON_ONLY=false
 SEMANTIC_LIMIT=""
 SEMANTIC_TOKENS=""
+RESET_LINT_RUN=false
+STRUCTURAL_ONLY_MODE=false
+DELETE_ORPHANS_ONLY_MODE=false
 for arg in "$@"; do
   case $arg in
     --verbose|-v) VERBOSE=true ;;
@@ -158,6 +164,7 @@ for arg in "$@"; do
       DELETE_ORPHANS=false
       ;;
     --structural-only)
+      STRUCTURAL_ONLY_MODE=true
       SEMANTIC=false
       EMIT_REVIEW=false
       AUTO_FIX=false
@@ -167,6 +174,7 @@ for arg in "$@"; do
       DELETE_ORPHANS=false
       ;;
     --delete-orphans-only)
+      DELETE_ORPHANS_ONLY_MODE=true
       SEMANTIC=false
       EMIT_REVIEW=false
       AUTO_FIX=false
@@ -175,6 +183,7 @@ for arg in "$@"; do
       DEDUP=false
       DELETE_ORPHANS=true
       ;;
+    --reset-lint-run) RESET_LINT_RUN=true ;;
     --semantic-limit=*) SEMANTIC_LIMIT="${arg#*=}" ;;
     --semantic-tokens=*) SEMANTIC_TOKENS="${arg#*=}" ;;
     --help|-h)
@@ -184,6 +193,14 @@ for arg in "$@"; do
     *) echo "Unknown arg: $arg" >&2; exit 2 ;;
   esac
 done
+
+# Structural-only and the separately confirmed delete-orphans continuation are
+# standalone commands. They must not consume or overwrite an exit-101
+# checkpoint belonging to a full/diagnostic logical lint run.
+STATEFUL_LINT_RUN=true
+if [ "$STRUCTURAL_ONLY_MODE" = true ] || [ "$DELETE_ORPHANS_ONLY_MODE" = true ]; then
+  STATEFUL_LINT_RUN=false
+fi
 
 if [ ! -d "$WIKI_DIR" ]; then
   echo "ERROR: wiki/ does not exist under $WIKI_ROOT" >&2
@@ -262,12 +279,46 @@ if [ "$LOCK_STATUS" != "LOCKED" ]; then
   exit 1
 fi
 
+# ── Logical lint-run checkpoint (survives exit 101) ──
+LINT_RUN_STATE="$RUNTIME_DIR/lint-run-state.json"
+LINT_RUN_ACTIVE=false
+LINT_RUN_ID=""
+
+if [ "$RESET_LINT_RUN" = true ]; then
+  python3 "$SCRIPT_DIR/_lint_run_state.py" reset "$LINT_RUN_STATE" \
+    --related-state "$RUNTIME_DIR/review-sweep-run.json" || exit 2
+  echo "[lint] Discarded the previous logical lint-run checkpoint." >&2
+fi
+
+if [ "$STATEFUL_LINT_RUN" = true ]; then
+  if ! LINT_RUN_ID=$(python3 "$SCRIPT_DIR/_lint_run_state.py" begin "$LINT_RUN_STATE"); then
+    echo "[lint] Could not start/resume logical lint-run state." >&2
+    exit 2
+  fi
+  LINT_RUN_ACTIVE=true
+  echo "[lint] Logical run: $LINT_RUN_ID"
+fi
+
+lint_stage_done() {
+  [ "$LINT_RUN_ACTIVE" = true ] || return 1
+  python3 "$SCRIPT_DIR/_lint_run_state.py" is-done "$LINT_RUN_STATE" "$1"
+}
+
+lint_mark_done() {
+  [ "$LINT_RUN_ACTIVE" = true ] || return 0
+  python3 "$SCRIPT_DIR/_lint_run_state.py" mark-done "$LINT_RUN_STATE" "$1"
+}
+
+lint_finish_run() {
+  [ "$LINT_RUN_ACTIVE" = true ] || return 0
+  python3 "$SCRIPT_DIR/_lint_run_state.py" finish "$LINT_RUN_STATE"
+  LINT_RUN_ACTIVE=false
+}
+
 # ── Phase 1: Structural lint ──
 LINT_SCRIPT=$(mktemp -t wiki-lint-XXXXXX.py)
 trap "kill '$LOCK_HOLDER_PID' 2>/dev/null; rm -rf '$LINT_LOCKDIR'; rm -f '$LINT_SCRIPT' '$LINT_CACHE.tmp' '$LINT_CACHE.tmp.err'" EXIT
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export SCRIPT_DIR
 cat > "$LINT_SCRIPT" <<'PYEOF'
 import json
 import os
@@ -355,6 +406,7 @@ run_structural_scan() {
 }
 
 if ! run_structural_scan; then
+  lint_finish_run
   exit 1
 fi
 CACHE_DIRTY_AFTER_SCAN=false
@@ -441,19 +493,27 @@ fi
 
 # ── Phase 2: Semantic lint (user-selected default; --no-semantic skips) ──
 if [ "$SEMANTIC" = true ]; then
-  SEM_ARGS=()
-  [ -n "$SEMANTIC_LIMIT" ]  && SEM_ARGS+=(--limit "$SEMANTIC_LIMIT")
-  [ "$EMIT_REVIEW" = true ] && SEM_ARGS+=(--emit-review)
-  [ -n "$SEMANTIC_TOKENS" ] && \
-    echo "[lint] --semantic: --semantic-tokens is ignored in conversation mode" >&2
-  echo "[lint] --semantic: running conversation-mode semantic pass ..."
-  IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/wiki-lint-semantic.py" ${SEM_ARGS:+"${SEM_ARGS[@]}"}
-  sem_rc=$?
-  if [ "$sem_rc" -eq 101 ]; then
-    echo "[lint] --semantic: conversation handoff pending (exit 101) — the calling agent must answer the written prompt and re-invoke wiki-lint-semantic.py to finish the semantic pass." >&2
-    exit 101
-  elif [ "$sem_rc" -ne 0 ]; then
-    echo "[lint] --semantic: sub-script exited $sem_rc, continuing" >&2
+  if lint_stage_done "semantic"; then
+    echo "[lint] --semantic: already complete for logical run $LINT_RUN_ID; skipping full rescan."
+  else
+    SEM_ARGS=()
+    [ -n "$SEMANTIC_LIMIT" ]  && SEM_ARGS+=(--limit "$SEMANTIC_LIMIT")
+    [ "$EMIT_REVIEW" = true ] && SEM_ARGS+=(--emit-review)
+    [ -n "$SEMANTIC_TOKENS" ] && \
+      echo "[lint] --semantic: --semantic-tokens is ignored in conversation mode" >&2
+    echo "[lint] --semantic: running conversation-mode semantic pass ..."
+    IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/wiki-lint-semantic.py" ${SEM_ARGS:+"${SEM_ARGS[@]}"}
+    sem_rc=$?
+    if [ "$sem_rc" -eq 101 ]; then
+      echo "[lint] --semantic: conversation handoff pending (exit 101) — answer the written prompt and re-run wiki-lint.sh with the same flags; the logical-run checkpoint prevents a second full pass after this one completes." >&2
+      exit 101
+    elif [ "$sem_rc" -ne 0 ]; then
+      echo "[lint] --semantic: sub-script exited $sem_rc, continuing" >&2
+    elif ! lint_mark_done "semantic"; then
+      echo "[lint] --semantic: failed to persist completion checkpoint." >&2
+      lint_finish_run
+      exit 2
+    fi
   fi
 fi
 
@@ -501,18 +561,22 @@ print(errors)
 ")
   if [ "$HAS_ERRORS" != "0" ]; then
     echo "[lint] --strict: $HAS_ERRORS critical issues found" >&2
+    lint_finish_run
     exit 1
   fi
 fi
 
 # ── Default maintenance: Auto-fix missing-frontmatter ──
 if [ "$AUTO_FIX" = true ]; then
-  CACHE_DIRTY_AFTER_SCAN=true
-  echo "[lint] Auto-fix: repairing missing-frontmatter..."
-  TIMESTAMP=$(date +%Y-%m-%d)
-  # Progress lines go to stderr; stdout carries ONLY the final count, so
-  # $FIXED can't be a multi-line blob (2026-07-12). Writes are atomic.
-  FIXED=$(python3 << PYEOF
+  if lint_stage_done "auto_fix"; then
+    echo "[lint] Auto-fix: already complete for logical run $LINT_RUN_ID; skipping."
+  else
+    CACHE_DIRTY_AFTER_SCAN=true
+    echo "[lint] Auto-fix: repairing missing-frontmatter..."
+    TIMESTAMP=$(date +%Y-%m-%d)
+    # Progress lines go to stderr; stdout carries ONLY the final count, so
+    # $FIXED can't be a multi-line blob (2026-07-12). Writes are atomic.
+    FIXED=$(python3 << PYEOF
 import json, re, pathlib, os, sys
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from _paths import atomic_write
@@ -541,58 +605,93 @@ for f in items:
 print(fixed)
 PYEOF
 )
-  fix_rc=$?
-  if [ "$fix_rc" -ne 0 ]; then
-    echo "[lint] Auto-fix: python exited $fix_rc, continuing" >&2
+    fix_rc=$?
+    if [ "$fix_rc" -ne 0 ]; then
+      echo "[lint] Auto-fix: python exited $fix_rc, continuing" >&2
+    else
+      if ! lint_mark_done "auto_fix"; then
+        echo "[lint] Auto-fix: failed to persist completion checkpoint." >&2
+        lint_finish_run
+        exit 2
+      fi
+    fi
+    case "$FIXED" in
+      ''|*[!0-9]*)
+        echo "[lint] Auto-fix: unexpected count output '${FIXED}' — treating as 0" >&2
+        FIXED=0 ;;
+    esac
+    echo "[lint] Auto-fix: repaired $FIXED issues"
   fi
-  case "$FIXED" in
-    ''|*[!0-9]*)
-      echo "[lint] Auto-fix: unexpected count output '${FIXED}' — treating as 0" >&2
-      FIXED=0 ;;
-  esac
-  echo "[lint] Auto-fix: repaired $FIXED issues"
 fi
 
 # ── Default maintenance: Auto-fix links (NashSU handleFix parity) ──
 if [ "$FIX_LINKS" = true ]; then
-  CACHE_DIRTY_AFTER_SCAN=true
-  echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
-  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply --no-stub \
-    --from-cache "$LINT_CACHE" \
-    --project-root "$WIKI_ROOT"
-  fixlinks_rc=$?
-  if [ "$fixlinks_rc" -ne 0 ]; then
-    echo "[lint] --fix-links: sub-script exited $fixlinks_rc, continuing" >&2
+  if lint_stage_done "fix_links"; then
+    echo "[lint] Auto-fix-links: already complete for logical run $LINT_RUN_ID; skipping."
+  else
+    CACHE_DIRTY_AFTER_SCAN=true
+    echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
+    python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply --no-stub \
+      --from-cache "$LINT_CACHE" \
+      --project-root "$WIKI_ROOT"
+    fixlinks_rc=$?
+    if [ "$fixlinks_rc" -ne 0 ]; then
+      echo "[lint] --fix-links: sub-script exited $fixlinks_rc, continuing" >&2
+    elif ! lint_mark_done "fix_links"; then
+      echo "[lint] --fix-links: failed to persist completion checkpoint." >&2
+      lint_finish_run
+      exit 2
+    fi
   fi
 fi
 
 # ── Default maintenance: Review sweep (NashSU sweep-reviews.ts parity) ──
 if [ "$SWEEP" = true ]; then
-  CACHE_DIRTY_AFTER_SCAN=true
-  echo "[lint] Review sweep: resolving satisfied review items..."
-  SWEEP_OUT=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
-      --project "$WIKI_ROOT" --apply 2>&1 | tail -3)
-  sweep_rc=$?
-  echo "[lint] --sweep: $SWEEP_OUT"
-  if [ "$sweep_rc" -eq 101 ]; then
-    echo "[lint] --sweep: conversation handoff pending (exit 101) — the calling agent must answer the written prompt and re-invoke sweep_reviews.py to finish the sweep, then re-run wiki-lint.sh." >&2
-    exit 101
-  elif [ "$sweep_rc" -ne 0 ]; then
-    echo "[lint] --sweep: sub-script exited $sweep_rc, continuing" >&2
+  if lint_stage_done "sweep"; then
+    echo "[lint] Review sweep: already complete for logical run $LINT_RUN_ID; skipping."
+  else
+    CACHE_DIRTY_AFTER_SCAN=true
+    echo "[lint] Review sweep: resolving satisfied review items..."
+    SWEEP_ARGS=(--project "$WIKI_ROOT" --apply)
+    if [ "$LINT_RUN_ACTIVE" = true ]; then
+      SWEEP_ARGS+=(--run-id "$LINT_RUN_ID")
+    fi
+    SWEEP_OUT=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
+        "${SWEEP_ARGS[@]}" 2>&1 | tail -3)
+    sweep_rc=$?
+    echo "[lint] --sweep: $SWEEP_OUT"
+    if [ "$sweep_rc" -eq 101 ]; then
+      echo "[lint] --sweep: conversation handoff pending (exit 101) — answer the written prompt and re-run wiki-lint.sh. The same logical run keeps one hard total of at most 5 judge batches and stops after the first zero-resolved batch." >&2
+      exit 101
+    elif [ "$sweep_rc" -ne 0 ]; then
+      echo "[lint] --sweep: sub-script exited $sweep_rc, continuing" >&2
+    elif ! lint_mark_done "sweep"; then
+      echo "[lint] --sweep: failed to persist completion checkpoint." >&2
+      lint_finish_run
+      exit 2
+    fi
   fi
 fi
 
 # ── Default maintenance: Cross-source dedup (NashSU dedup parity) ──
 if [ "$DEDUP" = true ]; then
-  CACHE_DIRTY_AFTER_SCAN=true
-  echo "[lint] Cross-source dedup: merging near-duplicate concepts..."
-  python3 "$SCRIPT_DIR/cross_source_dedup.py" --project "$WIKI_ROOT" 2>&1 | tail -5
-  dedup_rc=${PIPESTATUS[0]}
-  if [ "$dedup_rc" -eq 101 ]; then
-    echo "[lint] --dedup: conversation handoff pending (exit 101) — the calling agent must answer the written prompt and re-invoke cross_source_dedup.py to finish the dedup pass, then re-run wiki-lint.sh." >&2
-    exit 101
-  elif [ "$dedup_rc" -ne 0 ]; then
-    echo "[lint] --dedup: sub-script exited $dedup_rc, continuing" >&2
+  if lint_stage_done "dedup"; then
+    echo "[lint] Cross-source dedup: already complete for logical run $LINT_RUN_ID; skipping."
+  else
+    CACHE_DIRTY_AFTER_SCAN=true
+    echo "[lint] Cross-source dedup: merging near-duplicate concepts..."
+    python3 "$SCRIPT_DIR/cross_source_dedup.py" --project "$WIKI_ROOT" 2>&1 | tail -5
+    dedup_rc=${PIPESTATUS[0]}
+    if [ "$dedup_rc" -eq 101 ]; then
+      echo "[lint] --dedup: conversation handoff pending (exit 101) — answer the written prompt and re-run wiki-lint.sh to finish the same logical lint run." >&2
+      exit 101
+    elif [ "$dedup_rc" -ne 0 ]; then
+      echo "[lint] --dedup: sub-script exited $dedup_rc, continuing" >&2
+    elif ! lint_mark_done "dedup"; then
+      echo "[lint] --dedup: failed to persist completion checkpoint." >&2
+      lint_finish_run
+      exit 2
+    fi
   fi
 fi
 
@@ -609,6 +708,7 @@ if [ "$DELETE_ORPHANS" = ask ]; then
   echo "[lint] All preceding default lint/fix/sweep/dedup stages are complete." >&2
   echo "[lint] Ask the user: 是否执行 delete-orphans（仅预览并生成 Review，不会删除页面）？" >&2
   echo "[lint] If approved, run: $0 --delete-orphans-only" >&2
+  lint_finish_run
   exit 102
 fi
 
@@ -616,6 +716,7 @@ if [ "$DELETE_ORPHANS" = true ]; then
   if [ "$CACHE_DIRTY_AFTER_SCAN" = true ]; then
     echo "[lint] Refreshing structural cache after wiki mutations before orphan review..."
     if ! run_structural_scan; then
+      lint_finish_run
       exit 1
     fi
   fi
@@ -629,4 +730,5 @@ if [ "$DELETE_ORPHANS" = true ]; then
   fi
 fi
 
+lint_finish_run
 exit 0
