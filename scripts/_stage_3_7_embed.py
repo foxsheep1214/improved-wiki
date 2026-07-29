@@ -20,6 +20,7 @@ import os
 import sys
 from pathlib import Path
 import urllib.parse
+import urllib.request
 
 from _config import Config
 from _page_ref import PageRef, PageRefError
@@ -50,7 +51,6 @@ def _stage_3_7_check_embed_capability(base_url: str, model: str) -> tuple[bool, 
             return False, "embedding model 未配置"
         return True, ""
 
-    import urllib.request
     root = f"{parsed.scheme or 'http'}://{parsed.netloc}"
     try:
         with urllib.request.urlopen(f"{root}/api/tags", timeout=3) as resp:

@@ -57,6 +57,20 @@ minerU 32 页/chunk 串行。272 页书（9 chunks）可能超 600s 终端超时
 
 ## Fixed bugs（回归意识——已修但值得记录症状）
 
+### Stage 3.7 本地 Ollama 能力探测曾在 URL 解析处崩溃（已修，2026-07-30）
+`_stage_3_7_check_embed_capability()` 在函数中先调用 `urllib.parse.urlparse()`，
+稍后才执行 `import urllib.request`。Python 会把该 import 绑定的 `urllib` 判定为整函数
+局部变量，导致本地 Ollama 默认路径在真实网络探测前就抛 `UnboundLocalError`，已经
+通过 go/no-go 的书也无法写入最终 `ingested` 标记。已修：`urllib.parse` 与
+`urllib.request` 都在模块级导入，并用默认 Ollama URL/模型列表回归测试覆盖。
+
+### 非 TTY 运行 ingest 时进度曾整段延迟到 exit 101 才出现（已修，2026-07-30）
+`ingest.py` 在桌面 agent、batch supervisor 或重定向日志中使用 pipe，Python 会对普通
+`print` 做块缓冲。大型 caption round 因此可能已经完成数百张图，但终端看起来长时间
+无输出，直到下一次 conversation handoff 退出时才一次性刷出全部进度，容易被误判为
+minerU 卡死。已修：CLI 入口对 stdout/stderr 启用 line buffering；TTY、StringIO 和
+不支持 `reconfigure` 的调用者保持兼容。
+
 ### Stage 2.2 prompt 的 YAML/LaTeX 转义坑（已修，2026-06-27）
 Prompt 曾用双引号包公式（`formula: "LaTeX"`），未强制 YAML 单引号；含 `\`/`$` 的字符串在双引号 YAML 里会被静默改写或让 `yaml.safe_load` 抛错，fallback parser 拿不到 `concepts_found` → 该 chunk **静默生成 0 个页面**（无报错）。已修：要求含 `\`/`$` 的字段用单引号。**操作陷阱**：改这个 prompt 模板会变更每个 chunk 的 prompt hash，在飞 chunk 结果全部作废（文件名不匹配）；若旧结果内容本身没变，`cp old-hash.txt new-hash.txt` 可免重跑。
 

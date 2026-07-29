@@ -52,6 +52,24 @@ from _stage_1_extract import _stage_1_1_detect_pdf_type
 from _stage_1_1_scanned import MINERU_CHUNK_SIZE
 from _watch import ingest_watch
 
+
+def _configure_line_buffered_output() -> None:
+    """Expose long-running ingest progress immediately outside a TTY.
+
+    Batch supervisors, desktop agents, and redirected logs attach pipes rather
+    than terminals, so Python otherwise block-buffers ordinary ``print`` calls.
+    A large caption round can then look stalled until the next exit-101 handoff
+    flushes hundreds of completed progress lines at once.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, OSError, ValueError):
+            # StringIO/test doubles and already-closed streams may not support
+            # TextIOWrapper.reconfigure. Output remains usable in those cases.
+            pass
+
+
 def _probe_and_apply_context(config) -> None:
     """Probe the live conversation model's context window (or reuse cache) and
     apply it to ``config``. Raises ``ConversationPending`` on the first pass
@@ -61,6 +79,7 @@ def _probe_and_apply_context(config) -> None:
 
 
 def main() -> int:
+    _configure_line_buffered_output()
     parser = argparse.ArgumentParser(description="Ingest source files into the wiki (NashSU-style multi-stage)")
     parser.add_argument("file", nargs="*", help="Path(s) to raw source file(s). Multiple files enable batch mode. "
                         "Omit with --watch to consume the queue.")

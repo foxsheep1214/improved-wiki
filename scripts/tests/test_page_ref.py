@@ -91,6 +91,36 @@ class TestPageRef(unittest.TestCase):
 
 
 class TestEmbeddingConsumesPageRef(unittest.TestCase):
+    def test_local_ollama_capability_probe_parses_url_before_request(self):
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"models": [{"model": "bge-m3:latest"}]}'
+
+        with (
+            mock.patch.dict(sys.modules, {"lancedb": mock.Mock()}),
+            mock.patch.object(
+                _stage_3_7_embed.urllib.request,
+                "urlopen",
+                return_value=Response(),
+            ) as urlopen,
+        ):
+            result = _stage_3_7_embed._stage_3_7_check_embed_capability(
+                "http://127.0.0.1:11434/v1",
+                "bge-m3",
+            )
+
+        self.assertEqual(result, (True, ""))
+        urlopen.assert_called_once_with(
+            "http://127.0.0.1:11434/api/tags",
+            timeout=3,
+        )
+
     def test_legacy_ref_resolves_once_without_wiki_wiki_fallback(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
