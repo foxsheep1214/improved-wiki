@@ -100,7 +100,10 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **Schema/Purpose 上下文（NashSU 0.6.6 parity）**：把根目录
   `schema.md` 的语义部分作为 AUTHORITATIVE 路由/Frontmatter 契约注入每个
   chunk；机器命名 YAML 仅供 Stage 0.1，不进入 LLM 上下文。可选
-  `purpose.md` 同时注入，用于内容优先级而非改写事实。候选类型来自结构化
+  `purpose.md` 同时注入，用于内容优先级而非改写事实。另把
+  `wiki/index.md` 按 NashSU 的 40K 上限冻结为每源快照注入；超大 index
+  优先保留 synthesis/thesis 分区，使分析能复用并更新既有 living pages，
+  但 index 标题/描述本身不当作事实证据。候选类型来自结构化
   `type→dir` 表；仅排除 ingest 自管的 source/entity/concept、用户发起的
   query 与应用维护的 overview。comparison、synthesis、finding、thesis、
   methodology 和自定义 schema 类型都可作为 typed candidate。
@@ -113,7 +116,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 2.4 · Generation（single-pass pipeline）
 - **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再逐 chunk 统一生成分析推荐的 key 概念/实体与项目 schema-typed 页（源锚定；≤1 chunk 走单发）。comparison、synthesis、finding、thesis、methodology 不再有旁路或专门 stage。**不是** analyze→generate 逐 chunk 交错——全部分析在前，生成在后（2.3 夹在中间，需要全量分析结果）。完整语义 schema 以 AUTHORITATIVE 形式注入；每个 genuinely supported 的 `schema_typed_candidate` 在生成前按结构化 `type→dir` 重新解析，忽略 LLM 自报的 folder。`mentioned`、passing/background 项不进入 owner inventory，也不允许生成“补充基础页”。
-- **schema 语义与数量**：每类候选都必须满足项目 schema 的语义门（例如 finding 要证据锚点、methodology 要可复用条件/步骤、thesis 要可证伪、comparison 要真实多维对比、synthesis 要真实多来源）。不设各类型条数目标、下限或上限，也不再截断 typed candidate 清单（旧 per-chunk 40 / all-chunks 120 展示上限已移除）。2.2 推荐只是候选，不预先承诺建页；2.4 仍须判断其是否真正关键且被实质展开。某次 2.4 调用若没有任何候选达到该门槛，必须只返回精确哨兵 `NO_KEY_PAGES`；普通空白、解释性文字或损坏输出仍是硬失败。source 页不受该哨兵影响，由 2.6 单独强制生成。
+- **schema 语义与数量**：每类候选都必须满足项目 schema 的语义门（例如 finding 要证据锚点、methodology 要可复用条件/步骤、thesis 要可证伪、comparison 要真实多维对比）。按 NashSU bundled schema，当前来源可建立 speculative working thesis，也可建立区别于 source summary 的 cross-cutting synthesis；后续来源经同路径合并/更新。项目 schema 若声明更严格门槛则服从项目 schema。不设各类型条数目标、下限或上限，也不再截断 typed candidate 清单（旧 per-chunk 40 / all-chunks 120 展示上限已移除）。2.2 推荐只是候选，不预先承诺建页；但 synthesis/thesis 不得仅因仍是单来源初稿或 speculative 而在 2.4 被二次静默拒绝。某次 2.4 调用若没有任何候选达到该门槛，必须只返回精确哨兵 `NO_KEY_PAGES`；普通空白、解释性文字或损坏输出仍是硬失败。source 页不受该哨兵影响，由 2.6 单独强制生成。
 - **并行生成（2026-07-09 默认开启；2026-07-23 加并发上限）**：多 chunk 时用预计算 slug 清单（`_build_gen_inventory`，slug = slugify(name)，取自已缓存的 2.2 分析）取代"chunk N+1 靠 chunk N 实际产出的 slug 去重"——去重是确定性引用查表，不是像 2.2 rolling digest 那样的内容依赖，NashSU 本身也不对生成分 chunk（一次整书调用），没有"必须串行"的先例要对齐。一次 ingest.py 调用最多吐出 `--parallel N` 个仍缺答案的 generation prompt；主对话并发派该波的 fresh sub-agent，写回后 re-invoke 进入下一波（10 chunks、N=4 → 4+4+2）。`N=1` 才显式串行，N≥剩余 chunk 数仍一次全发。选项退出：`IMPROVED_WIKI_PARALLEL_GEN=0`/`false`/`no`/`off` 回退旧的严格串行累积路径（排查回归时用）。
 - **子步骤（生成前）· 增量关联验证**：`stage_2_3_detect_incremental_associations` 将候选与真实页面匹配并保留 type-prefixed exact path；同类型命中是 **UPDATE EXISTING** 目标，2.4 必须用该现有路径输出 FILE 块，不能因“已存在”跳过来源的新贡献。跨类型命中只链接、不另建重复页；schema-typed 候选只在其声明 route 内匹配，避免 generic 页误压制 typed 页。`stage_2_3_resolve_proposed_connections` 另将 2.2 自报的 `connections_to_existing_wiki` 去磁盘验证，作为 Linkable pages；两者都不接受幻觉路径。wiki 为空时自然无关联。
 - **子步骤（生成后收尾）· 源内概念去重**（原 Stage 2.5，已并入 2.4）：对同一本书内部概念去重合并（防同名异义重复页）。**embedding 语义初筛**（cosine ≥0.82，复用 `_dedup_embedding.candidate_pairs`，取代旧的词级 Jaccard，能抓跨语言/同义重复如 傅里叶变换 vs Fourier transform）+ LLM 逐组确认，失败保守不合并。**无回退**：embedding stack 不可用则 `raise` 暂停（不退回 Jaccard）。跳过条件：单 chunk 书。go/no-go：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。

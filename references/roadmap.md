@@ -14,10 +14,13 @@ capabilities that don't exist yet and are intentionally deferred.
 
 - 普通 ingest 已把 `comparison` / `synthesis` / `finding` / `methodology` /
   `thesis` 统一接入 Stage 2.2 `schema_typed_candidates` → Stage 2.4 FILE
-  generation；不再有独立 Stage 2.9。候选可使用滚动 digest 做跨 chunk
-  连续判断，但仍必须由当前输入的真实来源证据支撑。
-- Deep Research 页本身整合多个真实来源，因此 auto-ingest 时可合法产生
-  synthesis/thesis；一本书的多个章节或 chunk 仍不能冒充多个来源。
+  generation；不再有独立 Stage 2.9。候选可使用滚动 digest 与冻结的
+  `wiki/index.md` 快照识别已有 living page，但正文仍必须由当前输入的真实
+  来源证据支撑。按 NashSU bundled schema，普通来源可建立 cross-cutting
+  synthesis 初稿或 speculative working thesis，后续来源再 merge/update；
+  项目 schema 可以声明更严格门槛。
+- Deep Research 页本身整合多个真实来源，因此 auto-ingest 时也可产生
+  synthesis/thesis；无论哪种来源都不得把章节清单冒充 synthesis。
 - **仍缺少的是主动扫描既有 wiki 多页/多书、再自动创造新的 synthesis /
   thesis 的机制。** `cross_source_dedup.py` 只合并去重；普通单源 ingest
   不会读取整库正文来主动做新结论。

@@ -72,8 +72,10 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 - Stage 2.4 generates the recommended key and schema-typed pages after
   association/dedup. Comparison, synthesis, finding, thesis, methodology, and
   custom declared types follow the same selection, routing, grounding, and FILE
-  generation path. Schema semantics remain mandatory: for example, a synthesis
-  requires real multi-source evidence.
+  generation path. Schema semantics remain mandatory. Under NashSU's bundled
+  semantics, a source may seed a cross-cutting synthesis or a speculative
+  working thesis; later source ingests merge evidence and update thesis
+  confidence/status. A project schema may impose a stricter evidence gate.
 - A Stage 2.3 match in the candidate's own schema route is an exact **update
   target**, not a reason to skip the candidate: Stage 2.4 emits that existing
   FILE path and Stage 3.1 merges it. A cross-type association remains link-only

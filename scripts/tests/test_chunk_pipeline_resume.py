@@ -308,7 +308,8 @@ class TestChunkPipelineResume(unittest.TestCase):
 
 class TestPrefetchBoundary(unittest.TestCase):
     """analyze_only (prefetch) runs Stage 2.2 then stops at the 2.2/2.3 boundary,
-    BEFORE any wiki-dependent work. A later spine call reuses the cached 2.2."""
+    before live association or wiki mutation. Stage 2.2 uses a frozen read-only
+    wiki context snapshot; a later spine call reuses the cached analysis."""
 
     def setUp(self):
         # Real chunking + heading resolution are irrelevant here; stub the heavy

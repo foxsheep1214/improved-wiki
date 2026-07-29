@@ -27,6 +27,7 @@ from _schema import (
     list_existing_slugs,
     load_purpose_md,
     load_schema_md,
+    load_wiki_index_context,
     schema_candidate_routes,
 )
 from _stage_2_base import file_block_slug
@@ -48,7 +49,7 @@ from _task_manifest import bind_chunk_plan
 
 CHUNK_PLAN_SCHEMA_VERSION = 3
 CHUNKER_VERSION = "token-bounded-heading-aware-v2"
-ANALYSIS_POLICY_VERSION = "nashsu-0.6.6-schema-typed-v2-existing-updates"
+ANALYSIS_POLICY_VERSION = "nashsu-0.6.6-schema-typed-v3-synthesis-thesis"
 
 _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_2_done",
@@ -60,6 +61,8 @@ _STAGE_2_2_DOWNSTREAM_MARKERS = (
 )
 
 _STAGE_2_2_DOWNSTREAM_ARTIFACTS = (
+    "slugs_snapshot_2_2",
+    "wiki_index_snapshot_2_2",
     "chunk_plan_v2",
     "chunk_analyses",
     "global_digest",
@@ -278,6 +281,7 @@ def _analyze_all_chunks(
     raw_file: Path, config: Config, template_content: str,
     chunk_total: int, t_start: float, verbose: bool,
     existing_slugs: list | None = None,
+    wiki_index_context: str = "",
 ) -> list:
     """Stage 2.2: analyze all chunks, serially.
 
@@ -287,9 +291,10 @@ def _analyze_all_chunks(
     branch: every call is a manual round-trip, which is inherently serial.
     Returns chunk_analyses indexed by chunk order.
 
-    ``existing_slugs`` is this book's persisted 2.2 snapshot (see
-    _run_chunk_pipeline) so every chunk prompt is built from the SAME frozen
-    slug list \u2014 wiki-independent, prompt-hash stable across resumes.
+    ``existing_slugs`` and ``wiki_index_context`` are this source's persisted
+    Stage 2.2 snapshots (see _run_chunk_pipeline) so every chunk prompt is built
+    from the SAME frozen wiki context — prompt-hash stable across resumes while
+    matching NashSU's current-index analysis context.
     """
     chunk_analyses: list = []
 
@@ -298,7 +303,8 @@ def _analyze_all_chunks(
             chunk, i, chunk_total, global_digest, accumulated_digest,
             overlap_before, heading_path, raw_file, config, template_content,
             max_retries=_stage_2_2_chunk_retries(), verbose=verbose,
-            existing_slugs=existing_slugs)
+            existing_slugs=existing_slugs,
+            wiki_index_context=wiki_index_context)
         chunk_analyses.append(ca)
         updated = ca.get("updated_global_digest", "")
         if isinstance(updated, str) and len(updated.strip()) > 50:
@@ -587,11 +593,12 @@ def _run_chunk_pipeline(
     the generation prompt. Returns
     ``(chunk_analyses, analysis, file_blocks, incremental_associations)``.
 
-    ``analyze_only`` (prefetch boundary, 2026-06-28): Stage 2.2 (chunk analysis)
-    is wiki-independent \u2014 it reads only the book's own text/digest. Stage 2.3 is
-    the first stage that reads ``config.wiki_dir``. In batch mode the next book's
-    2.2 may be prefetched in parallel while the current book holds the serial
-    wiki-write spine; ``analyze_only=True`` runs/caches 2.2 then raises
+    ``analyze_only`` (prefetch boundary, 2026-06-28): Stage 2.2 freezes one
+    read-only slug/index snapshot at entry, then every chunk reads only that
+    snapshot plus the source text/digest. Stage 2.3 is the first stage that
+    performs a fresh live wiki read. In batch mode the next source's 2.2 may be
+    prefetched in parallel while the current source holds the serial wiki-write
+    spine; ``analyze_only=True`` runs/caches 2.2 then raises
     ``PrepareStopAfter("1.5")`` BEFORE the wiki-dependent 2.3+ stages. The cached
     2.2 is restored later (under ``stage_2_2_done``) when the book reaches the
     spine and runs 2.3+ for real.
@@ -604,6 +611,7 @@ def _run_chunk_pipeline(
     chunk_plan = _build_chunk_plan(extracted_text, config, chunk_meta)
 
     _h = file_sha256(raw_file)
+    checkpoint_invalidated = False
     _has_stage_2_cache = bool(
         progress
         and "chunk_analyses" in progress
@@ -616,6 +624,7 @@ def _run_chunk_pipeline(
         mismatch = _chunk_checkpoint_mismatch(progress, chunk_plan)
         if mismatch:
             _invalidate_stage_2_2_checkpoint(config, _h, mismatch)
+            checkpoint_invalidated = True
     # Once any incompatible cache has been invalidated, bind the current plan
     # before a cached restore or a new Stage 2.2 marker can be accepted.
     bind_chunk_plan(config, _h, chunk_plan)
@@ -689,7 +698,7 @@ def _run_chunk_pipeline(
                 template_content, verbose)
             return (*result, global_digest)
 
-    # \u2500\u2500 Stage 2.2: build chunk plan + analyze all chunks (wiki-independent) \u2500\u2500
+    # \u2500\u2500 Stage 2.2: build chunk plan + analyze (frozen wiki context snapshot) \u2500\u2500
     est_sec = chunk_total * 75
     print(f"  [stage 2.2] Analyze \u2014 {chunk_total} chunk(s), "
           f"target {config.target_chars:,} chars/chunk (est. {est_sec/60:.0f} min)")
@@ -700,21 +709,34 @@ def _run_chunk_pipeline(
     # updated_global_digest. No whole-book prior.
     accumulated_digest = ""
 
-    # Existing-slugs SNAPSHOT (2026-07-12): freeze the wiki slug list ONCE per
-    # book on first entry into 2.2 and persist it, so every chunk prompt (and
-    # every resume) is built from the same list. A live list_existing_slugs()
-    # read per prompt violated 2.2's wiki-independent contract: in batch mode
-    # a parallel book's wiki writes drifted the prompt hash → conversation
-    # cache misses on every resume.
-    slugs_snapshot = (progress or {}).get("slugs_snapshot_2_2")
-    if slugs_snapshot is None:
+    # Existing-wiki SNAPSHOT: freeze both the slug list and NashSU-style current
+    # index ONCE per source before Stage 2.2. Live wiki reads per prompt would
+    # drift while another batch source writes pages and break conversation-cache
+    # hashes on resume. The index lets analysis recognize/update existing
+    # synthesis/thesis pages instead of seeing only untyped bare stems.
+    snapshot_update: dict = {}
+    slugs_snapshot = (
+        None if checkpoint_invalidated
+        else (progress or {}).get("slugs_snapshot_2_2")
+    )
+    if not isinstance(slugs_snapshot, list):
         slugs_snapshot = sorted(list_existing_slugs(config))
-        save_progress(config, _h, {"slugs_snapshot_2_2": slugs_snapshot})
+        snapshot_update["slugs_snapshot_2_2"] = slugs_snapshot
+    wiki_index_snapshot = (
+        None if checkpoint_invalidated
+        else (progress or {}).get("wiki_index_snapshot_2_2")
+    )
+    if not isinstance(wiki_index_snapshot, str):
+        wiki_index_snapshot = load_wiki_index_context(config)
+        snapshot_update["wiki_index_snapshot_2_2"] = wiki_index_snapshot
+    if snapshot_update:
+        save_progress(config, _h, snapshot_update)
 
     chunk_analyses, accumulated_digest = _analyze_all_chunks(
         chunk_meta, global_digest, accumulated_digest, raw_file, config,
         template_content, chunk_total, t_start, verbose,
-        existing_slugs=slugs_snapshot)
+        existing_slugs=slugs_snapshot,
+        wiki_index_context=wiki_index_snapshot)
 
     for analysis, planned in zip(chunk_analyses, chunk_plan["chunks"]):
         analysis["_chunk_index"] = planned["index"]
@@ -725,7 +747,8 @@ def _run_chunk_pipeline(
 
     # Persist 2.2 on its own + mark stage_2_2_done so a prefetch (analyze_only)
     # can stop here and the later spine run restores chunk_analyses without
-    # re-analyzing. 2.2 is wiki-independent \u2014 safe to cache before 2.3+ runs.
+    # re-analyzing. 2.2 is snapshot-stable after entry, so the frozen analysis
+    # is safe to cache before 2.3+ performs fresh live wiki reads.
     # Roll the final accumulated_digest up into global_digest (dict) for
     # 2.4/2.6. Persist so a cached resume restores it.
     global_digest = _parse_accumulated_to_dict(accumulated_digest)

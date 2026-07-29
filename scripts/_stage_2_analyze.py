@@ -428,12 +428,16 @@ metadata block.
 """
 
 
-def _stage_2_2_schema_types_block(config: Config) -> str:
-    """Inject authoritative NashSU-style schema and optional project purpose."""
+def _stage_2_2_schema_types_block(
+    config: Config,
+    wiki_index_context: str = "",
+) -> str:
+    """Inject NashSU-style schema, purpose, and frozen current-index context."""
     text = load_schema_md(config)
     schema_context = schema_prompt_text(text)
     purpose_context = load_purpose_md(config).strip()[:6000]
-    if not schema_context and not purpose_context:
+    index_context = str(wiki_index_context or "").strip()[:40_000]
+    if not schema_context and not purpose_context and not index_context:
         return ""
 
     routes = schema_candidate_routes(text)
@@ -448,11 +452,39 @@ def _stage_2_2_schema_types_block(config: Config) -> str:
         "</schema>\n"
         "Treat the Page Types table as the primary routing and frontmatter contract. "
         "For schema-typed candidates, `type` and `folder` MUST use the exact mapping "
-        "below in the `schema_typed_candidates` output field. Use a typed page only "
-        "when THIS source genuinely supports it; NEVER invent goals, habits, journal "
-        "entries, decisions, findings, or hypotheses.\n"
+        "below in the `schema_typed_candidates` output field. Recommend a typed page "
+        "only when this source actually supports creating it or materially updating "
+        "an existing page; NEVER invent goals, habits, journal entries, decisions, "
+        "findings, or hypotheses.\n"
         f"Eligible source-grounded schema types: {route_lines}\n"
     ) if schema_context else ""
+    lifecycle_lines: list[str] = []
+    if "synthesis" in routes:
+        lifecycle_lines.extend([
+            "- `synthesis` is a cross-cutting summary or conclusion, distinct "
+            "from the mandatory source summary. The current source may seed a "
+            "new synthesis when it materially connects multiple concepts, "
+            "findings, entities, or existing wiki topics; later sources merge "
+            "into and refine that page.",
+            "- Do not require a synthesis to be multi-source before its first "
+            "creation unless the project schema explicitly requires that. "
+            "Never infer cross-source facts from index titles alone.",
+        ])
+    if "thesis" in routes:
+        lifecycle_lines.extend([
+            "- `thesis` is a falsifiable working hypothesis and a living page. "
+            "The current source may seed a `speculative` thesis when it "
+            "explicitly advances a supported hypothesis; later evidence updates "
+            "its confidence/status and supporting or refuting links.",
+            "- Do not wait for multi-source consensus before creating a thesis "
+            "unless the project schema explicitly requires it. Do not convert "
+            "an ordinary source claim into a hypothesis.",
+        ])
+    lifecycle_block = (
+        "\n# NashSU Synthesis / Thesis Lifecycle\n"
+        + "\n".join(lifecycle_lines)
+        + "\n"
+    ) if lifecycle_lines else ""
     purpose_block = (
         "\n# Wiki Purpose\n"
         "<purpose>\n"
@@ -461,7 +493,18 @@ def _stage_2_2_schema_types_block(config: Config) -> str:
         "Use the purpose to prioritize relevant material; it never overrides source "
         "evidence or the schema's routing contract.\n"
     ) if purpose_context else ""
-    return schema_block + purpose_block
+    index_block = (
+        "\n# Current Wiki Index (FROZEN FOR THIS SOURCE)\n"
+        "<current_wiki_index>\n"
+        f"{index_context}\n"
+        "</current_wiki_index>\n"
+        "This matches NashSU's stable ingest context. Use it to preserve page "
+        "identity, recognize an existing synthesis/thesis that should be "
+        "updated, and avoid duplicate pages. Index titles/descriptions are "
+        "navigation context, not factual evidence; ground every new statement "
+        "in the current source or explicitly available evidence.\n"
+    ) if index_context else ""
+    return schema_block + lifecycle_block + purpose_block + index_block
 
 
 def _stage_2_2_granularity_block(accumulated_digest) -> str:
@@ -547,6 +590,7 @@ def _stage_2_2_build_prompt(
     overlap_before: str = "",
     heading_path: str = "",
     existing_slugs: list | None = None,
+    wiki_index_context: str = "",
 ) -> str:
     """Build the prompt for Stage 2.2: Chunk Analysis.
 
@@ -561,13 +605,14 @@ def _stage_2_2_build_prompt(
     If heading_path is provided, it tells the LLM which chapter/section
     hierarchy this chunk belongs to (NashSU parity: chunk.headingPath).
 
-    ``existing_slugs`` is the per-source SNAPSHOT of existing wiki slugs taken
-    when the source first entered Stage 2.2 (persisted under
-    "slugs_snapshot_2_2" in progress by _ingest_chunks). 2.2 is contractually
-    wiki-independent; a live list_existing_slugs() read here made the prompt
-    hash drift while a parallel batch source wrote wiki pages → conversation
-    cache misses on every resume. None falls back to a live read (legacy
-    callers/tests only — the pipeline always passes the snapshot).
+    ``existing_slugs`` and ``wiki_index_context`` are per-source SNAPSHOTS
+    taken when the source first enters Stage 2.2 (persisted under
+    "slugs_snapshot_2_2" and "wiki_index_snapshot_2_2" by _ingest_chunks).
+    Stage 2.2 is contractually snapshot-stable: fresh live reads while a
+    parallel batch source writes wiki pages would make prompt hashes drift and
+    cause conversation cache misses on every resume. ``existing_slugs=None``
+    retains a live-read fallback for legacy callers/tests only; the pipeline
+    always passes both snapshots.
     """
     if accumulated_digest:
         # Sequential mode: use accumulated digest from previous chunks
@@ -602,7 +647,8 @@ def _stage_2_2_build_prompt(
 
     overlap_section = _stage_2_2_build_overlap_section(overlap_before)
 
-    schema_types_section = _stage_2_2_schema_types_block(config)
+    schema_types_section = _stage_2_2_schema_types_block(
+        config, wiki_index_context=wiki_index_context)
 
     granularity_section = _stage_2_2_granularity_block(accumulated_digest)
 
@@ -692,14 +738,17 @@ Analyze THIS CHUNK of the source. Extract:
 6. **Schema-typed page candidates** — use only the eligible type→directory
    mappings in the authoritative schema block above (for example finding,
    methodology, thesis, comparison, or synthesis). Recommend a page only when
-   the current source evidence genuinely satisfies that type's schema semantics.
+   the current source evidence genuinely satisfies that type's schema semantics
+   and creates a useful new page or materially updates an indexed existing page.
    A later chunk may recommend a comparison or other typed page when THIS chunk
    plus the accumulated digest substantively establish it; the digest is
-   continuity evidence, not permission to invent facts. A synthesis candidate
-   still requires actual multi-source evidence as declared by the schema — two
-   chapters from one source do not make a synthesis. NEVER invent goals, habits,
-   journal entries, decisions, findings, hypotheses, or other records that are
-   not present in the source.
+   continuity evidence, not permission to invent facts. Follow the NashSU
+   synthesis/thesis lifecycle above: a synthesis candidate may be seeded from
+   a source that supports a cross-cutting conclusion, and an explicitly
+   supported working thesis may begin as speculative, unless the project schema
+   imposes a stricter gate. NEVER invent goals, habits, journal entries,
+   decisions, findings, hypotheses, or other records that are not present in
+   the source.
 
 # Output (YAML only, in ```yaml block)
 ```yaml
@@ -785,10 +834,11 @@ connections_to_existing_wiki:
     relationship: "extends" | "contrasts" | "applies" | "cites"
 
 # Schema-typed page candidates (NashSU 0.6.6 parity). ONLY use eligible mappings
-# listed in the authoritative schema block, and only when the current source
-# evidence satisfies that type's schema semantics. Cross-chunk candidates may
-# use the accumulated digest for continuity. Leave empty (`[]`) when no eligible
-# type fits.
+# listed in the authoritative schema block. The current source may create or
+# materially update one when its evidence satisfies that type's schema
+# semantics. Cross-chunk candidates may use the accumulated digest for
+# continuity, and existing page identity may come from the frozen wiki index.
+# Leave empty (`[]`) when no eligible type fits.
 # NEVER invent goals/habits/journal/decisions/findings/hypotheses.
 schema_typed_candidates:
   - type: "finding" | "methodology" | "thesis" | "comparison" | "synthesis" | "..."   # a schema-declared type
@@ -1019,6 +1069,7 @@ def _stage_2_2_analyze_chunk(
     max_retries: int = 2,
     verbose: bool = False,
     existing_slugs: list | None = None,
+    wiki_index_context: str = "",
 ) -> dict:
     """Analyze a single chunk.
 
@@ -1037,6 +1088,7 @@ def _stage_2_2_analyze_chunk(
         template=template, accumulated_digest=accumulated_digest,
         overlap_before=overlap_before, heading_path=heading_path,
         existing_slugs=existing_slugs,
+        wiki_index_context=wiki_index_context,
     )
 
     validation_feedback = ""

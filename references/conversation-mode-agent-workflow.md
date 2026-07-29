@@ -92,9 +92,12 @@ complete Stage 2 analysis; no additional handoff is needed.
 
 Comparison pages are ordinary Stage 2.4 schema-typed outputs. Follow the
 project schema and the source evidence; there is no dedicated Stage 2.9 prompt,
-fixed heading set, zero sentinel, or numeric comparison cap. Synthesis pages
-must use real multi-source evidence rather than treating multiple chunks from
-one source as multiple sources.
+fixed heading set, zero sentinel, or numeric comparison cap. Under the NashSU
+bundled schema, one source may seed a cross-cutting synthesis distinct from its
+source summary, and may seed a falsifiable thesis with `status: speculative`;
+later ingests merge contributing evidence and update thesis confidence/status.
+Never invent other sources from index titles, and obey a project schema that
+declares a stricter evidence gate.
 
 Stage 3.4 runs after pages are written. Each item requires:
 

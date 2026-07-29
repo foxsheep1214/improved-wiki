@@ -802,7 +802,8 @@ def _batch_ingest_under_coordinator(
             _fill_prefetch_slots(
                 raw_files, i, config, bg_state, max_concurrent)
 
-            # Wiki-independent Stage 2.2 runs without ProjectLock.
+            # Stage 2.2 freezes read-only slug/index context once, then remains
+            # snapshot-stable and runs without ProjectLock.
             try:
                 _do_prepare(f, config, template_override, verbose, True)
             except PrepareStopAfter:

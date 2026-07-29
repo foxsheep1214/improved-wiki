@@ -48,7 +48,9 @@ Stage 2.2 schema_typed_candidates
 
 - `comparison`：同一来源能实质支持，只要存在真实、多维、值得独立复用的
   对比即可。
-- `synthesis`：必须整合多个真实来源；一本书的多个章节或多个 chunk 仍是
-  单一来源，不能据此生成 synthesis。
+- `synthesis`：按 NashSU bundled schema 是区别于 source summary 的跨主题
+  综合/结论；一个来源在充分连接多个实质概念、finding、entity 或既有主题时
+  可以建立初稿，后续来源继续 merge。不得把章节罗列冒充 synthesis，也不得
+  从 index 标题杜撰其他来源证据。项目 schema 若要求多来源，则服从项目规则。
 
 两者都由项目 `schema.md` 的最新规则裁决，不由目录名或页数配额裁决。

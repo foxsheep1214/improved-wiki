@@ -172,8 +172,9 @@ def _do_prepare(
     """Stage 0-2 for one book.
 
     Two segments with different cross-book safety:
-      - **Wiki-independent (0/1/2.1/2.2)** — reads only the book's own
-        text/digest, writes no wiki/ state. Safe to run for several books in
+      - **Snapshot-stable (0/1/2.1/2.2)** — Stage 2.2 freezes read-only wiki
+        slug/index context once at entry, then reads only the book and that
+        snapshot and writes no wiki/ state. Safe to run for several books in
         parallel ("prefetch"). ``prefetch_only=True`` runs exactly this segment
         then raises ``PrepareStopAfter("1.5")`` at the Stage 2.2/2.3 boundary.
       - **Wiki-dependent (2.3–2.6)** — Stage 2.3 reads ``config.wiki_dir`` to
@@ -475,7 +476,7 @@ def _do_prepare(
 
         # Stage 2.2 → 2.3 → 2.4 chunk pipeline. Both batch prefetch and an
         # explicit single-book ``--stop-after-stage=1.5`` stop at the
-        # wiki-independent 2.2/2.3 boundary. Previously only ``prefetch_only``
+        # snapshot-stable 2.2/2.3 boundary. Previously only ``prefetch_only``
         # was forwarded, so the single-book flag was accepted by argparse but
         # silently ran into 2.3/2.4 and emitted generation handoffs.
         analyze_only = _stage_2_2_only_requested(config, prefetch_only)

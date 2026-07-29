@@ -9,9 +9,9 @@
 | source | wiki/sources/ | One grounded summary page per immutable raw source |
 | query | wiki/queries/ | User-initiated open questions, saved answers, and deep research |
 | comparison | wiki/comparisons/ | Source-grounded side-by-side analysis of related alternatives |
-| synthesis | wiki/synthesis/ | Cross-source summaries and conclusions |
+| synthesis | wiki/synthesis/ | Cross-cutting summaries and conclusions |
 | overview | wiki/ | Application-maintained project overview |
-| thesis | wiki/thesis/ | Falsifiable working hypotheses that evolve across sources |
+| thesis | wiki/thesis/ | Working hypotheses and their evolution over time |
 | methodology | wiki/methodology/ | Reusable research, design, test, or verification methods |
 | finding | wiki/findings/ | Source-backed empirical or quantitative observations |
 
@@ -72,9 +72,13 @@ replicated: true | false | null
 - Use `entity` for named products, systems, organizations, people, and standards.
 - Use `finding` only for an evidence-anchored observation or measured result.
 - Use `methodology` for a reusable procedure with rationale and verification steps.
-- Use `thesis` only for a falsifiable, evolving cross-source hypothesis.
+- Use `thesis` for a falsifiable working hypothesis. A source may establish it
+  as `speculative`; update its confidence/status as later evidence accumulates.
 - Use `comparison` only when the source makes a genuine multi-dimensional contrast.
-- Use `synthesis` only for cross-source integration; one source alone is not synthesis.
+- Use `synthesis` for a cross-cutting summary or conclusion that connects
+  multiple material concepts, findings, entities, or existing wiki topics. It
+  may begin from one source and accumulate further contributing sources, but it
+  must remain distinct from that source's mandatory summary page.
 - Ingest never invents user goals, decisions, findings, or hypotheses absent from evidence.
 
 ## Index Format
@@ -113,7 +117,8 @@ frontmatter type using full wiki-relative targets:
 1. Record the disagreement without silently choosing a winner.
 2. Link all conflicting source pages.
 3. Create a review/query item when evidence is insufficient.
-4. Update a thesis or synthesis page only after cross-source evaluation.
+4. Resolve the disagreement in a synthesis once sufficient evidence exists;
+   update relevant thesis confidence/status as evidence accumulates.
 
 ## Machine-Readable Naming Rules
 

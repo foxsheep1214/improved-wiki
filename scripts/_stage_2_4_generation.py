@@ -278,6 +278,28 @@ def _schema_routing_block(config: Config) -> str:
         "that the source does not support.\n"
         f"Exact type→directory mapping:\n{route_lines}\n"
     ) if schema_context else ""
+    lifecycle_lines: list[str] = []
+    if "synthesis" in routing:
+        lifecycle_lines.append(
+            "- Generate a recommended `synthesis` as a cross-cutting summary "
+            "or conclusion, not as a duplicate source summary. A current source "
+            "may seed it when the schema permits; future source ingests merge "
+            "additional evidence into the same page."
+        )
+    if "thesis" in routing:
+        lifecycle_lines.append(
+            "- Generate a recommended `thesis` as a falsifiable working "
+            "hypothesis. It may begin with `status: speculative`; future source "
+            "ingests update confidence/status and supporting or refuting links."
+        )
+    lifecycle_block = (
+        "\n# NashSU Synthesis / Thesis Lifecycle\n"
+        "Stage 2.2 has already selected these schema-typed candidates from "
+        "source evidence. Do not add a second consensus or source-count gate "
+        "that the project schema does not require.\n"
+        + "\n".join(lifecycle_lines)
+        + "\n"
+    ) if lifecycle_lines else ""
     purpose_block = (
         "\n# Wiki Purpose\n"
         "<purpose>\n"
@@ -286,7 +308,7 @@ def _schema_routing_block(config: Config) -> str:
         "Use the purpose to prioritize what matters; never let it override source\n"
         "evidence or the schema routing contract.\n"
     ) if purpose_context else ""
-    return schema_block + purpose_block
+    return schema_block + lifecycle_block + purpose_block
 
 
 def _schema_typed_output_section(raw_rel: str) -> str:
@@ -299,6 +321,16 @@ and `[type]` shown above. Follow that type's semantic and frontmatter rules from
 the authoritative schema; include every type-specific required field. Do not
 coerce a comparison, synthesis, thesis, methodology, finding, or custom type
 into a generic concept/entity page.
+
+For `synthesis`, integrate the material cross-cutting conclusion supported by
+this source, keep it distinct from the source summary, and cite every
+contributing source/page actually available. A first source may seed the page
+when the schema permits; do not fabricate other sources from index titles.
+
+For `thesis`, state a falsifiable working hypothesis, distinguish direct
+evidence from inference, and include the schema-required confidence/status
+fields. A first source may establish `status: speculative`; later ingests update
+the same page with supporting or refuting evidence.
 
 ---FILE:wiki/<schema-folder>/<slug>.md---
 ---
@@ -808,6 +840,10 @@ Chunk: {chunk_index + 1}
   new OR marked UPDATE EXISTING PAGE. The writer will merge update blocks into
   their exact existing paths.
 - Do not generate candidates marked ALREADY COVERED/SKIP or CROSS-TYPE.
+- A recommended synthesis/thesis candidate has already passed Stage 2.2's
+  evidence-selection gate. Generate it unless it is marked SKIP/CROSS-TYPE or
+  the authoritative project schema itself rejects it; do not silently drop it
+  merely because it starts from one source or remains speculative.
 - Do not create pages for passing mentions, background prerequisites, or extra
   "foundational" terms that were not recommended.
 - There is no page-count target. Do not pad or split one coherent topic merely
@@ -1164,6 +1200,10 @@ Chunks: {len(chunk_analyses)}
   new OR marked UPDATE EXISTING PAGE. The writer will merge update blocks into
   their exact existing paths.
 - Do not generate candidates marked ALREADY COVERED/SKIP or CROSS-TYPE.
+- A recommended synthesis/thesis candidate has already passed Stage 2.2's
+  evidence-selection gate. Generate it unless it is marked SKIP/CROSS-TYPE or
+  the authoritative project schema itself rejects it; do not silently drop it
+  merely because it starts from one source or remains speculative.
 - Do not add pages for passing mentions, background prerequisites, or
   supplementary terms that were not recommended.
 - There is no page-count target. Do not pad or split one coherent topic merely
