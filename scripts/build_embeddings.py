@@ -119,93 +119,171 @@ def parse_args():
 SKIP_STEMS = {"index", "log", "overview", "schema"}
 
 
-def chunk_text(text, max_chars=1500, overlap=200):
-    """Split text into chunks, preferring paragraph boundaries."""
+_HEADING_LINE_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+
+
+def chunk_spans(text, max_chars=1500, overlap=200):
+    """Split text into (start, end) spans, markdown-aware.
+
+    Spans rather than strings because each chunk's heading breadcrumb is
+    resolved from its position (see heading_path_at).
+
+    Boundary preference and the protected-range guard are shared with the
+    Stage 2.2 book chunker (NashSU text-chunker.ts parity: never cut inside a
+    fenced code block or a markdown table, prefer heading > paragraph >
+    newline > sentence end). Only the window sizing differs — Stage 2.2 sizes
+    to a token budget with a 2000-char floor, embeddings want ~1500 chars.
+
+    The previous character-window split had no such guard, so a long datasheet
+    parameter table was routinely cut between rows and the trailing half lost
+    its header line.
+    """
+    from _stage_2_analyze import (
+        _stage_2_1_find_protected_ranges,
+        _stage_2_1_pick_boundary,
+        _stage_2_1_snap_out,
+    )
+
     text = re.sub(r"\n{3,}", "\n\n", text)
-    chunks = []
+    n = len(text)
+    if n <= max_chars:
+        return [(0, n)] if text.strip() else []
+
+    heading_positions = [m.start() for m in _HEADING_LINE_RE.finditer(text)]
+    protected = _stage_2_1_find_protected_ranges(text)
+
+    spans = []
     start = 0
-    while start < len(text):
-        end = min(start + max_chars, len(text))
-        if end < len(text):
-            last_nl = text.rfind("\n", start + max_chars - 200, end)
-            if last_nl > start:
-                end = last_nl
-        chunks.append(text[start:end])
-        if end >= len(text):
+    while start < n:
+        end = min(start + max_chars, n)
+        if end >= n:
+            spans.append((start, n))
             break
-        start = max(end - overlap, start + 1)
-    return chunks
+
+        search_start = max(start, end - int(max_chars * 0.15))
+        boundary = _stage_2_1_pick_boundary(
+            text, search_start, end, heading_positions, protected)
+        if boundary > start:
+            end = boundary
+        end = _stage_2_1_snap_out(start, end, protected)
+        if end <= start:  # a protected block fills the window — let it overflow
+            r = next((rng for rng in protected if rng[0] < start + 1 < rng[1]), None)
+            end = r[1] if r else min(start + max_chars, n)
+
+        spans.append((start, end))
+        # The overlap start must clear protected blocks too. Backing up a fixed
+        # number of characters from a chunk that ended just past a long table
+        # lands mid-table, so the next chunk opened with headerless rows — the
+        # very split this function exists to prevent.
+        new_start = end - overlap
+        containing = next(
+            (r for r in protected if r[0] < new_start < r[1]), None)
+        if containing is not None:
+            new_start = containing[0]
+        start = new_start if new_start > start else end
+
+    return [(s, e) for s, e in spans if text[s:e].strip()]
+
+
+def heading_path_at(text, pos):
+    """Breadcrumb of the H1-H6 stack open at ``pos`` — "Page > Section > Sub".
+
+    A page-scoped version of the Stage 2.2 resolver: wiki pages have no
+    第N章/Chapter anchors, so the ancestor stack is the whole signal.
+    """
+    stack = []
+    for m in _HEADING_LINE_RE.finditer(text):
+        if m.start() > pos:
+            break
+        level = len(m.group(1))
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        stack.append((level, m.group(2).strip()))
+    return " > ".join(title for _level, title in stack)
+
+
+def enrich_for_embedding(title, heading_path, chunk_text):
+    """Text actually sent to the embedder: title + breadcrumb + chunk body.
+
+    Port of NashSU enrichChunkForEmbedding (embedding.ts:299-308). The
+    breadcrumb is the most valuable context a short chunk can carry — a
+    300-char excerpt is far more findable when the embedded text names the
+    page and section containing it. Measured on this project's own wikis, the
+    page title was literally absent from 33% (HardwareWiki) and 46%
+    (RadarWiki) of chunks, so those vectors carried no page identity at all.
+
+    Only the vector sees this; LanceDB still stores the raw chunk_text, exactly
+    as NashSU stores chunk.text rather than the enriched string.
+    """
+    parts = [p.strip() for p in (title, heading_path, chunk_text) if p and p.strip()]
+    return "\n\n".join(parts)
 
 
 def collect_pages():
-    """Walk wiki/<type>/ subdirs for .md pages.
+    """Walk the wiki tree for knowledge pages to embed.
 
-    wiki/sources/ mirrors raw/<type>/<any-subdir>/<file> (see
-    naming-conventions.md), so it can nest arbitrarily deep
-    (wiki/sources/Datasheet/ADI/ADL8113.md) — must walk recursively,
-    not os.listdir() the top level only, or whole type folders go
-    silently unembedded.
+    Uses the shared walker rather than a hardcoded type list: a schema may
+    define its own page folders (wiki/people/, wiki/protocols/, …), and a
+    fixed whitelist silently left every page under them unembedded — the same
+    bug already patched once by adding "methodology" to the list. The walker
+    skips artifact dirs (lint/REVIEW/clusters/media) and SKIP_STEMS drops the
+    app-managed aggregates.
     """
+    from _paths import WIKI_ARTIFACT_DIRS, iter_wiki_pages
+
     pages = []
-    for sub in ["sources", "concepts", "entities", "queries", "comparisons",
-                "findings", "synthesis", "thesis", "methodology"]:
-        d = f"{WIKI}/{sub}"
-        if not os.path.exists(d):
+    for rel_path, content in iter_wiki_pages(
+            Path(WIKI), skip_dirs=WIKI_ARTIFACT_DIRS):
+        rel_path = rel_path.replace(os.sep, "/")
+        stem = rel_path.rsplit("/", 1)[-1][:-3]
+        if stem in SKIP_STEMS:
             continue
-        for dirpath, _dirnames, filenames in os.walk(d):
-            for f in sorted(filenames):
-                if not f.endswith(".md"):
-                    continue
-                stem = f[:-3]
-                if stem in SKIP_STEMS:
-                    continue
-                path = os.path.join(dirpath, f)
-                rel_path = os.path.relpath(path, WIKI)
-                # path-derived id: avoids collisions between same-named
-                # pages nested under different type subdirs (e.g. two
-                # manufacturers' datasheets both named "LM2596.md")
-                page_id = rel_path[:-3].replace(os.sep, "/")
-                try:
-                    content = Path(path).read_text(encoding="utf-8")
-                except Exception as e:
-                    # A skipped page silently disappears from the embedding
-                    # index — say so instead of dropping it without a trace.
-                    print(f"  ⚠ skipping unreadable page {rel_path}: "
-                          f"{type(e).__name__}: {e}")
-                    continue
-                if content.startswith("---"):
-                    end = content.find("\n---", 3)
-                    body = content[end + 4:] if end != -1 else content
-                else:
-                    body = content
-                title = ""
-                m = TITLE_LINE_RE.search(content)
-                if m:
-                    title = m.group(1).strip()
-                heading_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
-                heading = heading_match.group(1) if heading_match else ""
-                pages.append({
-                    "page_id": page_id,
-                    "path": rel_path.replace(os.sep, "/"),
-                    "title": title,
-                    "heading": heading,
-                    "body": body,
-                })
+        # path-derived id: avoids collisions between same-named pages nested
+        # under different type subdirs (e.g. two manufacturers' datasheets
+        # both named "LM2596.md")
+        page_id = rel_path[:-3]
+        if content.startswith("---"):
+            end = content.find("\n---", 3)
+            body = content[end + 4:] if end != -1 else content
+        else:
+            body = content
+        title = ""
+        m = TITLE_LINE_RE.search(content)
+        if m:
+            title = m.group(1).strip()
+        heading_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
+        heading = heading_match.group(1) if heading_match else ""
+        pages.append({
+            "page_id": page_id,
+            "path": rel_path,
+            "title": title,
+            "heading": heading,
+            "body": body,
+        })
     return pages
 
 
 def build_chunks(pages):
     chunks = []
     for page in pages:
-        cs = chunk_text(page["body"], MAX_CHARS)
-        for idx, ctext in enumerate(cs):
-            sha = hashlib.sha256(ctext.encode("utf-8")).hexdigest()[:16]
+        body = page["body"]
+        for idx, (s, e) in enumerate(chunk_spans(body, MAX_CHARS)):
+            ctext = body[s:e]
+            # Per-chunk breadcrumb. This used to be the page's first H1 copied
+            # onto every chunk, which carried no section signal at all.
+            hpath = heading_path_at(body, s) or page["heading"]
+            embed_text = enrich_for_embedding(page["title"], hpath, ctext)
+            # Hash the ENRICHED text: the cache is keyed by what is actually
+            # embedded, so changing enrichment or chunking invalidates stale
+            # vectors instead of silently serving them.
+            sha = hashlib.sha256(embed_text.encode("utf-8")).hexdigest()[:16]
             chunks.append({
                 "chunk_id": f"{page['page_id']}#{idx}",
                 "page_id": page["page_id"],
                 "chunk_index": idx,
                 "chunk_text": ctext,
-                "heading_path": page["heading"],
+                "embed_text": embed_text,
+                "heading_path": hpath,
                 "title": page["title"],
                 "path": page["path"],
                 "text_sha16": sha,
@@ -282,7 +360,7 @@ def cmd_embed():
         done = 0
         for i in range(0, len(to_embed), SAVE_EVERY):
             sl = to_embed[i:i + SAVE_EVERY]
-            vecs = embed_texts([c["chunk_text"] for c in sl], BASE_URL, MODEL, API_KEY)
+            vecs = embed_texts([c["embed_text"] for c in sl], BASE_URL, MODEL, API_KEY)
             if vecs and dim is None:
                 dim = len(vecs[0])
                 print(f"  Detected dims: {dim}")

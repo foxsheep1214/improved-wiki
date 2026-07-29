@@ -152,11 +152,17 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bo
         page_dir = wiki_root / "wiki" / page_type
         if not page_dir.exists():
             continue
-        for page in page_dir.glob("*.md"):
+        # Recursive: a schema may route a type into a nested folder (a Page
+        # Types row of `wiki/concepts/notes/` yields the top-level name
+        # `concepts`, and the page really is written to `concepts/notes/`).
+        # A single-level glob left every page under such a folder behind on
+        # --delete. NashSU walks the tree too (source-lifecycle.ts:433).
+        for page in sorted(page_dir.rglob("*.md")):
+            page_label = f"{page_type}/{page.relative_to(page_dir).as_posix()}"
             try:
                 text = page.read_text()
             except Exception as e:
-                print(f"[lifecycle] Skipping unreadable page {page_type}/{page.name} "
+                print(f"[lifecycle] Skipping unreadable page {page_label} "
                       f"({type(e).__name__}: {e}) — cannot check its sources.")
                 continue
             # Naive sources_str.split(",") breaks when a source filename
@@ -172,8 +178,11 @@ def _cleanup_orphan_pages(wiki_root: Path, source_stem: str, config, dry_run: bo
                 if not dry_run:
                     history_dir.mkdir(parents=True, exist_ok=True)
                     ts = time.strftime("%Y%m%d-%H%M%S")
-                    shutil.copy2(page, history_dir / f"{ts}_{page.name}")
+                    # Flatten the nested path into the snapshot name so two
+                    # same-stem pages from different subfolders cannot collide.
+                    snapshot = page_label.replace("/", "_")
+                    shutil.copy2(page, history_dir / f"{ts}_{snapshot}")
                     page.unlink()
-                print(f"{tag} Deleted orphan page: {page_type}/{page.name}")
+                print(f"{tag} Deleted orphan page: {page_label}")
                 removed += 1
     return removed

@@ -3,10 +3,22 @@
 ## Open issues
 
 ### Several files exceed the 800-line guideline
-`_core.py`（~1480 行）。暂无明显自然切分点，未拆。
-`ingest.py`（~680 行）协同 `_ingest_skip.py` / `_ingest_chunks.py` / `_ingest_prepare.py` / `_ingest_write.py` 四个编排子模块。
+清单核对于 2026-07-29（此前版本已失效：`_core.py` 记的 ~1480 行、`ingest.py`
+记的 ~680 行都早已被 `b01ea6f` 拆成 facade，现分别是 381 / 202 行）。
+
+当前实际超阈值的模块：
+
+| 文件 | 行数 | 说明 |
+|---|---|---|
+| `_stage_2_4_generation.py` | 1568 | source-anchored 逐 chunk 生成 + 源内去重收尾集中，暂无干净切分点 |
+| `_stage_3_write.py` | 1367 | 写盘 + 链接归一化 + Stage 3.5 聚合重建三块职责 |
+| `_stage_1_3_caption.py` | 1205 | VLM 配文 + 上下文映射 + 内联三块 |
+| `graph.py` | 1185 | 独立命令，含 HTML/JS 输出模板 |
+| `_stage_2_analyze.py` | 1159 | 分块器 + 滚动 digest + schema 校验 |
+| `_stage_1_1_scanned.py` | 1136 | minerU 编排 + OCR 分块 + sidecar 持久化 |
+| `_batch_supervisor.py` | 917 | 批处理协调（worker lease / 预取 / 暂停标记） |
+
 `_stage_1_extract.py` 是 facade，re-export 兄弟模块 `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py` 的公开名，外部导入者无需改动。
-`_stage_2_4_generation.py`（~1326 行）仍超阈值（source-anchored 逐 chunk 生成 + 源内去重收尾逻辑集中，暂未找到干净切分点）。
 
 ### minerU 偶尔把公式区域分类为 `image` 而非 `equation`
 ~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。

@@ -432,7 +432,16 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
         basename = Path(rel_path).name
         if basename in _LISTING_PAGES:
-            pass
+            # These are application-managed aggregates: Stage 3.5 rebuilds
+            # index/overview deterministically, log.md is append-only, and
+            # schema.md is the user's contract. A generation block claiming one
+            # would overwrite the whole file. Stage 2.4 is candidate-driven and
+            # never asks for them, so this is a backstop for a model that
+            # volunteers one anyway (NashSU guards the same set —
+            # isAppManagedAggregatePath, ingest.ts:1428-1431).
+            print(f"  [write] Dropped — {rel_path} is an application-managed "
+                  "aggregate; Stage 3.5 owns it")
+            continue
         elif top_dir not in _VALID_SUBDIRS:
             corrected = _stage_3_1_auto_correct_wiki_path(rel_path, content, config)
             if corrected:
@@ -491,14 +500,14 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 rel_path, content, _slug_dirs, source_page_slug=_source_page_slug)
 
         full_path = config.wiki_dir / rel_path
-        is_listing = basename in _LISTING_PAGES
 
         if _is_redundant_duplicate_write(full_path, content, _written_this_run):
             print(f"  [skip] {rel_path} — duplicate block, identical to "
                   f"content already written this ingest")
             continue
 
-        do_merge = full_path.exists() and not is_listing
+        # Aggregates were dropped above, so anything still here merges.
+        do_merge = full_path.exists()
         # Hash the post-normalization bytes actually handed to the writer, so a
         # replay (normalization is deterministic) matches exactly.
         _content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -529,10 +538,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             full_path, config.wiki_root, config.wiki_dir).project_relative)
         if full_path == source_path:
             source_block = (rel_path, content)
-        action = "[merge]" if do_merge else "[overwrite]" if is_listing and full_path.exists() else "[write]"
-        print(f"  {action} {rel_path}")
+        print(f"  {'[merge]' if do_merge else '[write]'} {rel_path}")
 
-        if enrich_enabled and not is_listing:
+        if enrich_enabled:
             enrich_candidates.append((rel_path, full_path))
 
     if not source_block and not query_bridge:

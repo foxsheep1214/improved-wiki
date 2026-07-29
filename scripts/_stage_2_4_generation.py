@@ -930,6 +930,8 @@ updated: {time.strftime('%Y-%m-%d')}
 Generate only qualifying new and UPDATE EXISTING key pages that are not marked
 [ALREADY COVERED]/[SKIP]/CROSS-TYPE. Start with the first FILE block, or output
 exactly `{_NO_KEY_PAGES_SENTINEL}` if none qualifies.
+
+{language_directive}
 """
 
 
@@ -1283,6 +1285,8 @@ updated: {time.strftime('%Y-%m-%d')}
 Generate only qualifying new and UPDATE EXISTING key pages that are not marked
 [ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with the first FILE
 block, or output exactly `{_NO_KEY_PAGES_SENTINEL}` if none qualifies.
+
+{language_directive}
 """
 
 

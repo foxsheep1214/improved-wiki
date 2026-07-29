@@ -336,9 +336,15 @@ def parse_file_blocks_detailed(response: str) -> FileBlockParseResult:
                     current_lines = []
                     continue
                 if not path.endswith(".md"):
-                    current_path = None
-                    current_lines = []
-                    continue
+                    # Append the suffix rather than dropping the block. The
+                    # write path already defends against this exact slip
+                    # (_stage_3_write / _ingest_write both append `.md` with a
+                    # note that "agent sometimes outputs paths without .md"),
+                    # but killing the block here made that defence unreachable
+                    # and lost the page with no warning. NashSU's opener has no
+                    # extension check at all (ingest.ts:389-425).
+                    warn(f"FILE path missing .md suffix — writing as {path}.md")
+                    path = path + ".md"
                 parts = path.split("/")
                 if len(parts) > 2 and parts[0] != "sources":
                     corrected = f"{parts[0]}/{'-'.join(parts[1:])}"

@@ -221,6 +221,13 @@ def _stage_3_1_schema_route(rel_path: str, content: str,
     fm_type = _extract_fm_field(content, "type").strip().strip('"').strip("'")
     target = schema_route_dir(fm_type, routing)
     if target is None:                   # unknown/unroutable type — leave it
+        # Leaving it is the lossless choice (NashSU wiki-schema.ts:84 drops the
+        # block instead), but doing so silently violates this module's own
+        # never-silent rule: the page lands wherever the LLM guessed and no one
+        # finds out. Say it once, keep the page.
+        print(f"  [write] ⚠️  {rel_path}: frontmatter type "
+              f"{fm_type or '(missing)'!r} is not in schema.md's Page Types "
+              "table — writing to the path as given, not routing it")
         return rel_path                  # (NB: "" is a valid target = wiki root)
     norm = rel_path[len("wiki/"):] if rel_path.startswith("wiki/") else rel_path
     top = norm.split("/", 1)[0] if "/" in norm else ""
