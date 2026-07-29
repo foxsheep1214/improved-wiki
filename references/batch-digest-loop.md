@@ -17,8 +17,9 @@ python3 "$SKILL_DIR/scripts/ingest.py" \
   --parallel 4
 ```
 
-`--parallel` caps a Stage 2.4 handoff wave and the Phase-1 prefetch ceiling. It
-does not make the cross-book Stage 2.3+ spine parallel.
+`--parallel` controls the Phase-1 prefetch ceiling. Stage 2.4 is always one
+consolidated whole-source handoff, and the cross-book Stage 2.3+ spine remains
+serial.
 
 ### Queue-driven
 

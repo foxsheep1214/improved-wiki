@@ -69,7 +69,8 @@ Active order:
 1.1 text/OCR → 1.2 images → 1.3 captions
 2.2 serial chunk analysis + rolling digest
 → 2.3 existing-wiki association
-→ 2.4 grounded key/schema-typed page generation + in-source dedup
+→ 2.4 one consolidated whole-source key/schema-typed generation
+  + in-source dedup
 → 2.6 source page
 → 3.4a pre-write review generation
 → 3.1 write/merge → 3.5 aggregate repair → 3.2 media injection
@@ -104,9 +105,12 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 - No concept-page, entity-page, or claim-count target exists. `mentioned`
   concepts are analysis context only and never reserve a generated slug.
 - Stage 2.4 generates the recommended key and schema-typed pages after
-  association/dedup. Comparison, synthesis, finding, thesis, methodology, and
-  custom declared types follow the same selection, routing, grounding, and FILE
-  generation path. Schema semantics remain mandatory. Under NashSU's bundled
+  all chunk analyses and the Stage 2.3 association extension. Comparison,
+  synthesis, finding, thesis, methodology, and custom declared types follow
+  the same selection, routing, grounding, and FILE generation path. Stage 2.3
+  existing-wiki association and the post-generation in-source semantic dedup
+  are documented improved-wiki extensions; they do not split the single final
+  generation call. Schema semantics remain mandatory. Under NashSU's bundled
   semantics, a source may seed a cross-cutting synthesis or a speculative
   working thesis; later source ingests merge evidence and update thesis
   confidence/status. A project schema may impose a stricter evidence gate.
@@ -133,8 +137,11 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 ### Parallelism
 
 - Stage 2.2 is serial: chunk N+1 consumes chunk N's validated rolling digest.
-- Stage 2.4 chunks are independent and run in bounded parallel waves up to
-  `--parallel`; `--parallel 1` is the explicit serial mode.
+- Stage 2.4 runs exactly one consolidated generation handoff after every
+  Stage 2.2 chunk has been analyzed. Its prompt carries the final rolling
+  digest, every chunk analysis, and bounded raw evidence from every chunk.
+- `--parallel` controls cross-book Phase 1 OCR/caption prefetch only; it does
+  not split or parallelize Stage 2.4.
 - Across books, Phase 1 overlaps with the current book, but minerU has one
   resource slot and captioning has one coordinated slot.
 - Stage 2.3+ is one ordered write spine across books. Never parallelize it.
@@ -161,9 +168,8 @@ Continue until all confirmed sources exit `0`, the user explicitly pauses, or
 a real external blocker is reported. A pending prompt, cached answer, or
 source waiting behind the spine is not a terminal result.
 
-Stage 2.4 may expose several independent prompts in one bounded wave. Answer
-them concurrently with separate fresh workers, validate every result, then
-re-invoke for the next wave. Do not convert Stage 2.4 to serial execution.
+Stage 2.4 exposes at most one whole-source generation prompt. Answer it with
+one fresh worker, validate and atomically publish the result, then re-invoke.
 
 Policy and rationale: `references/delegate-mode.md`. Per-stage result formats:
 `references/conversation-mode-agent-workflow.md`.

@@ -58,8 +58,8 @@ memory.
 
 ## Stage 2.4 quality release
 
-Stage 2.4 may be answered concurrently within the wave emitted by `ingest.py`.
-For each prompt:
+Stage 2.4 emits one consolidated whole-source prompt after all Stage 2.2
+analyses finish. For that prompt:
 
 - generate only the recommended key owner slugs requested by that prompt,
   including exact paths marked UPDATE EXISTING PAGE, while excluding
@@ -73,8 +73,8 @@ For each prompt:
 - preserve proper nouns and technical identifiers;
 - add wikilinks only from the prompt's Linkable pages universe.
 
-Validate all results in the wave, atomically publish them, then re-invoke. Do
-not serialize normal Stage 2.4 operation and do not exceed `--parallel`.
+Validate the one complete result, atomically publish it, then re-invoke.
+`--parallel` controls Phase 1 prefetch and does not split Stage 2.4.
 
 If a returned FILE opener has no matching END marker, ingest drops that
 partial body and emits one `Stage-2-TruncatedFileRepair-*` handoff. Answer only

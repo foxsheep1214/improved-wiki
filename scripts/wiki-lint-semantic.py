@@ -98,8 +98,8 @@ LANG_SAMPLE_CHARS = 2000
 # if 256K batches prove too coarse for semantic-lint's judgment quality in
 # practice. Each batch is one conversation handoff; a single invocation
 # eager-drains and emits prompts for ALL currently-uncached batches at once
-# (2026-07-10, mirrors ingest.py Stage 2.4's parallel-eager generation) so
-# they can be answered in parallel rather than one round-trip at a time. The
+# (a lint-local 2026-07-10 policy) so they can be answered in parallel rather
+# than one round-trip at a time. The
 # slug is content-hashed, so each batch resumes independently and the loop
 # is idempotent across re-invokes.
 _LINT_TARGET_TOKENS_HARD_CEIL = 256_000
@@ -402,8 +402,7 @@ def main() -> int:
         print(f"  first 500 chars of user_content:\n  {user_content[:500]!r}")
         return 0
 
-    # Conversation mode, batched, eager-drain (2026-07-10; mirrors ingest.py
-    # Stage 2.4's _generate_all_chunks_parallel "eager-inventory + drain"):
+    # Conversation mode, batched, eager-drain (2026-07-10; lint-local policy):
     # an uncached batch's prompt .md is written by llm_call() BEFORE it
     # raises ConversationPending, so on an uncached batch we catch it and
     # CONTINUE to the next batch instead of returning immediately — a single

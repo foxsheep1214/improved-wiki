@@ -19,17 +19,22 @@ fan-outing work but never published one complete result.
 **Consequences:** More handoff overhead, but stable per-call attention.
 Responses publish through `.txt.tmp` plus validation and atomic rename.
 
-## ADR-002 — Serial Stage 2.2, bounded-parallel Stage 2.4
+## ADR-002 — Serial Stage 2.2, single-pass Stage 2.4
 
 **Decision:** Stage 2.2 remains serial because each chunk consumes the prior
-validated rolling digest. Stage 2.4 chunk generation runs in independent
-bounded waves capped by `--parallel`.
+validated rolling digest. After all analyses finish, Stage 2.4 runs one
+whole-source generation call with the final digest, every chunk analysis, and
+bounded raw evidence from every chunk.
 
-**Reason:** 2.2 has a real data dependency; 2.4 has a precomputed owner-slug
-inventory and no rolling content dependency.
+**Reason:** NashSU 0.6.6 consolidates all long-source analyses before a single
+generation call. Per-chunk generation hid earlier/later evidence from each
+prompt and weakened cross-chunk synthesis, thesis, comparison, and terminology
+coherence.
 
-**Consequences:** `--parallel 1` is the explicit serial diagnostic mode.
-Normal operation must not serialize Stage 2.4 or parallelize Stage 2.2.
+**Consequences:** `--parallel` controls Phase-1 cross-book prefetch only.
+Stage 2.2 must not be parallelized and Stage 2.4 must not be split into chunk
+waves. Stage 2.3 association and post-generation in-source semantic dedup
+remain explicit improved-wiki extensions around the single final call.
 
 ## ADR-003 — Two-stage cross-book pipeline with one write spine
 

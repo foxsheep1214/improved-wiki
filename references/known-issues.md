@@ -10,13 +10,13 @@
 
 | 文件 | 行数 | 说明 |
 |---|---|---|
-| `_stage_2_4_generation.py` | 1568 | source-anchored 逐 chunk 生成 + 源内去重收尾集中，暂无干净切分点 |
+| `_stage_2_4_generation.py` | 1595 | 单次整书 generation prompt + 旧 direct helper 与 FILE repair 集中，暂无干净切分点 |
 | `_stage_3_write.py` | 1367 | 写盘 + 链接归一化 + Stage 3.5 聚合重建三块职责 |
 | `_stage_1_3_caption.py` | 1205 | VLM 配文 + 上下文映射 + 内联三块 |
 | `graph.py` | 1185 | 独立命令，含 HTML/JS 输出模板 |
-| `_stage_2_analyze.py` | 1159 | 分块器 + 滚动 digest + schema 校验 |
+| `_stage_2_analyze.py` | 1160 | 分块器 + 滚动 digest + schema 校验 |
 | `_stage_1_1_scanned.py` | 1136 | minerU 编排 + OCR 分块 + sidecar 持久化 |
-| `_batch_supervisor.py` | 917 | 批处理协调（worker lease / 预取 / 暂停标记） |
+| `_batch_supervisor.py` | 916 | 批处理协调（worker lease / 预取 / 暂停标记） |
 
 `_stage_1_extract.py` 是 facade，re-export 兄弟模块 `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py` 的公开名，外部导入者无需改动。
 
@@ -96,4 +96,5 @@ Chunk 窗口末端落在受保护 block（表格/代码块）内部时曾无条�
 ## Batch digest patterns
 批量摄入 pitfalls 见 `batch-digest-loop.md`。一句话：把确认过的完整文件列表一次交给
 `ingest.py`；Phase 1 自动做受控 OCR/caption 流水，Stage 2.2 串行，Stage 2.4
-按 `--parallel` 分波并行，跨书 Stage 2.3+ 由 durable spine reservation 串行。
+一次整书生成，跨书 Stage 2.3+ 由 durable spine reservation 串行；`--parallel`
+只控制 Phase 1 预取。

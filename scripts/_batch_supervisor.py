@@ -658,7 +658,6 @@ def batch_ingest(
     verbose: bool = False,
 ) -> list[dict]:
     """Run one batch coordinator invocation under a transient project flock."""
-    config.handoff_parallel_limit = max(1, int(max_concurrent))
     with batch_coordinator_slot(config):
         return _batch_ingest_under_coordinator(
             raw_files,

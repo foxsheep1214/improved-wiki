@@ -1073,8 +1073,9 @@ def _stage_2_2_analyze_chunk(
 ) -> dict:
     """Analyze a single chunk.
 
-    Used by the barrier-free pipeline in _do_prepare where each chunk is
-    analyzed and immediately generated before moving to the next chunk.
+    Used by Stage 2.2's serial analysis pass. Every chunk is analyzed first;
+    Stage 2.3 association and the single consolidated Stage 2.4 generation call
+    run only after the full analysis pass completes.
 
     Returns analysis dict with keys: concepts_found, entities_found, claims,
     formulas, connections_to_existing_wiki, digest_updates, plus _chunk_index,

@@ -12,9 +12,8 @@
 2. **主对话 Stage 2.2**：只推进当前书。chunk 分析依赖滚动 digest，严格逐 chunk
    串行；普通 batch 不会自动让多本书同时产生 2.2 handoff。
 3. **Stage 2.3+ spine**：跨书严格串行。项目锁只在当前书的
-   `2.3 → generate → write → finalize` 区间持有。书内 Stage 2.4 的多个
-   generation prompt 仍可并行作答，但按 `--parallel N` 分波发出，而不是无上限
-   一次吐出全部 prompt。
+   `2.3 → generate → write → finalize` 区间持有。书内 Stage 2.4 在全部
+   chunk analysis 完成后只发出一个整书 generation prompt。
 
 ```
 后台 worker A:  book N   OCR ─────────→ caption ─────→ done
@@ -33,12 +32,10 @@ minerU 和 caption 都各有一个跨进程资源槽：
 - `N=1`：只启动一个 Phase-1 worker，不做 OCR/caption 跨书重叠。
 - `N>=2`：Phase-1 worker 上限为 2；超过 2 不会再增加 OCR 进程，因为流水线只有
   minerU 和 caption 两个独占资源槽。
-- 同一个数也是 Stage 2.4 并行 handoff 波次的硬上限。例如 10 个未缓存 chunk
-  配 `--parallel 4` 时按 `4 + 4 + 2` 推进；`N=1` 才会显式退化为串行；若 N
-  不小于剩余 chunk 数，仍一次发出全部。
+- `--parallel` 不再控制 Stage 2.4：无论来源有多少 chunk，Stage 2.4 都只执行
+  一次整书 generation handoff。
 - Stage 2.2 **不**套用这类并行波次：chunk N+1 的 prompt 依赖 chunk N 更新后的
-  rolling digest，因此严格串行。Stage 2.4 的 owner slug inventory 在生成前已
-  确定，各 chunk 不存在这种滚动内容依赖。
+  rolling digest，因此严格串行；完成全部 analysis 后才进入 2.3 和单次 2.4。
 
 默认 `--parallel 4`，因此自动 Phase-1 实际使用两个 worker。
 
@@ -175,7 +172,7 @@ python3 "$SKILL_DIR/scripts/ingest.py" \
   相同边界。
 - durable spine reservation 跨 exit 101 保持 source owner，不允许 handoff
   等待期换书。
-- Stage 2.4 保持并行，但每波未完成 handoff 不超过 `--parallel`；Stage 2.2 串行。
+- Stage 2.2 严格串行；Stage 2.4 是单个整书 handoff，不存在书内 generation 波次。
 - ConversationPending exit 101 不清理健康 detached worker；显式 pause/信号才清理。
 
 ## 相关

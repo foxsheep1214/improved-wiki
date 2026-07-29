@@ -266,8 +266,8 @@ class TestSemanticLintBatchedE2E(unittest.TestCase):
     def test_all_pending_batches_emitted_together(self):
         """3 pages (boost/buck/flyback, sorted), a target_chars budget that
         exactly fits the first two previews (boost+buck) → 2 batches, BOTH
-        initially uncached. Eager-drain (2026-07-10, mirrors ingest.py Stage
-        2.4's _generate_all_chunks_parallel): round 1 must emit prompt files
+        initially uncached. Lint's eager-drain policy (2026-07-10): round 1
+        must emit prompt files
         for ALL uncached batches in a single invocation (not just the first),
         so the calling agent can dispatch subagents for them in parallel,
         then return 101 once. Round 2 (after both answered): both cached →

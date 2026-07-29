@@ -45,7 +45,12 @@ from _stage_validators import (
     _verify_stage_2_4_file_blocks,
 )
 from _ingest_skip import _stage_0_2_should_skip, _stop_after_stage
-from _ingest_chunks import _run_chunk_pipeline
+from _ingest_chunks import (
+    GENERATION_POLICY_VERSION,
+    _build_chunk_meta,
+    _run_chunk_pipeline,
+)
+from _stage_2_context import build_consolidated_stage_2_context
 from normalize_raw_names import stage_0_1_check_file
 from _task_manifest import ensure_task_manifest
 
@@ -70,6 +75,7 @@ def _prepare_source_page(
     global_digest: dict, raw_file: Path, config: Config,
     template_content: str, progress: dict | None, file_blocks: list,
     verbose: bool, source_context: str = "",
+    consolidated_context: str = "",
     associations: dict | None = None,
     chunk_claims: list | None = None,
     chunk_analyses: list[dict] | None = None,
@@ -117,6 +123,7 @@ def _prepare_source_page(
             global_digest, raw_file, config,
             template=template_content, verbose=verbose,
             linkable_slugs=_linkable, source_context=source_context,
+            consolidated_context=consolidated_context,
             associations=associations,
             generated_concepts=_gen_concepts, generated_entities=_gen_entities,
             chunk_claims=chunk_claims,
@@ -498,6 +505,7 @@ def _do_prepare(
                 "chunk_analyses": chunk_analyses,
                 "analysis": analysis,
                 "incremental_associations": incremental_associations,
+                "generation_policy_version": GENERATION_POLICY_VERSION,
                 # Persist file_blocks so a stage_2_3_done cache-resume restores
                 # them DIRECTLY (it is the authoritative artifact). The retired
                 # raw_response could not be re-parsed into FILE blocks, so a
@@ -562,10 +570,20 @@ def _do_prepare(
             concept_count_before = _stage_2_5["concept_count_before"]
             concept_count_after = _stage_2_5["concept_count_after"]
 
-            # Stage 2.6 source grounding: raw source trimmed to the model-sized
-            # budget. Stage 2.4 already emitted every recommended schema-typed
-            # page, including comparison/synthesis when the schema permits.
-            _src_grounding = (extracted_text or "")[: config.source_budget]
+            # Rebuild the exact deterministic whole-source context used by
+            # Stage 2.4: final rolling digest + every chunk analysis + bounded
+            # raw evidence from every chunk. It is intentionally not persisted
+            # as a duplicate large cache artifact.
+            _stage_2_chunk_meta, _ = _build_chunk_meta(
+                extracted_text,
+                config,
+            )
+            _stage_2_context = build_consolidated_stage_2_context(
+                global_digest,
+                chunk_analyses,
+                _stage_2_chunk_meta,
+                config.source_budget,
+            )
 
             # Stage 2.6: Source page generation + merge — skipped for deep-research
             # pages (wiki/queries/*.md): the page itself is already the
@@ -578,7 +596,8 @@ def _do_prepare(
             else:
                 file_blocks, _source_page_truncated = _prepare_source_page(
                     global_digest, raw_file, config, template_content, progress,
-                    file_blocks, verbose, source_context=_src_grounding,
+                    file_blocks, verbose,
+                    consolidated_context=_stage_2_context,
                     associations=incremental_associations,
                     # Source-wide claim candidates. Stage 2.6 selects and
                     # synthesizes only core claims; it does not preserve this

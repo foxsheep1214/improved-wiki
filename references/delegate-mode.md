@@ -70,9 +70,9 @@ must not be blocked by stale results for obsolete prompt hashes.
 
 - Stage 2.2 answers strictly one at a time because the rolling digest is an
   input to the next prompt.
-- Stage 2.4 answers may run concurrently in the wave emitted by `ingest.py`.
-  One fresh worker still owns each prompt; do not exceed `--parallel`.
-- Validate and publish every answer in a Stage 2.4 wave before re-invoking.
+- Stage 2.4 emits one whole-source prompt after all Stage 2.2 answers are
+  complete. One fresh worker owns that consolidated handoff.
+- Validate and publish the complete Stage 2.4 answer before re-invoking.
 - Never run two cross-book Stage 2.3+ write spines.
 
 See `architecture-decisions.md` ADR-002 and
@@ -103,7 +103,7 @@ User-facing progress should distinguish:
 
 - Phase 1 extraction/caption status;
 - Stage 2.2 serial chunk progress;
-- Stage 2.4 wave progress;
+- Stage 2.4 consolidated-generation progress;
 - active or reserved write spine;
 - post-write review/aggregate/embed completion.
 
@@ -141,5 +141,5 @@ while True:
     atomic_publish(tmp_result, task.result_path)
 ```
 
-The real driver must also handle a bounded Stage 2.4 wave, but each task in the
-wave follows the same one-worker/one-handoff publication contract.
+The real driver handles Stage 2.4 as one ordinary one-worker/one-handoff
+publication cycle.

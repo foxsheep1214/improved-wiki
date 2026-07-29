@@ -3,14 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
 
 from _config import Config
 from _core import (
-    BATCH_MAX_CONCURRENT,
-    ConversationPending,
     stage_begin as _stage_begin,
     slugify,
     PrepareStopAfter,
@@ -30,7 +27,6 @@ from _schema import (
     load_wiki_index_context,
     schema_candidate_routes,
 )
-from _stage_2_base import file_block_slug
 from _stage_2_analyze import (
     ChunkAnalysisValidationError,
     _stage_2_1_chunk_text,
@@ -44,12 +40,17 @@ from _stage_2_4_generation import (
     stage_2_4_generate_all,
     _stage_2_4_extract_names,
 )
+from _stage_2_context import (
+    STAGE_2_CONTEXT_POLICY_VERSION,
+    build_consolidated_stage_2_context,
+)
 from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_1_digest
 from _task_manifest import bind_chunk_plan
 
 CHUNK_PLAN_SCHEMA_VERSION = 3
 CHUNKER_VERSION = "token-bounded-heading-aware-v2"
 ANALYSIS_POLICY_VERSION = "nashsu-0.6.6-schema-typed-v3-synthesis-thesis"
+GENERATION_POLICY_VERSION = STAGE_2_CONTEXT_POLICY_VERSION
 
 _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_2_done",
@@ -57,7 +58,9 @@ _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_9_done",  # legacy name: Stage 2.4 closing + Stage 2.6 tail
     "review_prepared",
     "write_loop_done",
+    "aggregate_done",
     "write_phase",
+    "review_done",
     "ingested",
 )
 
@@ -74,6 +77,31 @@ _STAGE_2_2_DOWNSTREAM_ARTIFACTS = (
     "comp_count",
     "concept_merge_stats",
     "dedup_was_run",
+    "generation_policy_version",
+)
+
+_STAGE_2_GENERATION_ARTIFACTS = (
+    "analysis",
+    "incremental_associations",
+    "file_blocks",
+    "source_page_response",
+    "comp_count",
+    "concept_merge_stats",
+    "dedup_was_run",
+    "generation_policy_version",
+)
+
+_STAGE_2_GENERATION_MARKERS = (
+    "stage_2_3_done",
+    "stage_2_9_done",
+    "review_prepared",
+)
+
+_POST_WRITE_MARKERS = (
+    "write_loop_done",
+    "aggregate_done",
+    "write_phase",
+    "review_done",
 )
 
 
@@ -237,6 +265,34 @@ def _invalidate_stage_2_2_checkpoint(
         unmark_stage_done(config, source_hash, marker)
 
 
+def _invalidate_stage_2_generation_checkpoint(
+    config: Config,
+    source_hash: str,
+    progress: dict,
+    reason: str,
+) -> None:
+    """Invalidate only the wiki-dependent Stage 2.3+ generation segment.
+
+    The Stage 2.2 chunk plan and validated analyses remain reusable. This keeps
+    prefetched long-book analysis intact while preventing a legacy per-chunk
+    Stage 2.4 result or source page from being mistaken for the consolidated
+    NashSU-style generation policy.
+    """
+    print(
+        "  [stage 2.4] ⚠️  cached generation is incompatible "
+        f"({reason}) — preserving Stage 2.2 and rebuilding Stage 2.3+."
+    )
+    delete_progress_keys(
+        config,
+        source_hash,
+        list(_STAGE_2_GENERATION_ARTIFACTS),
+    )
+    for key in _STAGE_2_GENERATION_ARTIFACTS:
+        progress.pop(key, None)
+    for marker in _STAGE_2_GENERATION_MARKERS:
+        unmark_stage_done(config, source_hash, marker)
+
+
 def _assert_chunk_count_alignment(chunk_meta: list, chunk_analyses: list) -> None:
     """Prevent ``zip`` from silently truncating generation input."""
     if len(chunk_meta) != len(chunk_analyses):
@@ -323,18 +379,18 @@ def _build_gen_inventory(
     chunk_analyses: list,
     schema_text: str = "",
 ) -> dict[str, int]:
-    """Eager slug→owner-chunk inventory for the parallel-gen path.
+    """Legacy slug→owner-chunk inventory for direct chunk-generation callers.
 
     Every key concept/entity/schema-candidate slug is DETERMINISTIC:
     ``slug = slugify(name)`` where ``name`` is taken from the (cached, stable)
     chunk analyses. So the canonical slug of every page is computable BEFORE
-    generation. Returns a flat ``slug_stem -> owner_chunk_index`` map. An
-    eligible schema-specific candidate takes precedence over a generic
-    concept/entity with the same stem; within each tier the FIRST chunk wins.
-    All page types share one flat map, matching how the serial loop mixes
-    produced FILE stems into ``generated_slugs``. Schema candidates are
-    included only when their type is an eligible route in the authoritative
-    Page Types table. Blank names are skipped.
+    generation. The active ingest pipeline does not use this helper; it is
+    retained for callers of the legacy ``stage_2_4_generate_chunk`` API.
+    Returns a flat ``slug_stem -> owner_chunk_index`` map. An eligible
+    schema-specific candidate takes precedence over a generic concept/entity
+    with the same stem; within each tier the FIRST chunk wins. Schema
+    candidates are included only when their type is an eligible route in the
+    authoritative Page Types table. Blank names are skipped.
     """
     _assert_chunk_count_alignment(chunk_meta, chunk_analyses)
     candidate_routes = schema_candidate_routes(schema_text)
@@ -393,7 +449,7 @@ def _build_gen_inventory(
                 ):
                     # Mentioned concepts are analysis context only. They are not
                     # standalone NashSU key-page candidates and must not reserve
-                    # an owner slug in a parallel wave.
+                    # an owner slug for a legacy direct chunk-generation call.
                     continue
                 name = item.get("name", "")
                 if not isinstance(name, str):
@@ -408,191 +464,58 @@ def _build_gen_inventory(
     return inventory
 
 
-def _other_chunk_slugs(inventory: dict[str, int], chunk_idx: int) -> list[str]:
-    """Sorted list of inventory stems owned by chunks OTHER than ``chunk_idx``.
-
-    Order-independent + sorted → deterministic prompt text → stable cache key
-    across re-invokes, regardless of execution order.
-    """
-    return sorted(stem for stem, owner in inventory.items() if owner != chunk_idx)
-
-
 def _generate_all_chunks(
     chunk_meta: list, chunk_analyses: list, existing_refs: dict,
     raw_file: Path, config: Config, template_content: str,
     chunk_total: int, t_start: float, verbose: bool,
     related_pages: list[dict] | None = None,
+    global_digest: dict | None = None,
 ) -> tuple[list, list, str | None]:
-    """Stage 2.4 generation, source-grounded for key-page fidelity.
+    """Stage 2.4: one consolidated generation call for the whole source.
 
-    - 1 chunk  → one grounded single-shot call (the whole source fits one prompt).
-    - >1 chunk → per-chunk generation, each prompt carrying THAT chunk's raw text,
-      so every recommended key page has its exact source passage present.
-
-    A book small enough to fit one generation prompt is also a single chunk, so
-    this is single-shot-equivalent for normal books and full-fidelity for large
-    ones — solving the huge-book "concepts drift to training-memory" failure that
-    a budget-trimmed prefix could not. improved-wiki ingest is not token-sensitive,
-    so the extra per-chunk calls on big books are an accepted cost. ``existing_refs``
-    + ``related_pages`` (Stage 2.3) are threaded so cross-chunk wikilinks resolve.
+    NashSU 0.6.6 finishes every serial chunk analysis first, then performs one
+    generation call with the final rolling digest and all chunk analyses.
+    improved-wiki follows that order and additionally includes bounded raw
+    evidence from every chunk. Stage 2.3 associations remain an explicit local
+    extension and are threaded into this single prompt.
     """
     _assert_chunk_count_alignment(chunk_meta, chunk_analyses)
-    if len(chunk_meta) <= 1:
-        source_context = chunk_meta[0][1] if chunk_meta else ""
-        all_file_blocks, generated_slugs, stop_reason = stage_2_4_generate_all(
-            chunk_analyses, raw_file, config, template_content,
-            verbose=verbose, existing_refs=existing_refs,
-            related_pages=related_pages, source_context=source_context,
-        )
-        print(f"  [generate] 1/1 [single-shot, grounded, {time.time() - t_start:.0f}s]")
-        return all_file_blocks, generated_slugs, stop_reason
-
-    if _parallel_gen_enabled():
-        return _generate_all_chunks_parallel(
-            chunk_meta, chunk_analyses, existing_refs, raw_file, config,
-            template_content, chunk_total, t_start, verbose,
-            related_pages=related_pages)
-
-    all_file_blocks: list = []
-    generated_slugs: list = []
-    for meta, analysis in zip(chunk_meta, chunk_analyses):
-        i, chunk_text = meta[0], meta[1]
-        blocks = stage_2_4_generate_chunk(
-            analysis, i, generated_slugs, raw_file, config, template_content,
-            verbose=verbose, chunk_text=chunk_text,
-            existing_refs=existing_refs, related_pages=related_pages,
-        )
-        all_file_blocks.extend(blocks)
-        for path, _ in blocks:
-            slug = file_block_slug(path)
-            if slug not in generated_slugs:
-                generated_slugs.append(slug)
-        print(f"  [generate] {i + 1}/{chunk_total} [per-chunk, grounded]")
-    print(f"  [generate] {chunk_total}/{chunk_total} per-chunk grounded done "
-          f"[{time.time() - t_start:.0f}s]")
-    # No single stop_reason for the per-chunk path. An unclosed FILE block first
-    # gets one exact-path repair; a failed/unrecovered chunk then raises inside
-    # stage_2_4_generate_chunk, so a partial key-page set cannot be mistaken for
-    # successful completion.
-    return all_file_blocks, generated_slugs, None
-
-
-def _parallel_gen_enabled() -> bool:
-    """DEFAULT ON (2026-07-09 user decision): eager-inventory + drain mode for
-    Stage 2.4 multi-chunk generation.
-
-    Cross-chunk dedup in 2.4 is a lightweight REFERENCE dependency (a
-    deterministic slug list — ``slug = slugify(name)`` from already-cached 2.2
-    analyses), not a CONTENT dependency like Stage 2.2's rolling digest (chunk
-    N+1 genuinely needs chunk N's digest output to build its own prompt). NashSU
-    itself never chunks generation at all (one call for the whole book) — it has
-    no "must be serial" requirement to mirror here; improved-wiki's own per-chunk
-    grounding (avoiding "concepts drift to training-memory" on large books) is
-    what makes chunking necessary, and that grounding is per-chunk-source-text,
-    unaffected by answer order. Serial was the original default purely out of
-    launch-day conservatism ("byte-identical to before"), not a real constraint.
-
-    Explicit opt-OUT via ``IMPROVED_WIKI_PARALLEL_GEN=0``/``false``/``no``/``off``
-    (e.g. bisecting a regression) restores the old strictly-serial accumulation
-    path. Unset or any other value = parallel-safe drain mode.
-    """
-    val = os.environ.get("IMPROVED_WIKI_PARALLEL_GEN", "").strip().lower()
-    return val not in ("0", "false", "no", "off")
-
-
-def _generate_all_chunks_parallel(
-    chunk_meta: list, chunk_analyses: list, existing_refs: dict,
-    raw_file: Path, config: Config, template_content: str,
-    chunk_total: int, t_start: float, verbose: bool,
-    related_pages: list[dict] | None = None,
-) -> tuple[list, list, str | None]:
-    """Eager-inventory + bounded-drain variant of >1-chunk generation.
-
-    The serial path forces order by feeding each chunk the slugs PRODUCED by
-    prior chunks. Here every key concept/entity/schema-candidate slug is computed
-    up front from the cached analyses (``_build_gen_inventory``), so each chunk
-    can be told to skip+link the pages owned by OTHER chunks independent of
-    execution order (``_other_chunk_slugs``, sorted → stable cache key).
-
-    Bounded drain: in conversation mode an uncached prompt raises
-    ``ConversationPending`` AFTER writing its prompt .md. We catch it per chunk
-    and continue until the configured parallel handoff ceiling is reached.
-    Thus ``--parallel 4`` advances a 10-chunk book in ``4 + 4 + 2`` prompt
-    waves; it does not serialize Stage 2.4. Cached answers are drained for free,
-    and a ceiling at least as large as the chunk count retains the original
-    all-at-once behavior.
-    """
-    _assert_chunk_count_alignment(chunk_meta, chunk_analyses)
-    # Some programmatic callers/tests intentionally provide a minimal config
-    # carrying only the handoff limit. Treat that as a project with no schema;
-    # a real Config always has both path attributes.
-    schema_text = (
-        load_schema_md(config)
-        if hasattr(config, "wiki_root") and hasattr(config, "wiki_dir")
-        else ""
-    )
-    inventory = _build_gen_inventory(
-        chunk_meta,
+    consolidated_context = build_consolidated_stage_2_context(
+        global_digest or {},
         chunk_analyses,
-        schema_text,
+        chunk_meta,
+        getattr(config, "source_budget", 100_000),
     )
-    all_file_blocks: list = []
-    generated_slugs: list = []
-    pending = 0
-    try:
-        handoff_limit = max(
-            1,
-            int(getattr(
-                config,
-                "handoff_parallel_limit",
-                BATCH_MAX_CONCURRENT,
-            )),
-        )
-    except (TypeError, ValueError, OverflowError):
-        handoff_limit = BATCH_MAX_CONCURRENT
-    for meta, analysis in zip(chunk_meta, chunk_analyses):
-        i, chunk_text = meta[0], meta[1]
-        other_slugs = _other_chunk_slugs(inventory, i)
-        try:
-            blocks = stage_2_4_generate_chunk(
-                analysis, i, other_slugs, raw_file, config, template_content,
-                verbose=verbose, chunk_text=chunk_text,
-                existing_refs=existing_refs, related_pages=related_pages,
-            )
-        except ConversationPending:
-            # Prompt .md already written; defer this chunk's answer.
-            pending += 1
-            if pending >= handoff_limit:
-                break
-            continue
-        all_file_blocks.extend(blocks)
-        for path, _ in blocks:
-            slug = file_block_slug(path)
-            if slug not in generated_slugs:
-                generated_slugs.append(slug)
-        print(f"  [generate] {i + 1}/{chunk_total} [parallel-wave, grounded]")
+    all_file_blocks, generated_slugs, stop_reason = stage_2_4_generate_all(
+        chunk_analyses,
+        raw_file,
+        config,
+        template_content,
+        verbose=verbose,
+        existing_refs=existing_refs,
+        related_pages=related_pages,
+        consolidated_context=consolidated_context,
+    )
+    print(
+        f"  [generate] {chunk_total}/{chunk_total} "
+        f"[single consolidated call, {time.time() - t_start:.0f}s]"
+    )
+    return all_file_blocks, generated_slugs, stop_reason
 
-    if pending > 0:
-        print(f"  [generate] emitted {pending} chunk prompt(s) for a "
-              f"parallel wave (limit {handoff_limit})")
-        raise ConversationPending()
-
-    print(f"  [generate] {chunk_total}/{chunk_total} parallel-wave grounded done "
-          f"[{time.time() - t_start:.0f}s]")
-    return all_file_blocks, generated_slugs, None
 
 def _run_chunk_pipeline(
     extracted_text: str, global_digest: dict, raw_file: Path, config: Config,
     template_content: str, progress: dict | None, verbose: bool,
     analyze_only: bool = False,
-) -> tuple[list, dict, list, dict]:
+) -> tuple[list, dict, list, dict, dict]:
     """Stage 2.2 \u2192 2.3 \u2192 2.4: analyze all chunks, detect existing-wiki
     associations, then generate pages with associations fed into each prompt.
 
     Split (2026-06-21): analysis and generation are separate phases so Stage 2.3
     (incremental association detection) can run between them and feed back into
     the generation prompt. Returns
-    ``(chunk_analyses, analysis, file_blocks, incremental_associations)``.
+    ``(chunk_analyses, analysis, file_blocks, incremental_associations,
+    global_digest)``.
 
     ``analyze_only`` (prefetch boundary, 2026-06-28): Stage 2.2 freezes one
     read-only slug/index snapshot at entry, then every chunk reads only that
@@ -635,6 +558,37 @@ def _run_chunk_pipeline(
     # in the artifact store guards against a missing artifact.
     if (progress and "chunk_analyses" in progress
             and is_stage_done(config, _h, "stage_2_3_done")):
+        cached_generation_policy = progress.get("generation_policy_version")
+        generation_cache_compatible = (
+            cached_generation_policy == GENERATION_POLICY_VERSION
+        )
+        if not generation_cache_compatible:
+            post_write_started = any(
+                is_stage_done(config, _h, marker)
+                for marker in _POST_WRITE_MARKERS
+            )
+            if post_write_started:
+                # Pages are already on disk. Replaying a different Stage 2.4
+                # payload here would cross the non-idempotent write boundary.
+                # Finish this already-started legacy source; new/pre-write
+                # sources use the consolidated policy.
+                generation_cache_compatible = True
+                print(
+                    "  [stage 2.4] ⚠️  legacy per-chunk generation cache is "
+                    "already past the write boundary — preserving it for safe "
+                    "resume. Re-ingest explicitly to regenerate this source "
+                    "under the consolidated policy."
+                )
+            else:
+                _invalidate_stage_2_generation_checkpoint(
+                    config,
+                    _h,
+                    progress,
+                    "generation policy changed from "
+                    f"{cached_generation_policy or 'legacy-per-chunk'} to "
+                    f"{GENERATION_POLICY_VERSION}",
+                )
+
         # Restore file_blocks DIRECTLY from the artifact store. The retired
         # design re-parsed ``raw_response`` (= "\n".join(block BODIES), bodies
         # without the ---FILE:...--- wrappers), so parse_file_blocks() returned
@@ -647,13 +601,23 @@ def _run_chunk_pipeline(
         # recover it, so rather than proceed with 0 blocks (re-introducing the
         # silent loss) we invalidate the stage marker and fall through to
         # re-run the chunk pipeline.
-        persisted_blocks = progress.get("file_blocks")
-        if persisted_blocks is None:
+        persisted_blocks = (
+            progress.get("file_blocks")
+            if generation_cache_compatible
+            else None
+        )
+        if generation_cache_compatible and persisted_blocks is None:
             print("  [stage 2.2] \u26a0\ufe0f  stage_2_3_done set but no persisted "
                   "file_blocks artifact \u2014 invalidating marker and re-running "
                   "chunk pipeline (prevents silent concept/entity loss).")
-            unmark_stage_done(config, _h, "stage_2_3_done")
-        else:
+            _invalidate_stage_2_generation_checkpoint(
+                config,
+                _h,
+                progress,
+                "stage_2_3_done has no persisted file_blocks",
+            )
+            generation_cache_compatible = False
+        if generation_cache_compatible:
             chunk_analyses = progress["chunk_analyses"]
             print(f"  [stage 2.2] (cached) Chunk Analysis \u2014 {len(chunk_analyses)} chunks")
             _verify_stage_2_2_chunks(
@@ -665,6 +629,7 @@ def _run_chunk_pipeline(
             analysis = progress.get("analysis", {})
             incremental_associations = progress.get("incremental_associations", {})
             global_digest = progress.get("global_digest", global_digest)
+            _verify_stage_2_1_digest(global_digest, raw_file)
             return chunk_analyses, analysis, persisted_blocks, incremental_associations, global_digest
 
     # Prefetch resume: Stage 2.2 was cached on its own (analyze_only run) but 2.3+
@@ -678,12 +643,11 @@ def _run_chunk_pipeline(
               f"(prefetched)")
         _verify_stage_2_2_chunks(
             chunk_analyses, extracted_text, chunk_plan=chunk_plan)
-        if analyze_only:
-            raise PrepareStopAfter("1.5")
         # Restore the persisted roll-up digest. A pre-roll-up cache (no valid
         # persisted global_digest) would silently feed an empty digest to
         # 2.4/2.6 — same pattern as the stage_2_3_done restore above:
-        # warn, invalidate the marker, and fall through to re-run 2.2.
+        # warn, invalidate the marker, and fall through to re-run 2.2. This
+        # validation runs even for another analyze-only prefetch resume.
         _digest_cached = progress.get("global_digest")
         _digest_keys = {"book_meta", "outline", "key_concepts", "key_claims", "key_entities"}
         if not isinstance(_digest_cached, dict) or not _digest_keys.issubset(_digest_cached):
@@ -693,11 +657,23 @@ def _run_chunk_pipeline(
                   "digest reaching 2.4/2.6).")
             unmark_stage_done(config, _h, "stage_2_2_done")
         else:
-            global_digest = _digest_cached
-            result = _generate_from_analyses(
-                chunk_analyses, extracted_text, global_digest, raw_file, config,
-                template_content, verbose)
-            return (*result, global_digest)
+            try:
+                _verify_stage_2_1_digest(_digest_cached, raw_file)
+            except RuntimeError as exc:
+                print(
+                    "  [stage 2.2] ⚠️  cached rolled-up global_digest failed "
+                    f"full shape/type validation ({exc}) — invalidating marker "
+                    "and re-running chunk analysis."
+                )
+                unmark_stage_done(config, _h, "stage_2_2_done")
+            else:
+                global_digest = _digest_cached
+                if analyze_only:
+                    raise PrepareStopAfter("1.5")
+                result = _generate_from_analyses(
+                    chunk_analyses, extracted_text, global_digest, raw_file, config,
+                    template_content, verbose)
+                return (*result, global_digest)
 
     # \u2500\u2500 Stage 2.2: build chunk plan + analyze (frozen wiki context snapshot) \u2500\u2500
     est_sec = chunk_total * 75
@@ -758,7 +734,7 @@ def _run_chunk_pipeline(
     # key_concepts/key_claims/key_entities) that 2.4/2.6 consume.
     # Migrated from Stage 2.1 (removed 2026-07-08): the gate now runs on the
     # 2.2 roll-up instead of the former whole-book prior.
-    if chunk_analyses and not analyze_only:
+    if chunk_analyses:
         _verify_stage_2_1_digest(global_digest, raw_file)
 
     save_progress(config, _h, {"chunk_plan_v2": chunk_plan,
@@ -838,16 +814,18 @@ def _generate_from_analyses(
         print(f"  [stage 2.3] {len(related_pages)} proposed connection(s) to "
               f"existing wiki resolved \u2192 fed into generation prompt")
 
-    # \u2500\u2500 Stage 2.4: generate all chunks (associations fed into prompt) \u2500\u2500
-    _stage_begin("Stage 2.4: Chunk Generation")
-    # Generation is always source-grounded: _generate_all_chunks feeds each
-    # chunk's raw text into its prompt. Each recommended key page is generated
-    # with its exact source passage; mentioned/background terms are not page
-    # targets. See _generate_all_chunks / _stage_2_4_build_prompt.
+    # \u2500\u2500 Stage 2.4: one whole-source generation (NashSU 0.6.6 order) \u2500\u2500
+    _stage_begin("Stage 2.4: Consolidated Generation")
+    # All serial analyses are complete before this call. The shared context
+    # carries the final rolling digest, every chunk analysis, and bounded raw
+    # evidence from every chunk. Stage 2.3 associations are an explicit
+    # improved-wiki extension inserted before the single generation call.
     all_file_blocks, _generated_slugs, _gen_stop_reason = _generate_all_chunks(
         chunk_meta, chunk_analyses, incremental_associations, raw_file, config,
         template_content, chunk_total, t_start, verbose,
-        related_pages=related_pages)
+        related_pages=related_pages,
+        global_digest=global_digest,
+    )
 
     # Build combined analysis
     unique_concepts, _ = _stage_2_4_extract_names(chunk_analyses)
@@ -861,7 +839,7 @@ def _generate_from_analyses(
         "entities_generated": len(entity_blocks),
         "coverage_pct": round(len(concept_blocks) / max(len(unique_concepts), 1), 2),
         "total_chunks": chunk_total,
-        "method": "analyze-key-items\u2192associate\u2192generate",
+        "method": "analyze-all\u2192associate-extension\u2192generate-once",
     }
     file_blocks = all_file_blocks
 

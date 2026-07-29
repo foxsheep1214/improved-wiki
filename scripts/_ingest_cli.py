@@ -68,8 +68,8 @@ def main() -> int:
     parser.add_argument("--parallel", type=int, default=0,
                         help=f"Pipeline concurrency ceiling (default: {BATCH_MAX_CONCURRENT}). "
                              "The OS prefetch pipeline uses at most 2 workers "
-                             "(1 minerU + 1 caption stage); the same value caps "
-                             "each Stage 2.4 parallel handoff wave.")
+                             "(1 minerU + 1 caption stage). Stage 2.4 is one "
+                             "consolidated whole-source handoff.")
     parser.add_argument("--dry-run", action="store_true", help="Don't write anything")
     parser.add_argument("--delete", action="store_true",
                         help="Delete source: remove source page, cache entry, and cleanup orphans (NashSU source-lifecycle parity)")
@@ -280,8 +280,6 @@ def main() -> int:
         config = Config.from_env()
         config.enrich_enabled = args.enrich_wikilinks and not args.no_enrich
         config.runtime_dir.mkdir(parents=True, exist_ok=True)
-        config.handoff_parallel_limit = (
-            args.parallel if args.parallel > 0 else BATCH_MAX_CONCURRENT)
         if args.resume_batch:
             _clear_batch_pause_marker(config)
             clear_prefetch_pause_marker(config)
@@ -340,8 +338,6 @@ def main() -> int:
     config = Config.from_env()
     config.enrich_enabled = args.enrich_wikilinks and not args.no_enrich
     config.stop_after_stage = args.stop_after_stage
-    config.handoff_parallel_limit = (
-        args.parallel if args.parallel > 0 else BATCH_MAX_CONCURRENT)
 
     # Validate raw files BEFORE probing context. A wrong cwd / missing file must
     # error immediately instead of triggering a fresh context-probe handoff —
@@ -496,7 +492,12 @@ def main() -> int:
                 est_chars = int(max(avg_chars, 200)) * pages  # floor at 200 chars/page
                 chunks_est = max(1, (est_chars + config.target_chars - 1) // config.target_chars)
                 print(f"  Estimated text: ~{est_chars:,} chars ({pages} pages × {max(avg_chars, 200):.0f} chars/page)")
-                print(f"  Estimated API calls: {chunks_est} (Stage 2.2 chunks) + 1-3 (Stage 2.4)")
+                print(
+                    "  Estimated text-generation calls: "
+                    f"{chunks_est} (Stage 2.2 chunks) + up to 1 "
+                    "(Stage 2.4 consolidated) + 1 (Stage 2.6 source page), "
+                    "plus optional dedup/review/merge handoffs"
+                )
             except Exception:
                 pass
         print(f"  Stages: text-extract -> image-extract+caption -> chunk+analyze -> generate -> review -> inject -> write -> cache")

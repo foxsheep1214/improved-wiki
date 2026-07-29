@@ -225,6 +225,7 @@ def stage_2_6_source_page(
     verbose: bool = False,
     linkable_slugs: list[str] | None = None,
     source_context: str = "",
+    consolidated_context: str = "",
     associations: dict | None = None,
     generated_concepts: list[str] | None = None,
     generated_entities: list[str] | None = None,
@@ -234,9 +235,11 @@ def stage_2_6_source_page(
 ) -> tuple[str, str]:
     """Stage 2.6: generate one NashSU-style source summary page.
 
-    improved-wiki keeps this as a dedicated, resumable call, but its observable
-    content contract matches NashSU: one free-form source summary, pages/links
-    only for key items, and no fixed heading or entry-count quota.
+    improved-wiki keeps this as a dedicated, resumable call, but reuses the
+    exact whole-source context supplied to Stage 2.4: final rolling digest,
+    every chunk analysis, and bounded raw evidence from every chunk. Its
+    observable content contract remains one free-form source summary with no
+    fixed heading or entry-count quota.
     """
     try:
         source_rel = str(file_path.relative_to(config.raw_root).with_suffix(""))
@@ -285,7 +288,17 @@ def stage_2_6_source_page(
     url_yaml = f'"{bib_url}"' if bib_url else '""'
     venue_yaml = f'"{bib_venue}"' if bib_venue else '""'
 
-    digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
+    # The consolidated context already contains the complete final digest.
+    # Keep this separate frontmatter-oriented block to bibliographic metadata
+    # only so Stage 2.6 does not duplicate tens of thousands of prompt chars.
+    digest_payload = global_digest
+    if consolidated_context:
+        digest_payload = {
+            key: value
+            for key, value in global_digest.items()
+            if key == "book_meta" or str(key).endswith("_meta")
+        }
+    digest_str = json.dumps(digest_payload, ensure_ascii=False, indent=2)
     # 8000 silently cut the outline of large books (observed live 2026-07-02:
     # a 26-chapter handbook's source-page prompt lost chapters 24-26 and the
     # agent had to reconstruct them from the raw TOC). 24K chars is still lean.
@@ -305,9 +318,9 @@ def stage_2_6_source_page(
     is_paper = template.lstrip().startswith("# digest-paper")
     source_kind = "paper" if is_paper else "book"
     info_header = (
-        "Paper Information (from Global Digest)"
+        "Paper Information (from Final Global Digest)"
         if is_paper else
-        "Book Information (from Global Digest)"
+        "Book Information (from Final Global Digest)"
     )
     body_guidance = """Write a concise, grounded source summary in the source's
 language. Choose headings and structure that fit this source; no fixed H2 set is
@@ -361,10 +374,21 @@ relevant existing/generated pages."""
         f"# Linkable pages\n{linkable_str}\n"
     )
 
-    # P1 parity with Stage 2.4 (2026-06-27): ground the source summary in
-    # the raw source (trimmed to budget) so it uses the source's own wording,
-    # formulas, numbers, and structure — not training memory.
-    if source_context.strip():
+    # Stage 2.6 consumes the exact same deterministic whole-source context as
+    # Stage 2.4. ``source_context`` remains a raw-text compatibility path for
+    # direct callers predating the consolidated policy.
+    if consolidated_context.strip():
+        source_section = (
+            "\n# Consolidated Stage 2 Context "
+            "(ground the summary in the WHOLE source)\n"
+            "Use the final digest, every chunk analysis, and bounded raw evidence "
+            "below. Preserve late-source details and cross-chunk relationships; "
+            "do not assume the original document ended at an early prefix.\n"
+            "<stage2-context>\n"
+            f"{consolidated_context}\n"
+            "</stage2-context>\n"
+        )
+    elif source_context.strip():
         source_section = (
             "\n# Source Text (ground the summary in THIS — do not write from memory)\n"
             "Base the summary on what the source ACTUALLY says: use its own wording,\n"
@@ -400,7 +424,11 @@ relevant existing/generated pages."""
     # NashSU does not require the source summary to dump that universe into its
     # body, so there is intentionally no "Generated pages" checklist here.
 
-    language_sample = source_context or json.dumps(global_digest, ensure_ascii=False)
+    language_sample = (
+        consolidated_context
+        or source_context
+        or json.dumps(global_digest, ensure_ascii=False)
+    )
     language_directive = build_language_directive(language_sample)
     schema_context = schema_prompt_text(load_schema_md(config))
     purpose_context = load_purpose_md(config).strip()[:6000]
@@ -426,7 +454,7 @@ relevant existing/generated pages."""
     # the source summary therefore selects and synthesizes only the important
     # claims while retaining source-wide context.
     chunk_claims_section = ""
-    if chunk_claims:
+    if chunk_claims and not consolidated_context:
         _cc_lines = []
         for c in chunk_claims[:400]:
             if isinstance(c, dict):

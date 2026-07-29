@@ -51,6 +51,22 @@ _LINKABLE_TOTAL_CAP = 400
 _NO_KEY_PAGES_SENTINEL = "NO_KEY_PAGES"
 
 
+def _stage_2_4_generation_max_tokens(config: Config) -> int:
+    """NashSU 0.6.6 generation-token ladder for the single final call."""
+    context_size = int(getattr(config, "context_size", 0) or 0)
+    if context_size >= 512_000:
+        return 32_768
+    if context_size >= 256_000:
+        return 24_576
+    if context_size >= 128_000:
+        return 16_384
+    if context_size > 0:
+        return 8_192
+    # Minimal test/programmatic configs may not have run the live context
+    # probe. Preserve their configured compatibility behavior.
+    return config.compute_max_tokens(16_384)
+
+
 def _is_key_concept_candidate(item: dict) -> bool:
     """Whether a Stage 2.2 concept is eligible for standalone generation.
 
@@ -943,6 +959,7 @@ def _stage_2_4_build_all_prompt(
     existing_refs: dict | None = None,
     related_pages: list[dict] | None = None,
     source_context: str = "",
+    consolidated_context: str = "",
 ) -> str:
     """Build ONE generation prompt covering ALL chunks (NashSU single-shot parity).
 
@@ -951,12 +968,9 @@ def _stage_2_4_build_all_prompt(
     all of them in a single response.
     Replaces the former per-chunk generation loop (Stage 2.4 × N calls → 1 call).
 
-    ``source_context`` (P1, 2026-06-27): raw source text, already trimmed to the
-    caller's budget. When present it is injected so the LLM grounds each page in
-    the source's OWN wording/formulas/examples instead of generic training-memory
-    knowledge — NashSU parity (buildGenerationPrompt feeds trimmed sourceContext).
-    Verified via the Hennessy A/B: analysis-only produced a wrong Amdahl's-Law
-    formula (the popular p/n form) instead of the source's Fraction_enhanced form.
+    ``consolidated_context`` is the active ingest path: the final rolling digest,
+    every chunk analysis, and bounded raw evidence from every chunk. The legacy
+    ``source_context`` argument remains for direct callers and tests.
     """
     existing_refs = existing_refs or {}
     existing_slugs = list_existing_slugs(config)
@@ -1133,21 +1147,29 @@ def _stage_2_4_build_all_prompt(
     else:
         related_pages_str = "(none)"
 
-    if source_context.strip():
+    context_text = consolidated_context or source_context
+    if context_text.strip():
+        context_label = (
+            "Consolidated Stage 2 Context"
+            if consolidated_context
+            else "Source Context"
+        )
         source_section = (
-            "\n# Source Text (GROUND EVERY PAGE IN THIS — do not write from memory)\n"
-            "The following is the raw source text (trimmed to budget). For every page:\n"
+            f"\n# {context_label} "
+            "(GROUND EVERY PAGE IN THIS — do not write from memory)\n"
+            "The context includes the final digest, all chunk analyses, and "
+            "bounded raw evidence. For every page:\n"
             "- Use the SOURCE'S OWN definitions, formulas, notation, variable names,\n"
             "  and worked examples — NOT the popular/textbook version from your memory.\n"
             "- If the source frames a concept a specific way (e.g. a particular formula\n"
             "  or set of variables), reproduce THAT framing; do not substitute a\n"
             "  generic equivalent.\n"
             "- Prefer the source's concrete numbers/examples over invented ones.\n"
-            "- If a concept below is not covered by this excerpt, generate it from its\n"
-            "  analysis entry as usual.\n"
-            "<source>\n"
-            f"{source_context}\n"
-            "</source>\n"
+            "- Use cross-chunk evidence to keep synthesis, thesis, comparison, and\n"
+            "  terminology coherent across the whole source.\n"
+            "<stage2-context>\n"
+            f"{context_text}\n"
+            "</stage2-context>\n"
         )
     else:
         source_section = ""
@@ -1166,7 +1188,7 @@ def _stage_2_4_build_all_prompt(
         if schema_candidate_slugs else ""
     )
 
-    language_sample = source_context or json.dumps(chunk_analyses, ensure_ascii=False)
+    language_sample = context_text or json.dumps(chunk_analyses, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
     return f"""{language_directive}
 
@@ -1299,6 +1321,7 @@ def stage_2_4_generate_all(
     existing_refs: dict | None = None,
     related_pages: list[dict] | None = None,
     source_context: str = "",
+    consolidated_context: str = "",
 ) -> tuple[list[tuple[str, str]], list[str], str | None]:
     """Single-shot generation: ONE LLM call for all chunks (NashSU parity, 2026-06-27).
 
@@ -1353,8 +1376,9 @@ def stage_2_4_generate_all(
         chunk_analyses, file_path, config, template,
         existing_refs=existing_refs, related_pages=related_pages,
         source_context=source_context,
+        consolidated_context=consolidated_context,
     )
-    gen_tokens = config.compute_max_tokens(16384)
+    gen_tokens = _stage_2_4_generation_max_tokens(config)
 
     for attempt in range(4):
         try:
@@ -1426,9 +1450,12 @@ def stage_2_4_generate_chunk(
     existing_refs: dict | None = None,
     related_pages: list[dict] | None = None,
 ) -> list[tuple[str, str]]:
-    """Generate FILE blocks for a single chunk (extracted from stage_2_per_chunk_generation).
+    """Legacy direct helper for one-chunk generation.
 
-    Used by the analyze→generate pipeline in _do_prepare. ``existing_refs``
+    The active ingest pipeline no longer calls this helper: NashSU-aligned
+    Stage 2.4 uses ``stage_2_4_generate_all`` once after every Stage 2.2 chunk
+    has been analyzed. It remains importable for compatibility and targeted
+    diagnostics. ``existing_refs``
     (Stage 2.3 output: {candidate_name: [type-prefixed wiki slugs]}) is
     forwarded so the LLM updates same-type targets and only links cross-type
     associations.

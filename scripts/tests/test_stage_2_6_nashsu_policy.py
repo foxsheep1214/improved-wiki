@@ -137,6 +137,55 @@ class TestPromptPolicy(unittest.TestCase):
         self.assertNotIn("Include **EVERY", prompt)
         self.assertNotIn("aim for 5-15", prompt.lower())
 
+    def test_prompt_uses_consolidated_whole_source_context(self):
+        digest = {
+            "book_meta": {"title": "Book"},
+            "outline": ["Early", "Late"],
+            "key_concepts": [],
+            "key_entities": [],
+            "key_claims": [],
+        }
+        context = (
+            "# Consolidated Stage 2 Context\n"
+            "## Final Global Digest\nFINAL-DIGEST\n"
+            "## Per-Chunk Analyses\nLATE-CHUNK-ANALYSIS\n"
+            "## Bounded Raw Source Evidence\nLATE-RAW-EVIDENCE"
+        )
+        prompts: list[str] = []
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            prompts.append(prompt)
+            return _page("Grounded whole-source summary."), "end_turn"
+
+        original = s26.call_anthropic_protocol
+        s26.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                tmp = Path(d)
+                cfg = _config(tmp)
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                s26.stage_2_6_source_page(
+                    digest,
+                    cfg.raw_root / "book.pdf",
+                    cfg,
+                    consolidated_context=context,
+                    chunk_claims=[{
+                        "claim": "duplicate claim section must be suppressed",
+                        "evidence": "late",
+                    }],
+                )
+        finally:
+            s26.call_anthropic_protocol = original
+
+        self.assertEqual(len(prompts), 1)
+        self.assertIn(context, prompts[0])
+        self.assertIn("ground the summary in the WHOLE source", prompts[0])
+        self.assertNotIn(
+            "# Claim candidates from per-chunk analysis",
+            prompts[0],
+        )
+
     def test_empty_related_is_preserved(self):
         normalized = s26._normalize_source_frontmatter(
             _page("body"),
