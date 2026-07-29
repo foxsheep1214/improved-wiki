@@ -109,13 +109,35 @@ def _stage_2_1_find_protected_ranges(text: str) -> list[tuple[int, int]]:
     tables. Returns sorted, non-overlapping ``(start, end)`` spans."""
     ranges: list[tuple[int, int]] = []
 
-    # Fenced code blocks: pair consecutive fence markers (```/~~~).
-    fences = [m.start() for m in _FENCE_RE.finditer(text)]
-    for i in range(0, len(fences) - 1, 2):
-        open_pos = fences[i]
-        close_line_end = text.find("\n", fences[i + 1])
-        end = len(text) if close_line_end == -1 else close_line_end + 1
+    # Fenced code blocks: a closing fence must use the same marker character,
+    # be at least as long as its opener, and contain no trailing info string.
+    # Pairing every two fence-looking lines is unsafe for OCR/source excerpts:
+    # a literal `````asm`` line inside a `````txt`` block would otherwise be
+    # mistaken for its close, shifting every later pair and protecting a huge
+    # span of ordinary prose from chunking.
+    open_fence: tuple[int, str, int] | None = None
+    for match in _FENCE_RE.finditer(text):
+        marker = match.group(1)
+        line_end = text.find("\n", match.end())
+        content_end = len(text) if line_end == -1 else line_end
+        trailing = text[match.end():content_end]
+
+        if open_fence is None:
+            open_fence = (match.start(), marker[0], len(marker))
+            continue
+
+        open_pos, open_char, open_len = open_fence
+        is_close = (
+            marker[0] == open_char
+            and len(marker) >= open_len
+            and not trailing.strip()
+        )
+        if not is_close:
+            continue
+
+        end = len(text) if line_end == -1 else line_end + 1
         ranges.append((open_pos, end))
+        open_fence = None
 
     def _in_fence(pos: int) -> bool:
         return any(s <= pos < e for s, e in ranges)
