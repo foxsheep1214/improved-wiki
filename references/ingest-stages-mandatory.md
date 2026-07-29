@@ -122,7 +122,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **子步骤（生成后收尾）· 源内概念去重**（原 Stage 2.5，已并入 2.4）：对同一本书内部概念去重合并（防同名异义重复页）。**embedding 语义初筛**（cosine ≥0.82，复用 `_dedup_embedding.candidate_pairs`，取代旧的词级 Jaccard，能抓跨语言/同义重复如 傅里叶变换 vs Fourier transform）+ LLM 逐组确认，失败保守不合并。**无回退**：embedding stack 不可用则 `raise` 暂停（不退回 Jaccard）。跳过条件：单 chunk 书。go/no-go：多 chunk 时 `concept_merge_rules` 已记录（可为 `[]`）。
 - **子步骤（生成后）· 源页生成**：所有 chunk 生成完，`stage_2_6_source_page` 从 global digest、源文本上下文和 per-chunk claim candidates 生成**一个简洁、自由结构的 source summary**，并入 file_blocks。只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。与 NashSU Step 2 的 source summary 内容契约对齐。若 source FILE 块未闭合，先 exact-path 定向修复；若仍缺失/不合规，使用 NashSU deterministic fallback，把完整 Stage 2 analysis 原样保留到最低限度 source 页（不截断、不另调 LLM）。go/no-go：最终恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END marker 完整且正文非空。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
-- **go/no-go**：2.4 可产生 0 个可选 key/schema-typed FILE block；2.6 合并后 `stages.file_blocks_generated ≥ 1`，且 source page FILE block 存在、概念页路径在 `wiki/concepts/` 下。
+- **go/no-go**：2.4 可产生 0 个可选 key/schema-typed FILE block；2.6 合并后 `stages.file_blocks_generated ≥ 1`，且 source page FILE block 存在（`_verify_or_die` 硬门禁）。概念页目录**不是**硬门禁：`_stage_validators.py` 只对路径异常打印告警，真正的归位由 Stage 3.1 的 schema 路由在写盘时自动纠正。
 - **失败处理**：0 个新/更新 key/schema-typed 页可以是合法结果（无候选、均由其他 chunk 覆盖、只有跨类型 link-only 关联，或模型以精确 `NO_KEY_PAGES` 判断候选均未达到独立建页/实质更新门槛）。同类型已有页本身不是跳过来源新贡献的理由，但边缘性提及也不强制制造更新。解析器丢弃未闭合的 FILE block，并把其安全路径交给一次 targeted repair handoff；repair 只接受请求路径，额外页面全部丢弃。若任一已经开始但未闭合的推荐路径仍未恢复则硬暂停；绝不运行“逐条目全量补齐”。
 
 ### Stage 2.7 · Query Auto-Generation（已移除，对齐 NashSU，2026-07-12）
@@ -153,7 +153,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 3.4 · Review
 - **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate），写入 `wiki/REVIEW/<type>/<date>-<source>-<slug>.md` + `review-suggestions.json`。运行在已写盘文件上。
 - **go/no-go**：review items 数量 ≥0（空数组 `[]` 合法）；非空 item 必须完整通过严格 schema：`type`/`severity` 枚举合法，title/description 非空，`affected_pages` 是 wiki 内安全 `.md` 路径，suggestion/missing-page 恰有 2–3 条搜索 query，其余类型 query 为空。整批先校验后写盘，任何非法 item 都 hard-fail，禁止静默跳过和路径穿越。成功后以 `review_done` 绑定 review page refs。
-- **时机偏离 NashSU（有意，audit M2 2026-07-07）**：NashSU 在 `writeFileBlocks` **之前**对 in-memory generation 跑 review；improved-wiki 在 3.1 写盘**之后**对已落盘文件跑。这是刻意选择，理由：(1) review items 本就是非阻断 triage（`resolved: false` 等人工处理），NashSU 的"写盘前"也只是时机不同、并不拦截写盘，故"写盘前拦截能力"在 NashSU 侧也不成立；(2) 写盘后 review 看到 enrichment/wikilink-merge/page-merge 之后的真实 on-disk 内容，finding 反映最终状态，对 lint/cross-source dedup 友好，而写盘前看到的是 pre-enrichment 内容、易产出过时 finding；(3) 真正的结构性失败拦截已由 Stage 2.6 `_stage_2_6_validate_required_sections` 硬门禁（缺 section 直接 raise）覆盖。代价：review 发现问题时页已落盘，需后续修复——但 review items 本就不阻断，该代价可接受。不额外跑 pre-write LLM pass（双倍 review 成本对非阻断 triage 项 ROI 低）。
+- **时机偏离 NashSU（有意，audit M2 2026-07-07）**：NashSU 在 `writeFileBlocks` **之前**对 in-memory generation 跑 review；improved-wiki 在 3.1 写盘**之后**对已落盘文件跑。这是刻意选择，理由：(1) review items 本就是非阻断 triage（`resolved: false` 等人工处理），NashSU 的"写盘前"也只是时机不同、并不拦截写盘，故"写盘前拦截能力"在 NashSU 侧也不成立；(2) 写盘后 review 看到 enrichment/wikilink-merge/page-merge 之后的真实 on-disk 内容，finding 反映最终状态，对 lint/cross-source dedup 友好，而写盘前看到的是 pre-enrichment 内容、易产出过时 finding；(3) 真正的结构性失败拦截在写盘前就已完成：`_verify_stage_2_4_file_blocks` 校验 in-memory 生成结果，`_stage_2_6_validate_source_file_block` 校验源页 FILE block（两者都在 3.1 之前、失败直接 raise）。（旧文写的 `_stage_2_6_validate_required_sections` 固定 H2 章节门禁已随 `c69eaf1` 对齐 NashSU 时删除——NashSU 侧本就不存在该门禁。）代价：review 发现问题时页已落盘，需后续修复——但 review items 本就不阻断，该代价可接受。不额外跑 pre-write LLM pass（双倍 review 成本对非阻断 triage 项 ROI 低）。
 
 ### Stage 3.5 · Aggregate Repair + Cache
 - **作用**：log.md 程序化 append（同一 source identity + hash 幂等，不重复追加）+ index.md LLM 整页重写（失败/超容量/>250 页时 Sources 单行 append）+ overview.md 尽力重写 + 写 `ingest-cache.json`。
@@ -222,7 +222,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 可选手动验证（**不再自动运行**——已为对齐 NashSU 移除）：`python3 "$SKILL_DIR/scripts/validate_ingest.py" --root "$WIKI_ROOT" --source "<source stem>"`（全阶段体检，独立工具）。其它手动补充：
 ```bash
-"$SKILL_DIR/scripts/wiki-lint.sh" --summary                    # 结构性 lint（wikilink 健康）
+"$SKILL_DIR/scripts/wiki-lint.sh" --structural-only            # 结构性只读 lint（wikilink 健康）
 test -d wiki/media/*/<slug> && find wiki/media/<type>/<slug> \( -name '*.jpeg' -o -name '*.png' \) | while read f; do [ -f "$f.caption.txt" ] || echo "MISSING CAPTION: $f"; done
 ```
 

@@ -21,12 +21,37 @@ export SKILL_DIR="${SKILL_DIR:-$HOME/.agents/skills/improved-wiki}"
 | Ingest 2+ sources | same command with the complete ordered file list | Confirm list and target project |
 | Re-ingest | `ingest.py --delete <file>`, then ingest again | Confirm source and full redo vs `--keep-media` |
 | Deep research | `/improved-wiki deep-research <topic>` | Confirm one-topic scope; require web search |
-| Lint | `"$SKILL_DIR/scripts/wiki-lint.sh"` | Read-only unless fixes are requested |
+| Lint | `"$SKILL_DIR/scripts/wiki-lint.sh"` | Default maintenance is authorized; ask at exit 102 before delete-orphans |
 | Graph | `python3 "$SKILL_DIR/scripts/graph.py"` | None |
 | Validate | `python3 "$SKILL_DIR/scripts/validate_ingest.py" --root "$WIKI_ROOT" --source "<source stem>"` | Read-only |
 
 Do not assume a particular vendor agent, browser, MCP server, or shell helper.
 If a required capability is missing, report it instead of silently degrading.
+
+## Lint contract
+
+- Plain `wiki-lint.sh` runs structural + semantic checks and, by default,
+  `emit-review`, `fix`, `fix-links`, `sweep`, and one `dedup` round.
+  `--no-<action>` overrides an individual default.
+- Semantic/sweep/dedup may return exit 101 for conversation handoff. Answer the
+  prompt and resume the exact invocation. After one requested dedup round,
+  continue remaining stages with `--no-dedup` unless the user explicitly asks
+  for full convergence.
+- After all preceding default stages finish, plain lint exits **102** with
+  `DELETE_ORPHANS_CONFIRMATION_REQUIRED`. This is a required pause: ask the
+  user whether to run delete-orphans. Do not infer consent.
+  - If approved: run `wiki-lint.sh --delete-orphans-only`; it performs a fresh
+    structural scan, then emits orphan preview/Review items.
+  - If declined: stop; the preceding lint/fix/sweep/dedup work is already done.
+- `--diagnostic-only` keeps structural + semantic lint but disables every wiki
+  mutation and the exit-102 checkpoint. `--structural-only` is the deterministic
+  structural-only diagnostic route.
+- Delete-orphans remains preview + Review generation; it does **not** delete
+  pages. Real deletion is the separately confirmed
+  `wiki-lint-fix.py --delete-orphans --apply` command.
+- Keep improved-wiki's documented semantic batching/safety extensions; v0.6.6
+  parity covers normalized indexed structural suggestions and exact normalized
+  filtering of false `missing-page` findings.
 
 ## Ingest contract
 
@@ -120,7 +145,7 @@ For every handoff except the tiny context probe:
 3. Produce a complete `<stage>.txt.tmp`; validate it; atomically rename to
    `<stage>.txt`.
 4. For Stage 2.2, run
-   `scripts/qc_stage22.py --file <current-result.txt>` before publication.
+   `scripts/qc_stage22.py --file <current-result.txt.tmp>` before publication.
 5. Re-run the exact ingest command immediately.
 
 Continue until all confirmed sources exit `0`, the user explicitly pauses, or
@@ -172,8 +197,9 @@ spine only after inspecting partial writes with `--abandon-spine <hash>`.
   analysis-only `--keep-media`. See `references/re-ingest-comparison.md`.
 - **Deep research:** confirm one-topic scope before the web→wiki loop.
 
-Single-source ingest, read-only lint/validate, Graph, and save-chat-to-wiki are
-not gated.
+Single-source ingest, diagnostic-only lint/validate, Graph, and save-chat-to-wiki
+are not gated. Plain lint's first five maintenance actions are authorized by
+default; its delete-orphans continuation is always human-gated at exit 102.
 
 ## Entry points
 
