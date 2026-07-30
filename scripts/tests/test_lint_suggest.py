@@ -57,6 +57,29 @@ class TestTokenizeForSuggestion(unittest.TestCase):
 
 
 class TestRunStructuralLint(unittest.TestCase):
+    def test_escaped_table_alias_resolves_to_real_target(self):
+        pages = [
+            (
+                "concepts/motor.md",
+                "---\ntitle: Motor\n---\n# Motor\nMotor body.",
+            ),
+            (
+                "comparisons/motors.md",
+                "# Motors\n\n"
+                "| Dimension | Value |\n"
+                "|---|---|\n"
+                "| Kind | [[concepts/motor\\|Motor]] |\n",
+            ),
+        ]
+        results = ls.run_structural_lint(pages)
+        self.assertIsNone(
+            finding(
+                results,
+                type="broken-link",
+                page="comparisons/motors.md",
+            )
+        )
+
     def test_suggests_closest_page_for_broken_wikilink(self):
         pages = [
             ("transformer.md", "---\ntitle: Transformer\n---\n# Transformer\nAttention model."),

@@ -23,6 +23,8 @@ import re
 import time
 from typing import Callable, Optional
 
+from _wikilinks import WIKILINK_RE
+
 # ── Parse ────────────────────────────────────────────────────────────────────
 
 _FM_RE = re.compile(r"^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)")
@@ -41,10 +43,10 @@ _LEADING_FENCE_RE = re.compile(
 # in 6, and had started to drift). Tools with NashSU-parity fallback chains
 # keep their own surrounding logic but reuse these patterns.
 #   TITLE_LINE_RE:  quote-tolerant `title:` line (MULTILINE).
-#   WIKILINK_RE:    [[target]] / [[target|display]] — group(1)=target,
+#   WIKILINK_RE:    [[target]] / [[target|display]] /
+#                   [[target\|display]] — group(1)=target,
 #                   group(2)=display (without the pipe) or None.
 TITLE_LINE_RE = re.compile(r"^title:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
-WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]")
 
 
 def extract_frontmatter_title(content: str) -> str:

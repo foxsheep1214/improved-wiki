@@ -26,6 +26,7 @@ from pathlib import Path
 from _frontmatter import parse_frontmatter, write_frontmatter
 from _frontmatter_array import normalize_block_arrays
 from _llm_api import call_anthropic_protocol
+from _wikilinks import escape_markdown_table_wikilink_aliases
 
 
 _LINK_SPAN_RE = re.compile(r'(\[\[.*?\]\])', re.DOTALL)
@@ -69,7 +70,10 @@ def _replace_first_outside_links(body: str, term: str, replacement: str):
             if term in seg:
                 parts[i] = seg.replace(term, replacement, 1)
                 lines[idx] = "".join(parts)
-                return "\n".join(lines)
+                updated, _ = escape_markdown_table_wikilink_aliases(
+                    "\n".join(lines)
+                )
+                return updated
         # every occurrence on this line sits inside a link — keep scanning
     return None
 
@@ -114,7 +118,9 @@ def repair_legacy_bare_enrichment_links(
         if bare in body:
             body = body.replace(bare, aliased, 1)
             repaired += 1
-    return write_frontmatter(fm, body), repaired
+    result = write_frontmatter(fm, body)
+    result, _ = escape_markdown_table_wikilink_aliases(result)
+    return result, repaired
 
 
 def enrich_wikilinks_batch(
@@ -237,6 +243,8 @@ Pages with no suggestions may be omitted from the object.
                 body = new_body
                 changed = True
         if changed:
-            enriched[rel_path] = write_frontmatter(fm, body)
+            result = write_frontmatter(fm, body)
+            result, _ = escape_markdown_table_wikilink_aliases(result)
+            enriched[rel_path] = result
 
     return enriched

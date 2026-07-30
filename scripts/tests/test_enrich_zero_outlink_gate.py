@@ -106,6 +106,40 @@ class ZeroOutlinkGate(unittest.TestCase):
             result["findings/margin.md"],
         )
 
+    def test_enrichment_escapes_alias_separator_in_markdown_table(self):
+        page = (
+            "comparisons/motors.md",
+            _page(
+                LONG
+                + "\n\n| Dimension | Value |\n"
+                "|---|---|\n"
+                "| Kind | motor control |\n"
+            ),
+        )
+
+        def fake(prompt, config, **kw):
+            return (
+                '{"comparisons/motors.md": [{"term": "motor control", '
+                '"target": "concepts/motor-control"}]}',
+                None,
+            )
+
+        orig = ew.call_anthropic_protocol
+        ew.call_anthropic_protocol = fake
+        try:
+            result = ew.enrich_wikilinks_batch(
+                [page],
+                ["concepts/motor-control"],
+                object(),
+            )
+        finally:
+            ew.call_anthropic_protocol = orig
+
+        self.assertIn(
+            "[[concepts/motor-control\\|motor control]]",
+            result["comparisons/motors.md"],
+        )
+
     def test_legacy_repair_handles_two_terms_with_same_target(self):
         content = _page(
             "A [[wlcsp-fan-in-redistribution]] architecture mounts balls on "

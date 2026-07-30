@@ -72,6 +72,22 @@ class TestExistingLinkGuard(unittest.TestCase):
         out = _replace_first_outside_links(body, "term", "[[t]]")
         self.assertEqual(out, "[[t]] here and term there\n")
 
+    def test_table_alias_separator_is_escaped(self):
+        body = (
+            "| Dimension | Value |\n"
+            "|---|---|\n"
+            "| Kind | motor control |\n"
+        )
+        out = _replace_first_outside_links(
+            body,
+            "motor control",
+            "[[concepts/motor-control|motor control]]",
+        )
+        self.assertIn(
+            "[[concepts/motor-control\\|motor control]]",
+            out,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -95,6 +95,21 @@ def test_related_frontmatter_creates_edge(wiki):
     assert g.has_edge("wiki/a", "wiki/b"), "related: frontmatter is a link source"
 
 
+def test_escaped_table_alias_creates_edge(wiki):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "b")
+    _write_page(wiki_dir, "a")
+    (wiki_dir / "a.md").write_text(
+        "---\ntype: concept\n---\n\n"
+        "| Dimension | Value |\n"
+        "|---|---|\n"
+        "| Target | [[b\\|Display B]] |\n",
+        encoding="utf-8",
+    )
+    pages, lg, g = _build(root)
+    assert g.has_edge("wiki/a", "wiki/b")
+
+
 # --- 2. weights via calculateRelevance --------------------------------------
 
 

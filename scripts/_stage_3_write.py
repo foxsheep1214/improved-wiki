@@ -23,6 +23,10 @@ from _schema import (
 from _llm_api import call_anthropic_protocol
 from _frontmatter_array import parse_frontmatter_array, write_frontmatter_array
 from _stage_1_1_scanned import _decode_html_entities
+from _wikilinks import (
+    escape_markdown_table_wikilink_aliases,
+    split_wikilink_inner,
+)
 
 __all__ = [
     "stage_3_1_write_wiki_file",       # Stage 3.1
@@ -620,7 +624,7 @@ def _stage_3_1_normalize_link_target(raw: str) -> str:
     parse_frontmatter_array for related entries. Slugs never contain
     brackets, so the bracket strip is lossless."""
     t = raw.strip().strip("[]").strip()
-    t = t.split("|")[0].split("#")[0].strip()
+    t = split_wikilink_inner(t)[0].split("#")[0].strip()
     if t.startswith("wiki/"):
         t = t[len("wiki/"):]
     if t.endswith(".md"):
@@ -805,6 +809,8 @@ def stage_3_1_normalize_page_links(
          ``[[<source_page_slug>|据<ref>]]``. Skips headings, code/math spans,
          and refs already inside any ``[[..]]``; the source page itself
          (own slug == source_page_slug) is excluded. Idempotent.
+      6. Wikilink alias separators inside Markdown-table cells are escaped as
+         ``[[target\|alias]]`` so they do not become extra cell boundaries.
 
     Ambiguous related stems (≥2 dirs, claimed prefix wrong or absent) are kept
     as the BARE stem + warned — usually a dedup failure (H1) where guessing a
@@ -901,13 +907,14 @@ def stage_3_1_normalize_page_links(
         "rerouted": 0,
         "twin": 0,
         "missing": 0,
+        "table_alias": 0,
     }
     unresolved: list[str] = []
     changed = False
 
     def _display_text(inner: str) -> str:
-        target, _, alias = inner.partition("|")
-        if alias.strip():
+        target, alias, _ = split_wikilink_inner(inner)
+        if alias and alias.strip():
             return alias.strip()
         t = _stage_3_1_normalize_link_target(target)
         return t.rsplit("/", 1)[-1] if t else target.strip()
@@ -921,8 +928,8 @@ def stage_3_1_normalize_page_links(
     def _fix_link(m: re.Match) -> str:
         nonlocal changed
         inner = m.group(1)
-        target, _, alias = inner.partition("|")
-        alias = alias.strip()
+        target, alias_value, _ = split_wikilink_inner(inner)
+        alias = (alias_value or "").strip()
         anchor = target.split("#", 1)[1].strip() if "#" in target else ""
         t = _stage_3_1_normalize_link_target(target)
         if not t:
@@ -997,6 +1004,11 @@ def stage_3_1_normalize_page_links(
         new_body, fig_count = _stage_3_1_wrap_figure_refs(new_body, source_page_slug)
         if fig_count:
             changed = True
+    new_body, counts["table_alias"] = escape_markdown_table_wikilink_aliases(
+        new_body
+    )
+    if counts["table_alias"]:
+        changed = True
     if changed:
         content = head + new_body
 
@@ -1019,6 +1031,11 @@ def stage_3_1_normalize_page_links(
         )
     if fig_count:
         _warn(f"body: wrapped {fig_count} figure/table ref(s) → [[{source_page_slug}]]")
+    if counts["table_alias"]:
+        _warn(
+            f"body: escaped {counts['table_alias']} Markdown-table wikilink "
+            "alias pipe(s)"
+        )
     if unresolved:
         uniq = list(dict.fromkeys(unresolved))
         _warn(f"body: ⚠️ {len(unresolved)} bare wikilink(s) left as-is "

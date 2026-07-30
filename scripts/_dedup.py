@@ -438,7 +438,7 @@ def rewrite_cross_references(content: str, slug_redirects: dict[str, str]) -> st
     # 1. Wikilinks in the body — both [[slug]] and [[slug|alias]].
     for old_slug, new_slug in slug_redirects.items():
         escaped = re.escape(old_slug)
-        pattern = re.compile(rf"\[\[{escaped}(\|[^\]]+)?\]\]")
+        pattern = re.compile(rf"\[\[{escaped}(\\?\|[^\]]+)?\]\]")
         out = pattern.sub(lambda m, ns=new_slug: f"[[{ns}{m.group(1) or ''}]]", out)
 
     # 2. & 3. `related` field — re-parse and rewrite.
@@ -495,7 +495,7 @@ def rewrite_index_md(content: str, removed_slugs: set[str]) -> str:
 def _line_refers_to_slug(line: str, slugs: set[str]) -> bool:
     for slug in slugs:
         escaped = re.escape(slug)
-        if re.search(rf"\[\[{escaped}(\|[^\]]*)?\]\]", line):  # wikilink
+        if re.search(rf"\[\[{escaped}(\\?\|[^\]]*)?\]\]", line):  # wikilink
             return True
         if re.search(rf"\(([^)]*/)?{escaped}\.md\)", line):    # markdown link
             return True

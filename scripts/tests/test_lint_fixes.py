@@ -83,6 +83,11 @@ class TestRewriteWikilinkTarget(unittest.TestCase):
         out = f.rewrite_wikilink_target(content, "foo-barr", "foo-bar")
         self.assertIn("[[foo-bar|the foo]]", out)
 
+    def test_preserves_escaped_table_alias(self):
+        content = "| See | [[foo-barr\\|the foo]] |\n"
+        out = f.rewrite_wikilink_target(content, "foo-barr", "foo-bar")
+        self.assertIn("[[foo-bar\\|the foo]]", out)
+
     def test_leaves_other_links(self):
         content = "[[a]] and [[foo-barr]] and [[b]]\n"
         out = f.rewrite_wikilink_target(content, "foo-barr", "foo-bar")

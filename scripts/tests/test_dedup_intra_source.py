@@ -201,6 +201,32 @@ class TestEntityDedup(unittest.TestCase):
         self.assertEqual(paths, ["entities/billingsley.md", "concepts/clutter.md"])
         self.assertIn("[[billingsley]]", dict(result)["concepts/clutter.md"])
 
+    def test_apply_preserves_escaped_table_alias_when_redirecting(self):
+        file_blocks = [
+            ("entities/billingsley.md", "---\ntitle: Billingsley\n---\nprimary"),
+            ("entities/j-b-billingsley.md", "---\ntitle: J. B. Billingsley\n---\ndup"),
+            (
+                "concepts/clutter.md",
+                "---\ntitle: Clutter\n---\n"
+                "| Entity | Note |\n"
+                "|---|---|\n"
+                "| [[j-b-billingsley\\|J. B. Billingsley]] | data |\n",
+            ),
+        ]
+        rules = [{
+            "primary_slug": "billingsley",
+            "primary_title": "Billingsley",
+            "duplicate_slugs": ["j-b-billingsley"],
+            "merge_strategy": "union",
+            "merge_reason": "test",
+            "folder": "entities",
+        }]
+        result = d._dedup_apply_merge_rules(file_blocks, rules)
+        self.assertIn(
+            "[[billingsley\\|J. B. Billingsley]]",
+            dict(result)["concepts/clutter.md"],
+        )
+
     def test_entity_merge_never_deletes_same_stem_concept(self):
         file_blocks = [
             ("entities/j-i-marcum.md", "---\ntitle: J. I. Marcum\n---\nprimary"),

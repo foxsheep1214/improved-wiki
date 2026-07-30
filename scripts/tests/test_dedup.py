@@ -173,6 +173,13 @@ class TestRewriteCrossReferences(unittest.TestCase):
         out = d.rewrite_cross_references("See [[old-slug|the old display]] here.", {"old-slug": "new-slug"})
         self.assertEqual(out, "See [[new-slug|the old display]] here.")
 
+    def test_preserves_escaped_table_alias(self):
+        out = d.rewrite_cross_references(
+            "| See | [[old-slug\\|the old display]] |\n",
+            {"old-slug": "new-slug"},
+        )
+        self.assertEqual(out, "| See | [[new-slug\\|the old display]] |\n")
+
     def test_does_not_touch_unrelated_slugs(self):
         out = d.rewrite_cross_references("Both [[paos]] and [[unrelated]] are mentioned.", {"paos": "phosphorus-accumulating-organisms"})
         self.assertIn("[[phosphorus-accumulating-organisms]]", out)

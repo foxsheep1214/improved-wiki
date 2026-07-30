@@ -245,6 +245,35 @@ class TestBodyWikilinks(unittest.TestCase):
         self.assertIn("[[sources/Book/radar-handbook|source]]", out)
         self.assertIn("corrected 1 wrongly-prefixed wikilink", printed)
 
+    def test_table_alias_separator_is_escaped(self):
+        content = _page(body=(
+            "\n# Title\n\n"
+            "| Dimension | Value |\n"
+            "|---|---|\n"
+            "| Filter | [[concepts/matched-filter|Matched filter]] |\n"
+        ))
+        out, printed = _run(OWN, content)
+        self.assertIn(
+            "[[concepts/matched-filter\\|Matched filter]]",
+            out,
+        )
+        self.assertIn("escaped 1 Markdown-table wikilink alias pipe", printed)
+
+    def test_already_escaped_table_alias_is_valid_and_idempotent(self):
+        content = _page(body=(
+            "\n# Title\n\n"
+            "| Dimension | Value |\n"
+            "|---|---|\n"
+            "| Filter | [[concepts/matched-filter\\|Matched filter]] |\n"
+        ))
+        out, printed = _run(
+            OWN,
+            content,
+            strict_missing_targets=True,
+        )
+        self.assertEqual(out, content)
+        self.assertEqual(printed, "")
+
 
 class TestH1Stripping(unittest.TestCase):
     def test_h1_wikilinks_stripped_to_alias_text(self):
@@ -355,6 +384,20 @@ class TestFigureRefWrapping(unittest.TestCase):
         self.assertIn(f"[[{SOURCE_SLUG}|据Fig. 3-1]]", out)
         self.assertIn(f"[[{SOURCE_SLUG}|据Table 4-2]]", out)
         self.assertIn("wrapped 3 figure/table ref(s)", printed)
+
+    def test_figure_ref_inserted_in_markdown_table_escapes_alias_pipe(self):
+        content = _page(body=(
+            "\n# Title\n\n"
+            "| Evidence | Result |\n"
+            "|---|---|\n"
+            "| See Fig. 3-1 | 30 dB |\n"
+        ))
+        out, printed = self._run_fig(content)
+        self.assertIn(
+            f"[[{SOURCE_SLUG}\\|据Fig. 3-1]]",
+            out,
+        )
+        self.assertIn("escaped 1 Markdown-table wikilink alias pipe", printed)
 
     def test_fullwidth_dot_and_hyphen_separators(self):
         content = _page(body="\n# Title\n\n对比图2．6 与图3-1。\n")

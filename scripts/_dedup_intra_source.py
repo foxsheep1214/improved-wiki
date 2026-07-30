@@ -181,7 +181,8 @@ def _dedup_rewrite_wikilinks(content, slug_map, current_slug=""):
     """
     def _sub(m):
         target = m.group(1)
-        pipe = f"|{m.group(2)}" if m.group(2) else ""
+        separator = r"\|" if r"\|" in m.group(0) else "|"
+        pipe = f"{separator}{m.group(2)}" if m.group(2) else ""
         bare = target.rsplit("/", 1)[-1]
         new_slug = slug_map.get(bare.lower())
         if new_slug is None:

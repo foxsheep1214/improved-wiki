@@ -90,8 +90,10 @@ def _normalized_link_target(target: str) -> str:
     return lint_link_target(target).lower()
 
 
-_WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
-_WIKILINK_WITH_ALIAS_RE = re.compile(r"\[\[([^\]|]+?)(\|[^\]]+?)?\]\]")
+_WIKILINK_RE = _WIKILINK_BODY_RE
+_WIKILINK_WITH_ALIAS_RE = re.compile(
+    r"\[\[([^\]|]+?)(\\?\|[^\]]+?)?\]\]"
+)
 
 
 def has_wikilink_to_target(content: str, target: str) -> bool:

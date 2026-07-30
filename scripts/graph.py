@@ -61,6 +61,7 @@ from networkx.algorithms.community import louvain_communities
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir, WIKI_ARTIFACT_DIRS  # noqa: E402
+from _wikilinks import WIKILINK_RE, split_wikilink_inner  # noqa: E402
 
 # --- Signal weights (NashSU graph-relevance.ts WEIGHTS) ---------------------
 W_DIRECT_LINK = 3.0
@@ -75,7 +76,6 @@ LOUVAIN_SEED = 42
 # Cohesion (intra-edge density) below this marks a low-quality community.
 COHESION_LOW = 0.15
 
-WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 # Node types hidden at build (NashSU wiki-graph.ts HIDDEN_TYPES). Query pages are
@@ -192,7 +192,10 @@ def load_pages(wiki_root: Path, include_hidden: bool = False) -> dict[str, Page]
         sources = tuple(s for s in _as_list(fm.get("sources")))
         # Direct links = [[wikilinks]] in body + `related:` frontmatter paths.
         targets: list[str] = []
-        targets.extend(m.split("|")[0].split("#")[0].strip() for m in WIKILINK_RE.findall(body))
+        targets.extend(
+            match.group(1).split("#")[0].strip()
+            for match in WIKILINK_RE.finditer(body)
+        )
         targets.extend(_as_list(fm.get("related")))
         links = tuple(t for t in targets if t)
         pages[node_id] = Page(
@@ -213,7 +216,7 @@ class LinkResolver:
     by_stem: dict[str, list[str]]      # stem -> [node_id, ...]
 
     def resolve(self, target: str) -> Optional[str]:
-        t = target.split("|")[0].split("#")[0].strip()
+        t = split_wikilink_inner(target)[0].split("#")[0].strip()
         if not t:
             return None
         candidates: list[str] = []

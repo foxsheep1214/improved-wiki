@@ -899,11 +899,13 @@ Rules:
 2. Use the EXACT slug shown. Do not change case, add words, or invent new ones.
 3. For candidates IN THIS CHUNK: use the slug from its "(slug: ...)" label.
 4. If no matching slug exists, write the term as PLAIN TEXT with NO [[]].
-5. NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
-6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
+5. In a Markdown table cell, escape an alias separator as
+   `[[target\\|display]]`; an unescaped `|` creates a false cell boundary.
+6. NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
+7. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-7. Result-file integrity: every LaTeX command must retain a literal reverse-solidus
+8. Result-file integrity: every LaTeX command must retain a literal reverse-solidus
    (U+005C) before its command name in the final .txt file. Never emit C0 control
    characters in math (especially form-feed, carriage-return, or tab).
 {extra_rules}
@@ -1260,11 +1262,13 @@ Rules:
 2. Use the EXACT slug shown. Do not change case, add words, or invent new ones.
 3. For candidates below: use the slug from its "(slug: ...)" label.
 4. If no matching slug exists, write the term as PLAIN TEXT with NO [[]].
-5. NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
-6. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
+5. In a Markdown table cell, escape an alias separator as
+   `[[target\\|display]]`; an unescaped `|` creates a false cell boundary.
+6. NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
+7. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
    each formula from the source / Formulas list verbatim (same variables, same form);
    never paraphrase a formula into prose or swap in a generic textbook version.
-7. Result-file integrity: every LaTeX command must retain a literal reverse-solidus
+8. Result-file integrity: every LaTeX command must retain a literal reverse-solidus
    (U+005C) before its command name in the final .txt file. Never emit C0 control
    characters in math (especially form-feed, carriage-return, or tab).
 {extra_rules}

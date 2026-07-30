@@ -13,6 +13,7 @@ from pathlib import Path
 from _config import Config
 from _language import get_output_language
 from _paths import media_slug, atomic_write
+from _wikilinks import WIKILINK_RE
 
 
 def _stage_3_2_language_sample(content: str) -> str:
@@ -38,7 +39,7 @@ def _stage_3_2_language_sample(content: str) -> str:
         label = match.group(2)
         return label or target.rsplit("/", 1)[-1]
 
-    sample = re.sub(r"\[\[([^|\]]+)(?:\|([^\]]+))?\]\]", _wikilink_label, sample)
+    sample = WIKILINK_RE.sub(_wikilink_label, sample)
     return sample[:4000]
 
 
