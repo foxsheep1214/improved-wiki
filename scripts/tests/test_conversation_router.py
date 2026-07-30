@@ -23,7 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _llm_api
 import ingest  # noqa: F401  (import side-effect: registers the router)
 from _core import Config, ConversationPending
-from _conversation_router import _infer_stage, _load_task_manifest
+from _conversation_router import (
+    _infer_stage,
+    _is_stale_result,
+    _load_task_manifest,
+)
 
 
 def _make_config(tmp: Path) -> Config:
@@ -55,6 +59,22 @@ class TestRouterRegistration(unittest.TestCase):
 
 
 class TestConversationHandoff(unittest.TestCase):
+    def test_secondary_role_heading_is_not_stale_prompt_copy(self):
+        prompt = "# Role\nYou are merging a wiki page.\n" + ("instructions " * 300)
+        response = (
+            "# Nested Vectored Interrupt Controller (NVIC)\n\n"
+            "## Role\n\n"
+            "The NVIC selects the highest-priority pending interrupt.\n"
+        )
+
+        self.assertFalse(_is_stale_result(response, prompt))
+
+    def test_primary_role_heading_still_detects_stale_prompt_copy(self):
+        prompt = "# Role\nYou are merging a wiki page.\n" + ("instructions " * 300)
+        response = "# Role\nYou are merging a wiki page.\n"
+
+        self.assertTrue(_is_stale_result(response, prompt))
+
     def test_writes_prompt_and_raises_pending(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)

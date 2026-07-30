@@ -26,7 +26,6 @@ from _progress import (
 )
 from _schema import (
     BASE_PAGE_DIRS,
-    is_safe_ingest_path,
     list_existing_slugs,
     load_schema_md,
     parse_wiki_schema_routing,
@@ -34,11 +33,11 @@ from _schema import (
 )
 from _stage_3_write import (
     _stage_3_1_wiki_path_for_source,
-    _stage_3_1_auto_correct_wiki_path,
-    _stage_3_1_schema_route,
     _stage_3_1_canonicalize_sources_field,
     _stage_3_1_sanitize_ingested_content,
     _stage_3_1_stamp_frontmatter_dates,
+    project_write_result_blocks,
+    resolve_ingest_write_path,
     stage_3_1_build_slug_dirs,
     stage_3_1_normalize_page_links,
     stage_3_1_write_wiki_file,
@@ -146,6 +145,23 @@ def _is_redundant_duplicate_write(full_path, content: str, written_this_run: dic
     that is the designed same-slug collision merge — let it through.
     """
     return written_this_run.get(full_path) == content
+
+
+def _is_same_run_collision(full_path, content: str, written_this_run: dict) -> bool:
+    """True when THIS write loop already wrote this path with other content.
+
+    Two FILE blocks landing on one path is the designed same-slug collision
+    merge (see _is_redundant_duplicate_write for the byte-identical case). It
+    must not be mistaken for NashSU's corrected-source replacement: a page this
+    loop just wrote always passes the "every ``sources`` entry is the current
+    source" owner test, so replacing its body would silently drop the earlier
+    block. Observed shapes: a stray Stage 2.4 ``wiki/sources/<stem>.md`` block
+    arriving after Stage 2.6's real source page, two candidate names that
+    slugify identically, and two typed candidates that schema routing collapses
+    onto the same directory + stem.
+    """
+    previous = written_this_run.get(full_path)
+    return previous is not None and previous != content
 
 
 def _write_ledger_path(config: Config, source_hash: str) -> Path:
@@ -403,6 +419,18 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         enrich_candidates = reconstruct_enrich_candidates(
             files_written_paths, config.wiki_dir, _LISTING_PAGES)
 
+    _write_blocks = [] if (write_phase_done or write_loop_done) else file_blocks
+
+    # A5 write-time link normalizer (audit 2026-07-02, M6): slug→dir universe
+    # = this batch ∪ on-disk wiki, built once per book. Empty on resume passes
+    # (the loop below is skipped, so the universe is unused).
+    _slug_dirs = (stage_3_1_build_slug_dirs(_write_blocks, config, _VALID_SUBDIRS, _routing)
+                  if _write_blocks else {})
+    # D4 figure-ref backstop: wiki-relative slug of this book's source page —
+    # the normalizer wraps bare 图X.X/表X.X/Fig X-X/Table X-X body refs as
+    # [[<slug>|据<ref>]] and skips the source page itself (own slug match).
+    _source_page_slug = source_path.relative_to(config.wiki_dir).with_suffix("").as_posix()
+
     # NashSU Phase-3 order: generate/validate review suggestions from the
     # in-memory FILE generation BEFORE any page write.  Persistence remains
     # post-write (after aggregate maintenance and media injection), matching
@@ -420,11 +448,26 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 "[stage 3.4a] review_prepared marker present — restored "
                 f"{len(prepared_review['items_data'])} item(s)")
         else:
-            prewrite_review_blocks = file_blocks
+            # Review the generation as Stage 3.1 will write it. Schema routing
+            # and the strict missing-target de-link are deterministic, so
+            # reviewing the raw draft instead produced missing-page items the
+            # writer had already resolved and affected_pages entries pointing at
+            # pre-routing paths. The projection applies only that deterministic
+            # chain — no page merge, so this is still a review of the generation.
+            prewrite_review_blocks = project_write_result_blocks(
+                _write_blocks,
+                config,
+                _VALID_SUBDIRS,
+                _routing,
+                _slug_dirs,
+                canonical_source=canonical_source,
+                today=today_str,
+                source_page_slug=_source_page_slug,
+            )
             if write_phase_done or write_loop_done:
                 prewrite_review_blocks = (
                     _reconstruct_blocks_from_disk(config, files_written_paths)
-                    or file_blocks
+                    or prewrite_review_blocks
                 )
             prepared_review = stage_3_4_prepare_review_suggestions(
                 prewrite_review_blocks,
@@ -438,17 +481,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 "review_prepared",
                 payload=prepared_review,
             )
-    _write_blocks = [] if (write_phase_done or write_loop_done) else file_blocks
-
-    # A5 write-time link normalizer (audit 2026-07-02, M6): slug→dir universe
-    # = this batch ∪ on-disk wiki, built once per book. Empty on resume passes
-    # (the loop below is skipped, so the universe is unused).
-    _slug_dirs = (stage_3_1_build_slug_dirs(_write_blocks, config, _VALID_SUBDIRS, _routing)
-                  if _write_blocks else {})
-    # D4 figure-ref backstop: wiki-relative slug of this book's source page —
-    # the normalizer wraps bare 图X.X/表X.X/Fig X-X/Table X-X body refs as
-    # [[<slug>|据<ref>]] and skips the source page itself (own slug match).
-    _source_page_slug = source_path.relative_to(config.wiki_dir).with_suffix("").as_posix()
 
     # Duplicate-block guard (redundancy fix 2026-07-09): (path → content)
     # written earlier in THIS loop; see _is_redundant_duplicate_write.
@@ -463,46 +495,16 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
               "merged in an earlier pass — replays skip the LLM merge")
 
     for rel_path, content in _write_blocks:
-        if ".." in rel_path or rel_path.startswith("/"):
+        # Traversal/safety reject → application-managed aggregate reject →
+        # top-dir accept-list or auto-correct → `.md` suffix → schema routing
+        # (NashSU validateWikiPageRouting parity, applied at write time). The
+        # same resolver builds _slug_dirs and the Stage 3.4a review projection,
+        # so all three agree on where this block lands.
+        resolved = resolve_ingest_write_path(
+            rel_path, content, config, _VALID_SUBDIRS, _routing)
+        if not resolved:
             continue
-        if not is_safe_ingest_path(rel_path):
-            continue
-
-        top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-        basename = Path(rel_path).name
-        if basename in _LISTING_PAGES:
-            # These are application-managed aggregates: Stage 3.5 rebuilds
-            # index/overview deterministically, log.md is append-only, and
-            # schema.md is the user's contract. A generation block claiming one
-            # would overwrite the whole file. Stage 2.4 is candidate-driven and
-            # never asks for them, so this is a backstop for a model that
-            # volunteers one anyway (NashSU guards the same set —
-            # isAppManagedAggregatePath, ingest.ts:1428-1431).
-            print(f"  [write] Dropped — {rel_path} is an application-managed "
-                  "aggregate; Stage 3.5 owns it")
-            continue
-        elif top_dir not in _VALID_SUBDIRS:
-            corrected = _stage_3_1_auto_correct_wiki_path(rel_path, content, config)
-            if corrected:
-                print(f"  [write] Auto-corrected: {rel_path} → {corrected}")
-                rel_path = corrected
-            else:
-                print(f"  [write] Dropped — cannot correct path: {rel_path}")
-                continue
-
-        if not rel_path.endswith(".md"):
-            rel_path = rel_path + ".md"
-
-        # Schema routing (NashSU validateWikiPageRouting parity): place the page
-        # in the directory its frontmatter `type` declares (schema typeDirs →
-        # base types). Auto-corrects type↔dir mismatches the accept-list above
-        # cannot catch — e.g. a type:concept page sitting in a schema folder, or
-        # a schema type:person page written to entities/.
-        if basename not in _LISTING_PAGES:
-            routed = _stage_3_1_schema_route(rel_path, content, _routing)
-            if routed != rel_path:
-                print(f"  [write] Schema-routed: {rel_path} → {routed}")
-                rel_path = routed
+        rel_path = resolved
 
         # Skip per-block language check for minerU OCR — OCR text from garbled
         # PDFs confuses the detector (e.g. C0 control chars → wrong language).
@@ -534,19 +536,19 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # prefixed when uniquely resolvable, H1 wikilinks de-linked,
         # self-links removed, bare figure/table refs wrapped as source-page
         # links (D4 backstop). Loud per-page prints, never silent.
-        if basename not in _LISTING_PAGES:
-            content = stage_3_1_normalize_page_links(
-                rel_path,
-                content,
-                _slug_dirs,
-                source_page_slug=_source_page_slug,
-                # The candidate inventory is now frozen and complete.  A
-                # Stage 2 candidate omitted from the emitted FILE blocks must
-                # not survive as a dangling link in newly generated content.
-                # The post-merge normalization keeps the legacy/default policy
-                # so existing user-authored forward links remain untouched.
-                strict_missing_targets=True,
-            )
+        # (Listing pages never reach here — the resolver drops them.)
+        content = stage_3_1_normalize_page_links(
+            rel_path,
+            content,
+            _slug_dirs,
+            source_page_slug=_source_page_slug,
+            # The candidate inventory is now frozen and complete.  A
+            # Stage 2 candidate omitted from the emitted FILE blocks must
+            # not survive as a dangling link in newly generated content.
+            # The post-merge normalization keeps the legacy/default policy
+            # so existing user-authored forward links remain untouched.
+            strict_missing_targets=True,
+        )
 
         full_path = config.wiki_dir / rel_path
 
@@ -561,6 +563,12 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # replay (normalization is deterministic) matches exactly.
         _content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
         _already_merged = _prior_pages.get(rel_path) == _content_sha
+        _collision = _is_same_run_collision(
+            full_path, content, _written_this_run)
+        if _collision:
+            print(f"  [write] ⚠️  {rel_path}: second FILE block for a page "
+                  "this ingest already wrote — merging both bodies instead of "
+                  "replacing (same-slug collision)")
 
         try:
             stage_3_1_write_wiki_file(
@@ -573,6 +581,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 slug_dirs=_slug_dirs if do_merge else None,
                 source_page_slug=_source_page_slug,
                 already_merged=_already_merged,
+                same_run_collision=_collision,
             )
         except OSError as e:
             print(f"  [write] HARD ERROR: {rel_path} — {e}")

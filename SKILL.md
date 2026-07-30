@@ -140,6 +140,11 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 - Stage 2.4 runs exactly one consolidated generation handoff after every
   Stage 2.2 chunk has been analyzed. Its prompt carries the final rolling
   digest, every chunk analysis, and bounded raw evidence from every chunk.
+  Over budget, whole low-value analysis FIELDS are dropped in a fixed priority
+  order so every per-chunk payload stays a complete parseable object; raw
+  evidence takes the leftover budget. The context states which fields it gave
+  up — this is never a silent cap. An oversized final digest or minimum-detail
+  analysis uses a valid JSON head/tail envelope rather than a mid-string cut.
 - `--parallel` controls cross-book Phase 1 OCR/caption prefetch only; it does
   not split or parallelize Stage 2.4.
 - Across books, Phase 1 overlaps with the current book, but minerU has one

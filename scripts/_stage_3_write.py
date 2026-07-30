@@ -204,7 +204,8 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
 
 
 def _stage_3_1_schema_route(rel_path: str, content: str,
-                            routing: dict[str, str]) -> str:
+                            routing: dict[str, str],
+                            *, quiet: bool = False) -> str:
     """Route a page to the directory its frontmatter ``type`` declares (schema
     typeDirs first, then the fixed base types) — NashSU ``validateWikiPageRouting``
     applied at write time.
@@ -224,10 +225,12 @@ def _stage_3_1_schema_route(rel_path: str, content: str,
         # Leaving it is the lossless choice (NashSU wiki-schema.ts:84 drops the
         # block instead), but doing so silently violates this module's own
         # never-silent rule: the page lands wherever the LLM guessed and no one
-        # finds out. Say it once, keep the page.
-        print(f"  [write] ⚠️  {rel_path}: frontmatter type "
-              f"{fm_type or '(missing)'!r} is not in schema.md's Page Types "
-              "table — writing to the path as given, not routing it")
+        # finds out. Say it once, keep the page. (``quiet`` callers only predict
+        # the write path; the write loop itself prints.)
+        if not quiet:
+            print(f"  [write] ⚠️  {rel_path}: frontmatter type "
+                  f"{fm_type or '(missing)'!r} is not in schema.md's Page Types "
+                  "table — writing to the path as given, not routing it")
         return rel_path                  # (NB: "" is a valid target = wiki root)
     norm = rel_path[len("wiki/"):] if rel_path.startswith("wiki/") else rel_path
     top = norm.split("/", 1)[0] if "/" in norm else ""
@@ -647,6 +650,64 @@ def _stage_3_1_scan_wiki_slug_dirs(config: Config) -> dict[str, set[str]]:
     return out
 
 
+def resolve_ingest_write_path(
+    rel_path: str,
+    content: str,
+    config: Config | None,
+    valid_subdirs: set[str],
+    routing: dict[str, str],
+    *,
+    quiet: bool = False,
+) -> str | None:
+    """Where Stage 3.1 will actually write one FILE block, or ``None`` if dropped.
+
+    The single implementation of the write-path chain: traversal/safety reject →
+    application-managed aggregate reject → top-dir accept-list or auto-correct →
+    ``.md`` suffix → schema route. Three callers must agree exactly on the
+    result — the write loop, the ``slug_dirs`` link universe, and the Stage 3.4a
+    review projection — so any drift between copies would silently reintroduce
+    dangling links or reviews pointed at paths that were never written.
+
+    ``quiet`` suppresses the per-page decision prints for the callers that only
+    predict the outcome; the write loop itself stays loud.
+    """
+    if ".." in rel_path or rel_path.startswith("/"):
+        return None
+    if not is_safe_ingest_path(rel_path):
+        return None
+    if Path(rel_path).name in _LISTING_BASENAMES:
+        # Stage 3.5 rebuilds index/overview deterministically, log.md is
+        # append-only, and schema.md is the user's contract. A generation block
+        # claiming one would overwrite the whole file (NashSU
+        # isAppManagedAggregatePath, ingest.ts:1428-1431).
+        if not quiet:
+            print(f"  [write] Dropped — {rel_path} is an application-managed "
+                  "aggregate; Stage 3.5 owns it")
+        return None
+
+    top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
+    if top_dir not in valid_subdirs:
+        corrected = _stage_3_1_auto_correct_wiki_path(
+            rel_path, content, config, quiet=quiet)
+        if not corrected:
+            if not quiet:
+                print(f"  [write] Dropped — cannot correct path: {rel_path}")
+            return None
+        if not quiet:
+            print(f"  [write] Auto-corrected: {rel_path} → {corrected}")
+        rel_path = corrected
+
+    if not rel_path.endswith(".md"):
+        rel_path = rel_path + ".md"
+
+    routed = _stage_3_1_schema_route(rel_path, content, routing, quiet=quiet)
+    if routed != rel_path:
+        if not quiet:
+            print(f"  [write] Schema-routed: {rel_path} → {routed}")
+        rel_path = routed
+    return rel_path
+
+
 def stage_3_1_build_slug_dirs(
     file_blocks: list[tuple[str, str]],
     config: Config,
@@ -655,32 +716,67 @@ def stage_3_1_build_slug_dirs(
 ) -> dict[str, set[str]]:
     """Slug→dirs universe for the link normalizer: this batch ∪ on-disk wiki.
 
-    Batch blocks are mapped through the SAME path-resolution chain the write
-    loop applies (top-dir accept-list → auto-correct → ``.md`` suffix → schema
-    route) so a block's universe entry matches where the loop will actually
-    write it. Built once per book, before the write loop."""
+    Batch blocks are mapped through ``resolve_ingest_write_path`` — the SAME
+    chain the write loop applies — so a block's universe entry matches where the
+    loop will actually write it. Built once per book, before the write loop."""
     slug_dirs = _stage_3_1_scan_wiki_slug_dirs(config)
     for rel_path, content in file_blocks:
-        if ".." in rel_path or rel_path.startswith("/"):
+        resolved = resolve_ingest_write_path(
+            rel_path, content, config, valid_subdirs, routing, quiet=True)
+        if not resolved or "/" not in resolved:
             continue
-        if not is_safe_ingest_path(rel_path):
-            continue
-        if Path(rel_path).name in _LISTING_BASENAMES:
-            continue
-        top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-        if top_dir not in valid_subdirs:
-            corrected = _stage_3_1_auto_correct_wiki_path(rel_path, content, quiet=True)
-            if not corrected:
-                continue
-            rel_path = corrected
-        if not rel_path.endswith(".md"):
-            rel_path += ".md"
-        rel_path = _stage_3_1_schema_route(rel_path, content, routing)
-        if "/" not in rel_path:
-            continue
-        rel_dir, name = rel_path.rsplit("/", 1)
+        rel_dir, name = resolved.rsplit("/", 1)
         slug_dirs.setdefault(name[:-3], set()).add(rel_dir)
     return slug_dirs
+
+
+def project_write_result_blocks(
+    file_blocks: list[tuple[str, str]],
+    config: Config,
+    valid_subdirs: set[str],
+    routing: dict[str, str],
+    slug_dirs: dict[str, set[str]],
+    *,
+    canonical_source: str,
+    today: str,
+    source_page_slug: str,
+) -> list[tuple[str, str]]:
+    """Project the in-memory generation onto its post-write paths and links.
+
+    Stage 3.4a runs before any page write (NashSU 0.6.6 order), so the reviewer
+    would otherwise judge a draft that Stage 3.1 then changes deterministically:
+    schema routing moves a page out of the directory the model guessed, and
+    ``strict_missing_targets`` de-links a target outside the batch ∪ disk
+    inventory. Reviewing the raw draft produced ``missing-page`` items that were
+    already resolved on disk and ``affected_pages`` entries pointing at
+    pre-routing paths.
+
+    This applies exactly the deterministic part of the write chain — path
+    resolution plus sanitize → canonicalize sources → stamp dates → normalize
+    links. The LLM page merge is intentionally NOT applied: a page that merges
+    into an existing one is represented by this source's own contribution, which
+    is what NashSU's pre-write reviewer sees as well.
+    """
+    projected: list[tuple[str, str]] = []
+    for rel_path, content in file_blocks:
+        resolved = resolve_ingest_write_path(
+            rel_path, content, config, valid_subdirs, routing, quiet=True)
+        if not resolved:
+            continue
+        content = _stage_3_1_sanitize_ingested_content(content)
+        content = _stage_3_1_canonicalize_sources_field(
+            content, canonical_source)
+        content = _stage_3_1_stamp_frontmatter_dates(content, today)
+        content = stage_3_1_normalize_page_links(
+            resolved,
+            content,
+            slug_dirs,
+            source_page_slug=source_page_slug,
+            strict_missing_targets=True,
+            quiet=True,
+        )
+        projected.append((resolved, content))
+    return projected
 
 
 def stage_3_1_normalize_page_links(
@@ -688,6 +784,7 @@ def stage_3_1_normalize_page_links(
     source_page_slug: str | None = None,
     *,
     strict_missing_targets: bool = False,
+    quiet: bool = False,
 ) -> str:
     """A5 write-time link normalizer — one pass over a FILE block before write.
 
@@ -717,14 +814,17 @@ def stage_3_1_normalize_page_links(
     AND in body links.
 
     Already-clean pages pass through byte-identical. All fixes print loud
-    per-page ``[normalize]`` lines — never silent."""
+    per-page ``[normalize]`` lines — never silent, except for ``quiet`` callers
+    that only PREDICT the written result (Stage 3.4a's review projection) and
+    would otherwise print every fix twice per page."""
     content = _stage_3_1_sanitize_ingested_content(content)
     norm_rel = rel_path[len("wiki/"):] if rel_path.startswith("wiki/") else rel_path
     own_prefixed = norm_rel[:-3] if norm_rel.endswith(".md") else norm_rel
     own_stem = own_prefixed.rsplit("/", 1)[-1]
 
     def _warn(msg: str) -> None:
-        print(f"  [normalize] {norm_rel}: {msg}")
+        if not quiet:
+            print(f"  [normalize] {norm_rel}: {msg}")
 
     def _fmt_list(items: list[str]) -> str:
         shown = ", ".join(items[:_WARN_LIST_CAP])
@@ -937,14 +1037,23 @@ def stage_3_1_write_wiki_file(
     slug_dirs: dict[str, set[str]] | None = None,
     source_page_slug: str | None = None,
     already_merged: bool = False,
+    same_run_collision: bool = False,
 ) -> None:
     content = _stage_3_1_sanitize_ingested_content(content)
     existing: str | None = None
     if config is not None:
         if merge and path.exists():
             existing = path.read_text(encoding="utf-8")
+            # NashSU's corrected-source replacement is about a page left behind
+            # by a PREVIOUS ingest. ``same_run_collision`` marks a page this
+            # same write loop already wrote, where the sole-owner test holds by
+            # construction (Stage 3.1 canonicalizes ``sources`` to the current
+            # source) and replacing would silently discard the earlier block's
+            # body. Two FILE blocks landing on one path is the designed
+            # same-slug collision merge, so keep it on the merger.
             replace_existing_body = bool(
                 source_file
+                and not same_run_collision
                 and _stage_3_1_is_owned_only_by_source(
                     existing, source_file)
             )

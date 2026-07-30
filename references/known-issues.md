@@ -57,6 +57,37 @@ minerU 32 页/chunk 串行。272 页书（9 chunks）可能超 600s 终端超时
 
 ## Fixed bugs（回归意识——已修但值得记录症状）
 
+### 合法 `## Role` 页合并曾被 stale 检测删除（已修，2026-07-30）
+conversation router 原先用子串 `"# Role" in response` 识别“代理复制了 prompt”；
+合法 Wiki 二级标题 `## Role` 也包含该子串。NVIC 合并因此每次验证通过后仍被当作
+stale 删除并重复 handoff。已改为只匹配行首的一级 `# Role` 或提示词式 `You are`，
+并保留长度门槛。
+
+### 无效 VLM caption 曾打印成功并虚增计数（已修，2026-07-30）
+VLM 返回 `Sorry, I cannot describe this image` 等语义失败文本时，Stage 1.3 会正确写
+`[待重试]`，但随后仍执行 `captioned += 1` 并打印 `✓`，导致一次重试后显示“231 new”
+而实际只有 230 张图。现把无效回答留在 pending，打印 `✗` 且不计入成功数。
+
+### 同源同路径 FILE 块曾静默替换而非合并（已修，2026-07-30）
+NashSU 0.6.6 的"纠正来源"替换语义（`replace_existing_body`）判据是"页面 `sources`
+全部解析为当前来源"。这条判据对**本轮写循环刚写过**的页由构造恒成立——Stage 3.1 会
+把 `sources` 规范化成当前源——所以第二个落到同一路径的 FILE 块会整体覆盖第一个块的
+正文：不调 LLM merge、不打警告，日志仍只印 `[merge]`。实测确认（arrays 做了 union，
+正文丢失）。最危险的形态：2.6 生成的真源页排在 `file_blocks` 首位，2.4 多吐的
+`wiki/sources/<stem>.md` 块排在后面把它替换掉（`_verify_stage_2_4_file_blocks` 本来
+就在为 ">2 blocks in wiki/sources/" 打警告）；其次是两个候选名 slugify 撞车、或两个
+不同类型候选被 schema 路由折叠到同一 dir+stem。已修：`_is_same_run_collision` 标出
+同轮碰撞并强制走三层 page-merge，同时打印一行 `same-slug collision`。
+
+### Stage 3.4a 提前到写盘前后曾产出"已自动解决"的 REVIEW 噪声（已修，2026-07-30）
+同一天的两个改动互相打架：3.4a 移到 `writeFileBlocks` 之前（NashSU 顺序），而写循环
+对新生成块启用 `strict_missing_targets=True` 去链。结果 reviewer 审的是未规范化草稿，
+为随后被去链的 `[[...]]` 开 `missing-page`（落盘时已不存在），并把 schema 路由前的
+路径写进 `affected_pages`（`concepts/x.md` → 实际写到 `findings/x.md`，REVIEW 页渲染
+成断链）。已修：3.4a 输入改为 `project_write_result_blocks` 的确定性投影（共用
+`resolve_ingest_write_path` + 同一条 sanitize/canonicalize/stamp/normalize 链，不做
+page merge）。
+
 ### Stage 3.7 本地 Ollama 能力探测曾在 URL 解析处崩溃（已修，2026-07-30）
 `_stage_3_7_check_embed_capability()` 在函数中先调用 `urllib.parse.urlparse()`，
 稍后才执行 `import urllib.request`。Python 会把该 import 绑定的 `urllib` 判定为整函数

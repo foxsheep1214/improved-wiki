@@ -8,12 +8,14 @@ VLM captioners — loud (logged), not the no-silent-fallback policy's target
 """
 from __future__ import annotations
 
+import io
 import json
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -271,6 +273,49 @@ class TestCorruptImageRoundClassification(unittest.TestCase):
                 # so the image is not re-pending on later rounds/runs.
                 self.assertFalse(cap._stage_1_3_is_caption_failed(marker))
             self.assertEqual(cap._stage_1_3_pending_images(pending, media_dir), [])
+
+
+class TestInvalidCaptionRoundClassification(unittest.TestCase):
+    """Semantic refusal text stays pending and is not logged as a success."""
+
+    def setUp(self):
+        self._orig = cap._stage_1_3_caption_one_image_with_failover
+
+    def tearDown(self):
+        cap._stage_1_3_caption_one_image_with_failover = self._orig
+
+    def test_invalid_caption_is_pending_not_counted_or_logged_success(self):
+        def fake_failover(img, config, media_dir, ctx_map):
+            return "Sorry, I cannot describe this image.", None, "primary"
+
+        cap._stage_1_3_caption_one_image_with_failover = fake_failover
+
+        with tempfile.TemporaryDirectory() as d:
+            media_dir = Path(d)
+            cfg = _make_config(media_dir / "cfg")
+            images = [{
+                "filename": "p1.jpg",
+                "width": 640,
+                "height": 480,
+            }]
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                captioned = cap._stage_1_3_caption_one_round(
+                    images, cfg, media_dir, {}, "", max_workers=1)
+
+            marker = (media_dir / "p1.jpg.caption.txt").read_text(
+                encoding="utf-8")
+            self.assertEqual(captioned, 0)
+            self.assertTrue(cap._stage_1_3_is_caption_failed(marker))
+            self.assertEqual(
+                cap._stage_1_3_pending_images(images, media_dir),
+                images,
+            )
+            self.assertIn(
+                "✗ invalid caption response, queued for retry",
+                stdout.getvalue(),
+            )
+            self.assertNotIn("✓", stdout.getvalue())
 
 
 class TestFallbackSerialization(unittest.TestCase):

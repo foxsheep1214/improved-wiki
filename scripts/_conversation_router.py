@@ -331,7 +331,15 @@ def _is_stale_result(response: str, prompt: str) -> bool:
     has_files = "---FILE:" in response or "### File" in response
     if has_yaml or has_files:
         return False
-    return any(m in response for m in ["# Role", "You are"]) and len(response) < len(prompt) * 0.8
+    # Match prompt-instruction markers only at their real line boundaries.
+    # A substring check for "# Role" also matches the legitimate wiki heading
+    # "## Role", causing a valid merge result to be deleted and regenerated
+    # forever (observed while merging the NVIC page).
+    copied_instruction = bool(
+        re.search(r"(?m)^# Role(?:[ \t]*$|[ \t]+)", response)
+        or re.search(r"(?m)^You are(?:[ \t]+|$)", response)
+    )
+    return copied_instruction and len(response) < len(prompt) * 0.8
 
 
 def _conversation_task_logical_key(prompt: str) -> str:

@@ -1014,7 +1014,19 @@ def _stage_1_3_caption_one_round(
                 if _stage_1_3_is_caption_failed(cap_text):
                     cap_text = (f"[待重试] 图片 {img['filename']}，"
                                 f"尺寸 {img.get('width','?')}×{img.get('height','?')}")
-                atomic_write(media_dir / (img["filename"] + ".caption.txt"), cap_text)
+                    atomic_write(
+                        media_dir / (img["filename"] + ".caption.txt"),
+                        cap_text,
+                    )
+                    print(
+                        f"  [{done}/{len(pending)}] {img['filename']} "
+                        "✗ invalid caption response, queued for retry"
+                    )
+                    continue
+                atomic_write(
+                    media_dir / (img["filename"] + ".caption.txt"),
+                    cap_text,
+                )
                 captioned += 1
                 tag = " (fallback)" if used == "fallback" else ""
                 if used == "fallback":
