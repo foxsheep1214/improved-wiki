@@ -3,43 +3,72 @@
 Extracted from ingest.py on 2026-06-23. Reads ingest-queue.json, feeds
 pending entries through the batch pipeline, and updates their status.
 wiki-monitor.sh adds files to the queue; ``ingest.py --watch`` consumes
-them. ``batch_ingest`` is imported lazily because it lives in ingest.py
-(which imports this module), breaking the cycle at runtime.
+them. The batch supervisor is independent of the CLI facade.
 """
 from __future__ import annotations
 
-import json
+import fcntl
+import os
 import time
 from pathlib import Path
 
-from _core import BATCH_MAX_CONCURRENT, Config, ConversationPending, ProjectLock
+from _config import Config
+from _core import BATCH_MAX_CONCURRENT, ConversationPending
+from _batch_supervisor import batch_ingest
+from _batch_coordination import (
+    BatchCoordinatorBusy,
+    SpineReservationConflict,
+)
+from _queue_store import (
+    load_queue,
+    merge_entry_updates,
+    queue_lock,
+    save_queue,
+)
 
 
 def _read_queue(config: Config) -> list[dict]:
-    """Read ingest-queue.json, returning entries sorted by addedAt (oldest first)."""
+    """Read ingest-queue.json, returning entries sorted by addedAt (oldest first).
+
+    A corrupted queue file is preserved (renamed ``.corrupt-<unix-secs>``) with a
+    loud warning instead of being silently ignored — the next ``_write_queue``
+    would otherwise clobber it, losing whatever entries it still held.
+    """
     qpath = config.runtime_dir / "ingest-queue.json"
-    if not qpath.exists():
-        return []
-    try:
-        queue = json.loads(qpath.read_text(encoding="utf-8"))
-        if not isinstance(queue, list):
-            return []
+    with queue_lock(config.runtime_dir, wait=True):
+        try:
+            queue = load_queue(qpath)
+        except RuntimeError as e:
+            corrupt = qpath.with_name(
+                f"{qpath.name}.corrupt-{int(time.time())}"
+            )
+            print(
+                f"⚠️  [watch] {e} Preserving it as {corrupt.name} and "
+                "starting with an empty queue.",
+                flush=True,
+            )
+            try:
+                qpath.rename(corrupt)
+            except OSError as rename_err:
+                print(
+                    "⚠️  [watch] could not preserve corrupt queue file: "
+                    f"{rename_err}",
+                    flush=True,
+                )
+            queue = []
         # Sort: priority first, then oldest addedAt
         return sorted(queue, key=lambda e: (
             0 if e.get("priority") else 1,
             e.get("addedAt", 0),
         ))
-    except Exception:
-        return []
 
 
 def _write_queue(config: Config, queue: list[dict]) -> None:
-    """Atomically write ingest-queue.json."""
+    """Merge status updates atomically, preserving concurrently appended work."""
     qpath = config.runtime_dir / "ingest-queue.json"
-    qpath.parent.mkdir(parents=True, exist_ok=True)
-    tmp = qpath.with_suffix(".tmp")
-    tmp.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.rename(qpath)
+    with queue_lock(config.runtime_dir, wait=True):
+        current = load_queue(qpath)
+        save_queue(qpath, merge_entry_updates(current, queue))
 
 
 def _queue_entry_to_file(entry: dict, config: Config) -> Path | None:
@@ -70,7 +99,8 @@ def ingest_watch(
     Each watch cycle:
       1. Read the queue
       2. Collect pending entries (status=pending, or failed with retryCount < max_retries)
-      3. Feed them through the batch pipeline (parallel Stage 0-2, serial Stage 3+)
+      3. Feed them through the batch pipeline (two-stage Phase-1 prefetch,
+         current-book Stage 2.2, serial Stage 2.3+)
       4. Update queue status for each (done / failed / skipped)
       5. Re-scan for new entries added by wiki-monitor.sh
       6. If --drain: exit when queue is empty; otherwise loop forever
@@ -79,13 +109,22 @@ def ingest_watch(
     wiki-monitor.sh (cron or manual) adds new files to the queue;
     ingest.py --watch picks them up in the next cycle.
     """
-    from ingest import batch_ingest  # lazy: breaks ingest <-> _watch import cycle
-    lock = ProjectLock(config, owner_id="watch")
-    if not lock.acquire(timeout=10):
+    # A watcher needs singleton protection, but it must not monopolize the
+    # wiki write lock while sleeping, extracting, or waiting for handoffs.
+    # batch_ingest acquires ProjectLock only around each active 2.3+ call and
+    # uses a source-bound durable reservation across exit-101 handoffs.
+    config.runtime_dir.mkdir(parents=True, exist_ok=True)
+    watch_lock_path = config.runtime_dir / "watch.lock"
+    watch_lock_fd = os.open(watch_lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(watch_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(watch_lock_fd)
         raise RuntimeError(
-            "Could not acquire project lock for watch mode. "
-            "Is another ingest.py --watch or batch running?"
-        )
+            "Could not acquire watch.lock — another ingest.py --watch is running")
+    except Exception:
+        os.close(watch_lock_fd)
+        raise
 
     cycle = 0
     total_processed = 0
@@ -193,6 +232,11 @@ def ingest_watch(
                 # failure — re-raise so main() returns 101; the agent answers the
                 # prompt and re-invokes --watch, resuming this wave from cache.
                 raise
+            except (BatchCoordinatorBusy, SpineReservationConflict):
+                # Coordination conflicts are not source failures and must not
+                # consume every queued book's retry budget. Surface them to the
+                # caller so the owning run/source can be resumed or inspected.
+                raise
             except Exception as e:
                 print(f"[watch] Batch ingest crashed: {e}")
                 import traceback
@@ -218,12 +262,15 @@ def ingest_watch(
 
             for entry, fp in wave_files:
                 result = result_by_path.get(str(fp))
-                if result and result.get("status") == "ok":
+                # "skipped" (source page already exists / already complete) is a
+                # successful outcome, not a failure — mark it done so the entry
+                # doesn't burn retries on every cycle.
+                if result and result.get("status") in ("ok", "skipped"):
                     entry["status"] = "done"
                     entry["completedAt"] = int(time.time() * 1000)
                     entry["error"] = None
                     total_done += 1
-                else:
+                elif result:
                     entry["status"] = "failed"
                     retries = entry.get("retryCount", 0) + 1
                     entry["retryCount"] = retries
@@ -233,8 +280,16 @@ def ingest_watch(
                     if retries >= max_retries:
                         print(f"  [watch] {entry['sourcePath']}: max retries ({max_retries}) reached — giving up")
                     total_failed += 1
+                else:
+                    # batch_ingest deliberately stops at the first failed
+                    # serial-spine source. Missing results are later, unattempted
+                    # books — keep them pending without burning a retry.
+                    entry["status"] = "pending"
+                    entry["error"] = "waiting behind earlier serial-spine failure"
+                    entry.pop("startedAt", None)
                 rest.append(entry)
-                total_processed += 1
+                if result:
+                    total_processed += 1
 
             _write_queue(config, rest)
             print(f"[watch] Cycle {cycle} complete — "
@@ -245,4 +300,5 @@ def ingest_watch(
               f"Processed {total_processed}: {total_done} done, {total_failed} failed.")
         print(f"[watch] Queue preserved at {config.runtime_dir / 'ingest-queue.json'}")
     finally:
-        lock.release()
+        fcntl.flock(watch_lock_fd, fcntl.LOCK_UN)
+        os.close(watch_lock_fd)

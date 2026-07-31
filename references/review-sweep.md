@@ -21,9 +21,10 @@ New source ingested → sweep pending reviews →
 | NashSU | improved-wiki |
 |--------|--------------|
 | `sweep-reviews.ts` — runs when ingest queue drains | `/improved-wiki sweep-reviews` — manual or post-batch trigger |
-| `buildWikiIndex()` — scans wiki/ for all page IDs + titles | `scripts/sweep_reviews.py` or Claude-direct scan |
+| `buildWikiIndex()` — scans wiki/ for all page IDs + titles | `scripts/sweep_reviews.py` or calling-agent scan |
 | Rule matching: filename / frontmatter title / affectedPages | Same: page path match, title match, affected page existence |
-| LLM semantic judgment for remaining items | Claude reads review item + wiki context → judges |
+| LLM semantic judgment for remaining items | Calling agent reads review item + wiki context → judges |
+| Judge at most 5 batches of 40; stop on first zero-resolved batch | Same logical cap; `review-sweep-run.json` persists the count and exact pending prompt across exit-101 re-entry |
 | Auto-resolve + mark `resolved` in the in-memory store (never deleted) | Set `resolved: true` + `resolved_at` + `resolved_reason` in REVIEW .md files — **kept on disk** as an audit trail; the content-stable `review_id` + resolved-wins dedup keeps them resolved across re-ingest |
 
 ## Workflow
@@ -39,7 +40,7 @@ New source ingested → sweep pending reviews →
 
 ### Step 1: Build Wiki Index
 
-Claude (or the sweep script) scans `wiki/` to build an index of:
+The calling agent (or the sweep script) scans `wiki/` to build an index of:
 - All page IDs (filename without `.md`)
 - All page titles (from frontmatter `title:`)
 
@@ -66,9 +67,11 @@ Check: Both pages still exist? → NO (one was deleted/merged) → auto-resolve
 
 **Conservative rule stage**: Only `missing-page` and `duplicate` auto-resolve by rule. `contradiction` / `suggestion` / `confirm` are NOT rule-resolvable — they fall through to the LLM semantic judge (Step 3). The rule stage is purely existence-based; there is **no** page-modified-time check (neither NashSU nor the script implements one).
 
+> **Fixed pitfall — partial-match false positives**: the rule stage originally used substring matching, which wrongly auto-resolved ~15 of 197 review items on 2-3 char fragments (`to`, `ul`, `DC`). `pageExists` is now EXACT-match only (filename id / kebab-normalized id / frontmatter title equality — NashSU parity), so this class of false positive is gone. Running without `--apply` first (dry-run) remains good practice.
+
 ### Step 3: LLM Semantic Judgment (Slow Path)
 
-For items that pass the rule check but need deeper evaluation, Claude reads the relevant wiki pages and judges:
+For items that pass the rule check but need deeper evaluation, the calling agent reads the relevant wiki pages and judges:
 
 ```
 Read: wiki/REVIEW/contradiction/2025-06-01-source-emi-filter-contradiction.md
@@ -114,14 +117,21 @@ If NO → leave unresolved
 | Before manual review session | Run sweep first to clear stale items |
 | When lint finds many review items | Sweep to reduce noise before investigating |
 
-> **Read-only preview via lint**: `wiki-lint.sh --sweep` runs `sweep_reviews.py` in dry-run and prints a one-line count of auto-resolvable items (e.g. `1 of 3 auto-resolvable, 2 still pending`). It never mutates review files — use it to gauge backlog; run `sweep_reviews.py --apply` (or `/improved-wiki sweep-reviews`) to actually close items.
+> **Default via lint**: plain `wiki-lint.sh` invokes
+> `sweep_reviews.py --apply --run-id <logical-lint-run>` and may resolve files
+> under `wiki/REVIEW/`. The logical run id—not candidate ordering or a prompt
+> content hash—owns the hard five-batch counter. Re-entering after exit 101
+> resumes the exact pending prompt; it cannot create a sixth batch. The first
+> completed batch with `resolved: []` ends the sweep.
+> Use `--no-sweep` to disable this stage, `--diagnostic-only` to disable all
+> wiki mutations, or run `sweep_reviews.py --dry-run` directly for a preview.
 
 ## Implementation Notes
 
 The sweep can be implemented in two ways:
 
-### A. Claude-Direct (conversation mode)
-Claude reads `wiki/REVIEW/` directory, builds wiki index, applies rules, judges ambiguous cases. Best for small wikis (<500 pages, <50 review items).
+### A. Agent-direct (conversation mode)
+The calling agent reads `wiki/REVIEW/` directory, builds wiki index, applies rules, and judges ambiguous cases. Best for small wikis (<500 pages, <50 review items).
 
 ### B. Script (`scripts/sweep_reviews.py`)
 Python script that:
@@ -130,7 +140,7 @@ Python script that:
 3. Builds page index from `wiki/` file tree
 4. Applies rule-based matching (fast)
 5. Outputs items needing LLM judgment as JSON
-6. Claude reads the JSON and applies semantic judgment
+6. The calling agent reads the JSON and applies semantic judgment
 7. Script updates resolved items
 
 Best for large wikis. Share the same wiki index building logic as `graph.py`.

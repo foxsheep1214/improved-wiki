@@ -52,11 +52,109 @@ def review_id_for(rtype: str, title: str) -> str:
     """
     key = f"{rtype}::{normalize_review_title(title)}"
     h = 0x811C9DC5
-    for ch in key:
-        h ^= ord(ch)
+    # Iterate UTF-16 code units (little-endian byte pairs), matching NashSU's
+    # JS `charCodeAt` semantics: a non-BMP character (emoji, rare CJK ext)
+    # hashes as its surrogate PAIR, not its single code point. Python's
+    # `ord(ch)` (code points) agreed only for BMP text and forked ids for
+    # non-BMP titles.
+    data = key.encode("utf-16-le")
+    for i in range(0, len(data), 2):
+        h ^= data[i] | (data[i + 1] << 8)
         # FNV prime 0x01000193, kept to 32 bits (JS Math.imul semantics).
         h = (h * 0x01000193) & 0xFFFFFFFF
     return f"review-{(h & 0xFFFFFFFF):08x}"
+
+
+# --- Human-readable review filename ({type}-{topic}-{date}.md) --------------
+# NashSU stores reviews in a single review.json keyed by ``reviewIdFor`` and
+# has no per-file naming. improved-wiki forks to one .md per review under
+# wiki/REVIEW/<type>/, so it needs a filename. The content-hash id stays the
+# canonical identity in frontmatter (sweep / process-reviews key on it); the
+# FILE name is chosen for human browsability: <type>-<topic>-<YYYYMMDD>.md.
+
+# Characters that are unsafe in a filename, then readability noise (quotes,
+# commas, parens, brackets) — stripped so the topic segment stays clean.
+_FN_UNSAFE = re.compile(r'[\/\\:\*\?"<>\|\n\r\t]')
+_FN_NOISE = re.compile(r'[\'"“”‘’，,（）()【】\[\]、；;：·…]')
+_FN_TYPE_MARK = re.compile(r'^\[[\w\-]+\]\s*')
+_REVIEW_TOPIC_MAXLEN = 40  # characters (not bytes) — safe for CJK filenames
+
+
+def derive_review_topic(title: str, rtype: str) -> str:
+    """Readable subject segment for a review filename.
+
+    Strips the leading ``[type]`` marker and any ``Missing page:`` prefix,
+    unwraps wikilinks, drops filesystem-unsafe + noise punctuation, turns
+    whitespace into hyphens, and truncates by character (CJK-safe).
+    """
+    s = (title or "").strip()
+    s = _FN_TYPE_MARK.sub("", s)
+    mp = REVIEW_TITLE_PREFIX_RE.match(s)
+    if mp:
+        s = s[mp.end():]
+        link = re.search(r"\[\[([^\]]+)\]\]", s)
+        if link:
+            s = link.group(1).split("/")[-1]
+    s = re.sub(r"\[\[([^\]]+)\]\]", r"\1", s)
+    if rtype == "missing-page" and "/" in s:
+        s = s.split("/")[-1]
+    s = s.replace("/", " ").replace("\\", " ")   # path separators → word breaks
+    s = _FN_UNSAFE.sub("", s)
+    s = _FN_NOISE.sub("", s)
+    s = re.sub(r"\s+", "-", s.strip())
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    if len(s) > _REVIEW_TOPIC_MAXLEN:
+        s = s[:_REVIEW_TOPIC_MAXLEN].rstrip("-")
+    return s or "review"
+
+
+def review_filename(rtype: str, title: str, date_compact: str,
+                    review_id: Optional[str] = None, *, disambiguate: bool = False) -> str:
+    """Build ``<type>-<topic>-<YYYYMMDD>[-<id4>].md``.
+
+    ``date_compact`` is an 8-digit ``YYYYMMDD`` string. When ``disambiguate``
+    is set (base name already taken by a DIFFERENT review this run), the last
+    4 hex of the content-hash id are appended for a deterministic, unique name.
+    """
+    topic = derive_review_topic(title, rtype)
+    base = f"{rtype}-{topic}-{date_compact}"
+    if disambiguate and review_id:
+        base = f"{base}-{review_id[-4:]}"
+    return f"{base}.md"
+
+
+def resolve_review_path(review_dir, rtype: str, title: str, date_compact: str):
+    """Return ``(path, review_id)`` for a review .md under ``review_dir``.
+
+    The single entry point every write site should use: filename is the
+    readable ``<type>-<topic>-<YYYYMMDD>.md`` and ``review_id`` is the NashSU
+    content hash (put it in frontmatter — sweep / process-reviews key on it).
+
+    Idempotent by CONTENT ID, not filename: if a file already carrying this
+    ``review_id`` exists under ``review_dir`` (even under a different date or
+    older name), its path is reused — so a re-run on another day does not
+    fork a duplicate. Only a base-name collision with a DIFFERENT review
+    appends ``-<id4>``.
+    """
+    from pathlib import Path
+    rid = review_id_for(rtype, title)
+    review_dir = Path(review_dir)
+    marker = f"review_id: {rid}"
+    if review_dir.exists():
+        # Reuse an existing file with the same content id (date-independent).
+        for existing in review_dir.glob("*.md"):
+            try:
+                head = existing.read_text(encoding="utf-8", errors="ignore")[:400]
+            except OSError:
+                continue
+            if marker in head:
+                return existing, rid
+    fpath = review_dir / review_filename(rtype, title, date_compact, rid)
+    if fpath.exists():
+        # Same base name but (per the scan above) a DIFFERENT id → disambiguate.
+        fpath = review_dir / review_filename(
+            rtype, title, date_compact, rid, disambiguate=True)
+    return fpath, rid
 
 
 def union_field(a: Optional[Sequence[str]],

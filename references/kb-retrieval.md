@@ -15,7 +15,7 @@ ls ~/Documents/知识库/
 # 每个项目有 wiki/ 子目录（markdown 页面）和 .llm-wiki/（运行时状态）
 ```
 
-当前可用项目：`HardwareWiki`、`硬件设计知识库`、`RadarWiki`、`雷达系统知识库`、`自然科学知识库`
+当前可用项目：`HardwareWiki`、`RadarWiki`、`自然科学知识库`（与 SKILL.md 一致）
 
 ## 2. 强制 4 步工作流
 
@@ -23,12 +23,12 @@ ls ~/Documents/知识库/
 步骤 ①  关键词搜索
         方式 A: 用 search_wiki.py 脚本
             search_wiki.py "查询关键词" --project <项目路径>
-        方式 B: 直接用 search_files 工具
-            search_files target=content pattern=<关键词> path=<项目路径>/wiki/
+        方式 B: 直接用文件内容搜索工具（如 Grep）
+            Grep pattern=<关键词> path=<项目路径>/wiki/
         至少试 2-3 个同义词（中文 + 英文 + 别名）
 
 步骤 ②  命中处理
-        命中 ≥ 1 → read_file 读具体段（按行号定位）
+        命中 ≥ 1 → 用文件读取工具（Read）读具体段（按行号定位）
         命中 = 0 → 进入步骤 ③
 
 步骤 ③  知识库无内容（明示）
@@ -43,14 +43,15 @@ ls ~/Documents/知识库/
 
 ## 3. 搜索方式
 
-improved-wiki 使用 **LanceDB 语义搜索**（本地 Ollama bge-m3 嵌入）。需要先建好索引：
+improved-wiki 使用 **hybrid 检索**：keyword（CJK bigram 加权，恒在线、免索引）+ 可选 vector（本地 Ollama bge-m3 + LanceDB）+ RRF(K=60) 融合。**未建索引也能搜**——只用 keyword 路径即可；建 LanceDB 索引只是为了启用 vector 增强：
 
 ```bash
-build_embeddings.py --project <项目> embed     # 一次性建索引
-search_wiki.py "查询" --project <项目>          # 语义搜索
+build_embeddings.py --project <项目> embed     # 一次性建索引（仅为启用 vector 路径）
+search_wiki.py "查询" --project <项目>          # hybrid；vector 不可用时报警并继续 keyword
+search_wiki.py "查询" --project <项目> --keyword-only   # 显式只用 keyword，免 Ollama/索引
 ```
 
-向量搜索的优势：即使查询词和页面用词不同，语义相近也能命中（如 "输出振荡" 匹配到 "PWM 调制方式"）。
+vector 路径的优势：即使查询词和页面用词不同，语义相近也能命中（如 "输出振荡" 匹配到 "PWM 调制方式"）。若 embedding provider/LanceDB 不可用，`search_wiki.py` 会把原因写到 stderr，并按 NashSU 行为在本次查询继续 keyword-only；`--keyword-only` 用于主动跳过 vector。这个搜索降级不适用于 ingest：Stage 3.7 仍是强制完整门禁。
 
 ## 4. 关键词搜索策略
 
@@ -78,20 +79,20 @@ search_wiki.py "查询" --project <项目>          # 语义搜索
 
 ## 5. 搜索工具使用
 
-### 5.1 search_wiki.py — 语义搜索
+### 5.1 search_wiki.py — hybrid 检索（keyword + vector + RRF）
 
 ```bash
 # 人类可读输出（交互调试用）
-python3 scripts/search_wiki.py "buck ringing" \
+python3 "$SKILL_DIR/scripts/search_wiki.py" "buck ringing" \
   --project ~/Documents/知识库/HardwareWiki
 
 # Agent 调用：--json 输出 JSON 数组，便于解析
-python3 scripts/search_wiki.py "LC谐振" \
+python3 "$SKILL_DIR/scripts/search_wiki.py" "LC谐振" \
   --project ~/Documents/知识库/HardwareWiki --json
 
 # 更多结果
-python3 scripts/search_wiki.py "LC谐振导致振铃" \
-  --project ~/Documents/知识库/硬件设计知识库 --top 10 --json
+python3 "$SKILL_DIR/scripts/search_wiki.py" "LC谐振导致振铃" \
+  --project ~/Documents/知识库/HardwareWiki --top 10 --json
 ```
 
 `--json` 返回格式（每条结果）：
@@ -104,16 +105,17 @@ python3 scripts/search_wiki.py "LC谐振导致振铃" \
 2. 取前 N 条的 `path` → `Read <项目>/wiki/<path>` 读全文
 3. 引用具体段落回答
 
-**前提**：需要先建 LanceDB 索引（一次性）：
+**建 vector 索引（一次性，仅为启用 vector 路径；keyword 无需索引）**：
 ```bash
-python3 scripts/build_embeddings.py --project ~/Documents/知识库/HardwareWiki embed
+python3 "$SKILL_DIR/scripts/build_embeddings.py" --project ~/Documents/知识库/HardwareWiki embed
 ```
+未建索引时 hybrid 会报警并自动返回 keyword 结果；也可用 `--keyword-only` 主动避免 vector 探测。
 
-### 5.2 补充：read_file 精读
+### 5.2 补充：Read 精读
 
-搜索结果给出文件路径后，用 `read_file` 按行号读具体段落：
+搜索结果给出文件路径后，用文件读取工具（Read）按行号读具体段落：
 ```
-read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
+Read wiki/concepts/buck-降压变换器.md offset=20 limit=50
 ```
 
 ## 6. 引用规范
@@ -122,7 +124,7 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 
 ```
 ✓ [HardwareWiki:wiki/concepts/buck-converter.md L1403-1424 §4.1 瞬态响应]
-✓ [硬件设计知识库:wiki/02_器件与选型/MOSFET开关特性.md §SOA]
+✓ [RadarWiki:wiki/concepts/脉冲压缩.md §匹配滤波]
 ✓ [TI LM5069 datasheet §7.5 Electrical Characteristics]
 ✗ 知识库无相关内容，以下为 LLM 通用知识
 ```
@@ -132,7 +134,7 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 1. **必须标具体项目名、段/章节/行号**，不能只标文件名
 2. **多来源时分别标注**，不要合并
 3. **LLM 通用知识必须标 ✗**，不可冒充知识库引用
-4. **跨项目引用**：标两个项目时用 `HardwareWiki:wiki/XX + 硬件设计知识库:wiki/YY` 格式
+4. **跨项目引用**：标两个项目时用 `HardwareWiki:wiki/XX + RadarWiki:wiki/YY` 格式
 
 ## 7. 边界情况处理
 
@@ -155,7 +157,7 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 ❌ 反模式 2: 用"应用场景"词（电路/示波器/PCB）而非"理论方法"词
 ❌ 反模式 3: 引用时不标具体项目名和段落（只标文件名）
 ❌ 反模式 4: 知识库无相关内容时含糊带过
-❌ 反模式 5: 凭印象编造 wiki 文件路径（应该 read_file 验证）
+❌ 反模式 5: 凭印象编造 wiki 文件路径（应该用 Read 验证）
 ❌ 反模式 6: 一次 grep 命中 0 就放弃（应该换关键词 2-3 次）
 ```
 
@@ -164,9 +166,9 @@ read_file wiki/concepts/buck-降压变换器.md offset=20 limit=50
 回复技术问题前，自检：
 
 ```
-[ ] 1. 指定了正确的知识库项目（HardwareWiki / 硬件设计知识库 / ...）
-[ ] 2. search_files target=content 或 search_wiki.py 执行了吗（≥2 个同义词）
-[ ] 3. 命中 ≥ 1 → read_file 读具体段 → 行号记录了吗
+[ ] 1. 指定了正确的知识库项目（HardwareWiki / RadarWiki / ...）
+[ ] 2. Grep 内容搜索 或 search_wiki.py 执行了吗（≥2 个同义词）
+[ ] 3. 命中 ≥ 1 → 用 Read 读具体段 → 行号记录了吗
 [ ] 4. 命中 = 0 → 明确标"知识库无"了吗
 [ ] 5. 引用是否标了项目名 + 具体段（不是只标文件名）
 [ ] 6. LLM 通用知识是否标了 ✗

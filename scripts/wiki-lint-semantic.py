@@ -8,9 +8,9 @@ only log.md). It scans every page's first 500
 chars + frontmatter, sends the concatenated summaries to an LLM, and
 parses ---LINT:type|severity|title--- blocks back into findings.
 
-Findings carry type="semantic" (matching NashSU's 4th structural-lint
-type), with the raw type (contradiction / stale / missing-page /
-suggestion) preserved in the detail string. affectedPages is parsed
+Findings carry type="semantic" (matching NashSU's semantic result type),
+with the raw type (contradiction / stale / missing-page / suggestion /
+term-ambiguity) preserved in the detail string. affectedPages is parsed
 from an optional "PAGES: a, b" line in the body.
 
 Output schema (one item per finding):
@@ -27,18 +27,22 @@ Output schema (one item per finding):
 Config:
   IMPROVED_WIKI_ROOT  project root (default: cwd)
 
-LLM execution: conversation mode only. The semantic
-lint is one LLM call; this script writes a prompt file under
-<runtime>/conversation/semantic-lint/ and raises ConversationPending (exit
-101). The calling agent answers with the current conversation's model, writes
-the result, and re-invokes — the script reads the cached result and writes
-lint-semantic.json. No external LLM API key is needed (text generation is
-conversation-only).
+LLM execution: conversation mode only. The semantic lint runs as one or more
+context-budgeted batches (see resolve_batch_target_chars() below); this
+script writes a prompt file per uncached batch under
+<runtime>/conversation/semantic-lint/ and, once every currently-uncached
+batch's prompt has been emitted, raises ConversationPending (exit 101). The
+calling agent answers each pending prompt (one fresh subagent per prompt,
+answerable in parallel — 2026-07-10) with the current conversation's model,
+writes the results, and re-invokes — the script reads the cached results and
+writes lint-semantic.json once every batch is answered. No external LLM API
+key is needed (text generation is conversation-only).
 
 Usage:
   ./wiki-lint-semantic.py              # scan and write lint-semantic.json
   ./wiki-lint-semantic.py --dry-run    # print prompt + summaries, no LLM call
   ./wiki-lint-semantic.py --limit 50   # cap pages sampled (for huge wikis)
+  ./wiki-lint-semantic.py --emit-review # explicitly route warnings to REVIEW/
 
 Exit codes: 0 done; 101 conversation pending (agent answers + re-invokes);
 2 usage error.
@@ -51,46 +55,54 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
-# ── constants (verbatim from NashSU lint.ts L161-162) ────────────────────────
+# ── constants (adapted from NashSU lint.ts L161-162) ─────────────────────────
+# Deviation from NashSU: title group is [^\n]+? here, not [^\n-]+?. NashSU's
+# literal regex excludes hyphens from the title, so any title containing one
+# (e.g. "MIL-STD-1553 ...", extremely common for model numbers in this KB)
+# fails to match at all and the finding is silently dropped. Confirmed live
+# against a real semantic-lint batch (2026-07-10): 1 of 5 findings lost.
 LINT_BLOCK_REGEX = re.compile(
-    r"---LINT:\s*([^\n|]+?)\s*\|\s*([^\n|]+?)\s*\|\s*([^\n-]+?)\s*---\n"
+    r"---LINT:\s*([^\n|]+?)\s*\|\s*([^\n|]+?)\s*\|\s*([^\n]+?)\s*---\n"
     r"([\s\S]*?)---END LINT---"
 )
 
 # NashSU parity: only log.md excluded from semantic lint (lint.ts L188)
 ANCHOR_FILES = {"log.md"}
-STATE_FILES = {
-    "lint-cache.json", "lint.json",
-    "ingest-cache.json",
-    "ingest-queue.json",
-    "ingest-lock",
-    "lint-lock", "lint.lock",
-    "lint-semantic.json",  # don't lint our own output
-}
-# Derived-artifact directories that are NOT source knowledge and must never be
-# fed to the semantic-lint LLM. The literal NashSU port (`f.name !== "log.md"`)
-# is faithless in THIS port's environment: unlike NashSU (which routes review to
-# a Zustand store and has no clusters/), this port WRITES ingest review items to
-# wiki/REVIEW/ and graph cluster-hub pages to wiki/clusters/. Without this guard
-# those diagnostics leak into the LLM analysis as if they were wiki content,
-# risking self-referential findings and an ingest feedback loop. Mirrors the
-# structural lint (wiki-lint.sh) + graph.py + _core.py, the other sibling
-# consumers, all of which already skip these dirs.
-SKIP_DIRS = {"lint", "REVIEW", "clusters", "media"}
+# STATE_FILES (incl. lint-semantic.json — don't lint our own output) is the
+# shared _lint_suggest.STATE_FILES, imported below after the sys.path setup.
+# Derived-artifact dirs (lint/REVIEW/clusters/media) must never be fed to the
+# semantic-lint LLM — shared guard; see _paths.WIKI_ARTIFACT_DIRS for the
+# rationale (the literal NashSU port `f.name !== "log.md"` is faithless here).
 
 # Per-page summary size (NashSU: 500 chars)
 SUMMARY_CHARS = 500
 # Concatenated sample for language detection (NashSU: 2000 chars)
 LANG_SAMPLE_CHARS = 2000
-# Batch size: pages per LLM call. A single concatenated call over a 7594-page
-# wiki blows the conversation model's context, so summaries are split into
-# batches. Each batch is one conversation handoff (exit 101 → agent answers →
-# resume → next batch). The slug is content-hashed, so each batch resumes
-# independently and the loop is idempotent across re-invokes.
-SEMANTIC_BATCH_PAGES = 200
+# Batch budget: context-derived char ceiling per LLM call (2026-07-10),
+# replacing the former fixed SEMANTIC_BATCH_PAGES=200 page-count split. A
+# single concatenated call over a 7594-page wiki blows the conversation
+# model's context, so summaries are still split into batches — but the split
+# point now scales with the probed model's context window (same formula
+# ingest.py uses for chunk sizing: _core._compute_chunk_targets, target_tokens
+# = min(hard_ceil, max(12K floor, context_size * 0.33))), with a larger hard
+# ceiling than ingest's own 64K. Lint's "skim short summaries and compare"
+# call is lighter per-token than ingest's "deeply extract structured facts
+# from continuous prose" call, so a bigger single-shot batch is a reasonable
+# bet here — even though ingest's own 2026-07-01 A/B test found LARGER
+# single-shot batches hurt *extraction* quality (64K beat a 192K single chunk
+# by +27% concept coverage). Override via IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL
+# if 256K batches prove too coarse for semantic-lint's judgment quality in
+# practice. Each batch is one conversation handoff; a single invocation
+# eager-drains and emits prompts for ALL currently-uncached batches at once
+# (a lint-local 2026-07-10 policy) so they can be answered in parallel rather
+# than one round-trip at a time. The
+# slug is content-hashed, so each batch resumes independently and the loop
+# is idempotent across re-invokes.
+_LINT_TARGET_TOKENS_HARD_CEIL = 256_000
 
 
 # ── language directive (NashSU parity: _language.detect_language port) ───────────
@@ -98,33 +110,101 @@ _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 from _language import build_language_directive  # noqa: E402 (titles, descriptions, PAGES list) MUST be in English."
+from _config import _compute_chunk_targets, _CONTEXT_SIZE_DEFAULT  # noqa: E402
 from _core import ConversationPending  # noqa: E402
+from _exit_codes import HANDOFF_PENDING  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
+from _paths import iter_wiki_pages, atomic_write  # noqa: E402
+from _lint_suggest import STATE_FILES, _extract_title  # noqa: E402
+from _review_utils import normalize_review_title, resolve_review_path  # noqa: E402
+
+
+def _probe_context_size(state_dir: Path) -> int:
+    """Read ingest's cached context-window probe (.llm-wiki/probed-context.json)
+    if present and fresh; otherwise fall back to _core's conservative default.
+
+    Lint is a standalone tool with no conversation-router registered (that
+    machinery lives in ingest.py), so it cannot itself trigger a fresh probe
+    handoff — it only ever reads the cache ingest already populated. In
+    practice lint is always run after (or alongside) an ingest of the same
+    project, so this is a cache hit in the common case."""
+    from _context_probe import load_cached
+
+    class _ConfigShim:
+        runtime_dir = state_dir
+        llm_model = os.environ.get("ANTHROPIC_MODEL", "")
+
+    cached = load_cached(_ConfigShim())
+    return cached if cached is not None else _CONTEXT_SIZE_DEFAULT
+
+
+def resolve_batch_target_chars(state_dir: Path) -> int:
+    """Per-batch char budget for chunk_batches(), derived from the probed (or
+    cached/default) context window via the shared _core formula."""
+    context_size = _probe_context_size(state_dir)
+    ceil_env = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", "").strip()
+    hard_ceil = int(ceil_env) if ceil_env.isdigit() else _LINT_TARGET_TOKENS_HARD_CEIL
+    _, target_chars = _compute_chunk_targets(0, context_size, hard_ceil=hard_ceil)
+    return target_chars
 
 
 # ── core scan ────────────────────────────────────────────────────────────────
-def collect_summaries(wiki_dir: Path, limit: Optional[int] = None) -> list[tuple[str, str]]:
-    """Returns [(short_path, summary_text), ...]. Excludes anchors + state files.
-    Sorts by relative path for determinism (NashSU parity)."""
+def _normalize_for_existence(value: str) -> str:
+    """NashSU 0.6.6 missing-page comparison normalization."""
+    return unicodedata.normalize(
+        "NFKC", normalize_review_title(value)
+    ).strip().lower()
+
+
+def missing_page_already_exists(
+    title: str, existing_page_names: set[str]
+) -> bool:
+    """Use exact normalized equality; substring matching is unsafe."""
+    normalized = _normalize_for_existence(title)
+    return bool(normalized) and normalized in existing_page_names
+
+
+def collect_summary_bundle(
+    wiki_dir: Path, limit: Optional[int] = None
+) -> tuple[list[tuple[str, str]], set[str]]:
+    """Return summaries plus existing basename/title names.
+
+    The summary list may be capped for diagnostics, but the existence set
+    still covers every readable wiki page so the cap cannot create false
+    ``missing-page`` findings.
+    """
     out: list[tuple[str, str]] = []
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        if rel.name in STATE_FILES or rel.name in ANCHOR_FILES:
-            continue
-        if rel.parts and rel.parts[0] in SKIP_DIRS:
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            continue
-        preview = text[:SUMMARY_CHARS] + ("..." if len(text) > SUMMARY_CHARS else "")
-        out.append((str(rel), preview))
-        if limit and len(out) >= limit:
-            break
+    existing_page_names: set[str] = set()
+    for rel_str, text in iter_wiki_pages(
+        wiki_dir, anchor_files=ANCHOR_FILES, state_files=STATE_FILES,
+    ):
+        basename = Path(rel_str).stem
+        if basename:
+            existing_page_names.add(_normalize_for_existence(basename))
+        title = _extract_title(text, rel_str)
+        if title:
+            existing_page_names.add(_normalize_for_existence(title))
+        if limit is None or len(out) < limit:
+            preview = text[:SUMMARY_CHARS] + (
+                "..." if len(text) > SUMMARY_CHARS else ""
+            )
+            out.append((rel_str, preview))
+    return out, existing_page_names
+
+
+def collect_summaries(
+    wiki_dir: Path, limit: Optional[int] = None
+) -> list[tuple[str, str]]:
+    """Compatibility wrapper returning only deterministic page summaries."""
+    out, _ = collect_summary_bundle(wiki_dir, limit=limit)
     return out
 
 
-def parse_lint_blocks(raw: str, now_ms: int) -> list[dict]:
+def parse_lint_blocks(
+    raw: str,
+    now_ms: int,
+    existing_page_names: Optional[set[str]] = None,
+) -> list[dict]:
     """Parse ---LINT:type|severity|title---\n<body>\n---END LINT--- blocks.
     Mirrors NashSU lint.ts L266-291."""
     results: list[dict] = []
@@ -133,6 +213,15 @@ def parse_lint_blocks(raw: str, now_ms: int) -> list[dict]:
         severity = m.group(2).strip().lower()
         title = m.group(3).strip()
         body = m.group(4).strip()
+
+        # NashSU 0.6.6 / #537: the model can incorrectly call an existing
+        # entity a missing page, especially in non-English wikis.
+        if (
+            raw_type == "missing-page"
+            and existing_page_names is not None
+            and missing_page_already_exists(title, existing_page_names)
+        ):
+            continue
 
         # Affected pages (optional PAGES: line)
         pages_match = re.search(r"^PAGES:\s*(.+)$", body, re.MULTILINE)
@@ -182,6 +271,7 @@ def build_prompt(summaries: list[tuple[str, str]]) -> tuple[str, str]:
         "- missing-page: an important concept is heavily referenced but has no dedicated page\n"
         "- suggestion: a question or source worth adding to the wiki\n"
         "- term-ambiguity: same term (slug) used for two genuinely different concepts but not disambiguated — e.g., 'switch' meaning both a mechanical switch and a switching transistor sharing one page/slug\n"
+        "For missing-page findings, Short title must be only the exact missing concept or entity name, without explanatory prefixes or suffixes.\n"
         "\n"
         "Severities:\n"
         "- warning: should be addressed\n"
@@ -198,23 +288,37 @@ def build_prompt(summaries: list[tuple[str, str]]) -> tuple[str, str]:
 
 
 def chunk_batches(summaries: list[tuple[str, str]],
-                  batch_pages: int | None = None) -> list[list[tuple[str, str]]]:
-    """Split summaries into batches of at most ``batch_pages`` pages each.
+                  target_chars: int) -> list[list[tuple[str, str]]]:
+    """Split summaries into batches whose cumulative preview length stays
+    within ``target_chars`` each.
 
     Keeping each LLM call bounded lets the semantic lint scale to large wikis
     (a 7594-page HardwareWiki would otherwise produce a single multi-MB
-    prompt). Returns ``[summaries]`` (one batch) when there are fewer pages
-    than the batch size — the common small-wiki case.
-
-    ``batch_pages`` defaults to the module global ``SEMANTIC_BATCH_PAGES``
-    resolved at call time (not def time) so tests can monkeypatch it.
+    prompt). Length-based (not a fixed page count, 2026-07-10): summary
+    lengths are uneven (short stub pages vs long digests), so measuring
+    actual cumulative chars — like ingest.py's real chunker measures actual
+    text rather than assuming an average per-page size — packs batches more
+    evenly than a naive page-count split. A single oversized summary still
+    gets its own batch rather than being split mid-page.
     """
-    if batch_pages is None:
-        batch_pages = SEMANTIC_BATCH_PAGES
-    if batch_pages <= 0 or len(summaries) <= batch_pages:
+    if not summaries:
+        return []
+    if target_chars <= 0:
         return [summaries]
-    return [summaries[i:i + batch_pages]
-            for i in range(0, len(summaries), batch_pages)]
+    batches: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    current_len = 0
+    for path, preview in summaries:
+        item_len = len(path) + len(preview)
+        if current and current_len + item_len > target_chars:
+            batches.append(current)
+            current = []
+            current_len = 0
+        current.append((path, preview))
+        current_len += item_len
+    if current:
+        batches.append(current)
+    return batches
 
 
 def dedup_findings(findings: list[dict]) -> list[dict]:
@@ -253,6 +357,11 @@ def main() -> int:
                         help="Cap number of pages sampled (for huge wikis)")
     parser.add_argument("--output", type=str, default=None,
                         help="Output path (default: <state_dir>/lint-semantic.json)")
+    parser.add_argument(
+        "--emit-review",
+        action="store_true",
+        help="Route warning findings into wiki/REVIEW/ (explicit mutation)",
+    )
     args = parser.parse_args()
 
     root = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
@@ -270,7 +379,9 @@ def main() -> int:
     state_dir = detect_runtime_dir(root)  # handles all fallback logic
     out_path = Path(args.output) if args.output else state_dir / "lint-semantic.json"
 
-    summaries = collect_summaries(wiki_dir, limit=args.limit)
+    summaries, existing_page_names = collect_summary_bundle(
+        wiki_dir, limit=args.limit
+    )
     if not summaries:
         print(f"[semantic-lint] No wiki pages found in {wiki_dir}", file=sys.stderr)
         # Still write an empty findings file so callers don't error
@@ -280,36 +391,55 @@ def main() -> int:
     print(f"[semantic-lint] Collected {len(summaries)} page summaries")
 
     system_prompt, user_content = build_prompt(summaries)
+    target_chars = resolve_batch_target_chars(state_dir)
 
     if args.dry_run:
-        batches = chunk_batches(summaries)
+        batches = chunk_batches(summaries, target_chars)
         print(f"[semantic-lint] DRY-RUN: {len(summaries)} pages in {len(batches)} batch(es) "
-              f"(batch size {SEMANTIC_BATCH_PAGES})")
+              f"(target_chars={target_chars:,})")
         print(f"[semantic-lint] DRY-RUN: batch 1 would send {len(user_content):,} chars to LLM")
         print(f"  system_prompt: {len(system_prompt):,} chars")
         print(f"  first 500 chars of user_content:\n  {user_content[:500]!r}")
         return 0
 
-    # Conversation mode, batched: each batch is one handoff (write prompt →
-    # exit 101 → agent answers → re-invoke → cache hit → next batch). The
-    # content-hashed slug makes each batch independently resumable, so the
-    # loop is safe to re-enter after every 101.
+    # Conversation mode, batched, eager-drain (2026-07-10; lint-local policy):
+    # an uncached batch's prompt .md is written by llm_call() BEFORE it
+    # raises ConversationPending, so on an uncached batch we catch it and
+    # CONTINUE to the next batch instead of returning immediately — a single
+    # invocation thus emits prompts for ALL currently-uncached batches, and
+    # the calling agent can dispatch one subagent per prompt IN PARALLEL.
+    # Batches are disjoint by page and only deduped once at the end, so there
+    # is no cross-batch ordering dependency to preserve (unlike a rolling
+    # digest). Only after the full pass, if anything is still pending, do we
+    # raise once. The content-hashed slug makes each batch independently
+    # resumable, so the loop is safe to re-enter after every 101.
     now_ms = int(time.time() * 1000)
     llm_call = make_conversation_llm_call(state_dir, stage_prefix="semantic-lint")
-    batches = chunk_batches(summaries)
+    print(f"[semantic-lint] batch budget: target_chars={target_chars:,} (context-derived)")
+    batches = chunk_batches(summaries, target_chars)
     findings: list[dict] = []
+    pending = 0
     for i, batch in enumerate(batches, 1):
         batch_system, batch_user = build_prompt(batch)
         try:
             raw = llm_call(batch_system, batch_user)
         except ConversationPending:
+            pending += 1
             print(f"[semantic-lint] Batch {i}/{len(batches)} pending "
-                  f"({len(batch)} pages) — awaiting conversation answer", file=sys.stderr)
-            return 101
-        batch_findings = parse_lint_blocks(raw, now_ms)
+                  f"({len(batch)} pages) — prompt emitted for parallel answering",
+                  file=sys.stderr)
+            continue
+        batch_findings = parse_lint_blocks(
+            raw, now_ms, existing_page_names=existing_page_names
+        )
         findings.extend(batch_findings)
         print(f"[semantic-lint] Batch {i}/{len(batches)}: {len(batch_findings)} finding(s) "
               f"from {len(batch)} pages ({len(raw):,} chars raw)")
+
+    if pending > 0:
+        print(f"[semantic-lint] {pending}/{len(batches)} batch(es) pending — "
+              f"awaiting parallel conversation answers", file=sys.stderr)
+        return HANDOFF_PENDING
 
     findings = dedup_findings(findings)
     # Renumber ids: parse_lint_blocks numbers per-batch from 0, so cross-batch
@@ -320,12 +450,7 @@ def main() -> int:
           f"({len(batches)} batch(es), after dedup)")
 
     # Atomic write
-    tmp = out_path.with_suffix(out_path.suffix + ".tmp")
-    tmp.write_text(
-        json.dumps(findings, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    tmp.replace(out_path)
+    atomic_write(out_path, json.dumps(findings, ensure_ascii=False, indent=2))
     print(f"[semantic-lint] Wrote {out_path}")
 
     # Summary
@@ -386,14 +511,94 @@ created: {date_str}
 {affected_links}
 """
         page_path = lint_dir / filename
-        tmp = page_path.with_suffix(page_path.suffix + ".tmp")
-        tmp.write_text(md, encoding="utf-8")
-        tmp.rename(page_path)
+        atomic_write(page_path, md)
         written += 1
 
     if written > 0:
         print(f"[semantic-lint] {written} semantic lint pages → {lint_dir}")
+
+    if args.emit_review:
+        emit_review_for_warnings(wiki_dir, findings)
     return 0
+
+
+# Map the 5 semantic raw types onto the wiki's review categories. missing-page
+# maps to itself so sweep_reviews' RULE stage can auto-resolve it when the page
+# gets created; contradiction maps to itself (human judgment, judge-eligible);
+# the rest are generic suggestions.
+_REVIEW_TYPE_FOR_RAW = {
+    "contradiction": "contradiction",
+    "missing-page": "missing-page",
+    "stale": "suggestion",
+    "suggestion": "suggestion",
+    "term-ambiguity": "suggestion",
+}
+
+
+def emit_review_for_warnings(wiki_dir: Path, findings: list[dict]) -> int:
+    """Route warning-severity semantic findings into wiki/REVIEW/ (2026-07-11).
+
+    Without this, semantic findings were a dead end: they landed only in
+    lint-semantic.json + .llm-wiki/lint/*.md, which no downstream tool reads
+    and no human necessarily browses — NashSU shows findings in its desktop
+    UI, improved-wiki had no equivalent "a human will see this" surface.
+    Real case: a batch found 22 stale placeholder stubs; the finding could
+    never trigger any action. REVIEW items feed the existing human-triage +
+    sweep workflow. info-severity findings ("nice to have") stay lint-page-
+    only. Idempotent: stable filename per (raw_type, title); existing files
+    are left untouched. Returns the number of items written.
+    """
+    warnings = [f for f in findings if f.get("severity") == "warning"]
+    if not warnings:
+        return 0
+    date_str = time.strftime("%Y-%m-%d")
+    count = 0
+    for f in warnings:
+        detail = f.get("detail", "")
+        m = re.match(r"\[([\w-]+)\]\s*", detail)
+        raw_type = m.group(1) if m else "suggestion"
+        review_type = _REVIEW_TYPE_FOR_RAW.get(raw_type, "suggestion")
+        title = f.get("page", "semantic finding")
+        affected = f.get("affectedPages") or []
+        review_dir = wiki_dir / "REVIEW" / review_type
+        review_dir.mkdir(parents=True, exist_ok=True)
+        # Readable <type>-<topic>-<date>.md + content-hash id (idempotent by id).
+        fpath, review_id = resolve_review_path(
+            review_dir, review_type, title, date_str.replace("-", ""))
+        if fpath.exists():
+            continue
+        affected_yaml = "\n".join(f"  - {p}" for p in affected) or "  []"
+        body_detail = re.sub(r"^\[[\w-]+\]\s*", "", detail)
+        md = f"""---
+type: review
+review_id: {review_id}
+review_type: {review_type}
+title: "{title}"
+created: {date_str}
+resolved: false
+resolved_at: null
+resolved_reason: null
+affected_pages:
+{affected_yaml}
+search_queries:
+  - "{title}"
+---
+
+# [{raw_type}] {title}
+
+{body_detail}
+
+(Generated from a warning-severity semantic-lint finding — see
+``.llm-wiki/lint/`` for the full lint page. Consider running
+``lint_verify_semantic.py`` first: it re-checks warning findings against
+FULL page content and records a confirmed/refuted verdict.)
+"""
+        atomic_write(fpath, md)
+        count += 1
+    if count:
+        print(f"[semantic-lint] {count} warning finding(s) routed to wiki/REVIEW/ "
+              f"for human triage")
+    return count
 
 
 if __name__ == "__main__":

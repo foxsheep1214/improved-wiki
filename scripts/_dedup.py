@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -204,20 +205,39 @@ def _build_detector_user_message(summaries: list[EntitySummary]) -> str:
     )
 
 
+def _warn_unparseable(reason: str, raw: str) -> None:
+    """Loud stderr note on an unparseable detector answer (2026-07-12). The
+    answer is already persisted by the conversation cache, so silently
+    returning [] would permanently skip these candidates: every re-invoke
+    replays the same cached bad answer. Tell the operator how to force a
+    re-answer instead of leaving a silent dedup gap."""
+    preview = raw.strip().replace("\n", " ")[:160]
+    print(f"[dedup] WARNING: detector answer unparseable ({reason}); treating "
+          f"as 'no duplicates' for this batch. Answer starts: {preview!r}. "
+          f"NOTE: the bad answer is cached by the conversation cache — delete "
+          f"the matching answer file under <runtime>/conversation/dedup/ and "
+          f"re-invoke to get a fresh answer.", file=sys.stderr)
+
+
 def parse_detector_response(raw: str) -> list[dict]:
     """Tolerant JSON extraction: strips code fences / preamble, pulls the first
-    balanced {...} block. Returns [] on any failure."""
+    balanced {...} block. Returns [] on any failure (with a stderr warning —
+    see _warn_unparseable)."""
     json_text = _extract_first_json_object(raw)
     if not json_text:
+        _warn_unparseable("no JSON object found", raw)
         return []
     try:
         parsed = json.loads(json_text)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as ex:
+        _warn_unparseable(f"invalid JSON: {ex}", raw)
         return []
     if not isinstance(parsed, dict):
+        _warn_unparseable("top level is not an object", raw)
         return []
     groups_raw = parsed.get("groups")
     if not isinstance(groups_raw, list):
+        _warn_unparseable("missing/invalid 'groups' array", raw)
         return []
 
     out: list[dict] = []
@@ -267,8 +287,10 @@ def _extract_first_json_object(text: str) -> str | None:
     return None
 
 
-def _normalize_group_key(slugs: list[str]) -> str:
-    return ",".join(sorted(s.lower() for s in slugs))
+# Group-key normalization is shared with the whitelist storage layer
+# (_dedup_storage.canonical_key) so persisted keys and in-memory keys can
+# never drift apart.
+from _dedup_storage import canonical_key as _normalize_group_key  # noqa: E402
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -416,7 +438,7 @@ def rewrite_cross_references(content: str, slug_redirects: dict[str, str]) -> st
     # 1. Wikilinks in the body — both [[slug]] and [[slug|alias]].
     for old_slug, new_slug in slug_redirects.items():
         escaped = re.escape(old_slug)
-        pattern = re.compile(rf"\[\[{escaped}(\|[^\]]+)?\]\]")
+        pattern = re.compile(rf"\[\[{escaped}(\\?\|[^\]]+)?\]\]")
         out = pattern.sub(lambda m, ns=new_slug: f"[[{ns}{m.group(1) or ''}]]", out)
 
     # 2. & 3. `related` field — re-parse and rewrite.
@@ -473,7 +495,7 @@ def rewrite_index_md(content: str, removed_slugs: set[str]) -> str:
 def _line_refers_to_slug(line: str, slugs: set[str]) -> bool:
     for slug in slugs:
         escaped = re.escape(slug)
-        if re.search(rf"\[\[{escaped}(\|[^\]]*)?\]\]", line):  # wikilink
+        if re.search(rf"\[\[{escaped}(\\?\|[^\]]*)?\]\]", line):  # wikilink
             return True
         if re.search(rf"\(([^)]*/)?{escaped}\.md\)", line):    # markdown link
             return True

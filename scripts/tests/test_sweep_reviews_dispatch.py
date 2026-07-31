@@ -15,6 +15,7 @@ Run:  python3 scripts/tests/test_sweep_reviews_dispatch.py
 """
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
 import unittest
@@ -374,6 +375,198 @@ class TestLlmJudgeBatching(unittest.TestCase):
         self.assertEqual(got, set())
         self.assertEqual(called["n"], 0)  # no judgeable items → no LLM call
 
+    def test_five_batch_cap_persists_across_handoffs_and_reordering(self):
+        """Six batches of candidates may exist, but one logical run can create
+        only five judge prompts even when every prompt needs exit-101 re-entry
+        and the input order changes between continuations."""
+        from _core import ConversationPending
+        import _llm_call
+
+        items = [
+            {
+                "review_id": f"review-{i:04x}",
+                "type": "missing-page",
+                "title": f"t{i}",
+                "affected_pages": [],
+                "description": "",
+            }
+            for i in range(240)
+        ]
+        attempts = {}
+
+        def fake_make(runtime_dir, stage_prefix):
+            def call(system, user):
+                attempts[user] = attempts.get(user, 0) + 1
+                if attempts[user] == 1:
+                    raise ConversationPending()
+                ids = re.findall(r"^- id=(\S+)", user, flags=re.MULTILINE)
+                return f'{{"resolved": ["{ids[0]}"]}}'
+            return call
+
+        original = _llm_call.make_conversation_llm_call
+        _llm_call.make_conversation_llm_call = fake_make
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                runtime = Path(td)
+                result = None
+                for continuation in range(12):
+                    current = items if continuation % 2 == 0 else list(reversed(items))
+                    try:
+                        result = sweep._llm_judge_reviews(
+                            current,
+                            [],
+                            runtime,
+                            run_id="logical-lint-1",
+                        )
+                        break
+                    except ConversationPending:
+                        continue
+                self.assertIsNotNone(result, "sweep never reached its hard cap")
+                self.assertEqual(len(result), sweep.MAX_JUDGE_BATCHES)
+                self.assertEqual(len(attempts), sweep.MAX_JUDGE_BATCHES)
+                self.assertTrue(all(n == 2 for n in attempts.values()))
+                state_payload = (
+                    runtime / sweep.SWEEP_RUN_STATE
+                ).read_text(encoding="utf-8")
+                self.assertIn('"stop_reason": "max-batches"', state_payload)
+        finally:
+            _llm_call.make_conversation_llm_call = original
+
+    def test_zero_resolved_stops_persistent_run_after_first_batch(self):
+        from _core import ConversationPending
+        import _llm_call
+
+        items = [
+            {
+                "review_id": f"review-{i:04x}",
+                "type": "confirm",
+                "title": f"t{i}",
+                "affected_pages": [],
+                "description": "",
+            }
+            for i in range(80)
+        ]
+        attempts = {}
+
+        def fake_make(runtime_dir, stage_prefix):
+            def call(system, user):
+                attempts[user] = attempts.get(user, 0) + 1
+                if attempts[user] == 1:
+                    raise ConversationPending()
+                return '{"resolved": []}'
+            return call
+
+        original = _llm_call.make_conversation_llm_call
+        _llm_call.make_conversation_llm_call = fake_make
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                runtime = Path(td)
+                with self.assertRaises(ConversationPending):
+                    sweep._llm_judge_reviews(
+                        items, [], runtime, run_id="logical-lint-zero")
+                got = sweep._llm_judge_reviews(
+                    list(reversed(items)),
+                    [],
+                    runtime,
+                    run_id="logical-lint-zero",
+                )
+                self.assertEqual(got, set())
+                self.assertEqual(len(attempts), 1)
+                state_payload = (
+                    runtime / sweep.SWEEP_RUN_STATE
+                ).read_text(encoding="utf-8")
+                self.assertIn('"stop_reason": "zero-resolved"', state_payload)
+        finally:
+            _llm_call.make_conversation_llm_call = original
+
+    def test_outer_sweep_clears_completed_run_state(self):
+        from _core import ConversationPending
+        import _llm_call
+
+        attempts = {"n": 0}
+
+        def fake_make(runtime_dir, stage_prefix):
+            def call(system, user):
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    raise ConversationPending()
+                return '{"resolved": []}'
+            return call
+
+        original = _llm_call.make_conversation_llm_call
+        _llm_call.make_conversation_llm_call = fake_make
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                _make_wiki(root, {}, [("confirm", "Needs judgment", [])])
+                with self.assertRaises(ConversationPending):
+                    sweep.sweep_reviews(
+                        root, dry_run=True, use_llm=True, run_id="outer-run")
+                state_path = root / ".llm-wiki" / sweep.SWEEP_RUN_STATE
+                self.assertTrue(state_path.exists())
+
+                result = sweep.sweep_reviews(
+                    root, dry_run=True, use_llm=True, run_id="outer-run")
+                self.assertEqual(result["resolved"], 0)
+                self.assertFalse(state_path.exists())
+                self.assertEqual(attempts["n"], 2)
+        finally:
+            _llm_call.make_conversation_llm_call = original
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHumanGateExclusion(unittest.TestCase):
+    """2026-07-11 (#8): review items with `human_gate: true` frontmatter (e.g.
+    orphan-delete candidates from wiki-lint-fix.py) must NEVER be sent to the
+    LLM judge — the judge only sees page ids + titles, so it cannot know
+    inbound-link state; a human decides these. Mechanical, not prompt-based.
+    """
+
+    def test_human_gated_item_never_reaches_judge(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            (wiki / "concepts" / "lonely.md").write_text(
+                "---\ntype: concept\ntitle: Lonely\n---\n\n# L\nbody",
+                encoding="utf-8")
+            rdir = wiki / "REVIEW" / "suggestion"
+            rdir.mkdir(parents=True)
+            (rdir / "2026-07-10-lint-orphan-delete-concepts-lonely.md").write_text(
+                "---\n"
+                "type: review\n"
+                "review_type: suggestion\n"
+                'title: "Orphan delete candidate: concepts/lonely.md"\n'
+                "created: 2026-07-10\n"
+                "resolved: false\n"
+                "human_gate: true\n"
+                "affected_pages:\n"
+                "  - concepts/lonely.md\n"
+                "---\n\n# Orphan delete candidate: concepts/lonely.md\nbody\n",
+                encoding="utf-8")
+
+            judged_batches = []
+            original = sweep._llm_judge_reviews
+
+            def spy(pending, pages, runtime_dir, apply_fn=None):
+                judged_batches.append(list(pending))
+                return set()
+
+            sweep._llm_judge_reviews = spy
+            try:
+                result = sweep.sweep_reviews(root, dry_run=True, use_llm=True)
+            finally:
+                sweep._llm_judge_reviews = original
+
+            # The judge was never handed the human-gated item (either no call
+            # at all, or a call whose pool excludes it).
+            for batch in judged_batches:
+                titles = [r.get("title", "") for r in batch]
+                self.assertFalse(
+                    any("Orphan delete candidate" in t for t in titles),
+                    f"human-gated item leaked into judge pool: {titles}")
+            # And it stays pending, not resolved.
+            self.assertEqual(result.get("resolved", 0), 0)

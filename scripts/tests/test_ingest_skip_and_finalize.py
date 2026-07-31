@@ -5,14 +5,23 @@ Stdlib `unittest` only — no pytest, no network, no LLM calls.
 Covers two 2026-06-25 audit findings:
 
   Finding 1 — batch/queue path skipped Stage 3.7 (embeddings) + 4.1
-  (validation) and never set the stage_4_1 marker, because that tail lived
+  (validation) and never set the ingested marker, because that tail lived
   only in ingest_one. _finalize_book now centralizes it; both ingest_one and
   batch_ingest call it. Test: _finalize_book runs embed→validate→mark in order.
 
   Finding 2 — _stage_0_2_should_skip carried ~60 lines of unreachable code
   (a wikilink-completeness check after an unconditional return). Removed; the
-  stage_4_1 marker is the single completeness signal. Test: the four
+  ingested marker is the single completeness signal. Test: the four
   marker/source-page states resolve to the right skip/resume decision.
+
+  Finding 3 (2026-07-15) — deep-research query bridges (raw/queries/*.md)
+  deliberately get no Stage 2.6 source page (wiki/queries/<slug>.md is
+  already the canonical artifact). The source-page-existence staleness
+  check in _stage_0_2_should_skip doesn't know that, so every call saw
+  "no source page" and force-cleared the ingested marker — an endless
+  re-ingest loop regenerating duplicate concepts/entities on every run.
+  Fixed by special-casing is_query_bridge_source() paths to trust the
+  ingested marker alone, skipping the source-page check entirely.
 """
 from __future__ import annotations
 
@@ -29,6 +38,11 @@ import _core  # noqa: E402
 import ingest  # noqa: E402
 from _ingest_skip import _stage_0_2_should_skip  # noqa: E402
 from _stage_3_write import _stage_3_1_wiki_path_for_source  # noqa: E402
+from _task_manifest import (  # noqa: E402
+    TaskManifestError,
+    bind_page_refs,
+    ensure_task_manifest,
+)
 
 
 def _make_config(tmp: Path) -> _core.Config:
@@ -38,9 +52,9 @@ def _make_config(tmp: Path) -> _core.Config:
         cache_path=tmp / "rt" / "ingest-cache.json",
         progress_dir=tmp / "rt" / "ingest-progress",
         extract_tmp_dir=tmp / "rt" / "extract-tmp",
-        llm_base_url="https://example.invalid", llm_model="m", llm_api_key="",
-        llm_protocol="anthropic", caption_api_key="", caption_base_url="x",
-        caption_model="c", chunk_size=60000, chunk_overlap=3000,
+        llm_model="m",
+        caption_api_key="", caption_base_url="x",
+        caption_model="c", chunk_overlap=3000,
         source_budget=100000, target_chars=60000, target_tokens=30000,
         max_tokens=8192, conversation_prefix="ab12cd34",
     )
@@ -53,8 +67,93 @@ def _raw_file(tmp: Path) -> Path:
     return raw
 
 
+def _seed_zero_media_cache(cfg: _core.Config, raw: Path) -> None:
+    key = _core.source_cache_key(raw, cfg)
+    _core.save_cache(cfg, {
+        "version": "2",
+        "entries": {
+            key: {
+                "hash": _core.file_sha256(raw),
+                "method": "mineru-api",
+                "stages": {
+                    "images_extracted": 0,
+                    "images_captioned": 0,
+                    "images_injected": 0,
+                },
+            },
+        },
+    })
+
+
+def _seed_completion_state(
+    cfg: _core.Config,
+    raw: Path,
+) -> list[str]:
+    """Seed the exact post-write contract consumed by _finalize_book."""
+    source_hash = _core.file_sha256(raw)
+    ensure_task_manifest(raw, cfg)
+
+    source = _stage_3_1_wiki_path_for_source(raw, cfg)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# x\n", encoding="utf-8")
+    log = cfg.wiki_dir / "log.md"
+    log.write_text(
+        "# Log\n\n## 2026-01-01 — INGEST\n"
+        "- Source: `raw/Book/x.pdf`\n"
+        f"- Hash: {source_hash[:16]}\n",
+        encoding="utf-8",
+    )
+    index = cfg.wiki_dir / "index.md"
+    index.write_text("# Index\n\n- [[x]]\n", encoding="utf-8")
+    refs = ["wiki/sources/x.md", "wiki/log.md", "wiki/index.md"]
+    bind_page_refs(cfg, source_hash, refs)
+    _core.mark_stage_done(
+        cfg, source_hash, "write_loop_done",
+        payload={"files_written": ["wiki/sources/x.md"]},
+    )
+    _core.mark_stage_done(
+        cfg, source_hash, "write_phase",
+        payload={
+            "files_written": ["wiki/sources/x.md"],
+            "images_injected": 0,
+        },
+    )
+    _core.mark_stage_done(
+        cfg, source_hash, "review_done",
+        payload={"items": 0, "skipped": True, "page_refs": []},
+    )
+    _core.mark_stage_done(
+        cfg, source_hash, "aggregate_done",
+        payload={"page_refs": ["wiki/log.md", "wiki/index.md"]},
+    )
+    _core.save_cache(cfg, {
+        "version": "2",
+        "entries": {
+            _core.source_cache_key(raw, cfg): {
+                "hash": source_hash,
+                "sourceHash": source_hash,
+                "method": "mineru-api",
+                "filesWritten": refs,
+                "stages": {
+                    "images_extracted": 0,
+                    "images_captioned": 0,
+                    "images_injected": 0,
+                },
+            },
+        },
+    })
+    return refs
+
+
+def _raw_query_bridge_file(tmp: Path) -> Path:
+    raw = tmp / "raw" / "queries" / "research-x-2026-07-15-000000.md"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_text("---\ntype: query\n---\n# x\n", encoding="utf-8")
+    return raw
+
+
 class TestFinalizeBook(unittest.TestCase):
-    """_finalize_book = embeddings → stage_4_1 marker, in order.
+    """_finalize_book = embeddings → ingested marker, in order.
 
     The post-ingest validation auto-run (formerly between embed and the marker)
     was removed for NashSU alignment; _finalize_book now runs embeddings then
@@ -74,14 +173,15 @@ class TestFinalizeBook(unittest.TestCase):
             cfg = _make_config(tmp)
             raw = _raw_file(tmp)
             h = _core.file_sha256(raw)
+            refs = _seed_completion_state(cfg, raw)
 
-            self.assertFalse(_core.is_stage_done(cfg, h, "stage_4_1"))
-            ingest._finalize_book(raw, cfg, ["sources/x.md"], h)
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
+            ingest._finalize_book(raw, cfg, refs, h)
 
             # Order matters: embeddings must precede the completion marker so a
             # failing/missing embed stack pauses BEFORE the book is marked done.
             self.assertEqual(self.calls, ["embed"])
-            self.assertTrue(_core.is_stage_done(cfg, h, "stage_4_1"))
+            self.assertTrue(_core.is_stage_done(cfg, h, "ingested"))
 
     def test_embed_failure_leaves_book_unmarked(self):
         """No-fallback: if embeddings raise, the book is NOT marked complete."""
@@ -90,14 +190,47 @@ class TestFinalizeBook(unittest.TestCase):
             cfg = _make_config(tmp)
             raw = _raw_file(tmp)
             h = _core.file_sha256(raw)
+            refs = _seed_completion_state(cfg, raw)
 
             def _boom(*a, **k):
                 raise RuntimeError("Ollama down")
             ingest.stage_3_7_embed_new_pages = _boom
 
             with self.assertRaises(RuntimeError):
-                ingest._finalize_book(raw, cfg, ["sources/x.md"], h)
-            self.assertFalse(_core.is_stage_done(cfg, h, "stage_4_1"))
+                ingest._finalize_book(raw, cfg, refs, h)
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
+
+    def test_missing_postwrite_marker_refuses_embedding_and_completion(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = _raw_file(tmp)
+            h = _core.file_sha256(raw)
+            refs = _seed_completion_state(cfg, raw)
+            _core.unmark_stage_done(cfg, h, "aggregate_done")
+
+            with self.assertRaisesRegex(
+                TaskManifestError, "required stage markers"
+            ):
+                ingest._finalize_book(raw, cfg, refs, h)
+            self.assertEqual(self.calls, [])
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
+
+    def test_missing_bound_page_refuses_embedding_and_completion(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = _raw_file(tmp)
+            h = _core.file_sha256(raw)
+            refs = _seed_completion_state(cfg, raw)
+            (cfg.wiki_dir / "index.md").unlink()
+
+            with self.assertRaisesRegex(
+                TaskManifestError, "missing written pages"
+            ):
+                ingest._finalize_book(raw, cfg, refs, h)
+            self.assertEqual(self.calls, [])
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
 
 
 class TestStage02ShouldSkip(unittest.TestCase):
@@ -120,30 +253,58 @@ class TestStage02ShouldSkip(unittest.TestCase):
             tmp = Path(d)
             cfg, raw, h = self._setup(tmp)
             self._write_source_page(cfg, raw)
-            _core.mark_stage_done(cfg, h, "stage_4_1")
+            _seed_zero_media_cache(cfg, raw)
+            _core.mark_stage_done(cfg, h, "ingested")
             self.assertTrue(_stage_0_2_should_skip(raw, cfg))
 
     def test_complete_marker_but_page_deleted_reingest_and_clears_marker(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg, raw, h = self._setup(tmp)
-            _core.mark_stage_done(cfg, h, "stage_4_1")  # marker set, no page
+            _core.mark_stage_done(cfg, h, "ingested")  # marker set, no page
             self.assertFalse(_stage_0_2_should_skip(raw, cfg))
             # Stale marker must be cleared so the re-ingest actually re-runs.
-            self.assertFalse(_core.is_stage_done(cfg, h, "stage_4_1"))
+            self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
 
     def test_page_exists_no_marker_resumes(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg, raw, _h = self._setup(tmp)
             self._write_source_page(cfg, raw)
-            # Mid-flight: pages written but stage_4_1 not set → do NOT skip.
+            # Mid-flight: pages written but ingested not set → do NOT skip.
             self.assertFalse(_stage_0_2_should_skip(raw, cfg))
 
     def test_fresh_no_page_no_marker_ingests(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg, raw, _h = self._setup(tmp)
+            self.assertFalse(_stage_0_2_should_skip(raw, cfg))
+
+
+class TestStage02ShouldSkipQueryBridge(unittest.TestCase):
+    """Query bridges (raw/queries/*.md) never get a Stage 2.6 source page —
+    the ingested marker alone must decide skip/resume (Finding 3)."""
+
+    def test_marker_set_skips_even_though_no_source_page_exists(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = _raw_query_bridge_file(tmp)
+            h = _core.file_sha256(raw)
+            _core.mark_stage_done(cfg, h, "ingested")
+
+            # Sanity: this is exactly the state that used to be misread as a
+            # stale marker for a normal source (page never existed here).
+            self.assertFalse(_stage_3_1_wiki_path_for_source(raw, cfg).exists())
+            self.assertTrue(_stage_0_2_should_skip(raw, cfg))
+            # And the marker must survive — no false "stale marker" clear.
+            self.assertTrue(_core.is_stage_done(cfg, h, "ingested"))
+
+    def test_no_marker_does_not_skip(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            raw = _raw_query_bridge_file(tmp)
             self.assertFalse(_stage_0_2_should_skip(raw, cfg))
 
 

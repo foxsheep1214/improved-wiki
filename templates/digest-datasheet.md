@@ -25,7 +25,7 @@
 > **Use this template** when a file lives at `raw/Datasheet/<...>/*.pdf`.
 > Datasheets are heavily structured (tables, figures, pinouts). Focus on the key specs table,
 > electrical characteristics, pin-function summary, and typical application topology.
-> Output: source page + entity page(s) + 2–5 concept pages.
+> Output: one source page, key entity page(s), and concept pages only for genuinely important reusable ideas; no concept-page quota.
 
 ### Step 1: Chunk Analysis YAML schema
 
@@ -104,9 +104,9 @@ companion_documents:
 ### Step 2: Generation — Files to write
 
 1. **`wiki/sources/<Mfr> - <Part-Number>.md`** — source page
-   - First section after frontmatter: key specs markdown table (not bullet list)
-   - Then: pin function summary table, typical application, features/protection
-   - Last section: "参见" with concept + entity wikilinks
+   - Body: a concise source summary; prioritize identity, key specifications,
+     operating limits, interfaces/pins, and application constraints. Use tables
+     when they improve precision, but do not require a fixed section order.
 
 2. **`wiki/entities/<Part-Number>.md`** — entity page for the part (ALWAYS required)
    - Frontmatter: `type: entity`
@@ -114,7 +114,7 @@ companion_documents:
 
 3. **`wiki/entities/<Manufacturer>.md`** — manufacturer entity (only if not in linkable slugs)
 
-4. **`wiki/concepts/<slug>.md`** — 2–5 concept pages for key concepts the datasheet uses
+4. **`wiki/concepts/<slug>.md`** — pages only for key reusable ideas the datasheet substantively explains or applies; passing terminology does not get a page
 
 ---
 
@@ -142,6 +142,6 @@ companion_documents:
 
 ## See also
 
-- `SKILL.md` §5, §6
+- `references/naming-conventions.md` — frontmatter schema + wikilink naming
 - `templates/digest-applicationnote.md` — vendor app notes (typical companion doc)
 - `templates/digest-designexample.md` — reference designs

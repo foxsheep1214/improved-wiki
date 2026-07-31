@@ -17,10 +17,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from pathlib import Path
 
-from _core import Config
+from _config import Config
 from _llm_api import conversation_handoff, set_conversation_router
+from _paths import atomic_write
 
 
 def call_anthropic_protocol(prompt: str, config: Config, max_tokens: int | None = None) -> tuple[str, str]:
@@ -63,7 +65,7 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # Digest, Stage-2-Synthesis, LLM-task, ...) gives human-readable grouping;
     # the 8-char content hash guarantees distinct prompts get distinct cache
     # files. Without the hash, every call that falls through _infer_stage to
-    # 'LLM-task' (Stage 2.6 source page, per-concept fallback, ...) shares one
+    # 'LLM-task' (Stage 2.6 source page, Stage 2.4 generation, ...) shares one
     # file and the wrong answer gets reused across stages. The hash is
     # deterministic, so replay of the same prompt still hits the cache.
     stage = re.sub(r"[^a-zA-Z0-9]+", "-", _infer_stage(prompt)).strip("-")[:40] or "llm-task"
@@ -76,8 +78,8 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # for the LLM; only the cache *key* is stabilized.
     #
     # Two prompt shapes carry the list, both must be redacted:
-    #   1. Inline single-line (Stage 2.1/2.8): "- Existing wiki pages: a, b, c"
-    #   2. Heading + multi-line list (Stage 2.4/2.7/2.9/3.4):
+    #   1. Inline single-line (legacy 2.1/2.8 prompt shape): "- Existing wiki pages: a, b, c"
+    #   2. Heading + multi-line list (Stage 2.4/3.4):
     #        "# Existing wiki pages ..." followed by indented dash items or a
     #        bare comma-separated line, terminated by a blank line or the next
     #        "#" heading. The old single-line regex only matched shape 1, so
@@ -93,9 +95,9 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # Redact volatile image alt-text captions. The image filename (a content
     # hash) is stable across runs, but the VLM/minerU alt-text caption may be
     # present or absent depending on the Stage 1.3 caption-cache state. Without
-    # this, Stage 2.1's extracted_text block changes hash whenever captions are
-    # added/removed, thrashing the 2.1 digest slug and re-prompting Stage 2.1
-    # on every resume (observed: 497f2b16 -> e20e22a4 for the same paper).
+    # this, a prompt's extracted_text block changes hash whenever captions are
+    # added/removed, thrashing the slug and re-prompting the stage on every
+    # resume (observed: 497f2b16 -> e20e22a4 for the same paper's digest).
     # Only the cache KEY is stabilized; the full prompt is still written to the
     # .md for the LLM.
     stable_prompt = re.sub(r'!\[[^\]]*\]\(', '![](', stable_prompt)
@@ -108,8 +110,10 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
         conv_dir, slug, prompt,
         label=slug,
         stale_check=_is_stale_result,
-        on_cached=lambda _response: _mark_task_done(config, slug),
-        on_prompt_written=lambda: _mark_task_pending(config, slug),
+        on_cached=lambda _response: _mark_task_done(
+            config, slug, prompt, _response),
+        on_prompt_written=lambda: _mark_task_pending(
+            config, slug, prompt, max_tokens),
     )
     return response, "end_turn"
 
@@ -118,33 +122,206 @@ def _task_manifest_path(config: Config) -> Path:
     return config.runtime_dir / "conversation" / config.conversation_prefix / "tasks.json"
 
 
+_TASK_MANIFEST_SCHEMA_VERSION = 2
+
+
+def _empty_task_manifest(config: Config) -> dict:
+    return {
+        "schema_version": _TASK_MANIFEST_SCHEMA_VERSION,
+        "conversation_prefix": config.conversation_prefix,
+        "tasks": {},
+        "pending": [],
+        "completed": [],
+    }
+
+
+def _normalize_task_manifest(config: Config, manifest: dict) -> dict:
+    """Migrate v1 arrays and derive unique compatibility lists from records."""
+    if manifest.get("schema_version") != _TASK_MANIFEST_SCHEMA_VERSION:
+        migrated = _empty_task_manifest(config)
+        pending = list(dict.fromkeys(manifest.get("pending", [])))
+        completed = list(dict.fromkeys(manifest.get("completed", [])))
+        completed_set = set(completed)
+        for slug in pending + completed:
+            migrated["tasks"][slug] = {
+                "slug": slug,
+                "status": "completed" if slug in completed_set else "pending",
+                "prompt_file": f"{slug}.md",
+                "result_file": f"{slug}.txt",
+                "attempts": 0,
+                "migrated_from_v1": True,
+            }
+        manifest = migrated
+    manifest["schema_version"] = _TASK_MANIFEST_SCHEMA_VERSION
+    manifest["conversation_prefix"] = config.conversation_prefix
+    tasks = manifest.get("tasks")
+    if not isinstance(tasks, dict):
+        tasks = {}
+        manifest["tasks"] = tasks
+
+    # Prompt-policy/code changes intentionally produce a new content-hash slug.
+    # Preserve the old task and files for audit, but once the newer prompt for
+    # the same logical stage/chunk has completed, stop reporting the older task
+    # as an actionable handoff forever. Logical keys are deliberately limited
+    # to stage shapes that have one task per source or an explicit chunk number;
+    # generic/dedup/merge prompts may have several legitimate siblings.
+    conv_dir = _task_manifest_path(config).parent
+    for task in tasks.values():
+        if not isinstance(task, dict) or task.get("logical_key"):
+            continue
+        prompt_name = task.get("prompt_file")
+        if not prompt_name:
+            continue
+        try:
+            prompt = (conv_dir / str(prompt_name)).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        logical_key = _conversation_task_logical_key(prompt)
+        if logical_key:
+            task["logical_key"] = logical_key
+
+    task_order = {slug: index for index, slug in enumerate(tasks)}
+    completed_by_key: dict[str, tuple[str, dict]] = {}
+    for slug, task in tasks.items():
+        if not isinstance(task, dict) or task.get("status") != "completed":
+            continue
+        logical_key = str(task.get("logical_key") or "")
+        if not logical_key:
+            continue
+        prior = completed_by_key.get(logical_key)
+        candidate_order = (
+            int(task.get("created_at", 0) or 0),
+            task_order.get(slug, -1),
+        )
+        prior_order = (
+            int(prior[1].get("created_at", 0) or 0),
+            task_order.get(prior[0], -1),
+        ) if prior is not None else (-1, -1)
+        if candidate_order > prior_order:
+            completed_by_key[logical_key] = (slug, task)
+
+    for slug, task in tasks.items():
+        if not isinstance(task, dict) or task.get("status") != "pending":
+            continue
+        logical_key = str(task.get("logical_key") or "")
+        newer = completed_by_key.get(logical_key)
+        if not logical_key or newer is None:
+            continue
+        newer_slug, newer_task = newer
+        newer_order = (
+            int(newer_task.get("created_at", 0) or 0),
+            task_order.get(newer_slug, -1),
+        )
+        pending_order = (
+            int(task.get("created_at", 0) or 0),
+            task_order.get(slug, -1),
+        )
+        if newer_slug != slug and newer_order > pending_order:
+            task["status"] = "superseded"
+            task["superseded_by"] = newer_slug
+            task["superseded_at"] = int(
+                newer_task.get("completed_at")
+                or newer_task.get("updated_at")
+                or time.time() * 1000
+            )
+
+    manifest["pending"] = [
+        slug for slug, task in tasks.items()
+        if isinstance(task, dict) and task.get("status") == "pending"
+    ]
+    manifest["completed"] = [
+        slug for slug, task in tasks.items()
+        if isinstance(task, dict) and task.get("status") == "completed"
+    ]
+    return manifest
+
+
 def _load_task_manifest(config: Config) -> dict:
     p = _task_manifest_path(config)
     if p.exists():
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    return {"pending": [], "completed": []}
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                raise ValueError(
+                    f"expected JSON object, got {type(raw).__name__}")
+            return _normalize_task_manifest(config, raw)
+        except Exception as e:
+            # Corrupted manifest is not a silent reset — warn loudly so the
+            # user knows why pending-task reporting restarted (policy 2026-06-24).
+            print(f"⚠️  [conversation] {p} corrupted ({type(e).__name__}: {e}) "
+                  f"— resetting task manifest.", flush=True)
+    return _empty_task_manifest(config)
 
 
 def _save_task_manifest(config: Config, manifest: dict) -> None:
     p = _task_manifest_path(config)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    normalized = _normalize_task_manifest(config, manifest)
+    atomic_write(p, json.dumps(normalized, ensure_ascii=False, indent=2))
 
 
-def _mark_task_pending(config: Config, slug: str) -> None:
+def _mark_task_pending(
+    config: Config,
+    slug: str,
+    prompt: str,
+    max_tokens: int | None,
+) -> None:
     m = _load_task_manifest(config)
-    if slug not in m.get("pending", []):
-        m.setdefault("pending", []).append(slug)
+    now = int(time.time() * 1000)
+    prior = m.setdefault("tasks", {}).get(slug, {})
+    attempts = int(prior.get("attempts", 0) or 0) + 1
+    prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    created_at = prior.get("created_at", now)
+    m["tasks"][slug] = {
+        **prior,
+        "slug": slug,
+        "status": "pending",
+        "prompt_file": f"{slug}.md",
+        "result_file": f"{slug}.txt",
+        "prompt_sha256": prompt_hash,
+        "prompt_chars": len(prompt),
+        "max_tokens": max_tokens,
+        "attempts": attempts,
+        "created_at": created_at,
+        "updated_at": now,
+    }
+    logical_key = _conversation_task_logical_key(prompt)
+    if logical_key:
+        m["tasks"][slug]["logical_key"] = logical_key
     _save_task_manifest(config, m)
 
 
-def _mark_task_done(config: Config, slug: str) -> None:
+def _mark_task_done(
+    config: Config,
+    slug: str,
+    prompt: str,
+    response: str,
+) -> None:
     m = _load_task_manifest(config)
-    m["pending"] = [s for s in m.get("pending", []) if s != slug]
-    m.setdefault("completed", []).append(slug)
+    now = int(time.time() * 1000)
+    prior = m.setdefault("tasks", {}).get(slug, {})
+    m["tasks"][slug] = {
+        **prior,
+        "slug": slug,
+        "status": "completed",
+        "prompt_file": f"{slug}.md",
+        "result_file": f"{slug}.txt",
+        "prompt_sha256": prior.get(
+            "prompt_sha256",
+            hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        ),
+        "prompt_chars": prior.get("prompt_chars", len(prompt)),
+        "response_sha256": hashlib.sha256(
+            response.encode("utf-8")).hexdigest(),
+        "response_chars": len(response),
+        "attempts": max(1, int(prior.get("attempts", 0) or 0)),
+        "created_at": prior.get("created_at", now),
+        "updated_at": now,
+        "completed_at": prior.get("completed_at", now),
+    }
+    logical_key = _conversation_task_logical_key(prompt)
+    if logical_key:
+        m["tasks"][slug]["logical_key"] = logical_key
     _save_task_manifest(config, m)
 
 
@@ -154,7 +331,28 @@ def _is_stale_result(response: str, prompt: str) -> bool:
     has_files = "---FILE:" in response or "### File" in response
     if has_yaml or has_files:
         return False
-    return any(m in response for m in ["# Role", "You are"]) and len(response) < len(prompt) * 0.8
+    # Match prompt-instruction markers only at their real line boundaries.
+    # A substring check for "# Role" also matches the legitimate wiki heading
+    # "## Role", causing a valid merge result to be deleted and regenerated
+    # forever (observed while merging the NVIC page).
+    copied_instruction = bool(
+        re.search(r"(?m)^# Role(?:[ \t]*$|[ \t]+)", response)
+        or re.search(r"(?m)^You are(?:[ \t]+|$)", response)
+    )
+    return copied_instruction and len(response) < len(prompt) * 0.8
+
+
+def _conversation_task_logical_key(prompt: str) -> str:
+    """Return a safe supersession key for one-task-per-source/stage shapes."""
+    stage = _infer_stage(prompt)
+    if stage.startswith("Stage-2-2-Chunk-"):
+        return stage
+    if stage == "Stage-2-4-Generation":
+        chunk = re.search(r"^Chunk:\s*(\d+)\s*$", prompt, flags=re.MULTILINE)
+        return f"{stage}:chunk-{chunk.group(1)}" if chunk else f"{stage}:all"
+    if stage in ("Stage-2-6-SourcePage", "Stage-3-4-Review"):
+        return stage
+    return ""
 
 
 def _infer_stage(prompt: str) -> str:
@@ -175,7 +373,8 @@ def _infer_stage(prompt: str) -> str:
     # generation/analysis prompt and runs ~890 chars — it would push the
     # distinctive stage marker past this 500-char window and collapse every
     # generation stage to the generic "LLM-task" label (observed live on the
-    # Printed Circuits Handbook ingest: Stage 2.4/2.6/2.7/2.9 all mislabeled,
+    # Printed Circuits Handbook ingest: several Stage 2 generation prompts were
+    # all mislabeled,
     # which also defeats the per-stage cache-file grouping). When the prompt
     # literally opens with the directive, skip that block and scan the
     # instruction text that follows. Prompts that don't open with it (e.g. the
@@ -188,6 +387,8 @@ def _infer_stage(prompt: str) -> str:
         if idx != -1:
             scan = stripped[idx + 1:]
     head = scan[:500]
+    if "repairing truncated wiki FILE blocks" in head:
+        return "Stage-2-TruncatedFileRepair"
     if "generating wiki pages" in head.lower() or ("Synthesis" in head and "FILE blocks" in head):
         return "Stage-2-4-Generation"
     if "review agent" in head or "可疑项" in head:
@@ -205,10 +406,4 @@ def _infer_stage(prompt: str) -> str:
         # numbering was consolidated (2.5/2.8 retired); the stage code already
         # prints "[stage 2.4]" for it, so label its cache files to match.
         return "Stage-2-4-DedupConfirm"
-    if "just generated concept/entity pages for a book" in head:
-        return "Stage-2-9-Comparison"
-    if "review the concepts just generated for a book" in head.lower():
-        return "Stage-2-9-ComparisonReview"
-    if "performing **Stage 1: Global Digest**" in head or "produce a **high-level structural summary**" in head:
-        return "Stage-2-1-Global-Digest"
     return "LLM-task"

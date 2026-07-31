@@ -75,7 +75,7 @@ key_concepts:
   - name: "<e.g. Type II compensator>"
     importance: "core"
     wikilink_target: "type-ii-compensator"
-  # 1-3 concepts expected
+  # Include only independently useful key design concepts; no count target
 
 key_claims:
   - claim: "<e.g. 10µH gives best efficiency at 500kHz / 1A load>"
@@ -93,55 +93,16 @@ connections_to_existing_wiki:
 Files to write:
 
 1. **`wiki/sources/<Mfr> - <AN-Number> - <Topic>.md`** — source page
-   - Body: app note metadata, problem, design procedure, key equations, worked example summary, components used, "参见" with concept + entity + datasheet pages
+   - Body: a concise source summary; prioritize the problem, design procedure,
+     key equations, evidence, and useful component relationships, with
+     source-driven headings rather than a mandatory checklist
 
-2. **`wiki/concepts/<slug>.md`** — 1-3 concept pages (the design concepts the app note teaches)
-   - These are the high-value outputs: each app note should add 1-3 reusable design knowledge pages
+2. **`wiki/concepts/<slug>.md`** — pages only for independently useful key design concepts the app note substantively teaches
+   - These are high-value outputs, but an app note has no page quota and may add none when existing pages already cover the ideas
 
 3. **`wiki/entities/<Mfr>.md`** — entity page for the manufacturer (if not already exists)
 
 4. **Update `wiki/index.md`**, **`wiki/log.md`**, **`wiki/overview.md`**
-
----
-
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest vendor application notes (design guides) into a structured wiki.
-
-# Input
-- App note ID: {an_id}
-- Title: {title}
-- Manufacturer: {manufacturer}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-An app note is expected to produce 1 source page + 1-3 concept pages (the design knowledge).
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<Mfr> - <AN-Number> - <Topic>.md
-### File 2..N: wiki/concepts/<slug>.md (1-3 design concept pages)
-### File N+1 (optional): wiki/entities/<Mfr>.md
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per improved-wiki §6.2)
-- Frontmatter must follow improved-wiki §5
-- The design_procedure is the most important part. Preserve the step structure verbatim
-- Use LaTeX for all formulas. Cite the page/section for each key_equation
-- The worked_example should be reproducible — keep all input parameters
-- Cross-reference any datasheet or reference design mentioned
-```
 
 ---
 
@@ -165,6 +126,6 @@ File contents in order:
 
 ## See also
 
-- `SKILL.md` §5, §6
+- `references/naming-conventions.md` — frontmatter schema + wikilink naming
 - `templates/digest-datasheet.md` — the typical companion (datasheet of the part used)
 - `templates/digest-designexample.md` — the typical companion (reference design implementing the procedure)

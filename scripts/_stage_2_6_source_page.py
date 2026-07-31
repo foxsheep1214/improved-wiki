@@ -1,7 +1,221 @@
 from __future__ import annotations
 
-from _stage_2_base import *
+import json
+import re
+import time
+from pathlib import Path
+
+from _config import Config
+from _core import canonical_source_path
+from _file_block_repair import repair_truncated_file_blocks
+from _llm_api import call_anthropic_protocol
 from _language import build_language_directive
+from _schema import load_purpose_md, load_schema_md, schema_prompt_text
+from _stage_2_4_generation import _rank_linkable_fill
+
+
+def _normalize_source_frontmatter(
+    response: str, authors_yaml: str, year_yaml: str, url_yaml: str, venue_yaml: str,
+) -> str:
+    """Normalize the source-page FILE block's frontmatter when the agent's
+    Stage 2.6 response ignored the pre-filled template:
+
+    Inject any missing NashSU-parity bibliographic fields
+       (authors/year/url/venue) using the values already computed from the
+       digest — root cause of the Strauss/Witte pages lacking them.
+
+    The pipeline writes the FILE block verbatim, so a dropped field or empty
+    bibliographic field would otherwise persist to disk. A well-formed,
+    already-complete block is left untouched (no-op on parse failure or nothing
+    to fill). ``related: []`` is valid; NashSU does not impose a related-count
+    quota.
+    """
+    lines = response.split("\n")
+    # Locate the FILE block's frontmatter: the `---FILE:...---` line, then the
+    # opening `---`, then the next standalone `---` closes the frontmatter.
+    file_idx = next((i for i, ln in enumerate(lines) if ln.startswith("---FILE:")), None)
+    if file_idx is None or file_idx + 1 >= len(lines) or lines[file_idx + 1].strip() != "---":
+        return response
+    fm_open = file_idx + 1
+    fm_close = next((i for i in range(fm_open + 1, len(lines)) if lines[i].strip() == "---"), None)
+    if fm_close is None:
+        return response
+
+    fm = lines[fm_open + 1:fm_close]
+    desired = {
+        "authors": authors_yaml,
+        "year": year_yaml,
+        "url": url_yaml,
+        "venue": venue_yaml,
+    }
+    empty_yaml = {"", "[]", '""', "''", "null", "~"}
+
+    # A generated block may keep a field but blank out a value that the digest
+    # already supplied. Treat that the same as a missing field; otherwise the
+    # pre-filled bibliographic contract can still be silently lost.
+    for index, line in enumerate(fm):
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if (
+            key in desired
+            and value.strip().lower() in empty_yaml
+            and desired[key].strip().lower() not in empty_yaml
+        ):
+            fm[index] = f"{key}: {desired[key]}"
+    lines[fm_open + 1:fm_close] = fm
+    present = {ln.split(":", 1)[0].strip() for ln in fm if ":" in ln}
+
+    # Inject missing bibliographic fields before the frontmatter close.
+    additions = [
+        f"{key}: {val}"
+        for key, val in desired.items()
+        if key not in present
+    ]
+    if additions:
+        lines[fm_close:fm_close] = additions
+
+    return "\n".join(lines)
+
+
+def _stage_2_6_validate_source_file_block(
+    response: str,
+    source_rel: str,
+) -> None:
+    """Require one well-formed, non-empty source FILE block at the exact path.
+
+    This is the NashSU-aligned structural gate: it protects parser/write
+    integrity without prescribing body headings or the number of concepts,
+    entities, or claims in the summary.
+    """
+    header_pattern = r"^---\s*FILE:\s*(.*?)\s*---\s*$"
+    header_matches = list(re.finditer(
+        header_pattern,
+        response,
+        re.MULTILINE | re.IGNORECASE,
+    ))
+    headers = [match.group(1) for match in header_matches]
+    expected = f"wiki/sources/{source_rel}.md"
+    normalized = [path.strip() for path in headers]
+    if normalized != [expected]:
+        raise RuntimeError(
+            "Stage 2.6 must emit exactly one source FILE block at "
+            f"{expected}; got {normalized or 'none'}."
+        )
+    if len(re.findall(
+            r"^---\s*END\s+FILE\s*---\s*$",
+            response,
+            re.MULTILINE | re.IGNORECASE,
+    )) != 1:
+        raise RuntimeError(
+            "Stage 2.6 source FILE block must have exactly one END FILE marker."
+        )
+
+    start = header_matches[0].end()
+    if start < len(response) and response[start] == "\n":
+        start += 1
+    content = response[start:]
+    end_match = re.search(
+        r"^---\s*END\s+FILE\s*---\s*$",
+        content,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if not end_match:
+        raise RuntimeError("Stage 2.6 source FILE block is not closed.")
+    file_content = content[:end_match.start()]
+    lines = file_content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise RuntimeError(
+            "Stage 2.6 source FILE block must start with YAML frontmatter."
+        )
+    fm_close = next(
+        (i for i, line in enumerate(lines[1:], 1) if line.strip() == "---"),
+        None,
+    )
+    if fm_close is None or not "\n".join(lines[fm_close + 1:]).strip():
+        raise RuntimeError(
+            "Stage 2.6 source FILE block must contain a non-empty body."
+        )
+
+
+def source_analysis_text(
+    global_digest: dict,
+    chunk_analyses: list[dict] | None = None,
+    chunk_claims: list | None = None,
+) -> str:
+    """Serialize the complete Stage 2 analysis for deterministic recovery.
+
+    NashSU's fallback source page preserves its full analysis rather than
+    cutting it to a summary-sized prefix.  improved-wiki's equivalent analysis
+    is the rolled-up digest plus every per-chunk analysis.  ``chunk_claims`` is
+    retained as a compatibility fallback for older callers that do not carry
+    the full chunk list.
+    """
+    payload: dict = {"global_digest": global_digest}
+    if chunk_analyses is not None:
+        payload["chunk_analyses"] = chunk_analyses
+    elif chunk_claims is not None:
+        payload["chunk_claims"] = chunk_claims
+    return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def build_fallback_source_summary_content(
+    source_identity: str,
+    analysis_text: str,
+    date: str,
+) -> str:
+    """Build NashSU's deterministic minimum source-summary page."""
+    source_yaml = json.dumps(source_identity, ensure_ascii=False)
+    title_yaml = json.dumps(
+        f"Source: {source_identity}",
+        ensure_ascii=False,
+    )
+    return "\n".join([
+        "---",
+        "type: source",
+        f"title: {title_yaml}",
+        f"created: {date}",
+        f"updated: {date}",
+        f"sources: [{source_yaml}]",
+        "tags: []",
+        "related: []",
+        "---",
+        "",
+        f"# Source: {source_identity}",
+        "",
+        analysis_text or "(Analysis not available)",
+        "",
+    ])
+
+
+def build_fallback_source_summary(
+    source_rel: str,
+    source_identity: str,
+    analysis_text: str,
+    date: str,
+) -> str:
+    """Wrap the deterministic source summary in one exact FILE block."""
+    content = build_fallback_source_summary_content(
+        source_identity,
+        analysis_text,
+        date,
+    )
+    return (
+        f"---FILE:wiki/sources/{source_rel}.md---\n"
+        f"{content.rstrip()}\n"
+        "---END FILE---\n"
+    )
+
+
+def _serialize_file_blocks(blocks: list[tuple[str, str]]) -> str:
+    return "\n\n".join(
+        f"---FILE:{path if path.startswith('wiki/') else f'wiki/{path}'}---\n"
+        f"{content.rstrip()}\n"
+        "---END FILE---"
+        for path, content in blocks
+    )
+
 
 def stage_2_6_source_page(
     global_digest: dict,
@@ -11,23 +225,21 @@ def stage_2_6_source_page(
     verbose: bool = False,
     linkable_slugs: list[str] | None = None,
     source_context: str = "",
+    consolidated_context: str = "",
     associations: dict | None = None,
     generated_concepts: list[str] | None = None,
     generated_entities: list[str] | None = None,
+    chunk_claims: list | None = None,
+    chunk_analyses: list[dict] | None = None,
+    generated_pages: list[str] | None = None,
 ) -> tuple[str, str]:
-    """Stage 2.6: Dedicated source page generation.
+    """Stage 2.6: generate one NashSU-style source summary page.
 
-    Separated from concept/entity generation so the LLM can focus entirely
-    on producing a high-quality source page from the global digest.
-
-    NOTE — divergence from NashSU (intentional): NashSU's ingest is a
-    two-step Analysis→Generation flow where the *Generation* step is a SINGLE
-    combined LLM call that emits the source summary page AND all concept/entity
-    FILE blocks together (ingest.ts ~L835-868, buildGenerationPrompt). improved-
-    wiki instead splits the source page into this dedicated call for higher
-    source-page quality. Granularity is aligned with NashSU: one source summary
-    page per raw file at wiki/sources/<slug>.md, built from the accumulated
-    digest; long sources are chunked at the analysis stage.
+    improved-wiki keeps this as a dedicated, resumable call, but reuses the
+    exact whole-source context supplied to Stage 2.4: final rolling digest,
+    every chunk analysis, and bounded raw evidence from every chunk. Its
+    observable content contract remains one free-form source summary with no
+    fixed heading or entry-count quota.
     """
     try:
         source_rel = str(file_path.relative_to(config.raw_root).with_suffix(""))
@@ -37,21 +249,37 @@ def stage_2_6_source_page(
     book_meta = global_digest.get("book_meta", {})
     if not isinstance(book_meta, dict):
         book_meta = {}
-    title = book_meta.get("title", file_path.stem) if isinstance(book_meta, dict) else file_path.stem
     # Bibliographic metadata for the source-page frontmatter (NashSU source-page
     # parity: authors/year/url/venue). Pull from whichever *_meta block the digest
     # carries — book_meta (books), paper_meta (papers; has venue/doi), part_meta /
     # clip_meta / deck_meta (datasheets/news/decks may carry url/venue).
-    bib_meta = book_meta if book_meta else next(
-        (v for k, v in global_digest.items()
-         if k.endswith("_meta") and isinstance(v, dict)),
+    # Older Stage 2.2 prompts could emit both a compatibility ``book_meta`` and
+    # a more accurate type-specific block. Merge them, preferring non-empty
+    # type-specific values, rather than letting a non-empty ``book_meta`` hide
+    # a paper's venue/DOI.
+    bib_meta = dict(book_meta)
+    specific_meta = next(
+        (
+            v for k, v in global_digest.items()
+            if k != "book_meta" and k.endswith("_meta") and isinstance(v, dict)
+        ),
         {},
     )
+    for key, value in specific_meta.items():
+        if value not in ("", None, [], {}):
+            bib_meta[key] = value
+    title = bib_meta.get("title") or book_meta.get("title") or file_path.stem
     bib_authors = bib_meta.get("authors", []) if isinstance(bib_meta, dict) else []
     if not isinstance(bib_authors, list):
         bib_authors = [bib_authors] if bib_authors else []
     bib_year = bib_meta.get("year", "") if isinstance(bib_meta, dict) else ""
     bib_url = bib_meta.get("url", "") if isinstance(bib_meta, dict) else ""
+    bib_doi = str(bib_meta.get("doi", "") or "").strip() if isinstance(bib_meta, dict) else ""
+    if not bib_url and bib_doi:
+        if bib_doi.startswith(("http://", "https://")):
+            bib_url = bib_doi
+        else:
+            bib_url = "https://doi.org/" + re.sub(r"^doi:\s*", "", bib_doi, flags=re.I)
     # NashSU has no `publisher` field; fold a book's publisher into `venue`.
     bib_venue = (bib_meta.get("venue", "") or bib_meta.get("publisher", "")) if isinstance(bib_meta, dict) else ""
 
@@ -60,12 +288,23 @@ def stage_2_6_source_page(
     url_yaml = f'"{bib_url}"' if bib_url else '""'
     venue_yaml = f'"{bib_venue}"' if bib_venue else '""'
 
-    digest_str = json.dumps(global_digest, ensure_ascii=False, indent=2)
-    if len(digest_str) > 8000:
-        digest_str = digest_str[:8000] + "\n... (truncated)"
+    # The consolidated context already contains the complete final digest.
+    # Keep this separate frontmatter-oriented block to bibliographic metadata
+    # only so Stage 2.6 does not duplicate tens of thousands of prompt chars.
+    digest_payload = global_digest
+    if consolidated_context:
+        digest_payload = {
+            key: value
+            for key, value in global_digest.items()
+            if key == "book_meta" or str(key).endswith("_meta")
+        }
+    digest_str = json.dumps(digest_payload, ensure_ascii=False, indent=2)
+    # 8000 silently cut the outline of large books (observed live 2026-07-02:
+    # a 26-chapter handbook's source-page prompt lost chapters 24-26 and the
+    # agent had to reconstruct them from the raw TOC). 24K chars is still lean.
+    if len(digest_str) > 24000:
+        digest_str = digest_str[:24000] + "\n... (truncated)"
 
-    outline = global_digest.get("outline", [])
-    key_claims = global_digest.get("key_claims", [])
     key_concepts = global_digest.get("key_concepts", [])
     key_entities = global_digest.get("key_entities", [])
 
@@ -73,101 +312,31 @@ def stage_2_6_source_page(
     if template:
         template_section = f"\n# Document Type\n<template>\n{template[:2000]}\n</template>\n"
 
-    # Source-page body shape is doctype-aware: papers are not books — they have
-    # no chapter outline, so forcing "Table of Contents / EACH chapter" distorts
-    # the structure and the "Book Summary" heading mislabels them. Branch on the
-    # detected template; keep Key Takeaways + the dedicated call (better than
-    # NashSU's free-form same-call source page) for all doctypes.
+    # NashSU does not prescribe a source-page body template, heading set, or
+    # entry count. Keep doctype only as a writing hint; the model chooses the
+    # smallest useful structure for the source.
     is_paper = template.lstrip().startswith("# digest-paper")
-    if is_paper:
-        source_kind = "paper"
-        info_header = "Paper Information (from Global Digest)"
-        body_sections = """## Paper Summary
+    source_kind = "paper" if is_paper else "book"
+    info_header = (
+        "Paper Information (from Final Global Digest)"
+        if is_paper else
+        "Book Information (from Final Global Digest)"
+    )
+    body_guidance = """Write a concise, grounded source summary in the source's
+language. Choose headings and structure that fit this source; no fixed H2 set is
+required. Emphasize only what is genuinely important:
 
-2-4 sentences: the problem the paper addresses, its approach, the main result, and who it's for.
+- the source's scope, approach, and intended audience;
+- key named things and key ideas that materially shape the source;
+- core arguments/findings and the evidence that supports them;
+- meaningful connections, contradictions, caveats, or open questions.
 
-## Methodology & Results
-
-Write a focused technical summary from the digest. Cover:
-- **Problem & motivation:** the gap it addresses.
-- **Core idea / method:** the technical approach and key equations ($inline$, $$display$$).
-- **Main results:** the principal findings, with numbers where available.
-- **Comparison to prior work:** how it differs from or improves on prior methods.
-
-Papers are not books — do NOT impose a chapter-by-chapter outline. Write flowing prose with [[wikilinks]] to concepts/entities.
-
-## Key Entities
-
-List **EVERY entity page from the "Generated pages" block above** (do NOT omit any), one bullet per entity, each with:
-- **Name + type** — briefly, what kind of thing it is.
-- **Role in this paper** — central vs. peripheral, one sentence.
-- **Exists in wiki** — use the status shown in the Generated pages block. Wikilink each to its slug.
-
-## Main Arguments & Findings
-
-The paper's core claims. For EACH:
-- **Claim:** the assertion (one sentence).
-- **Evidence:** which figure / table / section supports it.
-- **Strength:** high / medium / low.
-- **Subject:** which entity or method the claim attaches to — do NOT transfer claims across subjects just because they share keywords.
-
-## Connections to Existing Wiki
-
-Which existing wiki pages does this source relate to? For each, does it **strengthen**, **challenge**, or **extend** existing knowledge? Wikilink each. If none, state "None identified."
-
-## Contradictions & Tensions
-
-Does anything in this source conflict with existing wiki content? Any internal tensions or caveats? If none, state "None identified."
-
-## Recommendations
-
-Which wiki pages should be created or updated based on this source? What should be emphasized vs. de-emphasized? Any open questions worth flagging for the user?"""
-    else:
-        source_kind = "book"
-        info_header = "Book Information (from Global Digest)"
-        body_sections = """## Book Summary
-
-2-4 sentences summarizing what this book covers, its approach, and who it's for.
-
-## Table of Contents & Key Concepts
-
-For EACH chapter in the outline, write one comprehensive line:
-1. **Chapter Title:** list ALL key topics — aim for 5-15 items, comma-separated.
-
-Example:
-1. **DC-DC Converters:** buck, boost, buck-boost, CCM vs DCM, voltage-mode control, PWM, synchronous rectification.
-
-Then list **EVERY concept page from the "Generated pages" block above** (this ingest created a page for each — do NOT omit any), one bullet per concept, each with:
-- **Name + brief definition** — the concept's definition as stated in the book.
-- **Why it matters in this book** — one sentence.
-- **Exists in wiki** — use the status shown in the Generated pages block ("new" or "exists (merged)"). Wikilink each to its slug.
-
-## Key Entities
-
-List **EVERY entity page from the "Generated pages" block above** (do NOT omit any), one bullet per entity, each with:
-- **Name + type** — briefly, what kind of thing it is.
-- **Role in this book** — central vs. peripheral, one sentence.
-- **Exists in wiki** — use the status shown in the Generated pages block. Wikilink each to its slug.
-
-## Main Arguments & Findings
-
-The book's core claims, results, or design rules. For EACH:
-- **Claim:** the assertion (one sentence).
-- **Evidence:** which chapter / case / equation supports it.
-- **Strength:** high / medium / low.
-- **Subject:** which entity or concept the claim attaches to — do NOT transfer claims, limits, or evaluations from one subject to another just because they share keywords.
-
-## Connections to Existing Wiki
-
-Which existing wiki pages does this source relate to? For each, does it **strengthen**, **challenge**, or **extend** existing knowledge? Wikilink each. If none, state "None identified."
-
-## Contradictions & Tensions
-
-Does anything in this source conflict with existing wiki content? Any internal tensions or caveats? If none, state "None identified."
-
-## Recommendations
-
-Which wiki pages should be created or updated based on this source? What should be emphasized vs. de-emphasized? Any open questions worth flagging for the user?"""
+Do not reproduce the analysis as an exhaustive inventory. Do not list every
+generated page, every chapter topic, every entity mention, or every per-chunk
+claim. Select and synthesize the core material, merge overlap, preserve exact
+subject attribution, and retain specific evidence anchors when useful. There is
+no heading-count, concept-count, or claim-count target. Link only the most
+relevant existing/generated pages."""
 
     # Issue 2 fix: constrain source-page wikilinks to a known-linkable set so the
     # LLM cannot link to a concept's own (never-written) slug when that concept
@@ -175,8 +344,25 @@ Which wiki pages should be created or updated based on this source? What should 
     # this, the source page emitted [[concepts/system-concept]] etc. → broken
     # links, because the concept was skipped in Stage 2.4 and no such file exists.
     linkable = sorted(set(linkable_slugs or []))
-    if len(linkable) > 300:
-        linkable = linkable[:300]
+    # 300 cut the sorted list mid-alphabet (observed live 2026-07-02: entities/*
+    # never made it into a source-page prompt's Linkable list). 1500 covers the
+    # current wiki scale; slugs are ~30 chars each so this stays <50K chars.
+    # Above the cap, an ALPHABETICAL cut has the same disease at the tail: CJK
+    # sorts last, so Chinese pages systematically vanish as the wiki grows
+    # (observed live: 4 valid CJK slugs fell outside the cap). Rank by
+    # relevance to THIS book instead (token/CJK-bigram overlap with the book's
+    # own generated slugs + digest concept/entity names). Ranking is
+    # deterministic (score desc, slug asc) so the prompt hash stays stable
+    # within one ingest — the linkable snapshot is stable during a book's run.
+    if len(linkable) > 1500:
+        _ref_names = [
+            str(x.get("name", "") if isinstance(x, dict) else x).strip()
+            for x in list(key_concepts) + list(key_entities)
+        ]
+        _refs = (list(generated_pages or [])
+                 + list(generated_concepts or []) + list(generated_entities or [])
+                 + [n for n in _ref_names if n])
+        linkable = sorted(_rank_linkable_fill(linkable, _refs)[:1500])
     linkable_str = "\n".join(f"  - [[{s}]]" for s in linkable) if linkable else "(none — write concepts as plain text, do NOT invent [[wikilinks]])"
     linkable_rule = (
         "\n# Wikilink Rule — STRICT\n"
@@ -188,15 +374,26 @@ Which wiki pages should be created or updated based on this source? What should 
         f"# Linkable pages\n{linkable_str}\n"
     )
 
-    # P1 parity with Stage 2.4/2.7/2.9 (2026-06-27): ground the summary/TOC/
-    # takeaways in the raw source (trimmed to budget) so the page uses the source's
-    # own wording, formulas, numbers, and chapter structure — not training memory.
-    if source_context.strip():
+    # Stage 2.6 consumes the exact same deterministic whole-source context as
+    # Stage 2.4. ``source_context`` remains a raw-text compatibility path for
+    # direct callers predating the consolidated policy.
+    if consolidated_context.strip():
+        source_section = (
+            "\n# Consolidated Stage 2 Context "
+            "(ground the summary in the WHOLE source)\n"
+            "Use the final digest, every chunk analysis, and bounded raw evidence "
+            "below. Preserve late-source details and cross-chunk relationships; "
+            "do not assume the original document ended at an early prefix.\n"
+            "<stage2-context>\n"
+            f"{consolidated_context}\n"
+            "</stage2-context>\n"
+        )
+    elif source_context.strip():
         source_section = (
             "\n# Source Text (ground the summary in THIS — do not write from memory)\n"
-            "Base the summary, TOC, and takeaways on what the source ACTUALLY says:\n"
-            "use its own wording, formulas, numbers, and chapter structure. Do not\n"
-            "fabricate takeaways or topics the source does not contain.\n"
+            "Base the summary on what the source ACTUALLY says: use its own wording,\n"
+            "formulas, numbers, and structure. Do not fabricate claims or topics the\n"
+            "source does not contain.\n"
             "<source>\n"
             f"{source_context}\n"
             "</source>\n"
@@ -204,81 +401,93 @@ Which wiki pages should be created or updated based on this source? What should 
     else:
         source_section = ""
 
-    # NashSU parity: Stage 2.3 association already answered "does this concept/
-    # entity already exist in the wiki?" — feed those FACTS into the prompt so
-    # the LLM fills the "exists in wiki" field truthfully instead of guessing.
-    # associations = {name: [existing_slug, ...]} (only names that matched).
+    # Stage 2.3 association facts are link hints, not a source-page inventory.
+    # Include only actual matches. Do not label every unmatched digest item as
+    # "new" or imply that the source page must enumerate it.
     assoc = associations or {}
-    existing_lines: list[str] = []
-    new_lines: list[str] = []
-    for c in key_concepts:
-        name = c.get("name", "").strip() if isinstance(c, dict) else str(c).strip()
-        if not name:
-            continue
-        m = assoc.get(name)
-        if m:
-            existing_lines.append(f"- {name} → exists as [[{m[0]}]]")
-        else:
-            new_lines.append(f"- {name} (new)")
-    for e in key_entities:
-        name = e.get("name", "").strip() if isinstance(e, dict) else str(e).strip()
-        if not name:
-            continue
-        m = assoc.get(name)
-        if m:
-            existing_lines.append(f"- {name} → exists as [[{m[0]}]]")
-        else:
-            new_lines.append(f"- {name} (new)")
-    if existing_lines or new_lines:
+    existing_lines = [
+        f"- {name} → exists as [[{slugs[0]}]]"
+        for name, slugs in sorted(assoc.items())
+        if slugs
+    ]
+    if existing_lines:
         assoc_section = (
-            "\n# Existing-wiki associations (Stage 2.3 FACTS — use for the "
-            "\"exists in wiki\" field, do NOT guess)\n"
-            "Already exist in wiki (wikilink to the listed slug; do NOT create new):\n"
-            + "\n".join(existing_lines or ["(none)"]) + "\n"
-            "New (not yet in wiki — new pages created this ingest):\n"
-            + "\n".join(new_lines or ["(none)"]) + "\n"
+            "\n# Existing-wiki association facts\n"
+            "Use these exact targets only when they are materially relevant to "
+            "the summary; do not enumerate them merely because they are listed:\n"
+            + "\n".join(existing_lines) + "\n"
         )
     else:
         assoc_section = ""
 
-    # Option A (NashSU single-tier): Key Concepts / Key Entities list EVERY
-    # page generated this ingest (Stage 2.4 file_blocks), NOT the curated 2.1
-    # key_concepts. Exists status comes from the 2.3 association facts above
-    # (a slug is "exists (merged)" if 2.3 matched it to an existing page).
-    _assoc_slugs: set[str] = set()
-    for _slugs in (assoc or {}).values():
-        _assoc_slugs.update(_slugs)
-    def _exists_mark(slug: str) -> str:
-        return "exists (merged)" if slug in _assoc_slugs else "new"
-    _gen_c = generated_concepts or []
-    _gen_e = generated_entities or []
-    if _gen_c or _gen_e:
-        _gp = ["# Generated pages (list EVERY one in Key Concepts / Key Entities — do NOT omit any)"]
-        if _gen_c:
-            _gp.append("Concept pages generated this ingest:")
-            _gp.extend(f"- [[{s}]] ({_exists_mark(s)})" for s in _gen_c)
-        if _gen_e:
-            _gp.append("Entity pages generated this ingest:")
-            _gp.extend(f"- [[{s}]] ({_exists_mark(s)})" for s in _gen_e)
-        generated_pages_section = "\n".join(_gp) + "\n"
-    else:
-        generated_pages_section = ""
+    # Generated slugs remain available through the Linkable pages universe.
+    # NashSU does not require the source summary to dump that universe into its
+    # body, so there is intentionally no "Generated pages" checklist here.
 
-    language_sample = source_context or json.dumps(global_digest, ensure_ascii=False)
+    language_sample = (
+        consolidated_context
+        or source_context
+        or json.dumps(global_digest, ensure_ascii=False)
+    )
     language_directive = build_language_directive(language_sample)
+    schema_context = schema_prompt_text(load_schema_md(config))
+    purpose_context = load_purpose_md(config).strip()[:6000]
+    project_context_section = ""
+    if schema_context:
+        project_context_section += (
+            "\n# Project Schema and Routing (AUTHORITATIVE)\n"
+            "<schema>\n"
+            f"{schema_context}\n"
+            "</schema>\n"
+            "The source page path and frontmatter must comply with this schema.\n"
+        )
+    if purpose_context:
+        project_context_section += (
+            "\n# Wiki Purpose\n"
+            "<purpose>\n"
+            f"{purpose_context}\n"
+            "</purpose>\n"
+            "Use this purpose to prioritize the summary.\n"
+        )
+    # Per-chunk claims are candidates, not a completeness ledger. NashSU passes
+    # the consolidated analysis to generation and asks for core claims/results;
+    # the source summary therefore selects and synthesizes only the important
+    # claims while retaining source-wide context.
+    chunk_claims_section = ""
+    if chunk_claims and not consolidated_context:
+        _cc_lines = []
+        for c in chunk_claims[:400]:
+            if isinstance(c, dict):
+                _claim = c.get("claim", "")
+                _ev = c.get("evidence", "")
+                _conf = c.get("confidence", "")
+                _cc_lines.append(f"- {_claim}" + (f" (evidence: {_ev})" if _ev else "") + (f" [{_conf}]" if _conf else ""))
+            else:
+                _cc_lines.append(f"- {c}")
+        chunk_claims_section = (
+            "\n# Claim candidates from per-chunk analysis\n"
+            "Use these as source-wide context. Select only core arguments/findings,\n"
+            "merge overlap, preserve exact subject attribution and evidence, and\n"
+            "do not reproduce the list wholesale or pad to a count.\n"
+            + "\n".join(_cc_lines) + "\n"
+        )
+
     prompt = f"""{language_directive}
 
 # Role
 You are writing a **source page** for a Karpathy-pattern wiki knowledge base.
 This page will be the authoritative entry for a {source_kind} in the wiki.
-{template_section}{linkable_rule}{source_section}{assoc_section}{generated_pages_section}
+    {template_section}{project_context_section}{linkable_rule}{source_section}{assoc_section}
 # {info_header}
 ```yaml
 {digest_str}
 ```
+{chunk_claims_section}
 
 # Task
-Write a comprehensive source page. Wrap it in FILE block format.
+Write one concise, grounded source summary page. Wrap it in FILE block format.
+
+{body_guidance}
 
 # ⚠️  CRITICAL — OUTPUT FORMAT
 Your ENTIRE response MUST be wrapped in EXACTLY ONE file block:
@@ -298,28 +507,86 @@ url: {url_yaml}
 venue: {venue_yaml}
 ---
 
-{body_sections}
+(source summary body; choose the useful structure described above)
 ---END FILE---
 
 # Instructions
 - Your FIRST line MUST be `---FILE:wiki/sources/{source_rel}.md---`, immediately followed by `---` (frontmatter start) on the NEXT line with NO blank line in between
 - Your LAST line MUST be `---END FILE---`
 - The frontmatter MUST use real data from the digest. NO ``` fences. NO blank lines before frontmatter.
-- Do NOT add extra sections beyond those listed above. Link to concepts via [[wikilinks]].
-- tags: 3-8 relevant tags (do NOT leave empty)
-- related: 2-5 related wiki page slugs
+- Choose only useful sections; no fixed heading set is required. Link only
+  genuinely relevant concepts/entities via allowed [[wikilinks]].
+- tags: relevant tags; do not pad to a target count
+- related: relevant wiki page slugs; `[]` is valid when none are useful
 - authors/year/url/venue: bibliographic fields for this source (NashSU source-page parity). The template is pre-filled from the digest where available — verify against the "{info_header}" block above and complete any left empty; use `[]` for authors and `""` for url/venue if genuinely unknown. authors is a list, year a number, url/venue strings.
+- Evidence anchors: every claim's **Evidence** cites chapter/section/equation/figure numbers (式(5-10), 图2.6, Table 8.1); a value read off a figure's curve must be marked "据图X.X".
 - Math: $inline$ $$display$$
 """
 
     gen_tokens = config.compute_max_tokens(8192)
-    response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens, label="source page")
+    response, stop_reason = call_anthropic_protocol(
+        prompt,
+        config,
+        max_tokens=gen_tokens,
+        label="source page",
+    )
+    repair = repair_truncated_file_blocks(
+        response,
+        original_prompt=prompt,
+        source_identity=canonical_source_path(file_path, config),
+        config=config,
+        max_tokens=config.compute_max_tokens(8192),
+        label="stage 2.6",
+        llm_call=call_anthropic_protocol,
+    )
+    candidate = _serialize_file_blocks(repair.blocks)
+    candidate = _normalize_source_frontmatter(
+        candidate, authors_yaml, year_yaml, url_yaml, venue_yaml,
+    )
+    fallback_reason = ""
+    if repair.unrecovered_paths:
+        fallback_reason = (
+            "targeted repair did not recover "
+            + ", ".join(repair.unrecovered_paths)
+        )
+    else:
+        try:
+            _stage_2_6_validate_source_file_block(candidate, source_rel)
+        except RuntimeError as exc:
+            fallback_reason = str(exc)
+
+    if fallback_reason:
+        analysis_text = source_analysis_text(
+            global_digest,
+            chunk_analyses=chunk_analyses,
+            chunk_claims=chunk_claims,
+        )
+        candidate = build_fallback_source_summary(
+            source_rel,
+            canonical_source_path(file_path, config),
+            analysis_text,
+            time.strftime("%Y-%m-%d"),
+        )
+        _stage_2_6_validate_source_file_block(candidate, source_rel)
+        # Two different fallbacks, only one of which NashSU refuses to cache.
+        # A malformed-but-complete block is a formatting miss: NashSU writes the
+        # deterministic summary and caches normally. An unrecovered truncation
+        # is a lost LLM turn: NashSU writes the summary but skips the cache so
+        # the next ingest regenerates the real page (ingest.ts:1326-1341).
+        stop_reason = (
+            "fallback-source-summary-unrecovered-truncation"
+            if repair.unrecovered_paths
+            else "fallback-source-summary"
+        )
+        print(
+            "  [stage 2.6] Generated deterministic source-summary fallback "
+            f"from complete Stage 2 analysis ({fallback_reason})"
+        )
+
+    response = candidate
     if verbose:
         print(f"[stage 2.6] Source page generated ({len(response):,} chars, stop={stop_reason})")
     else:
         print(f"[stage 2.6] Source page ready ({len(response):,} chars)")
 
     return response, stop_reason
-
-
-# ---------- Stage 2.7: Query generation ----------

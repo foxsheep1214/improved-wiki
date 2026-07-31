@@ -5,10 +5,11 @@ conversation mode is no longer optional. ``call_anthropic_protocol`` (the
 entry point the stage modules import) always delegates to the conversation
 router registered by ingest.py: the prompt is written to a file and
 ``ConversationPending`` is raised so the calling agent answers with the
-current conversation's model. Serial only — there is no concurrent text-gen
-path.
+current conversation's model. There is no direct-API text-gen path; independent
+prompt files (notably Stage 2.4) may still be answered concurrently by separate
+fresh agents.
 
-Image captioning (Stage 1.3, MiniMax VLM) and minerU OCR are NOT text
+Image captioning (Stage 1.3) and minerU OCR are NOT text
 generation and live elsewhere (`_stage_1_extract.py`); they are unaffected —
 vision content can't flow through the conversation-file handoff, so they
 always call their configured HTTP API directly regardless of this module.
@@ -16,7 +17,6 @@ always call their configured HTTP API directly regardless of this module.
 from __future__ import annotations
 
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -124,11 +124,27 @@ def conversation_handoff(
 
     if result_file.exists():
         response = result_file.read_text(encoding="utf-8")
-        if stale_check is not None and stale_check(response, prompt_text):
+        # An empty/whitespace-only result is never a valid answer (an agent
+        # touched the file without writing, or a write was torn) — treat it as
+        # stale on EVERY handoff path (router and sweep alike): delete and
+        # re-prompt rather than returning "" into a stage parser.
+        if not response.strip():
+            print(f"[conv:{tag}] Result file is empty — treating as stale, regenerating",
+                  flush=True)
+            result_file.unlink(missing_ok=True)
+        elif stale_check is not None and stale_check(response, prompt_text):
             print(f"[conv:{tag}] Result appears stale — regenerating", flush=True)
             result_file.unlink(missing_ok=True)
         else:
-            print(f"[conv:{tag}] Read response ({len(response)} chars)", flush=True)
+            # Handoff latency = answer mtime − prompt mtime. The ingest process
+            # exits during a handoff, so this is the only place wall-clock per
+            # LLM step is visible (timing instrumentation, 2026-07-02).
+            try:
+                _lat = result_file.stat().st_mtime - prompt_file.stat().st_mtime
+                _lat_s = f", handoff {_lat/60:.1f}m" if _lat > 0 else ""
+            except OSError:
+                _lat_s = ""
+            print(f"[conv:{tag}] Read response ({len(response)} chars{_lat_s})", flush=True)
             if on_cached is not None:
                 on_cached(response)
             return response
@@ -140,6 +156,11 @@ def conversation_handoff(
     print(f"  CONVERSATION → {tag}", flush=True)
     print(f"  Prompt:  {prompt_file}", flush=True)
     print(f"  Result:  {result_file}", flush=True)
+    print(f"  Answer via a FRESH subagent (1 handoff, then exit) — the main", flush=True)
+    print(f"  conversation only orchestrates; sole exception: the context probe.", flush=True)
+    print(f"  Write <slug>.txt.tmp, validate it, then atomically rename to .txt;", flush=True)
+    print(f"  never stream a partial answer directly into the final result path.", flush=True)
+    print(f"  (NashSU per-call statelessness — see delegate-mode.md L4.)", flush=True)
     print(f"{'=' * 60}\n", flush=True)
     raise ConversationPending()
 
@@ -149,8 +170,9 @@ def call_anthropic_protocol(prompt: str, config, max_tokens: int | None = None,
     """Route a text-generation LLM call to the conversation router.
 
     Always delegates to the conversation router registered by ingest.py
-    (prompt-file handoff, raises ``ConversationPending``). Serial only —
-    there is no direct-API fallback for text generation.
+    (prompt-file handoff, raises ``ConversationPending``). There is no
+    direct-API fallback for text generation; orchestration may answer
+    independent prompt files in parallel.
 
     ``label`` is accepted for call-site compatibility (progress lines that
     pass it) but is not otherwise used.

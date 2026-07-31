@@ -9,34 +9,44 @@ Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stag
 """
 from __future__ import annotations
 
-import json, os, re, sys, time
+import re, time
 from pathlib import Path
 
-_script_dir = Path(__file__).resolve().parent
-if str(_script_dir) not in sys.path:
-    sys.path.insert(0, str(_script_dir))
-from _core import (
-    Config,
-    heartbeat as _heartbeat, file_tag as _file_tag,
-    stage_begin as _stage_begin, stage_end as _stage_end,
-    llm_call_progress as _llm_call_progress, llm_call_done as _llm_call_done,
-    load_cache, save_cache, list_existing_slugs,
-    parse_yaml_block, parse_file_blocks,
-    is_safe_ingest_path, _WINDOWS_RESERVED, _ILLEGAL_CHARS_RE,
+from _paths import atomic_write, WIKI_ARTIFACT_DIRS
+from _page_ref import PageRef
+from _config import Config
+from _core import canonical_source_path
+from _schema import (
+    is_safe_ingest_path, _ILLEGAL_CHARS_RE,
     source_slug_from_raw_path, schema_route_dir,
 )
 from _llm_api import call_anthropic_protocol
-from _frontmatter_array import parse_frontmatter_array
+from _frontmatter_array import parse_frontmatter_array, write_frontmatter_array
+from _stage_1_1_scanned import _decode_html_entities
+from _wikilinks import (
+    escape_markdown_table_wikilink_aliases,
+    split_wikilink_inner,
+)
 
 __all__ = [
-    "stage_3_1_write_wiki_file",  # Stage 3.1
-    "stage_3_5_aggregate_repair", # Stage 3.5
+    "stage_3_1_write_wiki_file",       # Stage 3.1
+    "stage_3_1_build_slug_dirs",       # Stage 3.1 link normalizer (universe)
+    "stage_3_1_normalize_page_links",  # Stage 3.1 link normalizer (per page)
+    "stage_3_5_aggregate_repair",      # Stage 3.5
+    "rebuild_index_deterministic",     # standalone recovery tool (rebuild_index.py)
 ]
 
-# Per-side cap on body text shown to the LLM page-merge prompt. Was a hardcoded
-# 3000 that truncated normal pages mid-content and made the body-shrink
-# threshold (0.7 * full body length) unachievable. 24K comfortably holds a full
-# wiki page and stays within the merge output budget (config.max_tokens).
+# Fallback per-side cap on body text shown to the LLM page-merge prompt, used
+# only when config has no target_chars (e.g. minimal test configs). The real
+# cap is config.target_chars (see llm_merger below) — the same live-probed,
+# context-aware budget the rest of the pipeline uses for "how much text is
+# safe in one prompt". A fixed 24K (raised from a hardcoded 3000 that
+# truncated normal pages mid-content) was itself found too small 2026-07-09:
+# a comprehensive source page's body (~67 claims, ~38 entities) runs to ~65K
+# chars, well past 24K, silently truncating the "new content" side of the
+# merge before the LLM ever saw the sections beyond Table of Contents — the
+# merge then fell back to the old page's stale Key Entities/Claims/etc.
+# sections for the part it never received.
 MERGE_PROMPT_BODY_CAP = 24000
 
 # ---------- File writing ----------
@@ -85,7 +95,8 @@ def _stage_3_1_make_cjk_slug(title: str) -> str:
     return slug if slug else ""
 
 
-def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None) -> str | None:
+def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None,
+                                      quiet: bool = False) -> str | None:
     """Auto-correct malformed wiki paths from LLM output.
 
     LLM sometimes outputs:
@@ -99,7 +110,6 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
 
     Returns corrected path (relative to wiki/ dir, NO "wiki/" prefix) or None if uncorrectable.
     """
-    basename = Path(rel_path).name
     stem = Path(rel_path).stem
 
     # 2026-06-15: macOS/Linux 文件名不能含 /，LLM 可能在 slug 中输出 /
@@ -120,7 +130,8 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
     if fm_title and _stage_3_1_contains_cjk(fm_title) and not _stage_3_1_contains_cjk(slug):
         cjk_slug = _stage_3_1_make_cjk_slug(fm_title)
         if cjk_slug and _stage_3_1_contains_cjk(cjk_slug):
-            print(f"  ⚠️  [cjk] Slug '{slug}' → '{cjk_slug}' (CJK title detected)")
+            if not quiet:
+                print(f"  ⚠️  [cjk] Slug '{slug}' → '{cjk_slug}' (CJK title detected)")
             slug = cjk_slug
 
     # Case: bare filename (no path prefix) — LLM forgot wiki/concepts/ prefix
@@ -197,7 +208,8 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
 
 
 def _stage_3_1_schema_route(rel_path: str, content: str,
-                            routing: dict[str, str]) -> str:
+                            routing: dict[str, str],
+                            *, quiet: bool = False) -> str:
     """Route a page to the directory its frontmatter ``type`` declares (schema
     typeDirs first, then the fixed base types) — NashSU ``validateWikiPageRouting``
     applied at write time.
@@ -214,6 +226,15 @@ def _stage_3_1_schema_route(rel_path: str, content: str,
     fm_type = _extract_fm_field(content, "type").strip().strip('"').strip("'")
     target = schema_route_dir(fm_type, routing)
     if target is None:                   # unknown/unroutable type — leave it
+        # Leaving it is the lossless choice (NashSU wiki-schema.ts:84 drops the
+        # block instead), but doing so silently violates this module's own
+        # never-silent rule: the page lands wherever the LLM guessed and no one
+        # finds out. Say it once, keep the page. (``quiet`` callers only predict
+        # the write path; the write loop itself prints.)
+        if not quiet:
+            print(f"  [write] ⚠️  {rel_path}: frontmatter type "
+                  f"{fm_type or '(missing)'!r} is not in schema.md's Page Types "
+                  "table — writing to the path as given, not routing it")
         return rel_path                  # (NB: "" is a valid target = wiki root)
     norm = rel_path[len("wiki/"):] if rel_path.startswith("wiki/") else rel_path
     top = norm.split("/", 1)[0] if "/" in norm else ""
@@ -244,9 +265,18 @@ def _stage_3_1_sanitize_ingested_content(content: str) -> str:
     Delegates to _ingest_sanitize for the full 4-pattern port: outer ```yaml
     fence strip, ``frontmatter:`` prefix strip, missing opening fence repair,
     and wikilink-list-in-frontmatter repair. See _ingest_sanitize.py.
+
+    Also decodes stray HTML entities (2026-07-04, NOT NashSU parity — NashSU
+    only ever runs decodeHtmlEntities on HTML-table-cell text during OCR
+    conversion, never on LLM-generated page content). Observed pattern: an LLM
+    occasionally writes an inequality/symbol as a literal entity instead of
+    the real character (e.g. "q&lt;3.15 kW/m^2") when drafting a generated
+    page — this repairs it at write time regardless of which stage or which
+    calling agent produced the content.
     """
     from _ingest_sanitize import sanitize_ingested_file_content
-    return sanitize_ingested_file_content(content)
+    content = sanitize_ingested_file_content(content)
+    return _decode_html_entities(content)
 
 
 def _stage_3_1_backup_existing_page(path: Path, config: Config) -> None:
@@ -258,7 +288,13 @@ def _stage_3_1_backup_existing_page(path: Path, config: Config) -> None:
     safe_name = str(path.relative_to(config.wiki_dir)).replace("/", "_")
     ts = time.strftime("%Y%m%d-%H%M%S")
     backup_path = history_dir / f"{ts}_{safe_name}"
-    backup_path.write_text(path.read_text(encoding="utf-8"))
+    # Sequence suffix: same-second backups of the same page (e.g. merge +
+    # enrich passes) must not overwrite each other.
+    seq = 1
+    while backup_path.exists():
+        backup_path = history_dir / f"{ts}-{seq}_{safe_name}"
+        seq += 1
+    atomic_write(backup_path, path.read_text(encoding="utf-8"))
     print(f"  [backup] {path.name} → page-history/{backup_path.name}")
 
 
@@ -266,14 +302,22 @@ def _stage_3_1_backup_existing_page(path: Path, config: Config) -> None:
 from _frontmatter import (
     parse_frontmatter,
     write_frontmatter,
-    union_arrays,
     merge_page_content as _fm_merge_page_content,
     lock_fields,
     strip_embedded_images_section,
 )
 
 
-def _stage_3_1_merge_page_content(existing_text: str, new_text: str, config: Config) -> str:
+def _stage_3_1_merge_page_content(
+    existing_text: str,
+    new_text: str,
+    config: Config,
+    *,
+    page_path: str = "",
+    source_file: str = "",
+    replace_existing_body: bool = False,
+    already_merged: bool = False,
+) -> str:
     """NashSU 3-layer merge: delegates to _frontmatter.merge_page_content.
 
     Layers: array-union → LLM body merge → lock fields.
@@ -289,16 +333,28 @@ def _stage_3_1_merge_page_content(existing_text: str, new_text: str, config: Con
         # the LLM tries to reproduce (bug 2026-06-25).
         old_body = strip_embedded_images_section(parse_frontmatter(prev_content)[1])
         new_body = strip_embedded_images_section(parse_frontmatter(merged_content)[1])
-        # Show each body up to a generous cap, NOT a hardcoded 3K. The
+        # Show each body up to a generous cap, NOT a hardcoded constant. The
         # body-shrink threshold (_frontmatter.merge_page_content) rejects a
-        # merge below 0.7 * max(full old, full new); truncating the prompt to 3K
-        # meant any page whose body exceeds ~4.3K was shown only its head, so the
-        # LLM could not reproduce ≥70% of the full body and the no-fallback
-        # policy raised RuntimeError on a legitimate merge (2026-06-30 ohms-law,
-        # re-ingesting 无源器件篇). Normal-sized pages are now shown in full.
-        cap = MERGE_PROMPT_BODY_CAP
+        # merge below 0.7 * max(full old, full new); truncating the prompt too
+        # aggressively meant the LLM could not reproduce ≥70% of the full body
+        # and the no-fallback policy raised RuntimeError on a legitimate merge
+        # (2026-06-30 ohms-law, re-ingesting 无源器件篇). Use the live-probed,
+        # context-aware target_chars budget already computed for this session's
+        # model (same one chunking uses) rather than a stale fixed number — a
+        # fixed 24K silently truncated large source pages (2026-07-09).
+        cap = getattr(config, "target_chars", None) or MERGE_PROMPT_BODY_CAP
+        # Rules mirror NashSU buildPageMergeSystemPrompt (ingest.ts:2961-2986).
+        # The two bodies come from *different* source documents, so the merge
+        # is where cross-subject contamination happens: without the attribution
+        # rules an LLM readily folds one source's comparison remarks into
+        # claims about the page subject, or synthesizes two conflicting
+        # findings into one generalized conclusion. The body-shrink threshold
+        # in _frontmatter only catches dropped content, never this.
         prompt = f"""Merge two versions of a wiki page. Preserve ALL unique information from both.
 Do NOT drop claims, entities, formulas, or references from either version.
+Both versions target the same page; one is already on disk, the other was just
+generated from a different source document. Either may mention additional
+subjects for comparison or context.
 
 # Existing page content
 {old_body[:cap]}
@@ -309,7 +365,18 @@ Do NOT drop claims, entities, formulas, or references from either version.
 # Task
 Output the merged page body (no frontmatter, no code fences).
 The merged version should contain everything from both versions,
-with duplicates consolidated and new information integrated.
+with duplicates consolidated and new information integrated, and must:
+- Preserve subject/source boundaries: if either version mentions other
+  entities/models/products/methods for comparison, keep those comparisons
+  attribution-exact and do not fold them into claims about the page subject.
+- When claims conflict or apply to different subjects, keep them separated and
+  say which source version supports each one, instead of synthesizing a single
+  generalized conclusion.
+- When in doubt whether two similar-looking claims describe the same fact,
+  prefer keeping them separate.
+- Keep `[[wikilink]]` references intact.
+- Reorganize sections so the structure is logical for the merged topic, not a
+  concatenation of the two inputs.
 """
         # Give the merge the model's real output budget so it can reproduce both
         # bodies; the old hardcoded 4096 capped output at ~16K chars, itself
@@ -330,6 +397,44 @@ with duplicates consolidated and new information integrated.
         new_content=new_text,
         existing_content=existing_text if existing_text else None,
         merger_fn=llm_merger,
+        page_path=page_path,
+        source_file=source_file,
+        replace_existing_body=replace_existing_body,
+        already_merged=already_merged,
+    )
+
+
+def _stage_3_1_source_reference_identity(value: str) -> str:
+    """Normalize source frontmatter references for ownership comparison."""
+    ref = str(value or "").strip().replace("\\", "/").strip("/").lower()
+    for marker in ("/raw/sources/", "/raw/"):
+        if marker in f"/{ref}":
+            ref = f"/{ref}".split(marker, 1)[1]
+            break
+    for prefix in ("raw/sources/", "raw/"):
+        if ref.startswith(prefix):
+            ref = ref[len(prefix):]
+            break
+    return ref.strip("/")
+
+
+def _stage_3_1_is_owned_only_by_source(
+    content: str,
+    canonical_source: str,
+) -> bool:
+    """Whether every non-empty ``sources`` entry is the current source.
+
+    This is deliberately identity-based, not basename-based: two books in
+    different raw subdirectories may share a filename and must not be treated
+    as the same owner.
+    """
+    sources = parse_frontmatter_array(content, "sources")
+    if not sources:
+        return False
+    expected = _stage_3_1_source_reference_identity(canonical_source)
+    return bool(expected) and all(
+        _stage_3_1_source_reference_identity(source) == expected
+        for source in sources
     )
 
 
@@ -387,11 +492,17 @@ def _stage_3_1_canonicalize_sources_field(content: str, canonical_source: str) -
     items = ", ".join(f'"{s}"' for s in deduped)
     lines = fm.split("\n")
     new_lines = []
+    replaced = False
     for line in lines:
         if line.strip().startswith("sources:"):
             new_lines.append(f"sources: [{items}]")
+            replaced = True
         else:
             new_lines.append(line)
+    if not replaced:
+        # Frontmatter has no sources: line — append the computed list instead
+        # of silently dropping it (the page would otherwise lose provenance).
+        new_lines.append(f"sources: [{items}]")
     return "---\n" + "\n".join(new_lines) + "\n---" + body
 
 
@@ -429,17 +540,572 @@ def _stage_3_1_stamp_frontmatter_dates(content: str, today: str) -> str:
     return "---\n" + "\n".join(new_lines) + "\n---" + body
 
 
-def stage_3_1_write_wiki_file(path: Path, content: str, config: Config | None = None, merge: bool = False) -> None:
+# ---------- Stage 3.1 write-time link normalizer (audit 2026-07-02, A5/M6) ----------
+# The generation prompts state link-format rules (related as prefixed bare
+# slugs, STRICT [[dir/slug]] body links, no self-links) but nothing enforced
+# them in code — three format diseases spread across page types (audit M6).
+# This is the code backstop: ONE normalization pass applied to every
+# non-listing FILE block right before stage_3_1_write_wiki_file. Loud
+# per-page prints, never silent.
+
+_WIKILINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
+_H1_LINE_RE = re.compile(r"^#[ \t]")
+_ANCHOR_STEMS = {"index", "log", "overview", "schema"}
+_LISTING_BASENAMES = {"index.md", "log.md", "overview.md", "schema.md"}
+_WARN_LIST_CAP = 6  # max offending entries shown per warn line
+
+# Same-stem twin policy (fix 2026-07-02): a bare stem living in exactly
+# concepts/ AND entities/ resolves to concepts/ — the concept page is the
+# richer target (entity twins are typically chip stubs). Any OTHER ≥2-dir
+# set is true ambiguity and keeps the leave-as-is warning.
+_CONCEPT_ENTITY_PAIR = frozenset({"concepts", "entities"})
+
+# D4 figure-ref backstop (fix 2026-07-02): the D4 prompt rule asked models to
+# wrap bare 图X.X/表X.X/Fig X-X/Table X-X refs as source-page links but they
+# applied it inconsistently — a pure deterministic transform, so enforce it
+# here. Masked spans (existing wikilinks, markdown links/images whose media
+# paths may embed 图X-X, inline code, math) pass through untouched; that also
+# makes the transform idempotent — a wrapped ref sits inside [[...]] and is
+# masked on the next pass.
+_FIGREF_RE = re.compile(
+    r"(?:图|表)\s?\d+[.．-]\d+"
+    r"|\bFig\.?\s?\d+[-.]\d+"
+    r"|\bTable\s?\d+[-.]\d+")
+_FIGREF_MASK_RE = re.compile(
+    r"\[\[[^\[\]]+\]\]"             # existing wikilinks (incl. |alias)
+    r"|!?\[[^\]]*\]\([^)]*\)"       # markdown links/images
+    r"|`[^`]+`"                     # inline code spans
+    r"|\$\$[^$]+\$\$|\$[^$]+\$")    # math spans
+_HEADING_LINE_RE = re.compile(r"^#{1,6}[ \t]")
+_CODE_FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
+
+
+def _stage_3_1_wrap_figure_refs(body: str, source_page_slug: str) -> tuple[str, int]:
+    """Wrap bare figure/table refs as ``[[<source-page>|据<ref>]]`` (D4 backstop).
+
+    Line-by-line: heading lines and fenced code blocks are skipped whole;
+    within a line, _FIGREF_MASK_RE spans pass through unchanged and only the
+    gaps are transformed. Returns (new_body, wrap_count)."""
+    count = 0
+
+    def _wrap(m: re.Match) -> str:
+        nonlocal count
+        count += 1
+        return f"[[{source_page_slug}|据{m.group(0)}]]"
+
+    out_lines: list[str] = []
+    in_fence = False
+    for line in body.split("\n"):
+        if _CODE_FENCE_RE.match(line):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if in_fence or _HEADING_LINE_RE.match(line):
+            out_lines.append(line)
+            continue
+        pieces: list[str] = []
+        pos = 0
+        for m in _FIGREF_MASK_RE.finditer(line):
+            pieces.append(_FIGREF_RE.sub(_wrap, line[pos:m.start()]))
+            pieces.append(m.group(0))
+            pos = m.end()
+        pieces.append(_FIGREF_RE.sub(_wrap, line[pos:]))
+        out_lines.append("".join(pieces))
+    return "\n".join(out_lines), count
+
+
+def _stage_3_1_normalize_link_target(raw: str) -> str:
+    """Reduce one link target to a bare (possibly dir-prefixed) slug.
+
+    Strips ``[[..]]`` wrapping (incl. stray single brackets — a
+    ``related: [[concepts/foo]]`` line parses to ``[concepts/foo]``),
+    ``|alias`` and ``#anchor`` parts, a leading ``wiki/`` prefix, and a
+    trailing ``.md`` suffix. Quotes are already stripped by
+    parse_frontmatter_array for related entries. Slugs never contain
+    brackets, so the bracket strip is lossless."""
+    t = raw.strip().strip("[]").strip()
+    t = split_wikilink_inner(t)[0].split("#")[0].strip()
+    if t.startswith("wiki/"):
+        t = t[len("wiki/"):]
+    if t.endswith(".md"):
+        t = t[:-3]
+    return t.strip().strip("/")
+
+
+def _stage_3_1_scan_wiki_slug_dirs(config: Config) -> dict[str, set[str]]:
+    """stem → {wiki_dir-relative parent dir} for every knowledge page on disk.
+
+    Mirrors list_existing_slugs' exclusions (artifact dirs, ``_``-prefixed
+    stems, aggregate anchors) but keeps the parent dir — the normalizer needs
+    to know WHICH folder a stem lives in, not just that it exists."""
+    out: dict[str, set[str]] = {}
+    if not config.wiki_dir.exists():
+        return out
+    for f in config.wiki_dir.rglob("*.md"):
+        if WIKI_ARTIFACT_DIRS.intersection(f.parts):
+            continue
+        stem = f.stem
+        if stem.startswith("_") or stem in _ANCHOR_STEMS:
+            continue
+        if f.parent == config.wiki_dir:
+            continue  # root-level files are anchors/system pages, not link targets
+        rel_dir = f.parent.relative_to(config.wiki_dir).as_posix()
+        out.setdefault(stem, set()).add(rel_dir)
+    return out
+
+
+def resolve_ingest_write_path(
+    rel_path: str,
+    content: str,
+    config: Config | None,
+    valid_subdirs: set[str],
+    routing: dict[str, str],
+    *,
+    quiet: bool = False,
+) -> str | None:
+    """Where Stage 3.1 will actually write one FILE block, or ``None`` if dropped.
+
+    The single implementation of the write-path chain: traversal/safety reject →
+    application-managed aggregate reject → top-dir accept-list or auto-correct →
+    ``.md`` suffix → schema route. Three callers must agree exactly on the
+    result — the write loop, the ``slug_dirs`` link universe, and the Stage 3.4a
+    review projection — so any drift between copies would silently reintroduce
+    dangling links or reviews pointed at paths that were never written.
+
+    ``quiet`` suppresses the per-page decision prints for the callers that only
+    predict the outcome; the write loop itself stays loud.
+    """
+    if ".." in rel_path or rel_path.startswith("/"):
+        return None
+    if not is_safe_ingest_path(rel_path):
+        return None
+    if Path(rel_path).name in _LISTING_BASENAMES:
+        # Stage 3.5 rebuilds index/overview deterministically, log.md is
+        # append-only, and schema.md is the user's contract. A generation block
+        # claiming one would overwrite the whole file (NashSU
+        # isAppManagedAggregatePath, ingest.ts:1428-1431).
+        if not quiet:
+            print(f"  [write] Dropped — {rel_path} is an application-managed "
+                  "aggregate; Stage 3.5 owns it")
+        return None
+
+    top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
+    if top_dir not in valid_subdirs:
+        corrected = _stage_3_1_auto_correct_wiki_path(
+            rel_path, content, config, quiet=quiet)
+        if not corrected:
+            if not quiet:
+                print(f"  [write] Dropped — cannot correct path: {rel_path}")
+            return None
+        if not quiet:
+            print(f"  [write] Auto-corrected: {rel_path} → {corrected}")
+        rel_path = corrected
+
+    if not rel_path.endswith(".md"):
+        rel_path = rel_path + ".md"
+
+    routed = _stage_3_1_schema_route(rel_path, content, routing, quiet=quiet)
+    if routed != rel_path:
+        if not quiet:
+            print(f"  [write] Schema-routed: {rel_path} → {routed}")
+        rel_path = routed
+    return rel_path
+
+
+def stage_3_1_build_slug_dirs(
+    file_blocks: list[tuple[str, str]],
+    config: Config,
+    valid_subdirs: set[str],
+    routing: dict[str, str],
+) -> dict[str, set[str]]:
+    """Slug→dirs universe for the link normalizer: this batch ∪ on-disk wiki.
+
+    Batch blocks are mapped through ``resolve_ingest_write_path`` — the SAME
+    chain the write loop applies — so a block's universe entry matches where the
+    loop will actually write it. Built once per book, before the write loop."""
+    slug_dirs = _stage_3_1_scan_wiki_slug_dirs(config)
+    for rel_path, content in file_blocks:
+        resolved = resolve_ingest_write_path(
+            rel_path, content, config, valid_subdirs, routing, quiet=True)
+        if not resolved or "/" not in resolved:
+            continue
+        rel_dir, name = resolved.rsplit("/", 1)
+        slug_dirs.setdefault(name[:-3], set()).add(rel_dir)
+    return slug_dirs
+
+
+def project_write_result_blocks(
+    file_blocks: list[tuple[str, str]],
+    config: Config,
+    valid_subdirs: set[str],
+    routing: dict[str, str],
+    slug_dirs: dict[str, set[str]],
+    *,
+    canonical_source: str,
+    today: str,
+    source_page_slug: str,
+) -> list[tuple[str, str]]:
+    """Project the in-memory generation onto its post-write paths and links.
+
+    Stage 3.4a runs before any page write (NashSU 0.6.6 order), so the reviewer
+    would otherwise judge a draft that Stage 3.1 then changes deterministically:
+    schema routing moves a page out of the directory the model guessed, and
+    ``strict_missing_targets`` de-links a target outside the batch ∪ disk
+    inventory. Reviewing the raw draft produced ``missing-page`` items that were
+    already resolved on disk and ``affected_pages`` entries pointing at
+    pre-routing paths.
+
+    This applies exactly the deterministic part of the write chain — path
+    resolution plus sanitize → canonicalize sources → stamp dates → normalize
+    links. The LLM page merge is intentionally NOT applied: a page that merges
+    into an existing one is represented by this source's own contribution, which
+    is what NashSU's pre-write reviewer sees as well.
+    """
+    projected: list[tuple[str, str]] = []
+    for rel_path, content in file_blocks:
+        resolved = resolve_ingest_write_path(
+            rel_path, content, config, valid_subdirs, routing, quiet=True)
+        if not resolved:
+            continue
+        content = _stage_3_1_sanitize_ingested_content(content)
+        content = _stage_3_1_canonicalize_sources_field(
+            content, canonical_source)
+        content = _stage_3_1_stamp_frontmatter_dates(content, today)
+        content = stage_3_1_normalize_page_links(
+            resolved,
+            content,
+            slug_dirs,
+            source_page_slug=source_page_slug,
+            strict_missing_targets=True,
+            quiet=True,
+        )
+        projected.append((resolved, content))
+    return projected
+
+
+def stage_3_1_normalize_page_links(
+    rel_path: str, content: str, slug_dirs: dict[str, set[str]],
+    source_page_slug: str | None = None,
+    *,
+    strict_missing_targets: bool = False,
+    quiet: bool = False,
+) -> str:
+    """A5 write-time link normalizer — one pass over a FILE block before write.
+
+    Rules (audit M6 → fix A5):
+      1. ``related:`` entries → prefixed bare slugs (``concepts/foo``): strips
+         ``[[..]]`` wrapping / quotes / aliases / ``.md``; resolves the prefix
+         by checking which dir the stem exists in (slug_dirs = batch ∪ disk);
+         drops entries that resolve nowhere; collapses duplicates.
+      2. Bare body wikilinks ``[[foo]]``: prefixed when the stem resolves to
+         exactly ONE dir; ambiguous/missing are left as-is but warned.
+         When ``strict_missing_targets`` is enabled for a newly generated FILE
+         block, an already-prefixed target absent from the complete batch ∪
+         disk inventory is de-linked instead of preserving a dangling link.
+      3. H1 heading lines: embedded wikilinks stripped to plain text.
+      4. Self-links (own slug in body or related) de-linked/removed.
+      5. D4 backstop (when ``source_page_slug`` is given): bare figure/table
+         refs (图X.X / 表X.X / Fig X-X / Table X-X) in body text wrapped as
+         ``[[<source_page_slug>|据<ref>]]``. Skips headings, code/math spans,
+         and refs already inside any ``[[..]]``; the source page itself
+         (own slug == source_page_slug) is excluded. Idempotent.
+      6. Wikilink alias separators inside Markdown-table cells are escaped as
+         ``[[target\|alias]]`` so they do not become extra cell boundaries.
+
+    Ambiguous related stems (≥2 dirs, claimed prefix wrong or absent) are kept
+    as the BARE stem + warned — usually a dedup failure (H1) where guessing a
+    dir would pick the wrong twin; the entry becomes valid once the twins merge.
+    Exception (fix 2026-07-02): the exact concepts/+entities/ pair resolves
+    deterministically to concepts/ (see _CONCEPT_ENTITY_PAIR) — in related:
+    AND in body links.
+
+    Already-clean pages pass through byte-identical. All fixes print loud
+    per-page ``[normalize]`` lines — never silent, except for ``quiet`` callers
+    that only PREDICT the written result (Stage 3.4a's review projection) and
+    would otherwise print every fix twice per page."""
     content = _stage_3_1_sanitize_ingested_content(content)
+    norm_rel = rel_path[len("wiki/"):] if rel_path.startswith("wiki/") else rel_path
+    own_prefixed = norm_rel[:-3] if norm_rel.endswith(".md") else norm_rel
+    own_stem = own_prefixed.rsplit("/", 1)[-1]
+
+    def _warn(msg: str) -> None:
+        if not quiet:
+            print(f"  [normalize] {norm_rel}: {msg}")
+
+    def _fmt_list(items: list[str]) -> str:
+        shown = ", ".join(items[:_WARN_LIST_CAP])
+        extra = len(items) - _WARN_LIST_CAP
+        return shown + (f" (+{extra} more)" if extra > 0 else "")
+
+    # ── Rule 1 + 4a: related → prefixed bare slugs ──
+    has_fm = content.startswith("---") and content.find("\n---", 3) != -1
+    fm_end = content.find("\n---", 3) if has_fm else -1
+    fm_text = content[4:fm_end] if has_fm else ""
+    if has_fm and re.search(r"^related\s*:", fm_text, re.MULTILINE):
+        orig_entries = parse_frontmatter_array(content, "related")
+        kept: list[str] = []
+        dropped: list[str] = []
+        ambiguous: list[str] = []
+        twins: list[str] = []
+        self_removed: list[str] = []
+        seen: set[str] = set()
+        for entry in orig_entries:
+            t = _stage_3_1_normalize_link_target(entry)
+            if not t:
+                dropped.append(entry)
+                continue
+            claimed_dir, stem = t.rsplit("/", 1) if "/" in t else ("", t)
+            dirs = slug_dirs.get(stem)
+            if not dirs:
+                dropped.append(entry)
+                continue
+            is_ambiguous = False
+            is_twin = False
+            if claimed_dir and claimed_dir in dirs:
+                resolved = t
+            elif len(dirs) == 1:
+                resolved = f"{next(iter(dirs))}/{stem}"
+            elif dirs == _CONCEPT_ENTITY_PAIR:
+                is_twin = True  # concepts/+entities/ pair — concepts wins
+                resolved = f"concepts/{stem}"
+            else:
+                is_ambiguous = True  # ≥2 dirs, no (valid) claimed prefix — don't guess
+                resolved = stem
+            if resolved in (own_prefixed, own_stem):
+                self_removed.append(entry)
+                continue
+            if is_ambiguous:
+                ambiguous.append(entry)
+            if is_twin:
+                twins.append(entry)
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            kept.append(resolved)
+        if dropped:
+            _warn(f"related: dropped {len(dropped)} unresolvable — {_fmt_list(dropped)}")
+        if self_removed:
+            _warn(f"related: removed {len(self_removed)} self-link(s) — {_fmt_list(self_removed)}")
+        if twins:
+            _warn(f"related: resolved {len(twins)} same-stem ambiguity → concepts/ — {_fmt_list(twins)}")
+        if ambiguous:
+            _warn(f"related: ⚠️ {len(ambiguous)} ambiguous, kept bare — {_fmt_list(ambiguous)}")
+        if kept != orig_entries:
+            if not (dropped or self_removed or ambiguous or twins):
+                _warn(f"related: normalized {len(kept)} entry(ies) to prefixed bare slugs")
+            content = write_frontmatter_array(content, "related", kept)
+            has_fm = content.startswith("---") and content.find("\n---", 3) != -1
+            fm_end = content.find("\n---", 3) if has_fm else -1
+
+    # ── Rules 2 + 3 + 4b: body wikilinks ──
+    body_start = fm_end + 4 if has_fm else 0
+    head, body = content[:body_start], content[body_start:]
+    counts = {
+        "h1": 0,
+        "self": 0,
+        "prefixed": 0,
+        "rerouted": 0,
+        "twin": 0,
+        "missing": 0,
+        "table_alias": 0,
+    }
+    unresolved: list[str] = []
+    changed = False
+
+    def _display_text(inner: str) -> str:
+        target, alias, _ = split_wikilink_inner(inner)
+        if alias and alias.strip():
+            return alias.strip()
+        t = _stage_3_1_normalize_link_target(target)
+        return t.rsplit("/", 1)[-1] if t else target.strip()
+
+    def _delink_h1(m: re.Match) -> str:
+        nonlocal changed
+        counts["h1"] += 1
+        changed = True
+        return _display_text(m.group(1))
+
+    def _fix_link(m: re.Match) -> str:
+        nonlocal changed
+        inner = m.group(1)
+        target, alias_value, _ = split_wikilink_inner(inner)
+        alias = (alias_value or "").strip()
+        anchor = target.split("#", 1)[1].strip() if "#" in target else ""
+        t = _stage_3_1_normalize_link_target(target)
+        if not t:
+            return m.group(0)
+        if t in (own_prefixed, own_stem):
+            counts["self"] += 1
+            changed = True
+            return _display_text(inner)
+        if "/" in t:
+            claimed_dir, stem = t.rsplit("/", 1)
+            dirs = slug_dirs.get(stem)
+            if dirs and claimed_dir in dirs:
+                return m.group(0)
+            if not dirs:
+                if strict_missing_targets:
+                    counts["missing"] += 1
+                    changed = True
+                    return _display_text(inner)
+                # Preserve the historical policy for already-prefixed links
+                # whose target is outside the current inventory. They may be
+                # intentional forward/external wiki references; only reroute
+                # when a unique real target proves the prefix wrong.
+                return m.group(0)
+            if dirs and len(dirs) == 1:
+                resolved = f"{next(iter(dirs))}/{stem}"
+            elif dirs == _CONCEPT_ENTITY_PAIR:
+                resolved = f"concepts/{stem}"
+                counts["twin"] += 1
+            else:
+                unresolved.append(m.group(0))
+                return m.group(0)
+            if resolved in (own_prefixed, own_stem):
+                counts["self"] += 1
+                changed = True
+                return _display_text(inner)
+            counts["rerouted"] += 1
+            changed = True
+            rebuilt = (
+                resolved
+                + (f"#{anchor}" if anchor else "")
+                + (f"|{alias}" if alias else "")
+            )
+            return f"[[{rebuilt}]]"
+        dirs = slug_dirs.get(t)
+        if dirs and len(dirs) == 1:
+            counts["prefixed"] += 1
+            changed = True
+            d = next(iter(dirs))
+            rebuilt = f"{d}/{t}" + (f"#{anchor}" if anchor else "") + (f"|{alias}" if alias else "")
+            return f"[[{rebuilt}]]"
+        if dirs == _CONCEPT_ENTITY_PAIR:
+            counts["twin"] += 1  # concepts/+entities/ pair — concepts wins
+            changed = True
+            rebuilt = f"concepts/{t}" + (f"#{anchor}" if anchor else "") + (f"|{alias}" if alias else "")
+            return f"[[{rebuilt}]]"
+        unresolved.append(m.group(0))  # missing or truly ambiguous — never de-link (rule 2)
+        return m.group(0)
+
+    new_lines: list[str] = []
+    for line in body.split("\n"):
+        if "[[" not in line:
+            new_lines.append(line)
+        elif _H1_LINE_RE.match(line):
+            new_lines.append(_WIKILINK_RE.sub(_delink_h1, line))
+        else:
+            new_lines.append(_WIKILINK_RE.sub(_fix_link, line))
+    new_body = "\n".join(new_lines)
+
+    # ── Rule 5: D4 figure-ref backstop (source page itself excluded) ──
+    fig_count = 0
+    if source_page_slug and own_prefixed != source_page_slug:
+        new_body, fig_count = _stage_3_1_wrap_figure_refs(new_body, source_page_slug)
+        if fig_count:
+            changed = True
+    new_body, counts["table_alias"] = escape_markdown_table_wikilink_aliases(
+        new_body
+    )
+    if counts["table_alias"]:
+        changed = True
+    if changed:
+        content = head + new_body
+
+    if counts["h1"]:
+        _warn(f"H1: de-linked {counts['h1']} embedded wikilink(s)")
+    if counts["self"]:
+        _warn(f"body: de-linked {counts['self']} self-link(s)")
+    if counts["prefixed"]:
+        _warn(f"body: prefixed {counts['prefixed']} bare wikilink(s)")
+    if counts["rerouted"]:
+        _warn(
+            f"body: corrected {counts['rerouted']} wrongly-prefixed "
+            "wikilink(s)"
+        )
+    if counts["twin"]:
+        _warn(f"body: resolved {counts['twin']} same-stem ambiguity → concepts/")
+    if counts["missing"]:
+        _warn(
+            f"body: de-linked {counts['missing']} missing generated target(s)"
+        )
+    if fig_count:
+        _warn(f"body: wrapped {fig_count} figure/table ref(s) → [[{source_page_slug}]]")
+    if counts["table_alias"]:
+        _warn(
+            f"body: escaped {counts['table_alias']} Markdown-table wikilink "
+            "alias pipe(s)"
+        )
+    if unresolved:
+        uniq = list(dict.fromkeys(unresolved))
+        _warn(f"body: ⚠️ {len(unresolved)} bare wikilink(s) left as-is "
+              f"(unresolved/ambiguous) — {_fmt_list(uniq)}")
+    return content
+
+
+def stage_3_1_write_wiki_file(
+    path: Path,
+    content: str,
+    config: Config | None = None,
+    merge: bool = False,
+    *,
+    source_file: str = "",
+    normalize_rel_path: str = "",
+    slug_dirs: dict[str, set[str]] | None = None,
+    source_page_slug: str | None = None,
+    already_merged: bool = False,
+    same_run_collision: bool = False,
+) -> None:
+    content = _stage_3_1_sanitize_ingested_content(content)
+    existing: str | None = None
     if config is not None:
-        _stage_3_1_backup_existing_page(path, config)
         if merge and path.exists():
             existing = path.read_text(encoding="utf-8")
-            content = _stage_3_1_merge_page_content(existing, content, config)
+            # NashSU's corrected-source replacement is about a page left behind
+            # by a PREVIOUS ingest. ``same_run_collision`` marks a page this
+            # same write loop already wrote, where the sole-owner test holds by
+            # construction (Stage 3.1 canonicalizes ``sources`` to the current
+            # source) and replacing would silently discard the earlier block's
+            # body. Two FILE blocks landing on one path is the designed
+            # same-slug collision merge, so keep it on the merger.
+            replace_existing_body = bool(
+                source_file
+                and not same_run_collision
+                and _stage_3_1_is_owned_only_by_source(
+                    existing, source_file)
+            )
+            content = _stage_3_1_merge_page_content(
+                existing,
+                content,
+                config,
+                page_path=str(path),
+                source_file=source_file,
+                replace_existing_body=replace_existing_body,
+                already_merged=already_merged,
+            )
+            # The incoming FILE block was normalized before merge, but the LLM
+            # merger can reintroduce malformed related entries or wrong/case-
+            # mismatched body prefixes copied from a legacy page. Normalize the
+            # actual merged result once more before the atomic write.
+            if normalize_rel_path and slug_dirs is not None:
+                content = stage_3_1_normalize_page_links(
+                    normalize_rel_path,
+                    content,
+                    slug_dirs,
+                    source_page_slug=source_page_slug,
+                )
+        elif path.exists():
+            existing = path.read_text(encoding="utf-8")
+
+        # Conversation-mode handoffs resume the all-or-nothing write loop from
+        # its first FILE block.  Merge fast paths deliberately return the
+        # already-written page on replay; do not turn that no-op into another
+        # page-history snapshot and atomic rewrite.
+        if existing is not None and content == existing:
+            return
+        _stage_3_1_backup_existing_page(path, config)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(content, encoding="utf-8")
-    tmp.rename(path)
+    atomic_write(path, content)
 
 
 # Category subdir → bilingual index.md section header (NashSU index parity).
@@ -452,6 +1118,7 @@ _INDEX_CATEGORIES: list[tuple[str, str]] = [
     ("synthesis", "Synthesis（综合）"),
     ("findings", "Findings（发现）"),
     ("thesis", "Thesis（论题）"),
+    ("methodology", "Methodology（方法论）"),
 ]
 
 
@@ -480,11 +1147,102 @@ def _scan_wiki_inventory(wiki_dir: Path) -> dict[str, list[tuple[str, str]]]:
                     m = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
                     title = m.group(1).strip() if m else f.stem
                 pages.append((f.stem, title))
-            except Exception:
+            except (OSError, UnicodeDecodeError):
                 pages.append((f.stem, f.stem))
         if pages:
             inventory[subdir] = pages
     return inventory
+
+
+def rebuild_index_deterministic(wiki_dir: Path) -> str:
+    """Rebuild index.md in NashSU 0.6.6's application-owned format.
+
+    The 0.6.6 Rust implementation groups pages by frontmatter ``type``, sorts
+    groups alphabetically, sorts pages by display title, and always writes the
+    full wiki-relative target (without ``.md``). Full targets are essential
+    when a concept and comparison share the same filename stem.
+
+    Improved-wiki-only derived artifact directories are excluded because they
+    are not knowledge pages and do not exist in a stock NashSU project.
+    """
+    groups: dict[str, list[tuple[str, str]]] = {}
+    for path in sorted(wiki_dir.rglob("*.md")):
+        relative = path.relative_to(wiki_dir)
+        if relative.parts and relative.parts[0] in WIKI_ARTIFACT_DIRS:
+            continue
+        if path.stem.lower() in {"index", "overview", "log"}:
+            continue
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        fm, _ = parse_frontmatter(content)
+        kind = str(fm.get("type") or "other").strip() or "other"
+        title = str(fm.get("title") or "").strip().strip('"').strip("'")
+        if not title:
+            match = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
+            title = match.group(1).strip() if match else path.stem
+        target = relative.with_suffix("").as_posix()
+        groups.setdefault(kind, []).append((target, title))
+
+    lines = ["# Wiki Index", ""]
+    for kind in sorted(groups):
+        lines.extend([f"## {kind}", ""])
+        pages = sorted(
+            groups[kind],
+            key=lambda page: (page[1].lower(), page[0].lower()),
+        )
+        for target, title in pages:
+            lines.append(f"- [[{target}|{title}]]")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _log_contains_ingest_record(
+    log_text: str,
+    source_identity: str,
+    source_hash: str,
+) -> bool:
+    """True when one INGEST block already binds this source and content hash."""
+    source_line = f"- Source: `{source_identity}`"
+    hash_line = f"- Hash: {source_hash[:16]}"
+    blocks = re.split(
+        r"(?m)(?=^## [^\n]+ — INGEST\s*$)",
+        log_text,
+    )
+    return any(
+        source_line in block and hash_line in block
+        for block in blocks
+    )
+
+
+def _assert_aggregate_outputs(
+    log_path: Path,
+    index_path: Path,
+    source_identity: str,
+    source_hash: str,
+    source_stem: str,
+) -> None:
+    """Hard Stage 3.5 postcondition used before its done marker is written."""
+    if not log_path.is_file():
+        raise RuntimeError(f"Stage 3.5 log artifact is missing: {log_path}")
+    if not index_path.is_file():
+        raise RuntimeError(f"Stage 3.5 index artifact is missing: {index_path}")
+    log_text = log_path.read_text(encoding="utf-8")
+    if not _log_contains_ingest_record(
+        log_text, source_identity, source_hash
+    ):
+        raise RuntimeError(
+            "Stage 3.5 log does not contain the source/hash INGEST record")
+    index_text = index_path.read_text(encoding="utf-8")
+    link_pattern = re.compile(
+        r"\[\[(?:[^|\]\n]+/)?"
+        + re.escape(source_stem)
+        + r"(?:\||\]\])"
+    )
+    if not link_pattern.search(index_text):
+        raise RuntimeError(
+            f"Stage 3.5 index does not contain a link to {source_stem}")
 
 
 def stage_3_5_aggregate_repair(
@@ -499,6 +1257,7 @@ def stage_3_5_aggregate_repair(
     rewrite fed by on-disk inventory, append fallback), overview.md (LLM rewrite
     with structural validation + compress mode, keep-current fallback)."""
     files_written: list[str] = []
+    source_identity = canonical_source_path(raw_file, config)
 
     # log.md
     log_path = config.wiki_dir / "log.md"
@@ -506,18 +1265,21 @@ def stage_3_5_aggregate_repair(
         log_text = log_path.read_text(encoding="utf-8")
     else:
         log_text = "# Log\n"
-    raw_rel = raw_file.relative_to(config.raw_root)
     source_rel = source_path.relative_to(config.wiki_dir)
-    entry = (
-        f"\n## {time.strftime('%Y-%m-%d %H:%M:%S')} — INGEST\n"
-        f"- Source: `raw/{raw_rel}`\n"
-        f"- Source page: `wiki/{source_rel}`\n"
-        f"- Hash: {source_hash[:16]}\n"
-        f"- Method: {extract_method}\n"
-    )
-    log_text += entry
-    stage_3_1_write_wiki_file(log_path, log_text, config)
-    files_written.append(str(log_path.relative_to(config.wiki_root)))
+    if _log_contains_ingest_record(log_text, source_identity, source_hash):
+        print("[stage 3.5] Log already contains this source/hash — append skipped")
+    else:
+        entry = (
+            f"\n## {time.strftime('%Y-%m-%d %H:%M:%S')} — INGEST\n"
+            f"- Source: `{source_identity}`\n"
+            f"- Source page: `wiki/{source_rel}`\n"
+            f"- Hash: {source_hash[:16]}\n"
+            f"- Method: {extract_method}\n"
+        )
+        log_text += entry
+        stage_3_1_write_wiki_file(log_path, log_text, config)
+    files_written.append(PageRef.parse(
+        log_path, config.wiki_root, config.wiki_dir).project_relative)
 
     # index.md — LLM whole-page rewrite (NashSU parity, option A: every ingest).
     # Fed by an authoritative on-disk page inventory so ALL categories stay in
@@ -527,24 +1289,50 @@ def stage_3_5_aggregate_repair(
     current_index = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
 
     def _index_append_fallback() -> None:
-        new_link = f"- [[{source_path.stem}]]"
+        source_target = source_path.relative_to(config.wiki_dir).with_suffix(
+            ""
+        ).as_posix()
+        source_content = source_path.read_text(
+            encoding="utf-8",
+            errors="ignore",
+        )
+        source_fm, _ = parse_frontmatter(source_content)
+        source_title = str(
+            source_fm.get("title") or source_path.stem
+        ).strip().strip('"').strip("'")
+        new_link = f"- [[{source_target}|{source_title}]]"
         if not current_index:
             # Fresh wiki: write the skeleton WITH the new source link, not an
             # empty skeleton (the latter silently dropped the first ingest).
             stage_3_1_write_wiki_file(
-                index_path, f"# Index\n\n## Sources（来源）\n\n{new_link}\n", config)
+                index_path,
+                f"# Wiki Index\n\n## source\n\n{new_link}\n",
+                config,
+            )
             files_written.append(str(index_path.relative_to(config.wiki_root)))
             return
-        if f"[[{source_path.stem}]]" in current_index:
+        if (
+            f"[[{source_target}|" in current_index
+            or f"[[{source_target}]]" in current_index
+        ):
             return
-        # Insert after the END of the Sources header line so a bilingual header
-        # like "## Sources（来源）" isn't split mid-line.
-        m = re.search(r"(?m)^##\s+Sources.*$", current_index)
+        # Accept both the 0.6.6 type header and legacy bilingual headers.
+        m = re.search(
+            r"(?mi)^##\s+(?:source|Sources(?:（来源）)?)\s*$",
+            current_index,
+        )
         if m:
             insert_at = m.end()
             updated = current_index[:insert_at] + f"\n\n{new_link}" + current_index[insert_at:]
-            stage_3_1_write_wiki_file(index_path, updated, config)
-            files_written.append(str(index_path.relative_to(config.wiki_root)))
+        else:
+            print("[stage 3.5] ⚠️ index.md has no source section — "
+                  "appending one at end of file")
+            updated = (
+                current_index.rstrip("\n")
+                + f"\n\n## source\n\n{new_link}\n"
+            )
+        stage_3_1_write_wiki_file(index_path, updated, config)
+        files_written.append(str(index_path.relative_to(config.wiki_root)))
 
     INDEX_MAX_CHARS = max(4096, int(config.source_budget * 0.12))
     # LLM whole-page rewrite can only produce ~250 bullets within the 4096-token
@@ -578,7 +1366,8 @@ from the filesystem — the ground truth of what pages exist now).
 Rewrite the COMPLETE index.md so every category lists exactly its inventory
 pages, under these bilingual section headers in this order (omit empty ones):
 Sources（来源）, Concepts（概念）, Entities（实体）, Queries（查询）,
-Comparisons（对比）, Synthesis（综合）, Findings（发现）, Thesis（论题）.
+Comparisons（对比）, Synthesis（综合）, Findings（发现）, Thesis（论题）,
+Methodology（方法论）.
 
 Rules:
 - Preserve existing entries' descriptions verbatim where the stem matches.
@@ -612,20 +1401,38 @@ Output ONLY the complete new index.md. No commentary.
         except Exception as e:
             print(f"[stage 3.5] Index LLM rewrite failed ({e}) — using append fallback")
             _index_append_fallback()
+    files_written.append(PageRef.parse(
+        index_path, config.wiki_root, config.wiki_dir).project_relative)
 
     # overview.md — LLM rewrite with improved prompt (topic-synthesis, not
-    # source-dump) + structural validation + failure fallback + compress mode.
-    # NashSU aggregate-repair parity. Unlike the old version: creates overview
-    # on first ingest (no longer skips when absent), validates the 5 required
-    # sections, and keeps the current overview on any failure (no silent stall).
+    # source-dump) + failure fallback. True NashSU aggregate-repair parity
+    # (2026-07-03 correction): NashSU's own spec for overview.md is just "a
+    # comprehensive 2-5 paragraph overview of ALL topics" (ingest.ts
+    # buildGenerationPrompt / buildAggregateRepairPrompt) — it has no
+    # Strong/Weak Claims or Open Questions sections (grep confirms zero
+    # matches in NashSU source) and no forced-compress retry. NashSU's own
+    # size handling is isAggregateRepairSafe: a PRE-check that SKIPS the
+    # repair entirely (leaving the file untouched, just a warning) when
+    # already over cap, rather than asking the LLM to compress it. The
+    # earlier compress-mode design here (5 required sections + forced
+    # tighter-rewrite retry) was an original addition, not NashSU parity —
+    # aligned back to NashSU's simpler skip-if-unsafe behavior below.
     overview_path = config.wiki_dir / "overview.md"
     current_overview = overview_path.read_text(encoding="utf-8") if overview_path.exists() else ""
-    _AGGREGATE_CAP = max(4096, int(config.source_budget * 0.12))
-    OVERVIEW_MAX_CHARS = min(24000, _AGGREGATE_CAP)
-    compress_mode = bool(current_overview) and len(current_overview) > OVERVIEW_MAX_CHARS
-    if compress_mode:
+    # NashSU aggregateRepairSectionCap: proportional to context budget only,
+    # no hard ceiling.
+    OVERVIEW_MAX_CHARS = max(4096, int(config.source_budget * 0.12))
+    if current_overview and len(current_overview) > OVERVIEW_MAX_CHARS:
         print(f"[stage 3.5] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
-              f"compress mode")
+              f"skipping repair (NashSU isAggregateRepairSafe parity), leaving current overview untouched")
+        _assert_aggregate_outputs(
+            log_path,
+            index_path,
+            source_identity,
+            source_hash,
+            source_path.stem,
+        )
+        return files_written
 
     source_content = source_path.read_text(encoding="utf-8") if source_path.exists() else ""
     sources_lines: list[str] = []
@@ -640,33 +1447,21 @@ Output ONLY the complete new index.md. No commentary.
                 body = text
             sources_lines.append(f"### {f.stem}\n{body[:800]}")
 
-    required_sections = ["## Where we are", "## Strong Claims", "## Weak Claims",
-                         "## Open Questions", "## Sources"]
-    if compress_mode:
-        size_directive = (
-            f"The current overview has bloated to {len(current_overview)} chars. Produce a "
-            f"TIGHTER rewrite (≤ {OVERVIEW_MAX_CHARS} chars). Compress ## Where we are by "
-            f"synthesizing topics in common — do NOT enumerate every source. Keep all "
-            f"Strong/Weak Claims and Open Questions intact.")
-    else:
-        size_directive = (
-            "Keep ## Where we are concise: 2-5 paragraphs synthesizing topics in common "
-            "across sources, not a per-source walkthrough.")
-
     prompt = f"""You maintain the overview of a knowledge-base wiki. Below is the
 CURRENT overview.md, followed by the newly ingested source page and recent
 source pages for context. Rewrite the COMPLETE overview.md to incorporate the
 new source.
 
 CRITICAL — avoid source-listing dumps:
-- ## Where we are must SYNTHESIZE by knowledge area / topic, NOT enumerate books.
-  Group sources under shared themes; cite a source inline only when it anchors a
-  specific claim. Do NOT write "本次最新重新摄入…" source-inventory paragraphs or
+- Synthesize by knowledge area / topic, NOT enumerate books. Group sources
+  under shared themes; cite a source inline only when it anchors a specific
+  claim. Do NOT write "本次最新重新摄入…" source-inventory paragraphs or
   back-to-back book-by-book summaries.
 - Each paragraph = one theme (e.g. power electronics, high-speed design, RF),
   covering what the wiki knows, key tensions, and gaps — not which books were read.
 
-{size_directive}
+Keep the overview concise: 2-5 paragraphs synthesizing topics in common across
+sources, not a per-source walkthrough.
 
 # Current overview.md
 {current_overview or "(empty)"}
@@ -678,15 +1473,9 @@ CRITICAL — avoid source-listing dumps:
 {chr(10).join(sources_lines[:8])}
 
 # Task
-Output ONLY the new overview.md (starting with "# Overview"). Preserve structure:
-- ## Where we are (2-5 paragraph topic-synthesized overview of ALL topics)
-- ## Strong Claims (well-supported by multiple sources)
-- ## Weak Claims (single-source or speculative)
-- ## Open Questions
-- ## Sources (keep existing source links, add the new one as `- [[<stem>]]`)
-
-Do NOT remove or weaken existing Strong/Weak Claims or Open Questions unless the
-new source directly contradicts or answers them.
+Output ONLY the new overview.md (starting with "# Overview"): a comprehensive
+2-5 paragraph overview of ALL topics in the wiki, updated to reflect the newly
+ingested source — not just the new source.
 """
     try:
         response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=4096)
@@ -694,17 +1483,24 @@ new source directly contradicts or answers them.
             print("[stage 3.5] Overview LLM response contained FILE blocks — keeping current")
         else:
             body = response.strip()
-            body_lower = body.lower()
-            missing = [s for s in required_sections if s.lower() not in body_lower]
-            if missing:
-                print(f"[stage 3.5] Overview LLM response missing sections {missing} — keeping current")
-            elif not body.startswith("#"):
+            if not body.startswith("#"):
                 print("[stage 3.5] Overview LLM response did not start with '#' — keeping current")
             else:
                 stage_3_1_write_wiki_file(overview_path, body + "\n", config)
-                files_written.append(str(overview_path.relative_to(config.wiki_root)))
+                files_written.append(PageRef.parse(
+                    overview_path,
+                    config.wiki_root,
+                    config.wiki_dir,
+                ).project_relative)
                 print(f"[stage 3.5] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
     except Exception as e:
         print(f"[stage 3.5] Overview LLM update failed ({e}) — keeping current")
 
-    return files_written
+    _assert_aggregate_outputs(
+        log_path,
+        index_path,
+        source_identity,
+        source_hash,
+        source_path.stem,
+    )
+    return list(dict.fromkeys(files_written))

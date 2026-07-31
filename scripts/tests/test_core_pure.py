@@ -61,6 +61,27 @@ class TestConversationPendingNotSwallowed(unittest.TestCase):
         self.assertEqual(caught, [True])
 
 
+class TestComputeChunkTargetsHardCeil(unittest.TestCase):
+    """2026-07-10: hard_ceil is now a parameter (default = ingest's own 64K
+    _TARGET_TOKENS_HARD_CEIL) so other callers (wiki-lint-semantic.py) can
+    request a different ceiling without touching the ingest-tuned constant."""
+
+    def test_default_hard_ceil_matches_ingest_constant(self):
+        target_tokens, _ = _core._compute_chunk_targets(0, 1_000_000)
+        self.assertEqual(target_tokens, _core._TARGET_TOKENS_HARD_CEIL)
+
+    def test_custom_hard_ceil_overrides_default(self):
+        target_tokens, target_chars = _core._compute_chunk_targets(
+            0, 1_000_000, hard_ceil=256_000)
+        self.assertEqual(target_tokens, 256_000)
+        self.assertEqual(target_chars, _core._TARGET_CHARS_HARD_CEIL)
+
+    def test_small_context_still_respects_floor_under_custom_ceil(self):
+        target_tokens, _ = _core._compute_chunk_targets(
+            0, 20_000, hard_ceil=256_000)
+        self.assertEqual(target_tokens, _core._TARGET_TOKENS_MIN)
+
+
 class TestParseSimpleYaml(unittest.TestCase):
     """Fallback YAML parser (used when PyYAML missing or safe_load crashes)."""
 
@@ -193,6 +214,36 @@ class TestDetectTemplateType(unittest.TestCase):
             "digest-book")
 
 
+class TestIsQueryBridgeSource(unittest.TestCase):
+    """wiki/queries/*.md deep-research pages (2026-07-16: ingested directly —
+    no more raw/queries/ bridge copy, NashSU autoIngest path-agnostic parity)
+    plus backward-compat recognition of pre-2026-07-16 raw/queries/*.md bridge
+    copies still sitting in older wikis."""
+
+    def setUp(self):
+        self.config = _make_config(Path("/proj"))
+
+    def test_wiki_queries_is_a_bridge_source(self):
+        self.assertTrue(_core.is_query_bridge_source(
+            self.config.wiki_dir / "queries/research-x.md", self.config))
+
+    def test_wiki_queries_case_insensitive(self):
+        self.assertTrue(_core.is_query_bridge_source(
+            self.config.wiki_dir / "Queries/research-x.md", self.config))
+
+    def test_legacy_raw_queries_bridge_copy_still_recognized(self):
+        self.assertTrue(_core.is_query_bridge_source(
+            self.config.raw_root / "queries/research-x.md", self.config))
+
+    def test_book_is_not_a_bridge(self):
+        self.assertFalse(_core.is_query_bridge_source(
+            self.config.raw_root / "Book/x.pdf", self.config))
+
+    def test_path_outside_wiki_and_raw_root_is_not_a_bridge(self):
+        self.assertFalse(_core.is_query_bridge_source(
+            Path("/other/queries/x.md"), self.config))
+
+
 class TestStrDistance(unittest.TestCase):
     def test_levenshtein_basics(self):
         self.assertEqual(_core.str_distance("book", "book"), 0)
@@ -207,9 +258,9 @@ def _make_config(tmp: Path) -> _core.Config:
         cache_path=tmp / "rt" / "ingest-cache.json",
         progress_dir=tmp / "rt" / "ingest-progress",
         extract_tmp_dir=tmp / "rt" / "extract-tmp",
-        llm_base_url="https://example.invalid", llm_model="m", llm_api_key="",
-        llm_protocol="anthropic", caption_api_key="", caption_base_url="x",
-        caption_model="c", chunk_size=60000, chunk_overlap=3000,
+        llm_model="m",
+        caption_api_key="", caption_base_url="x",
+        caption_model="c", chunk_overlap=3000,
         source_budget=100000, target_chars=60000, target_tokens=30000,
         max_tokens=8192, conversation_prefix="ab12cd34",
     )
@@ -245,6 +296,43 @@ class TestSaveProgressMergeWrite(unittest.TestCase):
             pp.write_text("{not valid json", encoding="utf-8")
             _core.save_progress(cfg, h, {"extracted_text": "x"})  # must not raise
             self.assertEqual(_core.load_progress(cfg, h)["extracted_text"], "x")
+
+    def test_load_progress_corrupted_warns_and_returns_none(self):
+        # Policy exception (2026-06-24): a corrupted state file is a loud
+        # warning + reset (None), never a raised JSONDecodeError.
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "0badf00d" * 8
+            pp = _core.progress_path(cfg, h)
+            pp.parent.mkdir(parents=True, exist_ok=True)
+            pp.write_text("{not valid json", encoding="utf-8")
+            self.assertIsNone(_core.load_progress(cfg, h))
+
+    def test_delete_progress_keys_truly_removes(self):
+        # save_progress is merge-write and cannot express deletion —
+        # delete_progress_keys must actually remove keys from storage.
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "feedc0de" * 8
+            _core.save_progress(cfg, h, {"chunk_analyses": [1, 2], "extracted_text": "x"})
+            _core.delete_progress_keys(cfg, h, ["chunk_analyses", "never-existed"])
+            p = _core.load_progress(cfg, h)
+            self.assertNotIn("chunk_analyses", p)
+            self.assertEqual(p["extracted_text"], "x")  # untouched keys survive
+            # A later merge-write must NOT resurrect the deleted key.
+            _core.save_progress(cfg, h, {"stage_1_2": {"count": 1}})
+            self.assertNotIn("chunk_analyses", _core.load_progress(cfg, h))
+
+    def test_delete_progress_keys_noop_without_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _make_config(Path(d))
+            h = "abad1dea" * 8
+            _core.delete_progress_keys(cfg, h, ["anything"])  # must not raise
+            self.assertIsNone(_core.load_progress(cfg, h))
+            self.assertFalse(_core.progress_path(cfg, h).exists())
 
 
 class TestStageMarkers(unittest.TestCase):

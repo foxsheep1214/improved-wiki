@@ -83,6 +83,11 @@ class TestRewriteWikilinkTarget(unittest.TestCase):
         out = f.rewrite_wikilink_target(content, "foo-barr", "foo-bar")
         self.assertIn("[[foo-bar|the foo]]", out)
 
+    def test_preserves_escaped_table_alias(self):
+        content = "| See | [[foo-barr\\|the foo]] |\n"
+        out = f.rewrite_wikilink_target(content, "foo-barr", "foo-bar")
+        self.assertIn("[[foo-bar\\|the foo]]", out)
+
     def test_leaves_other_links(self):
         content = "[[a]] and [[foo-barr]] and [[b]]\n"
         out = f.rewrite_wikilink_target(content, "foo-barr", "foo-bar")
@@ -158,17 +163,24 @@ class TestBuildDeletedKeys(unittest.TestCase):
         self.assertEqual(keys, {"foo"})
 
 
-class TestExtractFrontmatterTitle(unittest.TestCase):
+class TestExtractTitleAnywhere(unittest.TestCase):
     def test_plain(self):
         self.assertEqual(
-            f.extract_frontmatter_title("---\ntitle: KV Cache\n---\n"), "KV Cache")
+            f.extract_title_anywhere("---\ntitle: KV Cache\n---\n"), "KV Cache")
 
     def test_quoted(self):
         self.assertEqual(
-            f.extract_frontmatter_title('---\ntitle: "KV Cache"\n---\n'), "KV Cache")
+            f.extract_title_anywhere('---\ntitle: "KV Cache"\n---\n'), "KV Cache")
 
     def test_missing(self):
-        self.assertEqual(f.extract_frontmatter_title("---\ntype: x\n---\n"), "")
+        self.assertEqual(f.extract_title_anywhere("---\ntype: x\n---\n"), "")
+
+    def test_matches_body_title_line_by_design(self):
+        # Documented divergence from _frontmatter.extract_frontmatter_title:
+        # whole-text MULTILINE search (NashSU-faithful) matches a body line.
+        self.assertEqual(
+            f.extract_title_anywhere("---\ntype: x\n---\ntitle: In Body\n"),
+            "In Body")
 
 
 class TestCleanIndexListing(unittest.TestCase):

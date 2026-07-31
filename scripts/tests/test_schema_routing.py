@@ -3,9 +3,10 @@
 Stdlib unittest only — no network, no LLM.
 
 Covers:
-  - schema_folders() parsing (both `wiki/x` and `wiki/x/` table forms)
+  - Page-Types-scoped folder parsing (including prose false-positive guards)
   - load_schema_md() root location + wiki/ back-compat + absent → ''
-  - _schema_routing_block() emits guidance only when the schema adds EXTRA folders
+  - full authoritative schema + optional purpose prompt context
+  - schema-typed candidates resolved through the authoritative type→dir map
   - the writer's valid-subdir set = base ∪ schema folders (so schema pages are
     accepted instead of dropped)
 """
@@ -32,9 +33,9 @@ def _make_config(tmp: Path) -> _core.Config:
         cache_path=tmp / "rt" / "ingest-cache.json",
         progress_dir=tmp / "rt" / "ingest-progress",
         extract_tmp_dir=tmp / "rt" / "extract-tmp",
-        llm_base_url="https://example.invalid", llm_model="m", llm_api_key="",
-        llm_protocol="anthropic", caption_api_key="", caption_base_url="x",
-        caption_model="c", chunk_size=60000, chunk_overlap=3000,
+        llm_model="m",
+        caption_api_key="", caption_base_url="x",
+        caption_model="c", chunk_overlap=3000,
         source_budget=100000, target_chars=60000, target_tokens=30000,
         max_tokens=8192, conversation_prefix="ab12cd34",
     )
@@ -58,6 +59,36 @@ _SCHEMA_BASE_ONLY = """# Schema
 | entity | wiki/entities |
 """
 
+_SCHEMA_STANDARD = """# Schema
+
+## Page Types
+
+| type | directory |
+|------|-----------|
+| source | wiki/sources |
+| concept | wiki/concepts |
+| entity | wiki/entities |
+| overview | wiki |
+"""
+
+_SCHEMA_RESEARCH_TYPES = """# Schema
+
+## Page Types
+
+| type | directory |
+|------|-----------|
+| source | wiki/sources/ |
+| entity | wiki/entities/ |
+| concept | wiki/concepts/ |
+| query | wiki/queries/ |
+| comparison | wiki/comparisons/ |
+| synthesis | wiki/synthesis/ |
+| overview | wiki/ |
+| thesis | wiki/thesis/ |
+| methodology | wiki/methodology/ |
+| finding | wiki/findings/ |
+"""
+
 
 class TestSchemaFolders(unittest.TestCase):
     def test_parses_both_table_forms(self):
@@ -75,6 +106,29 @@ class TestSchemaFolders(unittest.TestCase):
         extra = _core.schema_folders(_SCHEMA_WITH_EXTRAS) - _core.BASE_PAGE_DIRS
         self.assertEqual(extra, {"people"})
 
+    def test_index_md_and_log_md_prose_mentions_are_not_folders(self):
+        # Regression (2026-07-15): every project schema.md's "## Index Format"
+        # / "## Log Format" sections mention `wiki/index.md` / `wiki/log.md`
+        # in prose. The old whole-text regex had no way to tell that apart
+        # from a real `wiki/<folder>/` table row, so "index"/"log" leaked
+        # into the writer's accept-list — one ingest actually exploited this,
+        # writing a misclassified `type: index` page to a phantom
+        # `wiki/index/` directory instead of being rejected.
+        schema = _SCHEMA_WITH_EXTRAS + (
+            "\n## Index Format\n`wiki/index.md` lists all pages.\n"
+            "## Log Format\n`wiki/log.md` records activity.\n"
+        )
+        folders = _core.schema_folders(schema)
+        self.assertEqual(
+            folders,
+            {"sources", "concepts", "methodology", "people"},
+        )
+        self.assertNotIn("inde", folders)
+        self.assertNotIn("lo", folders)
+        # Real table-declared folders must still come through unaffected.
+        self.assertIn("sources", folders)
+        self.assertIn("people", folders)
+
 
 class TestLoadSchemaMd(unittest.TestCase):
     def test_reads_root_then_wiki_fallback_then_empty(self):
@@ -91,9 +145,25 @@ class TestLoadSchemaMd(unittest.TestCase):
             (cfg.wiki_root / "schema.md").write_text("root loc", encoding="utf-8")
             self.assertIn("root", _core.load_schema_md(cfg))    # root wins
 
+    def test_loads_optional_purpose_root_then_legacy_fallback(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            self.assertEqual(_core.load_purpose_md(cfg), "")
+            (cfg.wiki_dir / "purpose.md").write_text("legacy purpose", encoding="utf-8")
+            self.assertIn("legacy", _core.load_purpose_md(cfg))
+            (cfg.wiki_root / "purpose.md").write_text("root purpose", encoding="utf-8")
+            self.assertIn("root", _core.load_purpose_md(cfg))
+
+    def test_minimal_config_without_paths_is_treated_as_absent(self):
+        config = object()
+        self.assertEqual(_core.load_schema_md(config), "")
+        self.assertEqual(_core.load_purpose_md(config), "")
+
 
 class TestSchemaRoutingBlock(unittest.TestCase):
-    def test_block_emitted_only_with_extra_folders(self):
+    def test_block_emits_full_authoritative_schema_for_standard_project(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _make_config(tmp)
@@ -101,16 +171,20 @@ class TestSchemaRoutingBlock(unittest.TestCase):
             # No schema → no block.
             self.assertEqual(gen._schema_routing_block(cfg), "")
 
-            # Base-only schema → still no block (no noise on default projects).
-            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_BASE_ONLY, encoding="utf-8")
-            self.assertEqual(gen._schema_routing_block(cfg), "")
-
-            # Schema with extras → block names the extra folders.
-            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_WITH_EXTRAS, encoding="utf-8")
+            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_STANDARD, encoding="utf-8")
             block = gen._schema_routing_block(cfg)
-            self.assertIn("Schema-Defined Folders", block)
-            self.assertIn("methodology", block)
-            self.assertIn("people", block)
+            self.assertIn("Project Schema and Routing (AUTHORITATIVE)", block)
+            self.assertIn("`concept` → `wiki/concepts/`", block)
+            self.assertIn("Every generated page's frontmatter", block)
+
+            # Custom routes and optional project purpose share the same context.
+            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_WITH_EXTRAS, encoding="utf-8")
+            (cfg.wiki_root / "purpose.md").write_text("Study reliable systems.", encoding="utf-8")
+            block = gen._schema_routing_block(cfg)
+            self.assertIn("`methodology` → `wiki/methodology/`", block)
+            self.assertIn("`person` → `wiki/people/`", block)
+            self.assertIn("Wiki Purpose", block)
+            self.assertIn("Study reliable systems.", block)
 
 
 class TestWriterAcceptsSchemaFolders(unittest.TestCase):
@@ -125,19 +199,41 @@ class TestSchemaTypedCandidates(unittest.TestCase):
     """NashSU parity — Stage 2.2 flags schema-typed candidates, Stage 2.4
     surfaces them so generation routes a page into the candidate's folder."""
 
-    def test_stage_2_2_block_only_with_extras(self):
+    def test_stage_2_2_block_uses_authoritative_candidate_routes(self):
         import _stage_2_analyze as ana
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _make_config(tmp)
             self.assertEqual(ana._stage_2_2_schema_types_block(cfg), "")
-            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_BASE_ONLY, encoding="utf-8")
-            self.assertEqual(ana._stage_2_2_schema_types_block(cfg), "")
+            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_STANDARD, encoding="utf-8")
+            standard = ana._stage_2_2_schema_types_block(cfg)
+            self.assertIn("Project Schema and Routing (AUTHORITATIVE)", standard)
+            self.assertIn("Eligible source-grounded schema types: (none", standard)
             (cfg.wiki_root / "schema.md").write_text(_SCHEMA_WITH_EXTRAS, encoding="utf-8")
             block = ana._stage_2_2_schema_types_block(cfg)
-            self.assertIn("Schema-Defined Page Types", block)
-            self.assertIn("people", block)
+            self.assertIn("methodology → wiki/methodology/", block)
+            self.assertIn("person → wiki/people/", block)
             self.assertIn("schema_typed_candidates", block)
+
+    def test_stage_2_2_block_includes_all_five_research_types(self):
+        import _stage_2_analyze as ana
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_RESEARCH_TYPES,
+                encoding="utf-8",
+            )
+            block = ana._stage_2_2_schema_types_block(cfg)
+            for route in (
+                "comparison → wiki/comparisons/",
+                "synthesis → wiki/synthesis/",
+                "thesis → wiki/thesis/",
+                "methodology → wiki/methodology/",
+                "finding → wiki/findings/",
+            ):
+                self.assertIn(route, block)
+            self.assertNotIn("query → wiki/queries/", block)
 
     def test_stage_2_4_prompt_surfaces_candidates(self):
         with tempfile.TemporaryDirectory() as d:
@@ -145,20 +241,49 @@ class TestSchemaTypedCandidates(unittest.TestCase):
             cfg = _make_config(tmp)
             (cfg.wiki_dir).mkdir(parents=True, exist_ok=True)
             (cfg.raw_root).mkdir(parents=True, exist_ok=True)
+            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_WITH_EXTRAS, encoding="utf-8")
             chunk_analysis = {
                 "concepts_found": [],
                 "entities_found": [],
                 "schema_typed_candidates": [
                     {"type": "person", "name": "Ada Lovelace",
-                     "folder": "people", "rationale": "biography in this chunk"},
+                     "folder": "wrong-folder", "rationale": "biography in this chunk"},
                 ],
             }
             prompt = gen._stage_2_4_build_prompt(
                 chunk_analysis, "chunk text", 0, cfg.raw_root / "book.pdf", cfg,
             )
-            self.assertIn("Schema-typed pages found in this chunk", prompt)
+            self.assertIn(
+                "Key schema-typed page candidates recommended by the analysis",
+                prompt,
+            )
             self.assertIn("people/ada-lovelace", prompt)
+            self.assertNotIn("wrong-folder/ada-lovelace", prompt)
             self.assertIn("Ada Lovelace", prompt)
+
+    def test_single_shot_prompt_surfaces_schema_candidates(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            (cfg.wiki_root / "schema.md").write_text(_SCHEMA_WITH_EXTRAS, encoding="utf-8")
+            prompt = gen._stage_2_4_build_all_prompt(
+                [{
+                    "concepts_found": [],
+                    "entities_found": [],
+                    "schema_typed_candidates": [{
+                        "type": "methodology",
+                        "name": "Controlled Trial",
+                        "folder": "incorrect",
+                        "rationale": "the source defines the protocol",
+                    }],
+                }],
+                cfg.raw_root / "book.pdf",
+                cfg,
+            )
+            self.assertIn("methodology/controlled-trial", prompt)
+            self.assertNotIn("incorrect/controlled-trial", prompt)
 
     def test_stage_2_4_prompt_none_when_no_candidates(self):
         with tempfile.TemporaryDirectory() as d:
@@ -170,8 +295,282 @@ class TestSchemaTypedCandidates(unittest.TestCase):
                 {"concepts_found": [], "entities_found": []},
                 "chunk text", 0, cfg.raw_root / "book.pdf", cfg,
             )
-            self.assertIn("Schema-typed pages found in this chunk", prompt)
+            self.assertIn(
+                "Key schema-typed page candidates recommended by the analysis",
+                prompt,
+            )
             self.assertIn("(none)", prompt)
+            self.assertNotIn("# Schema-Typed Page Output", prompt)
+
+    def test_candidate_skips_when_prior_chunk_generated_same_stem(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_WITH_EXTRAS,
+                encoding="utf-8",
+            )
+            analysis = {
+                "schema_typed_candidates": [{
+                    "type": "methodology",
+                    "name": "Controlled Trial",
+                    "folder": "methodology",
+                    "rationale": "protocol",
+                }],
+            }
+            lines, slugs = gen._schema_candidate_inventory(
+                [analysis],
+                cfg,
+                {},
+                ["controlled-trial"],
+            )
+            self.assertEqual(slugs, [])
+            self.assertIn("ALREADY COVERED", "\n".join(lines))
+
+    def test_same_route_existing_candidate_is_an_update_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_WITH_EXTRAS,
+                encoding="utf-8",
+            )
+            analysis = {
+                "schema_typed_candidates": [{
+                    "type": "methodology",
+                    "name": "Controlled Trial",
+                    "rationale": "the source materially extends the protocol",
+                }],
+            }
+            lines, slugs = gen._schema_candidate_inventory(
+                [analysis],
+                cfg,
+                {"Controlled Trial": ["methodology/established-trial"]},
+                [],
+            )
+            self.assertEqual(
+                slugs,
+                [("Controlled Trial", "methodology/established-trial")],
+            )
+            rendered = "\n".join(lines)
+            self.assertIn("UPDATE EXISTING PAGE", rendered)
+            self.assertNotIn("do NOT generate", rendered)
+
+    def test_cross_route_association_remains_link_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_WITH_EXTRAS,
+                encoding="utf-8",
+            )
+            analysis = {
+                "schema_typed_candidates": [{
+                    "type": "methodology",
+                    "name": "Controlled Trial",
+                    "rationale": "protocol",
+                }],
+            }
+            lines, slugs = gen._schema_candidate_inventory(
+                [analysis],
+                cfg,
+                {"Controlled Trial": ["concepts/controlled-trial"]},
+                [],
+            )
+            self.assertEqual(slugs, [])
+            rendered = "\n".join(lines)
+            self.assertIn("CROSS-TYPE ASSOCIATION", rendered)
+            self.assertIn("[[concepts/controlled-trial]]", rendered)
+
+    def test_generic_same_route_existing_page_is_generated_as_update(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            prompt = gen._stage_2_4_build_prompt(
+                {
+                    "concepts_found": [{
+                        "name": "Thermal Resistance",
+                        "importance": "core",
+                        "definition": "A materially expanded definition.",
+                        "key_details": ["New source-grounded detail"],
+                    }],
+                    "entities_found": [],
+                },
+                "chunk text",
+                0,
+                cfg.raw_root / "book.pdf",
+                cfg,
+                existing_refs={
+                    "Thermal Resistance": [
+                        "concepts/thermal-resistance",
+                    ],
+                },
+            )
+            self.assertIn(
+                "(slug: concepts/thermal-resistance) "
+                "[core; UPDATE EXISTING PAGE]",
+                prompt,
+            )
+            self.assertIn(
+                "new OR marked UPDATE EXISTING PAGE",
+                prompt,
+            )
+
+    def test_schema_candidate_outranks_same_name_generic_concept(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_WITH_EXTRAS,
+                encoding="utf-8",
+            )
+            analysis = {
+                "concepts_found": [{
+                    "name": "Controlled Trial",
+                    "importance": "core",
+                    "definition": "A protocol.",
+                    "key_details": ["Grounded detail"],
+                }],
+                "entities_found": [],
+                "schema_typed_candidates": [{
+                    "type": "methodology",
+                    "name": "Controlled Trial",
+                    "folder": "wrong",
+                    "rationale": "Reusable protocol",
+                }],
+            }
+            prompt = gen._stage_2_4_build_prompt(
+                analysis,
+                "chunk text",
+                0,
+                cfg.raw_root / "book.pdf",
+                cfg,
+            )
+            self.assertIn("methodology/controlled-trial", prompt)
+            self.assertIn("SKIP GENERIC CONCEPT", prompt)
+
+    def test_comparison_and_synthesis_use_shared_typed_prompt(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_RESEARCH_TYPES,
+                encoding="utf-8",
+            )
+            analysis = {
+                "concepts_found": [],
+                "entities_found": [],
+                "schema_typed_candidates": [
+                    {
+                        "type": "comparison",
+                        "name": "MTI vs Pulse Doppler",
+                        "folder": "wrong",
+                        "rationale": "The source makes a substantive comparison.",
+                    },
+                    {
+                        "type": "synthesis",
+                        "name": "Detection Architecture Synthesis",
+                        "folder": "wrong",
+                        "rationale": "The research input integrates multiple sources.",
+                    },
+                ],
+            }
+            prompt = gen._stage_2_4_build_all_prompt(
+                [analysis],
+                cfg.raw_root / "book.pdf",
+                cfg,
+            )
+            self.assertIn("comparisons/mti-vs-pulse-doppler", prompt)
+            self.assertIn("synthesis/detection-architecture-synthesis", prompt)
+            self.assertNotIn("wrong/", prompt)
+            self.assertIn("# Schema-Typed Page Output", prompt)
+            self.assertIn("type: <schema-declared-type>", prompt)
+            self.assertIn("every type-specific required field", prompt)
+
+    def test_typed_prompt_receives_rolling_cross_chunk_context(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_RESEARCH_TYPES,
+                encoding="utf-8",
+            )
+            analysis = {
+                "concepts_found": [],
+                "entities_found": [],
+                "schema_typed_candidates": [{
+                    "type": "comparison",
+                    "name": "Architecture A vs B",
+                    "folder": "comparisons",
+                    "rationale": "The source compares both architectures.",
+                }],
+                "updated_global_digest": {
+                    "key_claims": [{
+                        "claim": "Architecture A favors latency.",
+                        "evidence": "§2.1",
+                    }],
+                },
+            }
+            prompt = gen._stage_2_4_build_prompt(
+                analysis,
+                "Architecture B favors throughput in §7.3.",
+                1,
+                cfg.raw_root / "book.pdf",
+                cfg,
+            )
+            self.assertIn(
+                "# Rolling Source Digest for Schema-Typed Candidates",
+                prompt,
+            )
+            self.assertIn("Architecture A favors latency.", prompt)
+
+    def test_schema_candidate_lists_have_no_40_or_120_item_cutoff(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
+            cfg.raw_root.mkdir(parents=True, exist_ok=True)
+            (cfg.wiki_root / "schema.md").write_text(
+                _SCHEMA_RESEARCH_TYPES,
+                encoding="utf-8",
+            )
+            candidates = [
+                {
+                    "type": "methodology",
+                    "name": f"Method {index:03d}",
+                    "folder": "methodology",
+                    "rationale": f"Supported method {index}.",
+                }
+                for index in range(130)
+            ]
+            analysis = {
+                "concepts_found": [],
+                "entities_found": [],
+                "schema_typed_candidates": candidates,
+            }
+            per_chunk = gen._stage_2_4_build_prompt(
+                analysis,
+                "chunk text",
+                0,
+                cfg.raw_root / "book.pdf",
+                cfg,
+            )
+            all_chunks = gen._stage_2_4_build_all_prompt(
+                [analysis],
+                cfg.raw_root / "book.pdf",
+                cfg,
+            )
+            for prompt in (per_chunk, all_chunks):
+                self.assertIn("methodology/method-000", prompt)
+                self.assertIn("methodology/method-129", prompt)
 
 
 class TestParseWikiSchemaRouting(unittest.TestCase):
@@ -211,6 +610,35 @@ class TestParseWikiSchemaRouting(unittest.TestCase):
         self.assertNotIn("evil", r)   # '..' segment dropped
         self.assertNotIn("abs", r)    # leading-slash dir dropped
 
+    def test_candidate_routes_exclude_pipeline_managed_types(self):
+        r = _core.schema_candidate_routes(_SCHEMA_WITH_EXTRAS)
+        self.assertEqual(r, {
+            "methodology": "methodology",
+            "person": "people",
+        })
+
+    def test_research_typed_routes_match_nashsu_066_lifecycle(self):
+        r = _core.schema_candidate_routes(_SCHEMA_RESEARCH_TYPES)
+        self.assertEqual(r, {
+            "comparison": "comparisons",
+            "synthesis": "synthesis",
+            "thesis": "thesis",
+            "methodology": "methodology",
+            "finding": "findings",
+        })
+        for pipeline_owned in ("source", "entity", "concept", "query", "overview"):
+            self.assertNotIn(pipeline_owned, r)
+
+    def test_prompt_schema_omits_machine_naming_rules(self):
+        schema = (
+            _SCHEMA_WITH_EXTRAS
+            + "\n## Machine-Readable Naming Rules\n```yaml\nrules:\n  Book: {}\n```\n"
+        )
+        prompt_schema = _core.schema_prompt_text(schema)
+        self.assertIn("Page Types", prompt_schema)
+        self.assertNotIn("Machine-Readable", prompt_schema)
+        self.assertNotIn("rules:", prompt_schema)
+
 
 class TestSchemaRouteDir(unittest.TestCase):
     def test_schema_type_wins(self):
@@ -225,39 +653,6 @@ class TestSchemaRouteDir(unittest.TestCase):
 
     def test_empty_type_is_none(self):
         self.assertIsNone(_core.schema_route_dir("", {"person": "people"}))
-
-
-class TestValidateWikiPageRouting(unittest.TestCase):
-    """NashSU validateWikiPageRouting parity — bidirectional issue detection."""
-
-    def setUp(self):
-        self.routing = {"concept": "concepts", "entity": "entities", "person": "people"}
-
-    def test_correct_routing_is_none(self):
-        self.assertIsNone(_core.validate_wiki_page_routing(
-            "people/ada.md", "person", self.routing))
-
-    def test_forward_mismatch_declared_type_wrong_dir(self):
-        issue = _core.validate_wiki_page_routing("entities/ada.md", "person", self.routing)
-        self.assertIsNotNone(issue)
-        self.assertIn("people", issue)
-
-    def test_reverse_mismatch_dir_owns_a_different_type(self):
-        # 'source' is NOT in this routing map, so the forward check is skipped and
-        # only the reverse check (people/ owns 'person') can fire.
-        issue = _core.validate_wiki_page_routing("people/foo.md", "source", self.routing)
-        self.assertIsNotNone(issue)
-        self.assertIn("person", issue)
-
-    def test_untyped_page_is_allowed(self):
-        self.assertIsNone(_core.validate_wiki_page_routing("people/x.md", "", self.routing))
-
-    def test_no_schema_is_noop(self):
-        self.assertIsNone(_core.validate_wiki_page_routing("people/x.md", "concept", {}))
-
-    def test_tolerates_leading_wiki_prefix(self):
-        self.assertIsNone(_core.validate_wiki_page_routing(
-            "wiki/people/ada.md", "person", self.routing))
 
 
 class TestStage31SchemaRoute(unittest.TestCase):

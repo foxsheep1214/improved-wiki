@@ -7,8 +7,6 @@ ingest.py's conversation router uses — so there is one cache-read / prompt-wri
 / raise implementation across the skill.
 
 Text generation is conversation-mode only; the handoff lives in ``_llm_api``.
-This module resolves an LLM endpoint (env vars / ``~/.agents/config.json``) for
-the dedup + semantic-lint sweeps.
 """
 from __future__ import annotations
 

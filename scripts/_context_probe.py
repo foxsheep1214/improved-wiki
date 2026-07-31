@@ -27,11 +27,16 @@ A ``.ctxprobe-pending`` marker makes a genuine probe (cache miss / TTL / model
 change / ``--reprobe``) re-ask the live model — clearing the stale conversation
 answer on a fresh start — without looping on the handoff re-invocation.
 
-Reliability: the answer is sanity-gated to [8K, 10M]. The existing budget
-reserves (15% response + 25% stable + 8% instruction ≈ 48%) already provide
-headroom, so no extra margin is applied. On parse failure / out-of-range the
-ingest PAUSES (no-silent-fallback policy) rather than guessing — see
-references/context-probe.md for the hand-recovery path.
+Reliability: a confident numeric answer is sanity-gated to [8K, 10M]; an
+out-of-range confident answer PAUSES the ingest (no-silent-fallback policy).
+The prompt tells the model not to guess — if it isn't certain it must write
+UNKNOWN instead of a number. A model self-report is never taken as ground
+truth on its own: a recognized model (``_KNOWN_MODEL_CONTEXT``) is always
+pinned to its authoritative spec, confident-sounding self-report or not; an
+unrecognized model's confident self-report is used but loudly flagged as
+unverified; UNKNOWN (or nothing parseable) falls back to the known spec if
+recognized, else the codebase's own conservative default — never to a guess.
+See references/context-probe.md for the hand-recovery path.
 """
 from __future__ import annotations
 
@@ -41,6 +46,8 @@ import shutil
 import time
 from pathlib import Path
 
+from _paths import atomic_write
+
 # Conversation prefix base. The probe dir is MODEL-NAMESPACED (``ctxprobe-<model>``)
 # so a different model → different dir → fresh probe, same model → cached, no loop.
 _PROBE_PREFIX_BASE = "ctxprobe"
@@ -49,19 +56,24 @@ _PROBE_MIN = 8_000          # no real model answers below this
 _PROBE_MAX = 10_000_000     # no current model exceeds this
 _PROBE_CACHE_TTL = 7 * 24 * 3600   # re-probe after 7 days (model may upgrade)
 
-# Known-model validation. The probe prompt asks the model to "give the largest
-# value you are confident of", so a cautious KNOWN model can lowball its context
-# (→ chunks sized too small) and a confused one can overshoot (→ chunks too large
-# to drive). When the self-report names a model we have an authoritative spec
-# for, we pin the context to that spec instead of trusting the model's guess.
-# Unknown models keep their self-report (still sanity-gated to [MIN, MAX]).
-# Sources: claude-api skill model table (2026-06) for Claude; glm-5.2 from the
-# user's own runtime note. Update when a model's real context window changes.
+# Known-model validation. Even with the prompt telling it not to guess, a model
+# can still confidently self-report a wrong number (observed: Claude Opus 4.8 —
+# genuinely 1M — self-reported a cautious 200000 in one probe; Claude Sonnet 5 —
+# also genuinely 1M — self-reported 200000 from a generic impression in another,
+# 2026-07-09). When the self-report names a model we have an authoritative spec
+# for, we pin the context to that spec instead of trusting the model's answer,
+# confident-sounding or not. Unknown models keep their self-report (still
+# sanity-gated to [MIN, MAX], and loudly flagged as unverified — see
+# probe_context). Sources: claude-api skill model table for Claude; glm-5.2 from
+# the user's own runtime note. Update whenever a new model shows up in a probe —
+# a missing entry is exactly what let the Sonnet 5 case slip through.
 _KNOWN_MODEL_CONTEXT = {
     "claude-fable-5": 1_000_000,
+    "claude-mythos-5": 1_000_000,
     "claude-opus-4-8": 1_000_000,
     "claude-opus-4-7": 1_000_000,
     "claude-opus-4-6": 1_000_000,
+    "claude-sonnet-5": 1_000_000,
     "claude-sonnet-4-6": 1_000_000,
     "claude-haiku-4-5": 200_000,
     "glm-5.2": 1_000_000,
@@ -80,8 +92,11 @@ Respond with EXACTLY two lines and nothing else:
 <model-identifier>
 <integer-token-count>
 
-If unsure of the exact context size, give the largest value you are confident the \
-model supports. No units, commas, prose, or extra punctuation on the number line.
+Do not guess or estimate from a general impression of "typical" model sizes — a \
+wrong guess silently mis-sizes every chunk budget downstream and is easy to get \
+wrong (context windows change across model releases). Only report a number you \
+are certain is your actual documented spec. If you are not certain, write UNKNOWN \
+on line 2 instead of a number — do not write a fallback number either.
 """
 
 
@@ -127,9 +142,21 @@ def _known_context(model_self: str | None) -> int | None:
     a = _norm_model(model_self)
     if not a:
         return None
+    # Exact match first — a substring hit must never shadow an exact entry
+    # (e.g. a future "claude-sonnet-5-2" self-report vs the "claude-sonnet-5"
+    # table row).
+    for name, ctx in _KNOWN_MODEL_CONTEXT.items():
+        if a == _norm_model(name):
+            return ctx
+    # Substring tolerance (proxy prefixes like "anthropic/claude-opus-4-8"):
+    # still resolves, but say so — a fuzzy hit pinning the wrong spec should be
+    # visible in the log rather than silent.
     for name, ctx in _KNOWN_MODEL_CONTEXT.items():
         b = _norm_model(name)
-        if a == b or a in b or b in a:
+        if a in b or b in a:
+            print(f"[context-probe] ⚠️  substring match: self-report {model_self!r} "
+                  f"resolved to known model '{name}' ({ctx:,} tokens) — verify this "
+                  f"is the intended model.")
             return ctx
     return None
 
@@ -175,7 +202,7 @@ def save_cached(config, context: int, model_self: str | None, env_reliable) -> N
         # kept for any old reader that still looks for "model"
         "model": config.llm_model,
     }
-    _cache_path(config).write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write(_cache_path(config), json.dumps(d, indent=2, ensure_ascii=False))
 
 
 def _clear_ctxprobe_dirs(config) -> None:
@@ -207,17 +234,30 @@ def clear_probe_cache(config) -> None:
 def _parse_probe(text: str):
     """Parse (model_self, context) from the two-line probe response.
 
-    Context = first 4+ digit integer (tolerates prose/commas). Identity = the
-    first non-empty line that isn't purely that number; None if unobtainable.
+    Context = first 4+ digit integer (tolerates prose/commas), or ``None`` if
+    the model wrote UNKNOWN (or nothing parseable) rather than guessing —
+    distinct from "parsed to 0", which would incorrectly read as a confident
+    but out-of-range answer. Identity = the first non-empty line that isn't
+    purely that number / UNKNOWN; None if unobtainable.
     """
     raw_lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
-    cleaned = (text or "").replace(",", "").replace(" ", "")
-    m = re.search(r"\d{4,}", cleaned)
-    context = int(m.group()) if m else 0
+
+    def _extract_int(s):
+        cleaned = (s or "").replace(",", "").replace(" ", "")
+        m = re.search(r"\d{4,}", cleaned)
+        return int(m.group()) if m else None
+
+    # Prefer the last line for the context number (the prompt's two-line
+    # contract puts it there) — scanning the whole text first false-positives
+    # on digits embedded in the model identifier itself (e.g. a release-date
+    # suffix like "-20251001"), which the identifier line commonly has.
+    context = _extract_int(raw_lines[-1]) if raw_lines else None
+    if context is None:
+        context = _extract_int(text)
     model_self = None
     for ln in raw_lines:
-        if re.fullmatch(r"[\d,\s]+", ln):
-            continue  # the number line
+        if re.fullmatch(r"[\d,\s]+", ln) or ln.strip().upper() == "UNKNOWN":
+            continue  # the number line, or an explicit non-guess
         model_self = ln
         break
     return model_self, context
@@ -249,25 +289,51 @@ def probe_context(config) -> int:
 
     # An answer came back (no exit-101) — consume it.
     model_self, raw = _parse_probe(resp)
-    if not (_PROBE_MIN <= raw <= _PROBE_MAX):
-        raise RuntimeError(
-            f"[context-probe] model '{config.llm_model}' returned an implausible "
-            f"context value ({raw!r} parsed from {resp!r}). Expected an integer in "
-            f"[{_PROBE_MIN}, {_PROBE_MAX}]. No silent fallback — the ingest pauses "
-            f"here. Recovery: hand-edit {_cache_path(config)} with "
-            f'{{"model_env": "{config.llm_model}", "context": <int>, "env_reliable": true, '
-            f'"probed_at": {int(time.time())}}} and re-run, or run ingest.py --reprobe. '
-            f"See references/context-probe.md."
-        )
-
-    # Known-model validation: pin a recognized model to its authoritative spec
-    # rather than trusting a possibly-cautious (lowballed) or confused
-    # (overshot) self-reported number. Unknown models keep ``raw``.
     known = _known_context(model_self)
-    if known is not None and known != raw:
-        print(f"[context-probe] known-model validation: '{model_self}' self-reported "
-              f"{raw:,} tokens but the authoritative spec is {known:,} — using the spec.")
-        raw = known
+
+    if raw is None:
+        # The model declined to guess (wrote UNKNOWN) or gave nothing parseable.
+        # Never substitute an unverified number here: use the authoritative spec
+        # if this model is recognized, else the codebase's own conservative
+        # built-in default — loudly, so it doesn't read as a confirmed value.
+        from _config import _CONTEXT_SIZE_DEFAULT
+        if known is not None:
+            raw = known
+            print(f"[context-probe] '{model_self}' reported no confident context "
+                  f"value — using the known spec ({raw:,}) instead of guessing.")
+        else:
+            raw = _CONTEXT_SIZE_DEFAULT
+            print(f"[context-probe] ⚠️  UNVERIFIED MODEL: '{model_self}' is not in "
+                  f"_KNOWN_MODEL_CONTEXT and reported no confident context value. "
+                  f"Falling back to the conservative default ({raw:,}) rather than "
+                  f"guessing — chunks may end up smaller than the model actually "
+                  f"supports. Verify the real context window and add a confirmed "
+                  f"entry to _KNOWN_MODEL_CONTEXT in _context_probe.py, then run "
+                  f"ingest.py --reprobe.")
+    else:
+        if not (_PROBE_MIN <= raw <= _PROBE_MAX):
+            raise RuntimeError(
+                f"[context-probe] model '{config.llm_model}' returned an implausible "
+                f"context value ({raw!r} parsed from {resp!r}). Expected an integer in "
+                f"[{_PROBE_MIN}, {_PROBE_MAX}]. No silent fallback — the ingest pauses "
+                f"here. Recovery: hand-edit {_cache_path(config)} with "
+                f'{{"model_env": "{config.llm_model}", "context": <int>, "env_reliable": true, '
+                f'"probed_at": {int(time.time())}}} and re-run, or run ingest.py --reprobe. '
+                f"See references/context-probe.md."
+            )
+        # Known-model validation: pin a recognized model to its authoritative
+        # spec rather than trusting a possibly-cautious (lowballed) or confused
+        # (overshot) self-reported number — regardless of how confident it read.
+        if known is not None and known != raw:
+            print(f"[context-probe] known-model validation: '{model_self}' self-reported "
+                  f"{raw:,} tokens but the authoritative spec is {known:,} — using the spec.")
+            raw = known
+        elif known is None:
+            print(f"[context-probe] ⚠️  UNVERIFIED: '{model_self}' is not in "
+                  f"_KNOWN_MODEL_CONTEXT — using its self-reported value ({raw:,}) "
+                  f"as-is. This has NOT been cross-checked against an authoritative "
+                  f"spec. If it turns out wrong, add a confirmed entry to "
+                  f"_KNOWN_MODEL_CONTEXT in _context_probe.py.")
 
     env_reliable = _identities_match(model_self, config.llm_model)
     save_cached(config, raw, model_self, env_reliable)
@@ -290,6 +356,16 @@ def resolve_context(config) -> int:
     """Return the live context for the current model: cache hit or one-shot probe."""
     cached = load_cached(config)
     if cached is not None:
-        print(f"[context-probe] cached: model={config.llm_model} context={cached:,} (reuse)")
+        if not config.llm_model:
+            # ANTHROPIC_MODEL is unset, so the cache key cannot distinguish
+            # conversation models: a session-model switch (e.g. Opus → Fable)
+            # is INVISIBLE here and the cached window may belong to the old
+            # model (2026-07-02). Reuse anyway (blocking would stall every
+            # handoff — see load_cached docstring), but say so loudly.
+            print(f"[context-probe] cached: context={cached:,} (reuse) "
+                  f"⚠️  ANTHROPIC_MODEL unset — a conversation-model switch is "
+                  f"NOT auto-detected; clear_probe_cache() to force a re-probe")
+        else:
+            print(f"[context-probe] cached: model={config.llm_model} context={cached:,} (reuse)")
         return cached
     return probe_context(config)

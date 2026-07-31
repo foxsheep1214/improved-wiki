@@ -24,6 +24,11 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+from _frontmatter import (
+    TITLE_LINE_RE as _TITLE_LINE_RE,
+    WIKILINK_RE as _WIKILINK_RE_SHARED,
+)
+
 __all__ = [
     "run_structural_lint",
     "tokenize_for_suggestion",
@@ -32,6 +37,8 @@ __all__ = [
     "extract_wikilinks",
     "ANCHOR_FILES",
     "AGGREGATE_FILES",
+    "STATE_FILES",
+    "BROKEN_LINK_AUTO_REWRITE_MIN_SCORE",
 ]
 
 # Link-target UNIVERSE exclusion — NashSU runStructuralLint parity (lint.ts:161
@@ -51,6 +58,28 @@ ANCHOR_FILES = {"index.md", "log.md"}
 # wiki/ scans won't see it; it stays listed here as a defensive/legacy guard.)
 AGGREGATE_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
 
+# Runtime/state filenames that must never be scanned as wiki pages. Shared
+# constant (2026-07-12): wiki-lint-fix.py, validate_ingest.py,
+# wiki-lint-semantic.py and wiki-lint.sh's embedded scan each carried a
+# drifted local copy — this is the union of all of them. Extra names are
+# harmless for any one consumer (skipping a state file that could never
+# appear is a no-op), missing names are not.
+STATE_FILES = {
+    "lint-cache.json", "lint.json", "lint-semantic.json",
+    "ingest-cache.json", "ingest-queue.json", "ingest-lock",
+    "lint-lock", "lint.lock",
+    "review.json", "review-suggestions.json",
+    "embed-cache.json", "dedup-report.json",
+}
+
+# Headless auto-rewrite gate (2026-07-10, user-approved lint hardening): only
+# exact (1.0) / same-basename (0.96) tier suggestions may be rewritten without
+# a human — contains-tier (0.82) and fuzzy-Levenshtein suggestions go to
+# review instead (string-similar is not meaning-similar; a headless batch
+# multiplies one bad suggestion). Shared here (2026-07-12) so wiki-lint-fix.py
+# and enrich_wikilinks_retroactive.py apply the SAME threshold.
+BROKEN_LINK_AUTO_REWRITE_MIN_SCORE = 0.9
+
 BROKEN_LINK_SUGGESTION_MIN_SCORE = 0.74
 RELATED_PAGE_SUGGESTION_MIN_SCORE = 0.08
 SAME_FOLDER_SCORE_BONUS = 0.08
@@ -58,8 +87,9 @@ SINGLE_CJK_TOKEN_WEIGHT = 0.35
 SUGGESTION_TOKEN_WINDOW = 4000
 SAME_BASENAME_SCORE = 0.96
 CONTAINS_TARGET_SCORE = 0.82
+MAX_SUGGESTION_CANDIDATES = 64
 
-_WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]")
+_WIKILINK_RE = _WIKILINK_RE_SHARED
 _CJK_RE = re.compile(r"[㐀-鿿]")
 _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
@@ -85,10 +115,41 @@ def normalize_link_target(target: str) -> str:
     return t.strip().lower()
 
 
+def _fragments(value: str) -> list[str]:
+    """NFKC-normalized character bigrams used by NashSU 0.6.6."""
+    normalized = unicodedata.normalize("NFKC", normalize_link_target(value))
+    chars = list(normalized)
+    if len(chars) < 2:
+        return [normalized] if normalized else []
+    result: list[str] = []
+    seen: set[str] = set()
+    for i in range(len(chars) - 1):
+        fragment = chars[i] + chars[i + 1]
+        if fragment not in seen:
+            seen.add(fragment)
+            result.append(fragment)
+    return result
+
+
+def _add_to_index(index: dict[str, list[int]], key: str, page_index: int) -> None:
+    index.setdefault(key, []).append(page_index)
+
+
+def _top_candidates(scores: dict[int, float], excluded: int) -> list[int]:
+    """Return NashSU's score-desc/index-asc candidate window."""
+    ranked = ((idx, score) for idx, score in scores.items() if idx != excluded)
+    return [
+        idx for idx, _ in
+        sorted(ranked, key=lambda item: (-item[1], item[0]))[
+            :MAX_SUGGESTION_CANDIDATES
+        ]
+    ]
+
+
 def _extract_title(content: str, fallback_path: str) -> str:
     fm = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
     if fm:
-        title = re.search(r'^title:\s*["\']?(.+?)["\']?\s*$', fm.group(1), re.MULTILINE)
+        title = _TITLE_LINE_RE.search(fm.group(1))
         if title and title.group(1).strip():
             return title.group(1).strip()
     heading = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
@@ -199,11 +260,15 @@ class _PageData:
     tokens: set[str] = field(default_factory=set)
 
 
-def _build_slug_map(pages: list[_PageData]) -> dict[str, str]:
-    m: dict[str, str] = {}
-    for p in pages:
-        m[p.slug.lower()] = p.short_name
-        m[re.sub(r"\.md$", "", _get_file_name(p.short_name)).lower()] = p.short_name
+def _build_slug_map(pages: list[_PageData]) -> dict[str, int]:
+    """Dual-index by normalized relative slug and basename, as in 0.6.6."""
+    m: dict[str, int] = {}
+    for index, p in enumerate(pages):
+        basename = re.sub(
+            r"\.md$", "", _get_file_name(p.short_name), flags=re.IGNORECASE
+        )
+        m[normalize_link_target(p.slug)] = index
+        m[normalize_link_target(basename)] = index
     return m
 
 
@@ -217,11 +282,10 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         {type, severity, page, detail,
          broken_target?, suggested_target?, suggested_source?}
 
-    with_suggestions=False skips the O(n^2) suggestion engine
-    (suggest_related_page / suggest_broken_target) and the per-page
-    tokenization that feeds it — detection (broken-link / orphan /
-    no-outlinks) still runs in O(n). Used by validate_ingest.py over the
-    whole wiki; the suggestion scan is left to the dedicated wiki-lint.sh.
+    with_suggestions=False skips the indexed candidate/scoring engine and the
+    per-page tokenization that feeds it — detection (broken-link / orphan /
+    no-outlinks) still runs in O(n). Used by validate_ingest.py over the whole
+    wiki; suggestion generation is left to the dedicated wiki-lint.sh.
     """
     content_pages = [
         (name, content)
@@ -243,8 +307,21 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         data.append(_PageData(short_name, short_name, slug, title, content, outlinks, tokens))
 
     slug_map = _build_slug_map(data)
+    token_index: dict[str, list[int]] = {}
+    fragment_index: dict[str, list[int]] = {}
+    if with_suggestions:
+        for page_index, page in enumerate(data):
+            for token in page.tokens:
+                _add_to_index(token_index, token, page_index)
+            for value in (page.slug, page.short_name, page.title):
+                for fragment in _fragments(value):
+                    _add_to_index(fragment_index, fragment, page_index)
 
-    def suggest_broken_target(target: str) -> _PageData | None:
+    def suggest_broken_target(target: str) -> "tuple[_PageData, float] | None":
+        # Returns (page, score) — the score is persisted on the finding
+        # (suggested_score, 2026-07-10) so the headless fixer can gate
+        # auto-rewrites by confidence tier. NashSU never needs the score
+        # persisted because its Fix is human-clicked per item.
         # Fast path: strip surrounding quotes that leak from YAML-formatted
         # related fields (e.g. [[concepts/foo"]] or [["concepts/foo"]]).
         # Try the clean version as an exact slug lookup before fuzzy scoring —
@@ -252,26 +329,32 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         # *contains* the clean target (CONTAINS_TARGET_SCORE = 0.82).
         clean = target.strip().strip('"').strip("'")
         if clean != target:
-            clean_norm = normalize_link_target(clean)
-            if clean_norm in slug_map:
-                clean_short = slug_map[clean_norm]
-                return next((p for p in data if p.short_name == clean_short), None)
-            # Also try basename-only lookup (for targets like "concepts/ieee").
-            clean_base = re.sub(r"\.md$", "", _get_file_name(clean)).lower()
-            if clean_base in slug_map:
-                clean_short = slug_map[clean_base]
-                return next((p for p in data if p.short_name == clean_short), None)
+            clean_base = re.sub(
+                r"\.md$", "", _get_file_name(clean), flags=re.IGNORECASE
+            )
+            for key in (
+                normalize_link_target(clean),
+                normalize_link_target(clean_base),
+            ):
+                page_index = slug_map.get(key)
+                if page_index is not None:
+                    return data[page_index], 1.0
 
         _MIN = BROKEN_LINK_SUGGESTION_MIN_SCORE
+        candidate_scores: dict[int, float] = {}
+        for fragment in _fragments(target):
+            for page_index in fragment_index.get(fragment, []):
+                candidate_scores[page_index] = candidate_scores.get(page_index, 0) + 1
         best: tuple[_PageData, float] | None = None
         best_ties = 0  # how many candidates share the current top score
-        for candidate in data:
+        for candidate_index in _top_candidates(candidate_scores, -1):
+            candidate = data[candidate_index]
             score = max(
                 string_similarity(target, candidate.slug, _MIN),
                 string_similarity(target, candidate.short_name, _MIN),
                 string_similarity(target, candidate.title, _MIN),
             )
-            if best is None or score > best[1]:
+            if best is None or score > best[1] + 1e-9:
                 best = (candidate, score)
                 best_ties = 1
             elif abs(score - best[1]) <= 1e-9:
@@ -289,15 +372,28 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             # counted in the single scan above — no second O(n) pass.)
             if best[1] <= CONTAINS_TARGET_SCORE and best_ties > 1:
                 return None
-            return best[0]
+            return best
         return None
 
-    def suggest_related_page(page: _PageData, direction: str) -> _PageData | None:
+    def suggest_related_page(
+        page: _PageData, page_index: int, direction: str
+    ) -> _PageData | None:
+        scores: dict[int, float] = {}
+        common_limit = max(20, math.ceil(len(data) * 0.25))
+        for token in page.tokens:
+            matches = token_index.get(token, [])
+            # Very common terms do not identify a useful related page and
+            # recreate the quadratic scan this index is intended to avoid.
+            if len(matches) > common_limit:
+                continue
+            weight = 1 if len(token) > 1 else SINGLE_CJK_TOKEN_WEIGHT
+            for candidate_index in matches:
+                scores[candidate_index] = scores.get(candidate_index, 0) + weight
+
         existing_outlinks = {normalize_link_target(o) for o in page.outlinks}
         best: tuple[_PageData, float] | None = None
-        for candidate in data:
-            if candidate.short_name == page.short_name:
-                continue
+        for candidate_index in _top_candidates(scores, page_index):
+            candidate = data[candidate_index]
             # Never suggest an aggregate file as a link source/target — the
             # headless auto-fixer would then append a [[wikilink]] INTO a
             # generated aggregate (overview.md/schema.md), violating the
@@ -314,12 +410,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 ]
                 if any(k in existing_outlinks for k in candidate_keys):
                     continue
-            overlap = 0.0
-            for token in page.tokens:
-                if token in candidate.tokens:
-                    overlap += 1 if len(token) > 1 else SINGLE_CJK_TOKEN_WEIGHT
-            if overlap == 0:
-                continue
+            overlap = scores.get(candidate_index, 0)
             folder_bonus = (
                 SAME_FOLDER_SCORE_BONUS
                 if page.short_name.split("/")[0] == candidate.short_name.split("/")[0]
@@ -334,31 +425,47 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             return best[0]
         return None
 
-    # Inbound link counts (case-insensitive slug resolution).
-    inbound_counts: dict[str, int] = {}
+    # Inbound counts use the same normalization and basename fallback as
+    # broken-link existence checks (NashSU 0.6.6 parity).
+    inbound_counts: dict[int, int] = {}
     for p in data:
         for link in p.outlinks:
-            lookup = link.lower()
-            if lookup in slug_map:
-                target = _relative_to_slug(slug_map[lookup]).lower()
-            else:
-                target = lookup
-            inbound_counts[target] = inbound_counts.get(target, 0) + 1
+            basename = re.sub(
+                r"\.md$", "", _get_file_name(link), flags=re.IGNORECASE
+            )
+            target = slug_map.get(normalize_link_target(link))
+            if target is None:
+                target = slug_map.get(normalize_link_target(basename))
+            if target is not None:
+                inbound_counts[target] = inbound_counts.get(target, 0) + 1
 
     # Memoize broken-target suggestions: suggest_broken_target depends only on
     # the target string and the (fixed) candidate set, so the same broken link
     # repeated across many pages is scanned once. On a wiki with lots of dangling
     # links this is a big win (e.g. 1856 broken links → 773 distinct targets).
-    _broken_cache: dict[str, "_PageData | None"] = {}
+    _broken_cache: dict[str, "tuple[_PageData, float] | None"] = {}
 
-    def _cached_broken_target(target: str) -> "_PageData | None":
+    def _cached_broken_target(target: str) -> "tuple[_PageData, float] | None":
         key = target.lower()
         if key not in _broken_cache:
             _broken_cache[key] = suggest_broken_target(target)
         return _broken_cache[key]
 
-    results: list[dict] = []
+    # Cross-directory basename collisions. The dedup/merge path is keyed by
+    # basename slug (_dedup._slug_from_path), so concepts/x.md and
+    # methodology/x.md collapse to one id. cross_source_dedup already REFUSES
+    # to merge such a group (guard 2026-07-11) rather than risk reading or
+    # deleting the wrong file, but that refusal only fires when a detector
+    # group happens to contain the slug — otherwise the collision stays
+    # invisible. known-issues.md documented a manual `find wiki -name
+    # "<slug>.md"` sweep as the workaround; this automates it (2026-07-30).
+    paths_by_basename: dict[str, list[str]] = {}
     for p in data:
+        stem = re.sub(r"\.md$", "", _get_file_name(p.short_name), flags=re.IGNORECASE)
+        paths_by_basename.setdefault(stem, []).append(p.short_name)
+
+    results: list[dict] = []
+    for page_index, p in enumerate(data):
         short_name = p.short_name
 
         # Aggregate files are scanned above (their outlinks count toward inbound),
@@ -366,9 +473,31 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         if _get_file_name(short_name) in AGGREGATE_FILES:
             continue
 
+        # Slug collision: same basename filed under two or more directories.
+        _stem = re.sub(r"\.md$", "", _get_file_name(short_name), flags=re.IGNORECASE)
+        _twins = [q for q in paths_by_basename.get(_stem, []) if q != short_name]
+        if _twins:
+            results.append({
+                "type": "slug-collision",
+                "severity": "warning",
+                "page": short_name,
+                "detail": (
+                    "Basename collides across directories with "
+                    + ", ".join(sorted(_twins))
+                    + ". Dedup/merge is keyed by basename, so these share one "
+                    "id and are skipped by cross-source dedup. Decide whether "
+                    "they are one topic (merge, keep the schema-correct type) "
+                    "or genuinely distinct (rename one to a type-specific "
+                    "slug)."
+                ),
+            })
+
         # Orphan: no inbound links.
-        if inbound_counts.get(p.slug.lower(), 0) == 0:
-            suggested_source = suggest_related_page(p, "source") if with_suggestions else None
+        if page_index not in inbound_counts:
+            suggested_source = (
+                suggest_related_page(p, page_index, "source")
+                if with_suggestions else None
+            )
             results.append({
                 "type": "orphan",
                 "severity": "info",
@@ -379,7 +508,10 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
 
         # No outbound links.
         if len(p.outlinks) == 0:
-            suggested_target = suggest_related_page(p, "target") if with_suggestions else None
+            suggested_target = (
+                suggest_related_page(p, page_index, "target")
+                if with_suggestions else None
+            )
             results.append({
                 "type": "no-outlinks",
                 "severity": "info",
@@ -390,18 +522,26 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
 
         # Broken links.
         for link in p.outlinks:
-            lookup = link.lower()
-            basename = re.sub(r"\.md$", "", _get_file_name(link)).lower()
-            if lookup in slug_map or basename in slug_map:
+            basename = re.sub(
+                r"\.md$", "", _get_file_name(link), flags=re.IGNORECASE
+            )
+            target = slug_map.get(normalize_link_target(link))
+            if target is None:
+                target = slug_map.get(normalize_link_target(basename))
+            if target is not None:
                 continue
-            suggested_target = _cached_broken_target(link) if with_suggestions else None
+            suggestion = _cached_broken_target(link) if with_suggestions else None
             results.append({
                 "type": "broken-link",
                 "severity": "warning",
                 "page": short_name,
                 "detail": f"Broken link: [[{link}]] — target page not found.",
                 "broken_target": link,
-                "suggested_target": suggested_target.short_name if suggested_target else None,
+                "suggested_target": suggestion[0].short_name if suggestion else None,
+                # improved-wiki extension (2026-07-10): the suggestion's
+                # similarity score, persisted so wiki-lint-fix.py can gate
+                # headless auto-rewrites (>=0.9 auto, below -> review).
+                "suggested_score": round(suggestion[1], 4) if suggestion else None,
             })
 
     return results

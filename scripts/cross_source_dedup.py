@@ -2,8 +2,8 @@
 """cross_source_dedup.py — 跨源去重 (cross-source dedup): lint-time, whole-wiki.
 
 Runs OFFLINE (user-invoked, not during ingest) across the ENTIRE wiki to merge
-duplicates that accumulated across multiple ingests. Distinct from Stage 2.5
-源内去重 (intra-source dedup, `_stage_2_5_dedup.py`) which is a conservative
+duplicates that accumulated across multiple ingests. Distinct from the in-source
+dedup 源内去重 (2.4 closing sub-step, ex-Stage 2.5, `_dedup_intra_source.py`) which is a conservative
 inline filter on one source's blocks before write. This module is thorough:
 backs up, writes a report, and rewrites all `[[wikilinks]]` + `related:`
 across the wiki so merges leave no broken links.
@@ -24,6 +24,8 @@ pass ``--dry-run`` to preview.
 Usage:
   python3 cross_source_dedup.py                          # LLM semantic dedup, auto-apply
   python3 cross_source_dedup.py --dry-run                # preview only, no writes
+  python3 cross_source_dedup.py --dry-run --no-llm       # batch-safe: candidate clusters only
+  python3 cross_source_dedup.py --token-only --no-llm    # deterministic, no Ollama/LLM at all
   python3 cross_source_dedup.py --project /path/to/wiki
   python3 cross_source_dedup.py --whitelist whitelist.json
 
@@ -37,6 +39,8 @@ import fcntl
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 from typing import List
@@ -46,17 +50,26 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 import _dedup  # noqa: E402
-# Cross-source dedup is pure LLM semantic (no deterministic prefilter) — NashSU
-# dedup.ts parity.
+# Cross-source dedup: embedding prefilter (DEDUP_PREFILTER_THRESHOLD=0.68, ON by
+# default) clusters candidates, then an LLM semantic detector confirms merges —
+# NashSU dedup-runner.ts parity. --no-embedding-prefilter falls back to a single
+# full-wiki LLM scan; --token-only uses deterministic token/CJK-bigram matching.
 from _core import ConversationPending  # noqa: E402
-from _paths import detect_runtime_dir  # noqa: E402
+from _exit_codes import HANDOFF_PENDING  # noqa: E402
+from _paths import detect_runtime_dir, iter_wiki_pages, atomic_write  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
 from _dedup_embedding import (  # noqa: E402
     candidate_pairs,
     cluster_by_pairs,
+    page_to_embedding_text,
     DuplicatePrefilterError,
+    _embed_config,
 )
 from _dedup_storage import add_not_duplicate, load_not_duplicates  # noqa: E402
+from _stage_2_base import (  # noqa: E402
+    _stage_2_title_words,
+    _stage_2_title_cjk_bigrams,
+)
 
 # ── Prefilter / detector tuning (NashSU dedup-runner.ts parity) ──────────────
 # The cross-source prefilter threshold is deliberately BELOW the intra-source
@@ -71,16 +84,39 @@ DEDUP_DETECTOR_BATCH_SUMMARIES = 80
 # (DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT). (NashSU dedup-runner.ts)
 DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT = 250
 
+# ── Fix 4 (2026-07-02): bounded, observable embedding access ─────────────────
+# The prefilter used to embed the ENTIRE wiki through
+# build_embeddings.embed_texts (3 retries × 120s timeout per 16-page batch,
+# retry sleeps, zero progress output) — on a large wiki that is minutes of
+# silence when healthy and HOURS when Ollama stalls. Cross-source dedup now
+# embeds through _embed_pages_bounded below: hard per-request timeout, skip-
+# with-warning per batch, heartbeat lines, and a consecutive-failure breaker.
+EMBED_BATCH_SIZE = 16           # pages per /v1/embeddings request
+EMBED_TIMEOUT_S = 60            # per-request timeout; one stalled batch is skipped, not fatal
+EMBED_PROBE_TIMEOUT_S = 10      # startup reachability probe — fail fast (<15s), never hang
+EMBED_HEARTBEAT_BATCHES = 8     # heartbeat line every N batches (N*16 pages)
+EMBED_MAX_CONSECUTIVE_FAILURES = 3  # abort embed phase after N failed batches in a row
+# --token-only candidate threshold: same 0.5 title-Jaccard Stage 2.3 uses with
+# the _stage_2_base ASCII-word / CJK-bigram matchers (separate branches).
+
+# ── Embedding cache (2026-07-05): avoid re-embedding 2771 pages across
+# conversation handoffs. The detector batches are serial (one batch per
+# invoke), but embeddings are reuseable across the whole run. Keyed by
+# a sha256 hash of sorted page IDs + count, so the cache auto-invalidates
+# when the wiki changes. Stored under .llm-wiki/dedup-embed-cache.json.
+DEDUP_EMBED_CACHE = "dedup-embed-cache.json"  # relative to runtime dir
+TOKEN_ONLY_JACCARD = 0.5
+
 # Aggregate files excluded from dedup candidates (NashSU embedding/graph parity:
 # aggregates aren't dedup'd). Keep in sync with _lint_suggest.AGGREGATE_FILES.
 ANCHOR_FILES = {"index.md", "log.md", "overview.md", "schema.md"}
-STATE_FILES = {
-    "lint-cache.json", "lint.json", "ingest-cache.json", "ingest-queue.json",
-    "ingest-lock", "lint-lock", "lint-semantic.json", "dedup-report.json",
-    "dedup-whitelist.json", "review.json", "review-suggestions.json",
-    "embed-cache.json",
-}
-SKIP_DIRS = {"lint", "REVIEW", "media"}
+# Shared canonical set + dedup-only extras (2026-07-12: literal copy folded
+# into _lint_suggest.STATE_FILES, same consolidation as the other three tools).
+from _lint_suggest import STATE_FILES as _SHARED_STATE_FILES  # noqa: E402
+STATE_FILES = _SHARED_STATE_FILES | {"dedup-whitelist.json", "dedup-embed-cache.json"}
+# Artifact dirs (lint/REVIEW/clusters/media) come from the shared
+# _paths.WIKI_ARTIFACT_DIRS via iter_wiki_pages — the local copy here had
+# drifted (missing `clusters`, so graph-generated hub pages leaked into dedup).
 
 
 # ── LLM call: conversation-mode only ───────────────────────────────────────
@@ -97,43 +133,48 @@ def make_llm_call(project_root: Path):
 # ── LLM semantic dedup (existing _dedup engine) ───────────────────
 
 def collect_wiki_pages(wiki_dir: Path) -> list[tuple[str, str]]:
-    out: list[tuple[str, str]] = []
-    if not wiki_dir.is_dir():
-        return out
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        if rel.name in ANCHOR_FILES or rel.name in STATE_FILES:
-            continue
-        if rel.parts and rel.parts[0] in SKIP_DIRS:
-            continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        out.append((f"wiki/{rel}", content))
-    return out
+    return [
+        (f"wiki/{rel}", content)
+        for rel, content in iter_wiki_pages(
+            wiki_dir, anchor_files=ANCHOR_FILES, state_files=STATE_FILES,
+        )
+    ]
 
 
 def load_whitelist(*paths: Path) -> list[list[str]]:
+    """Load user-supplied not-duplicate whitelist files.
+
+    A corrupt whitelist RAISES instead of silently returning [] (2026-07-12):
+    dedup auto-applies merges, so an unreadable whitelist + auto-apply means
+    destructive merges of pairs the user explicitly protected. A missing file
+    is still skipped (nothing was protected)."""
     pairs: list[list[str]] = []
     for p in paths:
         if not p or not p.exists():
             continue
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as ex:
+            raise RuntimeError(
+                f"dedup whitelist unreadable: {p} ({ex}). Fix or remove the "
+                f"file (expected JSON: {{\"not_duplicates\": [[slugA, slugB], ...]}} "
+                f"or a bare array) — refusing to run dedup without it, since "
+                f"auto-apply would merge pairs the whitelist protects."
+            ) from ex
         raw = data.get("not_duplicates", data) if isinstance(data, dict) else data
         if not isinstance(raw, list):
-            continue
+            raise RuntimeError(
+                f"dedup whitelist malformed: {p} — top level must be a list "
+                f"(or {{\"not_duplicates\": [...]}}), got {type(raw).__name__}. "
+                f"Fix or remove the file before running dedup."
+            )
         for pair in raw:
             if isinstance(pair, list) and len(pair) >= 2:
                 pairs.append([str(x) for x in pair[:2]])
     return pairs
 
 
-def _slug_from_path(project_relative: str) -> str:
-    return os.path.splitext(project_relative.split("/")[-1])[0]
+_slug_from_path = _dedup._slug_from_path
 
 
 def _is_embedding_coverage_error(ex: Exception) -> bool:
@@ -144,9 +185,120 @@ def _is_embedding_coverage_error(ex: Exception) -> bool:
             or "embedded only" in msg)
 
 
-def _normalize_slug_group_key(slugs) -> str:
-    """Order-independent, case-insensitive key. Mirrors NashSU normalizeSlugGroupKey."""
-    return "\t".join(sorted(s.lower() for s in slugs))
+# Order-independent, case-insensitive key — shared with the whitelist storage
+# layer (was a local copy with a "\t" separator; keys are only ever compared
+# against keys built by the same function, so unifying on "," is safe and
+# removes the cross-module drift risk).
+from _dedup_storage import canonical_key as _normalize_slug_group_key  # noqa: E402
+
+
+def check_embedding_endpoint(timeout: float = EMBED_PROBE_TIMEOUT_S) -> str | None:
+    """Fast reachability probe of the embedding endpoint (Fix 4). Returns None
+    when the server answers (any HTTP status counts as reachable), else a short
+    error string — so main() can fail in <15s with an actionable message
+    instead of grinding through per-batch retries against a dead endpoint."""
+    base_url, _model, _api_key = _embed_config()
+    probe_url = base_url.rstrip("/")
+    if probe_url.endswith("/v1"):
+        # Ollama answers "Ollama is running" at the server root.
+        probe_url = probe_url[: -len("/v1")] or base_url
+    try:
+        with urllib.request.urlopen(probe_url, timeout=timeout):
+            return None
+    except urllib.error.HTTPError:
+        return None  # server responded — reachable
+    except Exception as ex:  # URLError / timeout / connection refused ...
+        return str(ex)
+
+
+def _embed_pages_bounded(emb_pages: list[dict]) -> dict[str, list[float] | None]:
+    """Embed pages with a hard per-request timeout, heartbeat output, and a
+    consecutive-failure circuit breaker (Fix 4). A failed or timed-out batch is
+    skipped with a warning (members → None) so one bad batch can't kill or
+    stall the run; overall None-coverage is still enforced downstream by
+    candidate_pairs (DuplicatePrefilterError → graceful fallback/skip)."""
+    base_url, model, api_key = _embed_config()
+    url = f"{base_url.rstrip('/')}/embeddings"
+    out: dict[str, list[float] | None] = {}
+    total = len(emb_pages)
+    consecutive_failures = 0
+    print(f"[dedup] embedding {total} page(s) via {url} "
+          f"(batch {EMBED_BATCH_SIZE}, timeout {EMBED_TIMEOUT_S}s per request) ...",
+          flush=True)
+    for i in range(0, total, EMBED_BATCH_SIZE):
+        batch = emb_pages[i:i + EMBED_BATCH_SIZE]
+        payload = {"model": model,
+                   "input": [page_to_embedding_text(p) for p in batch]}
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode("utf-8"),
+            headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=EMBED_TIMEOUT_S) as resp:
+                data = json.loads(resp.read().decode("utf-8")).get("data", [])
+            vecs = [item.get("embedding") for item in data]
+            for p, v in zip(batch, vecs):
+                out[p["id"]] = list(v) if v else None
+            for p in batch[len(vecs):]:  # short response → rest of batch None
+                out[p["id"]] = None
+            consecutive_failures = 0
+        except Exception as ex:
+            consecutive_failures += 1
+            print(f"[dedup] WARNING: embedding batch {i}-{i + len(batch)} failed "
+                  f"({ex}); skipping {len(batch)} page(s).", flush=True)
+            for p in batch:
+                out[p["id"]] = None
+            if consecutive_failures >= EMBED_MAX_CONSECUTIVE_FAILURES:
+                print(f"[dedup] WARNING: {consecutive_failures} consecutive embedding "
+                      f"failures — aborting embed phase (remaining pages skipped; "
+                      f"consider --token-only).", flush=True)
+                for p in emb_pages[i + EMBED_BATCH_SIZE:]:
+                    out[p["id"]] = None
+                break
+        done = min(i + EMBED_BATCH_SIZE, total)
+        if ((i // EMBED_BATCH_SIZE + 1) % EMBED_HEARTBEAT_BATCHES == 0
+                or done == total):
+            print(f"[dedup] embedding progress: {done}/{total} page(s)", flush=True)
+    return out
+
+
+def _jaccard_over(a: set, b: set) -> bool:
+    """True when both sets are non-empty and Jaccard > TOKEN_ONLY_JACCARD
+    (Stage 2.3 parity: each branch requires both sides non-empty)."""
+    if not a or not b:
+        return False
+    return len(a & b) / len(a | b) > TOKEN_ONLY_JACCARD
+
+
+def _token_candidate_pairs(summaries) -> list[tuple[str, str]]:
+    """Deterministic no-network candidate pairs from title overlap (Fix 4,
+    --token-only): the same ASCII-word and CJK-bigram Jaccard matchers Stage
+    2.3 uses (_stage_2_base), threshold 0.5 on either branch. An inverted
+    token index limits scoring to pairs sharing >=1 token."""
+    words = {s.slug: _stage_2_title_words(s.title or s.slug) for s in summaries}
+    cjk = {s.slug: _stage_2_title_cjk_bigrams(s.title or s.slug) for s in summaries}
+    index: dict[str, set[str]] = {}
+    for slug in words:
+        for tok in words[slug] | cjk[slug]:
+            index.setdefault(tok, set()).add(slug)
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for slug in words:
+        candidates: set[str] = set()
+        for tok in words[slug] | cjk[slug]:
+            candidates |= index[tok]
+        candidates.discard(slug)
+        for other in candidates:
+            key = (slug, other) if slug < other else (other, slug)
+            if key in seen:
+                continue
+            seen.add(key)
+            if (_jaccard_over(words[slug], words[other])
+                    or _jaccard_over(cjk[slug], cjk[other])):
+                pairs.append(key)
+    return pairs
 
 
 def _filter_whitelisted_pairs(pairs, not_duplicates):
@@ -163,14 +315,33 @@ def _filter_whitelisted_pairs(pairs, not_duplicates):
 
 def _batch_candidate_clusters(clusters, summary_by_slug):
     """Pack candidate clusters into <=DEDUP_DETECTOR_BATCH_SUMMARIES-summary
-    batches so a very large cluster doesn't blow up one LLM call. Mirrors
-    NashSU batchCandidateClusters. (NashSU dedup-runner.ts)"""
+    batches so a very large cluster doesn't blow up one LLM call.
+
+    Deliberate non-parity fix (2026-07-10): NashSU's batchCandidateClusters
+    (dedup-runner.ts) never sub-splits a single oversized cluster — it's
+    packed whole regardless of the cap, byte-for-byte confirmed against the
+    local NashSU v0.6.0 checkout. RadarWiki hit this for real: a loose 0.68
+    similarity threshold's transitive union-find chaining across ~7000
+    topically-cohesive pages produced one 4606-member cluster, blowing a
+    single LLM call 57x past the 80-item cap. Any cluster larger than the cap
+    is now split into its own <=cap chunks; a pending (not-yet-flushed) small
+    batch is flushed first so the oversized cluster's chunks don't merge into
+    unrelated candidates."""
     batches: List[list] = []
     current: list = []
     for cluster in clusters:
         cluster_summaries = [summary_by_slug[sid] for sid in cluster
                              if sid in summary_by_slug]
         if len(cluster_summaries) < 2:
+            continue
+        if len(cluster_summaries) > DEDUP_DETECTOR_BATCH_SUMMARIES:
+            if current:
+                batches.append(current)
+                current = []
+            for i in range(0, len(cluster_summaries), DEDUP_DETECTOR_BATCH_SUMMARIES):
+                chunk = cluster_summaries[i:i + DEDUP_DETECTOR_BATCH_SUMMARIES]
+                if len(chunk) >= 2:
+                    batches.append(chunk)
             continue
         if (current
                 and len(current) + len(cluster_summaries) > DEDUP_DETECTOR_BATCH_SUMMARIES):
@@ -200,7 +371,46 @@ def _unique_duplicate_groups(groups):
     return out
 
 
-def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilter):
+def _load_dedup_embed_cache_v2(runtime: Path) -> dict[str, dict]:
+    """Load the per-page embedding cache: {page_id: {"h": <md5 of the exact
+    embedding text>, "v": [floats]}}.
+
+    v2 (2026-07-11, #1 cache brittleness): the old v1 cache was keyed on the
+    GLOBAL page set (sorted ids + count) — ANY page added/removed/renamed
+    invalidated the whole file and forced a full re-embed of the entire wiki
+    (~7.5K pages / tens of minutes), demonstrated live when a 2-page id
+    dedupe change cascaded into a full re-detection. Per-page content hashes
+    make the cache incremental: only new/changed pages are embedded. Returns
+    {} on miss/corrupt/v1-format (v1 is simply re-populated as v2 on save).
+    """
+    cache_path = runtime / DEDUP_EMBED_CACHE
+    if not cache_path.exists():
+        return {}
+    try:
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        if data.get("version") != 2:
+            return {}
+        pages = data.get("pages", {})
+        return {k: v for k, v in pages.items()
+                if isinstance(v, dict) and v.get("h") and v.get("v")}
+    except Exception:
+        return {}
+
+
+def _save_dedup_embed_cache_v2(runtime: Path, entries: dict[str, dict]) -> None:
+    """Persist the per-page embedding cache (atomic write)."""
+    cache_path = runtime / DEDUP_EMBED_CACHE
+    data = {"version": 2, "pages": entries}
+    # Standalone CLI can run on a project that never ingested (no .llm-wiki/
+    # yet) — create the runtime dir before the atomic tmp→rename write.
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(cache_path)
+
+
+def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilter,
+                   *, token_only=False, no_llm=False, runtime: Path | None = None):
     """Run the LLM duplicate detector, optionally pre-clustered by embeddings.
 
     With ``embedding_prefilter`` (GAP-3): embed every page's short description,
@@ -208,54 +418,115 @@ def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilt
     detector per size-bounded batch — so each LLM call sees a small candidate
     set instead of the whole wiki in one prompt.
 
+    Fix 4 modes: ``token_only`` replaces the embedding step with deterministic
+    title-token/CJK-bigram matching (no network); ``no_llm`` stops after
+    clustering and returns the clusters as unconfirmed "candidate" groups.
+
     Empty-prefilter / coverage handling follows NashSU dedup-runner:
       - zero candidate pairs: full-scan only when summaries<=250 (recall for
         small/medium wikis); large wikis return [] (avoids the #359 hang).
       - coverage error: fall back to a full LLM scan only for small/medium
         wikis; large wikis skip (return []) rather than hang.
     """
-    if not embedding_prefilter:
+    if not embedding_prefilter and not token_only:
         return _dedup.detect_duplicate_groups(summaries, llm_call, not_duplicates=not_duplicates)
 
     summary_by_slug = {s.slug: s for s in summaries}
-    emb_pages: List[dict] = []
-    for path, content in pages:
-        slug = _slug_from_path(path)
-        if slug not in summary_by_slug:
-            continue
-        s = summary_by_slug[slug]
-        # NashSU vectors summary.description (the short blurb), not the full
-        # body, for candidate generation. (NashSU summaryToEmbeddingPage)
-        emb_pages.append({"id": slug, "title": s.title, "tags": s.tags,
-                          "body": s.description or ""})
+    if token_only:
+        page_ids = [s.slug for s in summaries]
+        pairs = _token_candidate_pairs(summaries)
+        print(f"[dedup] token-only prefilter → {len(pairs)} raw candidate pair(s).",
+              flush=True)
+    else:
+        emb_pages: List[dict] = []
+        _seen_slugs: set[str] = set()
+        for path, content in pages:
+            slug = _slug_from_path(path)
+            if slug not in summary_by_slug:
+                continue
+            # Two files with the same basename in different dirs (e.g.
+            # queries/skolnik-m-i.md and entities/skolnik-m-i.md) map to one
+            # slug — only embed it once, or downstream id-keyed structures get
+            # duplicate entries (observed 2026-07-10: the same stub listed
+            # twice in a detector batch). The broader slug-collision issue
+            # (slug-keyed merge acting on the wrong file) is tracked in
+            # references/known-issues.md.
+            if slug in _seen_slugs:
+                continue
+            _seen_slugs.add(slug)
+            s = summary_by_slug[slug]
+            # NashSU vectors summary.description (the short blurb), not the full
+            # body, for candidate generation. (NashSU summaryToEmbeddingPage)
+            emb_pages.append({"id": slug, "title": s.title, "tags": s.tags,
+                              "body": s.description or ""})
+        page_ids = [pg["id"] for pg in emb_pages]
 
-    try:
-        # NashSU dedup-runner overrides the module default (0.82, the
-        # intra-source value) with DEDUP_PREFILTER_THRESHOLD=0.68 so
-        # cross-language/abbrev aliases aren't missed. (NashSU dedup-runner.ts)
-        pairs = candidate_pairs(emb_pages, threshold=DEDUP_PREFILTER_THRESHOLD)
-    except DuplicatePrefilterError as ex:
-        if (len(summaries) > DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT
-                and _is_embedding_coverage_error(ex)):
-            print(f"[dedup] embedding prefilter coverage too low ({ex}); "
-                  f"skipping full fallback for large wiki "
-                  f"({len(summaries)} > {DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT}).")
-            return []
-        print(f"[dedup] embedding prefilter failed ({ex}); "
-              f"falling back to full scan.")
-        return _dedup.detect_duplicate_groups(summaries, llm_call, not_duplicates=not_duplicates)
+        try:
+            # Per-page incremental embedding cache (v2, 2026-07-11): reuse the
+            # vector of every page whose exact embedding text is unchanged
+            # (md5), embed only new/changed pages. This also removes the old
+            # cache-hit path's latent crash (it passed a lambda where
+            # candidate_pairs expects a dict — never triggered because the v1
+            # global key never actually hit).
+            import hashlib as _hashlib
+            cached = _load_dedup_embed_cache_v2(runtime) if runtime is not None else {}
+            hashes = {
+                pg["id"]: _hashlib.md5(
+                    page_to_embedding_text(pg).encode("utf-8")).hexdigest()
+                for pg in emb_pages
+            }
+            embeddings: dict = {}
+            to_embed: List[dict] = []
+            for pg in emb_pages:
+                entry = cached.get(pg["id"])
+                if entry and entry.get("h") == hashes[pg["id"]]:
+                    embeddings[pg["id"]] = entry["v"]
+                else:
+                    to_embed.append(pg)
+            if to_embed:
+                print(f"[dedup] embedding cache: {len(embeddings)} hit(s), "
+                      f"{len(to_embed)} page(s) to embed", flush=True)
+                # NashSU dedup-runner overrides the module default (0.82, the
+                # intra-source value) with DEDUP_PREFILTER_THRESHOLD=0.68 so
+                # cross-language/abbrev aliases aren't missed. (NashSU dedup-runner.ts)
+                # Embeddings come from the bounded embedder (Fix 4) — hard timeouts,
+                # heartbeat, per-batch skip — not the unbounded embed_pages path.
+                embeddings.update(_embed_pages_bounded(to_embed))
+            else:
+                print(f"[dedup] embedding cache: all {len(embeddings)} page(s) "
+                      f"hit (per-page, content-hashed)", flush=True)
+            if runtime is not None:
+                # Prune ids no longer in the wiki; store only successful vectors.
+                _save_dedup_embed_cache_v2(runtime, {
+                    pid: {"h": hashes[pid], "v": vec}
+                    for pid, vec in embeddings.items()
+                    if vec and pid in hashes
+                })
+            pairs = candidate_pairs(emb_pages, threshold=DEDUP_PREFILTER_THRESHOLD,
+                                    embeddings=embeddings)
+        except DuplicatePrefilterError as ex:
+            if no_llm or (len(summaries) > DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT
+                          and _is_embedding_coverage_error(ex)):
+                print(f"[dedup] embedding prefilter coverage too low ({ex}); "
+                      f"skipping full fallback "
+                      f"({len(summaries)} summaries; try --token-only).", flush=True)
+                return []
+            print(f"[dedup] embedding prefilter failed ({ex}); "
+                  f"falling back to full scan.")
+            return _dedup.detect_duplicate_groups(summaries, llm_call, not_duplicates=not_duplicates)
 
     if not pairs:
         # Preserve recall for small/medium wikis: a weak or non-multilingual
         # embedder can miss exactly the cross-language aliases the detector is
         # meant to find. Large wikis return [] — the old full scan is what
-        # caused #359 hangs. (NashSU dedup-runner.ts)
-        if len(summaries) <= DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT:
+        # caused #359 hangs. (NashSU dedup-runner.ts) Token-only / no-LLM modes
+        # never full-scan (deterministic / no detector available).
+        if (not token_only and not no_llm
+                and len(summaries) <= DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT):
             return _dedup.detect_duplicate_groups(
                 summaries, llm_call, not_duplicates=not_duplicates)
-        print(f"[dedup] no candidate pairs and large wiki "
-              f"({len(summaries)} > {DEDUP_EMPTY_PREFILTER_FULL_SCAN_LIMIT}); "
-              f"skipping detector.")
+        print(f"[dedup] no candidate pairs ({len(summaries)} summaries); "
+              f"skipping detector.", flush=True)
         return []
 
     # Drop whitelisted pairs BEFORE clustering. (NashSU dedup-runner.ts)
@@ -263,24 +534,49 @@ def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilt
     if not filtered_pairs:
         return []
 
-    clusters = cluster_by_pairs([pg["id"] for pg in emb_pages], filtered_pairs)
+    clusters = cluster_by_pairs(page_ids, filtered_pairs)
     if not clusters:
         return []
+    print(f"[dedup] prefilter → {len(filtered_pairs)} candidate pair(s), "
+          f"{len(clusters)} candidate cluster(s).", flush=True)
+
+    if no_llm:
+        # --no-llm: report prefilter clusters directly, unconfirmed. run_phase2
+        # forces preview for these (never auto-merged).
+        return [{"slugs": sorted(c),
+                 "reason": "prefilter candidate cluster (not LLM-confirmed; --no-llm)",
+                 "confidence": "candidate"} for c in clusters]
 
     batches = _batch_candidate_clusters(clusters, summary_by_slug)
-    print(f"[dedup] embedding prefilter → {len(filtered_pairs)} candidate pair(s), "
-          f"{len(clusters)} cluster(s), {len(batches)} detector batch(es).")
+    print(f"[dedup] {len(batches)} detector batch(es).", flush=True)
+    # Eager-drain (2026-07-10, mirrors wiki-lint-semantic.py / ingest.py Stage
+    # 2.4): an uncached batch's prompt is written by llm_call() before it
+    # raises ConversationPending, so catch it per batch and CONTINUE instead
+    # of stopping at the first pending one — a single invocation thus emits
+    # prompts for ALL currently-uncached batches, and the calling agent can
+    # dispatch one subagent per prompt in parallel. Batches are disjoint
+    # clusters, only deduped once at the end via _unique_duplicate_groups, so
+    # there is no cross-batch ordering dependency to preserve.
     groups: List[dict] = []
+    pending = 0
     for batch in batches:
-        sub_groups = _dedup.detect_duplicate_groups(
-            batch, llm_call, not_duplicates=not_duplicates)
+        try:
+            sub_groups = _dedup.detect_duplicate_groups(
+                batch, llm_call, not_duplicates=not_duplicates)
+        except ConversationPending:
+            pending += 1
+            continue
         groups.extend(sub_groups)
+    if pending > 0:
+        print(f"[dedup] {pending}/{len(batches)} detector batch(es) pending — "
+              f"prompts emitted for parallel answering", flush=True)
+        raise ConversationPending()
     return _unique_duplicate_groups(groups)
 
 
 def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
                today=None, apply_low_confidence=False,
-               embedding_prefilter=True) -> dict:
+               embedding_prefilter=True, token_only=False, no_llm=False) -> dict:
     wiki_dir = project_root / "wiki"
     runtime = detect_runtime_dir(project_root)
     pages = collect_wiki_pages(wiki_dir)
@@ -294,8 +590,18 @@ def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
     # read and the --mark-not-duplicate write share one file + format.
     not_duplicates += load_not_duplicates(runtime)
 
-    print(f"[dedup] scanning {len(summaries)} pages for semantic duplicates ...")
-    groups = _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilter)
+    if no_llm and apply:
+        # --no-llm clusters are unconfirmed candidates — never auto-merge them.
+        print("[dedup] --no-llm: candidates are not LLM-confirmed — preview only, "
+              "no merges.", flush=True)
+        apply = False
+
+    # Early progress output (Fix 4): counts BEFORE any network work.
+    print(f"[dedup] scanning {len(summaries)} pages ({len(pages)} wiki files) "
+          f"for semantic duplicates ...", flush=True)
+    groups = _detect_groups(summaries, pages, llm_call, not_duplicates,
+                            embedding_prefilter, token_only=token_only,
+                            no_llm=no_llm, runtime=runtime)
     print(f"[dedup] detected {len(groups)} duplicate group(s).")
     for i, g in enumerate(groups, 1):
         print(f"  group {i}: {g['slugs']}  ({g['confidence']}) — {g['reason']}")
@@ -346,13 +652,42 @@ def _merge_lock(runtime: Path):
 
 def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
                   apply_low_confidence) -> list:
-    """Merge each detected group and persist. Must run under _merge_lock."""
+    """Merge each detected group and persist. Must run under _merge_lock.
+
+    Snapshot freshness (2026-07-10): the in-memory page snapshot is updated
+    after every merge (canonical content replaced, rewrites applied, deleted
+    pages dropped) so a later group sharing a page with an earlier one merges
+    the POST-merge content instead of a stale pre-merge copy. Previously the
+    snapshot was built once and never refreshed — masked in practice because
+    conversation mode usually processed one group per process invocation
+    (re-reading from disk each time), but the parallel-eager flow applies many
+    groups in one invocation.
+    """
     applied: list = []
     backup_dir = runtime / f"dedup-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     backup_dir.mkdir(parents=True, exist_ok=True)
-    pages_by_slug = {_slug_from_path(p): (p, c) for p, c in pages}
+    content_by_path = dict(pages)
+    pending_merges = 0
     for g in groups:
         if g.get("confidence") == "low" and not apply_low_confidence:
+            continue
+        pages_by_slug = {_slug_from_path(p): (p, c)
+                         for p, c in content_by_path.items()}
+        # Slug-collision guard (2026-07-11): the whole merge path is keyed by
+        # basename slug, so two files with the same basename in different dirs
+        # (e.g. queries/x.md and entities/x.md) silently shadow each other in
+        # pages_by_slug — a merge on such a group could read/delete the WRONG
+        # file. Refuse mechanically instead of relying on a manual pre-check;
+        # see references/known-issues.md (跨目录同名 basename 的 slug 碰撞).
+        slug_counts: dict = {}
+        for p in content_by_path:
+            s = _slug_from_path(p)
+            slug_counts[s] = slug_counts.get(s, 0) + 1
+        colliding = [s for s in g["slugs"] if slug_counts.get(s, 0) > 1]
+        if colliding:
+            print(f"[dedup] SKIP group {g['slugs']}: slug collision — "
+                  f"{colliding} maps to multiple files across dirs; resolve "
+                  f"manually (see known-issues.md)", flush=True)
             continue
         canonical_slug = g["slugs"][0]
         group_pages = []
@@ -365,16 +700,56 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
             group_pages.append({"slug": slug, "path": path, "content": content})
         if len(group_pages) < 2:
             continue
-        other_pages = [{"path": p, "content": c} for p, c in pages
-                       if _slug_from_path(p) not in {gp["slug"] for gp in group_pages}]
-        result = _dedup.merge_duplicate_group(
-            group_pages, canonical_slug, other_pages, llm_call, today=today)
+        group_slugs = {gp["slug"] for gp in group_pages}
+        other_pages = [{"path": p, "content": c}
+                       for p, c in content_by_path.items()
+                       if _slug_from_path(p) not in group_slugs]
+        # Eager-drain (2026-07-10): an uncached merge's prompt is written by
+        # llm_call before it raises ConversationPending — catch it and
+        # CONTINUE so one invocation emits ALL uncached merge prompts, then
+        # re-raise once at the end. Critical here (unlike the semantic-lint /
+        # detector loops, where it was only a latency win): every APPLIED
+        # merge changes pages on disk, and the embedding cache + detector
+        # conversation cache are content/id-keyed — a re-invocation after one
+        # applied merge invalidates the entire detection layer. Emitting all
+        # prompts while the disk is unchanged keeps those caches hot; the
+        # answered merges then apply together in one later invocation. Safe
+        # for groups sharing a page: the snapshot sync below changes the later
+        # group's prompt content after the earlier one applies, so a stale
+        # pre-merge answer misses the content-hash cache and re-pends fresh.
+        try:
+            result = _dedup.merge_duplicate_group(
+                group_pages, canonical_slug, other_pages, llm_call, today=today)
+        except ConversationPending:
+            pending_merges += 1
+            continue
         _persist_merge(project_root, result, backup_dir)
+        # Sync the in-memory snapshot with what _persist_merge just wrote.
+        for p in result.pages_to_delete:
+            content_by_path.pop(p, None)
+        content_by_path[result.canonical_path] = result.canonical_content
+        for r in result.rewrites:
+            content_by_path[r["path"]] = r["new_content"]
         removed = {_slug_from_path(p) for p in result.pages_to_delete}
         applied.append({"canonical": canonical_slug, "merged_away": sorted(removed),
                         "rewrites": [r["path"] for r in result.rewrites]})
         print(f"[dedup] merged → {canonical_slug} "
               f"(removed {sorted(removed)}, {len(result.rewrites)} rewrite(s))")
+    if pending_merges:
+        print(f"[dedup] {pending_merges} merge prompt(s) pending — emitted for "
+              f"parallel answering ({len(applied)} merge(s) applied this pass)",
+              flush=True)
+        # Partial-apply record (2026-07-12): merges applied THIS pass already
+        # changed files on disk, but the normal report write in run_phase2 is
+        # skipped when ConversationPending propagates — write a partial report
+        # first so no on-disk merge is ever unrecorded.
+        if applied:
+            _write_report(runtime / "dedup-report.json", {
+                "generatedAt": datetime.now().isoformat(timespec="seconds"),
+                "apply": True, "partial": True,
+                "pendingMerges": pending_merges,
+                "phase2": {"groups": groups, "applied": applied}})
+        raise ConversationPending()
     return applied
 
 
@@ -382,12 +757,12 @@ def _persist_merge(project_root, result, backup_dir) -> None:
     for b in result.backup:
         bpath = backup_dir / b["path"]
         bpath.parent.mkdir(parents=True, exist_ok=True)
-        bpath.write_text(b["content"], encoding="utf-8")
+        atomic_write(bpath, b["content"])
     canon = project_root / result.canonical_path
     canon.parent.mkdir(parents=True, exist_ok=True)
-    canon.write_text(result.canonical_content, encoding="utf-8")
+    atomic_write(canon, result.canonical_content)
     for r in result.rewrites:
-        (project_root / r["path"]).write_text(r["new_content"], encoding="utf-8")
+        atomic_write(project_root / r["path"], r["new_content"])
     for p in result.pages_to_delete:
         dpath = project_root / p
         if dpath.exists():
@@ -398,18 +773,13 @@ def _persist_merge(project_root, result, backup_dir) -> None:
         idx = index_path.read_text(encoding="utf-8")
         pruned = _dedup.rewrite_index_md(idx, removed_slugs)
         if pruned != idx:
-            # Atomic write (tmp + rename) so a crash mid-write can't corrupt
-            # index.md — matches _write_report and the Stage 3.5 writer.
-            tmp = index_path.with_suffix(index_path.suffix + ".tmp")
-            tmp.write_text(pruned, encoding="utf-8")
-            tmp.replace(index_path)
+            # Atomic write so a crash mid-write can't corrupt index.md.
+            atomic_write(index_path, pruned)
 
 
 def _write_report(path: Path, report: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    atomic_write(path, json.dumps(report, ensure_ascii=False, indent=2))
 
 
 # ── main ───────────────────────────────────────────────────────────────────
@@ -435,6 +805,13 @@ def main(argv: list[str] | None = None) -> int:
                         action="store_false",
                         help="Disable the embedding prefilter; run a single full-wiki "
                              "LLM detector scan (small wikis only — can hang on large ones)")
+    parser.add_argument("--token-only", action="store_true",
+                        help="Deterministic candidate detection from title token / "
+                             "CJK-bigram overlap (Stage 2.3 matchers) — no Ollama / "
+                             "embeddings needed")
+    parser.add_argument("--no-llm", action="store_true",
+                        help="Skip the LLM detector/merge stages: report prefilter "
+                             "candidate clusters only (implies preview — no merges)")
     parser.add_argument("--whitelist", action="append", default=[])
     parser.add_argument("--mark-not-duplicate", nargs=2, metavar=("SLUG_A", "SLUG_B"),
                         default=None,
@@ -442,9 +819,22 @@ def main(argv: list[str] | None = None) -> int:
                              "(idempotent) so the detector won't re-suggest it, then exit.")
     args = parser.parse_args(argv)
 
+    # Fix 4: batch operators run this non-interactively — line-buffer stdout so
+    # progress lines appear as they happen instead of sitting in a block buffer
+    # until exit (the "no output" half of the hang report).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, OSError):
+        pass
+
     project_root = Path(args.project or os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
     if not (project_root / "wiki").is_dir():
         print(f"ERROR: wiki/ not found under {project_root}", file=sys.stderr)
+        return 2
+
+    if args.no_llm and not (args.embedding_prefilter or args.token_only):
+        print("ERROR: --no-llm needs a candidate source; drop "
+              "--no-embedding-prefilter or add --token-only.", file=sys.stderr)
         return 2
 
     # Whitelist WRITE action: record a not-duplicate pair and exit (no LLM,
@@ -461,6 +851,17 @@ def main(argv: list[str] | None = None) -> int:
 
     apply = not args.dry_run
 
+    # Fix 4: fail fast (<15s) when the embedding endpoint is down, instead of
+    # grinding through per-batch timeouts against a dead/stalled Ollama.
+    if args.embedding_prefilter and not args.token_only:
+        probe_error = check_embedding_endpoint()
+        if probe_error:
+            print(f"ERROR: embedding endpoint unreachable ({probe_error}). "
+                  f"Start Ollama, or re-run with --token-only (deterministic, "
+                  f"no embeddings) or --no-embedding-prefilter (small wikis).",
+                  file=sys.stderr)
+            return 2
+
     llm_call, _ = make_llm_call(project_root)
     whitelist_pairs = load_whitelist(*[Path(p) for p in args.whitelist])
     try:
@@ -468,11 +869,12 @@ def main(argv: list[str] | None = None) -> int:
                    whitelist_pairs=whitelist_pairs,
                    today=lambda: date.today().isoformat(),
                    apply_low_confidence=args.apply_low_confidence,
-                   embedding_prefilter=args.embedding_prefilter)
+                   embedding_prefilter=args.embedding_prefilter,
+                   token_only=args.token_only, no_llm=args.no_llm)
     except ConversationPending:
         print("[dedup] conversation handoff — answer prompt under "
               "<runtime>/conversation/dedup/ and re-invoke.", file=sys.stderr)
-        return 101
+        return HANDOFF_PENDING
 
     print("[dedup] done.")
     return 0

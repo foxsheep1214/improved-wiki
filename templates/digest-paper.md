@@ -1,7 +1,7 @@
 # digest-paper.md — Ingest template for academic / industry papers
 
 > **Use this template** when a file lives at `raw/Paper/<...>/*.pdf`.
-> Differs from `digest-book.md` only in: (1) lighter output (2-5 concepts vs 10-50), (2) no chapter structure, (3) focuses on methodology + results + comparison to related work.
+> Differs from `digest-book.md` in emphasis, not a page quota: no chapter structure, and stronger focus on methodology, results, and comparison to related work.
 
 ---
 
@@ -64,7 +64,7 @@ connections_to_existing_wiki:
     relationship: "extends" | "applies" | "cites" | "contrasts"
 
 recommended_wiki_structure:
-  new_concept_pages:  # 2-5 expected
+  new_concept_pages:  # genuinely important standalone concepts only; no count target
     - slug: "<concept-slug>"
       rationale: "<why this needs its own page>"
   new_entity_pages:
@@ -85,55 +85,16 @@ reproducibility:
 Files to write (lighter than book):
 
 1. **`wiki/sources/<Authors> - <Year> - <Short-Title>.md`** — source page
-   - Body: paper metadata, problem statement, methodology, key results, comparison table, "参见"
+   - Body: a concise source summary; prioritize the problem, methodology, key
+     results, evidence, and caveats, but choose only useful sections rather
+     than following a fixed checklist
 
-2. **`wiki/concepts/<slug>.md`** — 2-5 concept pages
+2. **`wiki/concepts/<slug>.md`** — pages only for key ideas the paper introduces or applies non-trivially
    - Smaller than book concepts: focus on the paper's novel contribution, not background
 
-3. **`wiki/entities/<slug>.md`** — 1-3 entity pages (the paper's authors, if notable)
+3. **`wiki/entities/<slug>.md`** — pages only for key named things materially discussed (authors only when genuinely notable in context)
 
 4. **Update `wiki/index.md`**, **`wiki/log.md`**, **`wiki/overview.md`**
-
----
-
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest research / industry papers into a structured wiki.
-
-# Input
-- Paper title: {title}
-- Paper authors: {authors}
-- Year: {year}
-- Venue: {venue}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <list of slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-A paper is expected to produce 2-5 new concept pages, focused on the paper's NOVEL contribution. Don't extract textbook background as concept pages.
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<raw-rel-path>.md (with frontmatter)
-### File 2..N: wiki/concepts/<slug>.md (2-5 files)
-### File N+1..M: wiki/entities/<slug>.md (1-3 files, only if author is notable)
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per improved-wiki §6.2)
-- Frontmatter must follow improved-wiki §5
-- Do NOT invent content not in the source text
-- For math, use LaTeX with $...$ inline and $$...$$ display
-- Concept pages must add value beyond what existing wiki already says — don't re-derive things already in other papers
-```
 
 ---
 
@@ -158,6 +119,6 @@ File contents in order:
 
 ## See also
 
-- `SKILL.md` §5, §6
+- `references/naming-conventions.md` — frontmatter schema + wikilink naming
 - `templates/digest-book.md` — for full-length books
 - `templates/digest-datasheet.md` — for component datasheets (different focus)

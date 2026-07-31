@@ -4,21 +4,17 @@
 
 ## 何时使用这条 pipeline
 
-- 任意类型的 PDF（text/scanned/mixed 不再分流）：fitz 采样（`_stage_1_1_sample_pdf`，见 `ingest-stages-mandatory.md` Stage 1.1）只做 **garbled 字体检测**，统一交给这条 pipeline，hybrid-engine/auto 内部按页判 txt vs VLM OCR。method 标签：
-  - 正常 → `mineru-api`（auto：有文字层走 txt、无文字层走 VLM OCR）
-  - garbled 字体 PDF（文字层是乱码）→ `mineru-api-ocr`（强制 `parse_method=ocr`，避免 auto 读乱码层）
-  - 提取 <2000 字符 → 上述标签加 `-low-quality` 后缀
+- 任意类型的 PDF（text/scanned/mixed 不再分流）：统一交给这条 pipeline，hybrid-engine/auto 内部按页判 txt vs VLM OCR。method 标签统一为 `mineru-api`。（garbled 字体预检测与提取质量门已于 2026-07-08 移除，对齐 NashSU——`_stage_1_1_sample_pdf` 的 fitz 采样现仅供 `--dry-run` 类型估算，不再影响提取路径。）
 - 不适用：`.txt`/`.md`（直接读文件）、`.pptx`/`.docx`（zipfile/XML 解析，完全不碰 minerU）。
 
 ## 完整流程
 
 ```
-1. PyMuPDF 预检（仍然在用，5 秒级，仅做类型判断不做提取）
-   └─ 采样判断 text/scanned/mixed（详见 ingest-stages-mandatory.md 信号①②③④）
+1. （2026-07-08 起无预检——所有 PDF 直接进入下一步；PyMuPDF 采样仅剩 --dry-run 用）
 2. 起一个持久化本地 minerU API 服务器（mineru.cli.fast_api，端口 MINERU_API_PORT 默认 19999）
    ├─ 系统级文件锁 _stage_1_1_acquire_mineru_lock()（fcntl.flock，超时 3600s）确保只有 1 本书在跑
    └─ 1 页 warmup，避免冷启动延迟计入第一个 chunk
-3. PyMuPDF 渲染页面 + 切分 chunks（50 页/chunk，MINERU_CHUNK_SIZE）
+3. PyMuPDF 渲染页面 + 切分 chunks（32 页/chunk，MINERU_CHUNK_SIZE，2026-07-08 由 50 调整）
 4. 每个 chunk POST 本地 /file_parse（multipart，return_images + return_content_list=true）
    ├─ text 类型走 hybrid-engine 自动 txt method（无重 OCR）
    └─ scanned/mixed 走 hybrid-engine 自动 VLM OCR（`/file_parse` 默认 backend=hybrid-engine、parse_method=auto；可 per-request 改 backend，但 hybrid-engine 已验证最优）
@@ -35,7 +31,7 @@
 
 - **零成本**：本地跑，无 API 调用费。
 - **自动提取图片**：响应自带 base64 图 + content_list，不用额外一轮提取。
-- **无需 API key**（caption 阶段才需要 MiniMax key）。
+- **无需 API key**（caption 阶段才需要 VLM provider）。
 - **隐私**：数据本地处理。
 
 **权衡**：模型常驻内存，系统级只允许 1 本书同时跑（见下）。
@@ -58,9 +54,9 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 
 > 仍然是严格串行——不要手动绕过这个锁。
 
-### Chunk 大小：50 页
+### Chunk 大小：32 页
 
-`MINERU_CHUNK_SIZE = 50` 不变。现在是 HTTP 调用，`urlopen(..., timeout=1200)`（20 分钟/次请求），超过则该次尝试失败进入重试，不是旧版"单 chunk 30 分钟硬超时杀进程"的模型。
+`MINERU_CHUNK_SIZE = 32`（2026-07-08 由 50 调小：总时长由 minerU 吞吐决定，chunk 小则单次等待短、崩溃恢复粒度细）。HTTP 调用 `urlopen(..., timeout=1200)`（20 分钟/次请求），超过则该次尝试失败进入重试，不是旧版"单 chunk 30 分钟硬超时杀进程"的模型。
 
 ### 为什么现在用持久 API 服务器，而不是每 chunk 起一次 CLI 进程（2026-06-23 改，502 workaround）
 
@@ -76,8 +72,8 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 | 产物 | 位置 | 验证标准 |
 |------|------|---------|
 | 每页文字 | `p<NNN>.txt`（1:1 对应） | chars > 100 |
-| 提取图片 | `wiki/media/<slug>/p<NNN>-mineru_<id>.<ext>`（chunk 处理时直接落盘，不是事后单独提取） | 图片数 ≥ 原文引用数 |
-| 图片 caption | `wiki/media/<slug>/*.caption.txt`（`_stage_1_1_scanned_assemble_manifest()` 跑完直接调 caption，不等 ingest.py 里独立的 Stage 1.3） | 每图都有，长度 ≥20 字符 |
+| 提取图片 | `wiki/media/<type>/<pdf-stem>/p<NNN>-mineru_<id>.<ext>`（镜像 raw/ 结构；chunk 处理时直接落盘，不是事后单独提取） | 图片数 ≥ 原文引用数 |
+| 图片 caption | `wiki/media/<type>/<pdf-stem>/*.caption.txt`（`_stage_1_1_scanned_assemble_manifest()` 跑完直接调 caption，不等 ingest.py 里独立的 Stage 1.3） | 每图都有，长度 ≥20 字符 |
 | 全本合并文字 | 由 `_stage_1_1_assemble_ocr_text()` 拼接所有 `p<NNN>.txt` 返回（没有独立的 `_full_text.txt` 文件） | chars > 2000 |
 | 统计文件 | `_mineru_stats.json` | 用于崩溃恢复 |
 
@@ -101,4 +97,3 @@ API path 的 `_stage_1_2_harvest_images()` 曾不读 `content_list` 的 `image_c
 
 - **Stage 1.3 Caption**：对默认路径而言，caption 已经在这条 pipeline 内部跑完了（见上方"输出物"），不再是 ingest.py 里独立调度的一步。详见 `references/image-caption-strategy.md`。
 - **PPTX/DOCX**：完全不走这条 pipeline，用 stdlib zipfile/XML 解析文字 + 图片。
-- **混合型 PDF 判定**：见 `references/ingest-stages-mandatory.md` Stage 1.1 的第四信号"隐藏 OCR 层检测"。

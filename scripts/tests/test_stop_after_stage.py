@@ -23,6 +23,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from _core import PrepareStopAfter  # noqa: E402
+from _ingest_prepare import _stage_2_2_only_requested  # noqa: E402
 from _ingest_skip import _stop_after_stage  # noqa: E402
 
 
@@ -87,6 +88,24 @@ class PrepareStopAfterSignal(unittest.TestCase):
                 raise PrepareStopAfter("2")
             except Exception:  # noqa: BLE001 — simulates _do_prepare's broad except
                 self.fail("PrepareStopAfter must NOT be caught by `except Exception`")
+
+
+class Stage22OnlyBoundary(unittest.TestCase):
+    """Single-book --stop-after-stage=1.5 must not enter Stage 2.3/2.4."""
+
+    def test_batch_prefetch_requests_analysis_only(self):
+        cfg = _FakeConfig()
+        self.assertTrue(_stage_2_2_only_requested(cfg, True))
+
+    def test_single_book_stop_1_5_requests_analysis_only(self):
+        cfg = _FakeConfig()
+        cfg.stop_after_stage = "1.5"
+        self.assertTrue(_stage_2_2_only_requested(cfg, False))
+
+    def test_normal_ingest_runs_wiki_dependent_tail(self):
+        cfg = _FakeConfig()
+        cfg.stop_after_stage = None
+        self.assertFalse(_stage_2_2_only_requested(cfg, False))
 
 
 if __name__ == "__main__":

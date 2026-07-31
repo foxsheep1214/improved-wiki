@@ -22,7 +22,7 @@ The script:
 - For each new file, adds it to `.llm-wiki/ingest-queue.json`
 - Then exits
 
-`wiki-monitor.sh` does NOT itself run the queue. To process the queue, you need a separate cron entry for `run-queue.sh`. The reason for the split: the monitor is fast (just a hash diff) and can run frequently; the queue worker is slow (LLM API calls) and runs on its own schedule.
+`wiki-monitor.sh` does NOT itself run the queue. To process the queue, you need a separate cron entry for `run-queue.sh`. The reason for the split: the monitor is fast (just a hash diff) and can run frequently; the queue worker is slow (conversation-mode LLM handoffs) and runs on its own schedule.
 
 Standard 2-cron setup:
 
@@ -75,17 +75,23 @@ This is a common idiom: "only run if at least 1GB free".
 
 ## Lint cron (separate, optional)
 
-The ingest cron handles new files. A second cron can run **Lint** periodically to:
-- Mark `status: outdated` on news pages > 6 months old
-- Detect newly broken wikilinks
-- Re-check `wiki/log.md` for missing entries
+The ingest cron handles new files. A second cron can run **structural-only
+Lint** periodically. Relevant modes:
+- **structural** (`wiki-lint.sh --structural-only`): broken-link / orphan / no-outlinks / missing-frontmatter — deterministic, cron-safe
+- **full default lint** (plain `wiki-lint.sh`): semantic + Review/fix/sweep/dedup，走 conversation-mode handoff，并在 delete-orphans 前退出 102 等待用户确认 — NOT cron-safe
+- **review sweep** (`sweep_reviews.py`): auto-resolve stale review items — run manually after batch ingests
+- **cross-source dedup** (`cross_source_dedup.py`): 跨源重复页检测/合并 — manual, LLM-confirmed
+
+Only the structural pass belongs in cron:
 
 ```bash
-# Lint weekly (Sunday 04:00)
-0 4 * * 0 $SKILL_DIR/scripts/wiki-lint.sh
+# Structural lint weekly (Sunday 04:00)
+0 4 * * 0 $SKILL_DIR/scripts/wiki-lint.sh --structural-only
 ```
 
-`wiki-lint.sh` is a structural lint scanner — see `scripts/wiki-lint.sh` and `references/nashsu-lint-source-analysis.md` for details.
+Plain `wiki-lint.sh` intentionally runs the full maintenance workflow by
+default. Unattended cron must pass `--structural-only`; do not use plain lint
+or any mutating continuation in cron.
 
 ---
 

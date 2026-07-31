@@ -23,10 +23,42 @@ import re
 import time
 from typing import Callable, Optional
 
+from _wikilinks import WIKILINK_RE
+
 # ── Parse ────────────────────────────────────────────────────────────────────
 
 _FM_RE = re.compile(r"^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)")
-_LEADING_FENCE_RE = re.compile(r"^[ \t]*```(?:yaml|md|markdown)?[ \t]*\r?\n")
+# Tolerates a BOM, blank lines before the fence, and a mixed-case info string,
+# matching the write-time opener in _ingest_sanitize (NashSU
+# ingest-sanitize.ts:93-95). A narrower read-time regex left already-corrupt
+# pages unparseable, so their type/tags/sources stayed invisible to graph,
+# index rebuild and dedup.
+_LEADING_FENCE_RE = re.compile(
+    r"^(?:﻿)?(?:[ \t]*\r?\n)*[ \t]*```(?:yaml|md|markdown)?[ \t]*\r?\n",
+    re.IGNORECASE,
+)
+
+# Canonical shared regexes — single source of truth (per-tool copies had
+# multiplied: the `title:` matcher existed in 8 files, the wikilink extractor
+# in 6, and had started to drift). Tools with NashSU-parity fallback chains
+# keep their own surrounding logic but reuse these patterns.
+#   TITLE_LINE_RE:  quote-tolerant `title:` line (MULTILINE).
+#   WIKILINK_RE:    [[target]] / [[target|display]] /
+#                   [[target\|display]] — group(1)=target,
+#                   group(2)=display (without the pipe) or None.
+TITLE_LINE_RE = re.compile(r"^title:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
+
+
+def extract_frontmatter_title(content: str) -> str:
+    """Return the frontmatter ``title:`` value ("" if absent), quotes stripped.
+
+    Parses the frontmatter block properly (a ``title:`` line in the body
+    can't false-match).
+    """
+    val = parse_frontmatter(content)[0].get("title")
+    if isinstance(val, str):
+        return val.strip()
+    return ""
 
 
 def _strip_leading_code_fence(content: str) -> str:
@@ -168,27 +200,6 @@ def strip_embedded_images_section(body: str) -> str:
     return body[:idx].rstrip()
 
 
-def union_arrays(new_fm: dict, existing_fm: dict) -> dict:
-    """Union array fields from both frontmatters. Keeps all other fields from new_fm."""
-    merged = dict(new_fm)
-    for field in UNION_FIELDS:
-        new_vals = new_fm.get(field, [])
-        old_vals = existing_fm.get(field, [])
-        if not isinstance(new_vals, list):
-            new_vals = [new_vals] if new_vals else []
-        if not isinstance(old_vals, list):
-            old_vals = [old_vals] if old_vals else []
-        seen = set()
-        union = []
-        for v in old_vals + new_vals:
-            key = str(v).lower().strip('"').strip("'")
-            if key not in seen:
-                seen.add(key)
-                union.append(v)
-        merged[field] = union
-    return merged
-
-
 def merge_array_fields_into_content(new_content: str, existing_content: str) -> str:
     """Union frontmatter array fields (sources/tags/related) from both contents.
 
@@ -203,7 +214,14 @@ def merge_array_fields_into_content(new_content: str, existing_content: str) -> 
 
 
 def lock_fields(content: str, reference_fm: dict) -> str:
-    """Force LOCKED_FIELDS back to reference values."""
+    """Force LOCKED_FIELDS back to reference values.
+
+    Block-style arrays are normalized to inline first: this function does a
+    naive parse→write round-trip, which would otherwise silently empty a
+    block-form tags/related/sources array.
+    """
+    from _frontmatter_array import normalize_block_arrays
+    content = normalize_block_arrays(content)
     fm, body = parse_frontmatter(content)
     for field in LOCKED_FIELDS:
         if field in reference_fm and reference_fm[field]:
@@ -219,15 +237,18 @@ def merge_page_content(
     page_path: str = "",
     source_file: str = "",
     backup_fn: Optional[Callable] = None,
+    replace_existing_body: bool = False,
+    already_merged: bool = False,
 ) -> str:
     """Three-layer merge matching NashSU page-merge.ts.
 
     Layer 1: Union frontmatter array fields (always, zero-cost).
-    Layer 2: If bodies differ, call merger_fn (LLM) to produce unified body.
+    Layer 2: For a page solely owned by the current source, replace its stale
+             body; otherwise call merger_fn (LLM) to produce a unified body.
     Layer 3: Lock type/title/created to existing values.
 
-    Fallback: if LLM fails or body shrinks below threshold, return
-    array-merged-only result with backup.
+    ``already_merged`` marks a replayed write: this exact incoming block was
+    merged into this page earlier in the same ingest (see fast path 5).
     """
     # Fast path 1: brand-new page
     if not existing_content:
@@ -237,8 +258,29 @@ def merge_page_content(
     if new_content == existing_content:
         return existing_content
 
-    # Layer 1: union array fields
-    array_merged = merge_array_fields_into_content(new_content, existing_content)
+    # Layer 1: union array fields. Normalize block-style arrays to inline
+    # right away: fast path 4 below (and layer 3 via lock_fields) round-trips
+    # the content through the naive parse_frontmatter → write_frontmatter,
+    # which silently empties block-form tags/related/sources.
+    from _frontmatter_array import normalize_block_arrays
+    array_merged = normalize_block_arrays(
+        merge_array_fields_into_content(new_content, existing_content))
+
+    # NashSU 0.6.6 corrected-source behavior: if the caller proved that every
+    # existing source reference resolves to this same source, the newly
+    # generated body supersedes the stale one. Merging would preserve retracted
+    # wording forever. Array unions and locked identity fields still survive.
+    if replace_existing_body:
+        if backup_fn:
+            try:
+                backup_fn(existing_content)
+            except Exception:
+                pass
+        old_fm = parse_frontmatter(existing_content)[0]
+        replacement = lock_fields(array_merged, old_fm)
+        fm, body = parse_frontmatter(replacement)
+        fm["updated"] = time.strftime("%Y-%m-%d")
+        return write_frontmatter(fm, body)
 
     # Fast path 3: bodies identical (only frontmatter arrays differed)
     # Strip the auto-injected ## Embedded Images section first: it is an
@@ -258,37 +300,48 @@ def merge_page_content(
     # wikilink enrichment (which only adds [[...]] links).  Stripping wikilink
     # markup from both bodies collapses this enrichment-only difference, avoiding
     # a spurious LLM page-merge round-trip for every already-written page.
-    import re as _re
-    _wikilink_re = _re.compile(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]")
     def _strip_wikilinks(text: str) -> str:
-        return _wikilink_re.sub(lambda m: m.group(2) or m.group(1), text)
+        return WIKILINK_RE.sub(lambda m: m.group(2) or m.group(1), text)
     if _strip_wikilinks(old_body).strip() == _strip_wikilinks(new_body).strip():
         # Keep the existing (enriched) body; only adopt frontmatter array unions.
         return write_frontmatter(parse_frontmatter(array_merged)[0], old_body)
 
-    # Fast path 5: idempotent re-merge. If the existing page's `sources:`
-    # already includes every source in the new content, this collision was
-    # already merged in a prior run — the new body is already incorporated
-    # into the existing page. Returning the existing body (with unioned
-    # arrays) breaks the re-merge loop: write_phase has no per-file marker
-    # (only an all-or-nothing write_phase marker), so a mid-flight crash
-    # makes it re-write every file; the now-merged existing content changes
-    # the merge prompt hash, the conversation cache misses, and the LLM is
-    # asked to re-merge an already-merged page — forever (bug 2026-06-25).
-    def _src_set(fm: dict) -> set:
-        v = fm.get("sources")
-        if not v:
-            return set()
-        if isinstance(v, str):
-            return {v}
-        if isinstance(v, list):
-            return {str(s) for s in v}
-        return set()
-    if _src_set(parse_frontmatter(existing_content)[0]).issuperset(
-        _src_set(parse_frontmatter(new_content)[0])
-    ) and _src_set(parse_frontmatter(new_content)[0]):
-        # Keep the existing (already-merged) body; union frontmatter arrays.
-        return merge_array_fields_into_content(existing_content, new_content)
+    # Fast path 5: replay of a FILE block this same ingest already merged.
+    # Conversation mode leaves the write loop on every merge handoff, so the
+    # resumed loop replays from its first block; without this guard the
+    # now-merged existing content changes the merge prompt hash, the
+    # conversation cache misses, and the LLM is asked to re-merge an
+    # already-merged page — forever (bug 2026-06-25).
+    #
+    # Replay is proved by the caller's per-page write ledger, which is keyed on
+    # the exact incoming block bytes (_ingest_write._load_write_ledger). The
+    # previous criterion — "existing `sources:` is a superset of the incoming
+    # ones" — could not tell a replay from a genuine re-ingest of a corrected
+    # source: on any page two or more books contributed to, the superset held
+    # unconditionally, so the freshly generated body was discarded and the
+    # retracted wording survived every later re-ingest. NashSU keeps
+    # multi-source pages on the merger for exactly this reason
+    # (ingest.ts:1938-1939 "their other sources' contributions must survive").
+    if already_merged:
+        # Keep the existing (already-merged) body and its stable array order,
+        # adding only genuinely new incoming array values.  Calling the normal
+        # merge helper with the arguments reversed keeps the right body but
+        # orders arrays incoming-first, so every crash-resume flips `sources:`
+        # and looks like a real write even though nothing changed.
+        from _frontmatter_array import (
+            merge_lists,
+            parse_frontmatter_array,
+            write_frontmatter_array,
+        )
+        result = existing_content
+        for field in UNION_FIELDS:
+            existing_values = parse_frontmatter_array(result, field)
+            incoming_values = parse_frontmatter_array(new_content, field)
+            merged_values = merge_lists(existing_values, incoming_values)
+            if merged_values != existing_values:
+                result = write_frontmatter_array(
+                    result, field, merged_values)
+        return result
 
     # Layer 2: LLM merge (if merger provided)
     if merger_fn:

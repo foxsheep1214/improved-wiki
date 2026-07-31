@@ -78,21 +78,80 @@ class TestSemanticLintConversation(unittest.TestCase):
                 else:
                     os.environ["IMPROVED_WIKI_ROOT"] = old_root
 
+    def test_warning_to_review_requires_explicit_flag(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki"
+            wiki.mkdir()
+            (wiki / "buck.md").write_text(
+                _page("type: concept\ntitle: Buck", "# Buck\nBody."),
+                encoding="utf-8",
+            )
+
+            old_root = os.environ.get("IMPROVED_WIKI_ROOT")
+            old_argv = sys.argv
+            os.environ["IMPROVED_WIKI_ROOT"] = str(root)
+            sys.argv = ["wiki-lint-semantic.py"]
+            try:
+                self.assertEqual(wls.main(), 101)
+                prompt = next(
+                    (root / ".llm-wiki" / "conversation" / "semantic-lint").glob(
+                        "*.md"
+                    )
+                )
+                prompt.with_suffix(".txt").write_text(
+                    "---LINT: stale | warning | Buck data is stale---\n"
+                    "PAGES: buck.md\nRefresh the figures.\n"
+                    "---END LINT---\n",
+                    encoding="utf-8",
+                )
+
+                self.assertEqual(wls.main(), 0)
+                self.assertFalse((wiki / "REVIEW").exists())
+
+                sys.argv = ["wiki-lint-semantic.py", "--emit-review"]
+                self.assertEqual(wls.main(), 0)
+                self.assertTrue(
+                    any((wiki / "REVIEW").rglob("*.md")),
+                    "--emit-review must be the action that mutates wiki/REVIEW/",
+                )
+            finally:
+                sys.argv = old_argv
+                if old_root is None:
+                    os.environ.pop("IMPROVED_WIKI_ROOT", None)
+                else:
+                    os.environ["IMPROVED_WIKI_ROOT"] = old_root
+
 
 class TestBatching(unittest.TestCase):
     def test_chunk_batches_small_returns_single(self):
         wls = _load_module()
+        # "p%d.md" (5 chars) + "text" (4 chars) = 9 chars/item x 5 = 45 chars,
+        # comfortably under a 200-char budget.
         summaries = [("p%d.md" % i, "text") for i in range(5)]
-        batches = wls.chunk_batches(summaries, batch_pages=200)
+        batches = wls.chunk_batches(summaries, target_chars=200)
         self.assertEqual(len(batches), 1)
         self.assertEqual(len(batches[0]), 5)
 
     def test_chunk_batches_splits_at_boundary(self):
         wls = _load_module()
+        # Each item is 9 chars; a 27-char budget fits exactly 3 items/batch.
         summaries = [("p%d.md" % i, "text") for i in range(7)]
-        batches = wls.chunk_batches(summaries, batch_pages=3)
+        batches = wls.chunk_batches(summaries, target_chars=27)
         self.assertEqual(len(batches), 3)
         self.assertEqual([len(b) for b in batches], [3, 3, 1])
+
+    def test_chunk_batches_oversized_single_item_gets_own_batch(self):
+        wls = _load_module()
+        summaries = [("a.md", "x" * 500), ("b.md", "short")]
+        batches = wls.chunk_batches(summaries, target_chars=100)
+        self.assertEqual(len(batches), 2)
+        self.assertEqual(len(batches[0]), 1)
+
+    def test_chunk_batches_empty_input_returns_empty(self):
+        wls = _load_module()
+        self.assertEqual(wls.chunk_batches([], target_chars=1000), [])
 
     def test_dedup_findings_collapses_cross_batch_dupes(self):
         wls = _load_module()
@@ -134,14 +193,149 @@ class TestLanguageDirectiveInPrompt(unittest.TestCase):
                 os.environ["IMPROVED_WIKI_OUTPUT_LANGUAGE"] = old
 
 
-class TestSemanticLintBatchedE2E(unittest.TestCase):
-    def test_two_batches_resume_separately(self):
-        """3 pages, batch size 2 → 2 batches. Round 1: batch 1 pending (101).
-        Answer it; round 2: batch 2 pending (101). Answer it; round 3: both
-        cached → 0, findings merged + deduped + renumbered."""
+class TestNashsu066MissingPageFilter(unittest.TestCase):
+    def test_prompt_requires_exact_missing_name(self):
         wls = _load_module()
-        original_batch = wls.SEMANTIC_BATCH_PAGES
-        wls.SEMANTIC_BATCH_PAGES = 2
+        system_prompt, _ = wls.build_prompt([("concepts/a.md", "# A")])
+        self.assertIn(
+            "Short title must be only the exact missing concept or entity name",
+            system_prompt,
+        )
+
+    def test_existing_basename_title_and_nfkc_variant_are_filtered(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as td:
+            wiki = Path(td) / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            (wiki / "concepts" / "维特根斯坦.md").write_text(
+                _page("type: concept\ntitle: Ludwig Wittgenstein", "# 维特根斯坦"),
+                encoding="utf-8",
+            )
+            (wiki / "concepts" / "adler.md").write_text(
+                _page("type: concept\ntitle: 阿德勒", "# 阿德勒"),
+                encoding="utf-8",
+            )
+            (wiki / "concepts" / "abc.md").write_text(
+                _page("type: concept\ntitle: ＡＢＣ", "# ＡＢＣ"),
+                encoding="utf-8",
+            )
+            _, names = wls.collect_summary_bundle(wiki)
+            raw = (
+                "---LINT: missing-page | warning | 维特根斯坦---\n"
+                "body one\n---END LINT---\n"
+                "---LINT: missing-page | warning | 缺失页面：阿德勒---\n"
+                "body two\n---END LINT---\n"
+                "---LINT: missing-page | warning | Missing page: ABC---\n"
+                "body three\n---END LINT---\n"
+                "---LINT: missing-page | warning | 尼采---\n"
+                "body four\n---END LINT---\n"
+            )
+            results = wls.parse_lint_blocks(
+                raw, now_ms=0, existing_page_names=names
+            )
+            self.assertEqual([item["page"] for item in results], ["尼采"])
+
+    def test_exact_match_does_not_drop_unrelated_substring(self):
+        wls = _load_module()
+        names = {wls._normalize_for_existence("AI")}
+        raw = (
+            "---LINT: missing-page | warning | FAIR data governance---\n"
+            "body\n---END LINT---\n"
+        )
+        results = wls.parse_lint_blocks(
+            raw, now_ms=0, existing_page_names=names
+        )
+        self.assertEqual(len(results), 1)
+
+    def test_summary_limit_does_not_limit_existence_index(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as td:
+            wiki = Path(td) / "wiki"
+            wiki.mkdir()
+            (wiki / "a.md").write_text("# A", encoding="utf-8")
+            (wiki / "z.md").write_text(
+                _page("type: concept\ntitle: Existing Z", "# Existing Z"),
+                encoding="utf-8",
+            )
+            summaries, names = wls.collect_summary_bundle(wiki, limit=1)
+            self.assertEqual(len(summaries), 1)
+            self.assertIn(wls._normalize_for_existence("Existing Z"), names)
+
+
+class TestSemanticLintBatchedE2E(unittest.TestCase):
+    def test_all_pending_batches_emitted_together(self):
+        """3 pages (boost/buck/flyback, sorted), a target_chars budget that
+        exactly fits the first two previews (boost+buck) → 2 batches, BOTH
+        initially uncached. Lint's eager-drain policy (2026-07-10): round 1
+        must emit prompt files
+        for ALL uncached batches in a single invocation (not just the first),
+        so the calling agent can dispatch subagents for them in parallel,
+        then return 101 once. Round 2 (after both answered): both cached →
+        0, findings merged + deduped + renumbered. Monkeypatches
+        resolve_batch_target_chars (2026-07-10: replaces the old
+        SEMANTIC_BATCH_PAGES page-count knob) with a fixed small budget so
+        the split is deterministic regardless of the real probed/default
+        context size."""
+        wls = _load_module()
+        original_resolver = wls.resolve_batch_target_chars
+        wls.resolve_batch_target_chars = lambda state_dir: 156
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki" / "concepts"
+            wiki.mkdir(parents=True)
+            for name in ("buck", "boost", "flyback"):
+                (wiki / f"{name}.md").write_text(_page(
+                    f"type: concept\ntitle: {name}\n",
+                    f"# {name}\nA {name} converter.",
+                ), encoding="utf-8")
+
+            old_root = os.environ.get("IMPROVED_WIKI_ROOT")
+            old_argv = sys.argv
+            os.environ["IMPROVED_WIKI_ROOT"] = str(root)
+            sys.argv = ["wiki-lint-semantic.py"]
+            conv_dir = root / ".llm-wiki" / "conversation" / "semantic-lint"
+            try:
+                # Round 1: BOTH batches uncached → both prompts emitted in
+                # this single invocation (the eager-drain guarantee).
+                self.assertEqual(wls.main(), 101)
+                md_pending = [p for p in conv_dir.glob("*.md")
+                              if not p.with_suffix(".txt").exists()]
+                self.assertEqual(len(md_pending), 2)
+                md_pending.sort(key=lambda p: p.name)
+                md_pending[0].with_suffix(".txt").write_text(
+                    "---LINT: suggestion | info | Buck note---\n"
+                    "PAGES: concepts/buck.md\n Buck detail.\n---END LINT---\n",
+                    encoding="utf-8")
+                md_pending[1].with_suffix(".txt").write_text(
+                    "---LINT: suggestion | info | Flyback note---\n"
+                    "PAGES: concepts/flyback.md\n Flyback detail.\n---END LINT---\n",
+                    encoding="utf-8")
+
+                self.assertEqual(wls.main(), 0)
+                findings = json.loads(
+                    (root / ".llm-wiki" / "lint-semantic.json").read_text("utf-8"))
+                self.assertEqual(len(findings), 2)
+                self.assertEqual({f["page"] for f in findings},
+                                 {"Buck note", "Flyback note"})
+                ids = [f["id"] for f in findings]
+                self.assertEqual(len(set(ids)), len(ids))
+            finally:
+                wls.resolve_batch_target_chars = original_resolver
+                sys.argv = old_argv
+                if old_root is None:
+                    os.environ.pop("IMPROVED_WIKI_ROOT", None)
+                else:
+                    os.environ["IMPROVED_WIKI_ROOT"] = old_root
+
+    def test_answering_one_of_two_still_reports_the_other_pending(self):
+        """Same 2-batch setup, but only ONE of the two round-1 prompts gets
+        answered before the next invocation. The drain loop must read the
+        answered batch from cache instantly and still report the other as
+        pending (not silently skip it, not re-emit the already-answered one
+        as pending too)."""
+        wls = _load_module()
+        original_resolver = wls.resolve_batch_target_chars
+        wls.resolve_batch_target_chars = lambda state_dir: 156
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)
             wiki = root / "wiki" / "concepts"
@@ -159,38 +353,186 @@ class TestSemanticLintBatchedE2E(unittest.TestCase):
             conv_dir = root / ".llm-wiki" / "conversation" / "semantic-lint"
             try:
                 self.assertEqual(wls.main(), 101)
-                md1 = [p for p in conv_dir.glob("*.md")
-                       if not p.with_suffix(".txt").exists()]
-                self.assertEqual(len(md1), 1)
-                md1[0].with_suffix(".txt").write_text(
-                    "---LINT: suggestion | info | Buck note---\n"
-                    "PAGES: concepts/buck.md\n Buck detail.\n---END LINT---\n",
+                md_pending = sorted(
+                    (p for p in conv_dir.glob("*.md")
+                     if not p.with_suffix(".txt").exists()),
+                    key=lambda p: p.name)
+                self.assertEqual(len(md_pending), 2)
+                md_pending[0].with_suffix(".txt").write_text(
+                    "---LINT: suggestion | info | Only one answered---\n"
+                    "PAGES: concepts/buck.md\n detail.\n---END LINT---\n",
                     encoding="utf-8")
 
+                # Second invocation: the answered one is a cache hit; the
+                # other must still be reported pending, not lost.
                 self.assertEqual(wls.main(), 101)
-                md2 = [p for p in conv_dir.glob("*.md")
-                       if not p.with_suffix(".txt").exists()]
-                self.assertEqual(len(md2), 1)
-                md2[0].with_suffix(".txt").write_text(
-                    "---LINT: suggestion | info | Flyback note---\n"
-                    "PAGES: concepts/flyback.md\n Flyback detail.\n---END LINT---\n",
-                    encoding="utf-8")
-
-                self.assertEqual(wls.main(), 0)
-                findings = json.loads(
-                    (root / ".llm-wiki" / "lint-semantic.json").read_text("utf-8"))
-                self.assertEqual(len(findings), 2)
-                self.assertEqual({f["page"] for f in findings},
-                                 {"Buck note", "Flyback note"})
-                ids = [f["id"] for f in findings]
-                self.assertEqual(len(set(ids)), len(ids))
+                still_pending = [p for p in conv_dir.glob("*.md")
+                                 if not p.with_suffix(".txt").exists()]
+                self.assertEqual(len(still_pending), 1)
+                self.assertEqual(still_pending[0].name, md_pending[1].name)
+                self.assertFalse(
+                    (root / ".llm-wiki" / "lint-semantic.json").exists())
             finally:
-                wls.SEMANTIC_BATCH_PAGES = original_batch
+                wls.resolve_batch_target_chars = original_resolver
                 sys.argv = old_argv
                 if old_root is None:
                     os.environ.pop("IMPROVED_WIKI_ROOT", None)
                 else:
                     os.environ["IMPROVED_WIKI_ROOT"] = old_root
+
+
+class TestParseLintBlocksHyphenatedTitle(unittest.TestCase):
+    """Regression (2026-07-10): a title containing a hyphen (e.g. a model
+    number like "MIL-STD-1553") must still parse. NashSU's own regex uses
+    [^\\n-]+? for the title group, which stops at the first hyphen and then
+    fails to find the closing ---, silently dropping the whole block. Our
+    copy deviates on purpose: [^\\n]+? for the title group only."""
+
+    def test_hyphenated_title_parses(self):
+        wls = _load_module()
+        raw = (
+            "---LINT: missing-page | warning | MIL-STD-1553 总线体系结构缺少统领概念页---\n"
+            "PAGES: concepts/1553-command-word-structure.md\n"
+            "七个子页面都引用了这个概念，但它自己没有页面。\n"
+            "---END LINT---\n"
+        )
+        results = wls.parse_lint_blocks(raw, now_ms=0)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["page"], "MIL-STD-1553 总线体系结构缺少统领概念页")
+
+    def test_mixed_hyphenated_and_plain_titles_all_parse(self):
+        wls = _load_module()
+        raw = (
+            "---LINT: suggestion | warning | Plain title---\n"
+            "PAGES: a.md\nbody one\n---END LINT---\n"
+            "---LINT: missing-page | warning | SA-2 has no canonical page---\n"
+            "PAGES: b.md\nbody two\n---END LINT---\n"
+            "---LINT: stale | info | F-16 radar model outdated---\n"
+            "PAGES: c.md\nbody three\n---END LINT---\n"
+        )
+        results = wls.parse_lint_blocks(raw, now_ms=0)
+        self.assertEqual(len(results), 3)
+        self.assertEqual(
+            [r["page"] for r in results],
+            ["Plain title", "SA-2 has no canonical page", "F-16 radar model outdated"],
+        )
+
+
+class TestResolveBatchTargetChars(unittest.TestCase):
+    """2026-07-10: batch sizing is now context-derived instead of a fixed
+    SEMANTIC_BATCH_PAGES=200. Covers cache-hit, cache-miss/default, and the
+    lint-specific env override."""
+
+    def _write_cache(self, runtime_dir: Path, model_env: str, context: int, age_s: int = 0):
+        import time
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "probed-context.json").write_text(json.dumps({
+            "model_env": model_env, "context": context,
+            "probed_at": int(time.time()) - age_s,
+        }), encoding="utf-8")
+
+    def test_uses_cached_probe_when_fresh_and_model_matches(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            runtime = Path(t) / ".llm-wiki"
+            self._write_cache(runtime, model_env="", context=1_000_000)
+            old = os.environ.get("ANTHROPIC_MODEL")
+            os.environ.pop("ANTHROPIC_MODEL", None)
+            try:
+                target_chars = wls.resolve_batch_target_chars(runtime)
+                # 1M context x 0.33 = 330K tokens, capped at the 256K lint
+                # ceiling -> target_chars = min(768_000, 256_000*4) = 768_000.
+                self.assertEqual(target_chars, 768_000)
+            finally:
+                if old is not None:
+                    os.environ["ANTHROPIC_MODEL"] = old
+
+    def test_falls_back_to_default_context_when_no_cache(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            runtime = Path(t) / ".llm-wiki"
+            runtime.mkdir(parents=True)
+            target_chars = wls.resolve_batch_target_chars(runtime)
+            from _core import _CONTEXT_SIZE_DEFAULT, _compute_chunk_targets
+            _, expected = _compute_chunk_targets(
+                0, _CONTEXT_SIZE_DEFAULT, hard_ceil=wls._LINT_TARGET_TOKENS_HARD_CEIL)
+            self.assertEqual(target_chars, expected)
+
+    def test_env_override_changes_ceiling(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            runtime = Path(t) / ".llm-wiki"
+            self._write_cache(runtime, model_env="", context=1_000_000)
+            old_model = os.environ.get("ANTHROPIC_MODEL")
+            old_ceil = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL")
+            os.environ.pop("ANTHROPIC_MODEL", None)
+            os.environ["IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL"] = "40000"
+            try:
+                target_chars = wls.resolve_batch_target_chars(runtime)
+                self.assertEqual(target_chars, 160_000)  # 40_000 * 4 chars/token
+            finally:
+                if old_model is not None:
+                    os.environ["ANTHROPIC_MODEL"] = old_model
+                if old_ceil is None:
+                    os.environ.pop("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", None)
+                else:
+                    os.environ["IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL"] = old_ceil
+
+
+class TestEmitReviewForWarnings(unittest.TestCase):
+    """2026-07-11 (#2): warning-severity semantic findings must be routed
+    into wiki/REVIEW/ so they reach the human-triage + sweep workflow —
+    previously they were a dead end in lint-semantic.json / .llm-wiki/lint/."""
+
+    def test_warning_routed_info_not(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            wiki = Path(t) / "wiki"
+            wiki.mkdir(parents=True)
+            findings = [
+                {"type": "semantic", "severity": "warning",
+                 "page": "MTI pages contradict on SCV figure",
+                 "detail": "[contradiction] Page A says 20 dB, page B says 33 dB.",
+                 "affectedPages": ["concepts/a.md", "concepts/b.md"],
+                 "id": "lint-semantic-0", "createdAt": 0},
+                {"type": "semantic", "severity": "info",
+                 "page": "minor nicety",
+                 "detail": "[suggestion] could add a link",
+                 "affectedPages": None,
+                 "id": "lint-semantic-1", "createdAt": 0},
+                {"type": "semantic", "severity": "warning",
+                 "page": "swerling-models missing",
+                 "detail": "[missing-page] heavily referenced, no page",
+                 "affectedPages": ["concepts/c.md"],
+                 "id": "lint-semantic-2", "createdAt": 0},
+            ]
+            n = wls.emit_review_for_warnings(wiki, findings)
+            self.assertEqual(n, 2)
+            contra = list((wiki / "REVIEW" / "contradiction").glob("contradiction-*.md"))
+            self.assertEqual(len(contra), 1)
+            body = contra[0].read_text(encoding="utf-8")
+            self.assertIn("review_type: contradiction", body)
+            self.assertIn("concepts/a.md", body)
+            self.assertIn("resolved: false", body)
+            # missing-page maps to REVIEW/missing-page so the sweep RULE stage
+            # can auto-resolve it once the page exists.
+            missing = list((wiki / "REVIEW" / "missing-page").glob("missing-page-*.md"))
+            self.assertEqual(len(missing), 1)
+            # info finding produced nothing.
+            sugg_dir = wiki / "REVIEW" / "suggestion"
+            self.assertFalse(sugg_dir.exists())
+
+    def test_idempotent_rerun_writes_nothing_new(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            wiki = Path(t) / "wiki"
+            wiki.mkdir(parents=True)
+            findings = [{"type": "semantic", "severity": "warning",
+                         "page": "Dup finding",
+                         "detail": "[stale] outdated",
+                         "affectedPages": [], "id": "x", "createdAt": 0}]
+            self.assertEqual(wls.emit_review_for_warnings(wiki, findings), 1)
+            self.assertEqual(wls.emit_review_for_warnings(wiki, findings), 0)
 
 
 class TestCollectSummariesDirExclusion(unittest.TestCase):

@@ -24,34 +24,103 @@ Usage:
 import json, re
 from pathlib import Path
 from _frontmatter import parse_frontmatter, write_frontmatter
+from _frontmatter_array import normalize_block_arrays
 from _llm_api import call_anthropic_protocol
+from _wikilinks import escape_markdown_table_wikilink_aliases
 
 
 _LINK_SPAN_RE = re.compile(r'(\[\[.*?\]\])', re.DOTALL)
+# Line-level skips (same policy as _stage_3_write's figure-ref wrapper):
+# never insert links into heading lines or fenced code blocks.
+_HEADING_LINE_RE = re.compile(r"^#{1,6}[ \t]")
+_CODE_FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
 
 
 def _replace_first_outside_links(body: str, term: str, replacement: str):
     """Replace the first occurrence of `term` in `body` that is NOT inside an
-    existing ``[[...]]`` wikilink span. Returns the new body, or None if every
-    occurrence is inside a link (or there is no occurrence at all).
+    existing ``[[...]]`` wikilink span, NOT on a heading line, and NOT inside
+    a fenced code block. Returns the new body, or None if no eligible
+    occurrence exists.
 
-    Without this guard, a term that appears as a substring of an existing
+    The link-span guard: a term that appears as a substring of an existing
     link's slug (e.g. ``lead`` inside ``[[concepts/lead-(pd)-...-design]]``)
-    gets re-wrapped, producing malformed nested links such as
-    ``[[concepts/[[lead-(pd)-...]]-(pd)-...]]``.
+    must not be re-wrapped, or we produce malformed nested links such as
+    ``[[concepts/[[lead-(pd)-...]]-(pd)-...]]``. The heading/fence guard:
+    inserting [[links]] into an H1/H2... or into code corrupts the page
+    (H1 wikilinks are de-linked again by the write normalizer anyway).
     """
     if term not in body:
         return None
-    # With a capture group, re.split interleaves: [text, link, text, link, ...].
-    # Odd indices are link spans and must never be touched.
-    parts = _LINK_SPAN_RE.split(body)
-    for i, seg in enumerate(parts):
-        if i % 2 == 1:
-            continue  # link span — leave intact
-        if term in seg:
-            parts[i] = seg.replace(term, replacement, 1)
-            return "".join(parts)
+    lines = body.split("\n")
+    in_fence = False
+    for idx, line in enumerate(lines):
+        if _CODE_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence or _HEADING_LINE_RE.match(line):
+            continue
+        if term not in line:
+            continue
+        # With a capture group, re.split interleaves: [text, link, text, ...].
+        # Odd indices are link spans and must never be touched.
+        parts = _LINK_SPAN_RE.split(line)
+        for i, seg in enumerate(parts):
+            if i % 2 == 1:
+                continue  # link span — leave intact
+            if term in seg:
+                parts[i] = seg.replace(term, replacement, 1)
+                lines[idx] = "".join(parts)
+                updated, _ = escape_markdown_table_wikilink_aliases(
+                    "\n".join(lines)
+                )
+                return updated
+        # every occurrence on this line sits inside a link — keep scanning
     return None
+
+
+def _enrichment_link(target: str, term: str) -> str:
+    """Build a wikilink without changing the source sentence's wording.
+
+    ``term`` is exact body text selected by the enrichment model, while
+    ``target`` is a page slug and may have a very different human-readable
+    title.  A bare ``[[target]]`` therefore changes the rendered sentence
+    (for example, ``Maximum warpage`` became
+    ``Maximum Hybrid Substrate Reliability Modeling``).  Always retain the
+    original surface text as the display alias.
+    """
+    return f"[[{target}|{term}]]"
+
+
+def repair_legacy_bare_enrichment_links(
+    content: str,
+    suggestions: list[dict],
+) -> tuple[str, int]:
+    """Upgrade bare links written by the pre-alias enrichment implementation.
+
+    This migration is intentionally narrow: callers must use it only for pages
+    known to have had zero outlinks before enrichment.  Under that precondition,
+    a matching bare ``[[target]]`` was inserted by this module and can safely be
+    rewritten as ``[[target|term]]``.  Suggestions are processed in order so
+    two distinct terms targeting the same page repair two corresponding links.
+    """
+    content = normalize_block_arrays(content)
+    fm, body = parse_frontmatter(content)
+    repaired = 0
+    for suggestion in suggestions:
+        term = suggestion.get("term", "")
+        target = suggestion.get("target", "")
+        if not term or not target:
+            continue
+        aliased = _enrichment_link(target, term)
+        if aliased in body:
+            continue
+        bare = f"[[{target}]]"
+        if bare in body:
+            body = body.replace(bare, aliased, 1)
+            repaired += 1
+    result = write_frontmatter(fm, body)
+    result, _ = escape_markdown_table_wikilink_aliases(result)
+    return result, repaired
 
 
 def enrich_wikilinks_batch(
@@ -72,16 +141,40 @@ def enrich_wikilinks_batch(
     Never touches frontmatter. Returns {rel_path: enriched_content} for pages
     that actually changed — unchanged pages are omitted.
     """
+    # Zero-outlink gate (redundancy fix 2026-07-09): Stage 2.4 generation
+    # already mandates inline [[wikilinks]] in every page it writes, so
+    # enriching pages that ALREADY carry outlinks was a no-op round-trip in
+    # practice (the documented safe answer to the handoff was often `{}`).
+    # Keep the NashSU-parity bailout only for pages with ZERO outgoing links
+    # (merge leftovers, legacy pages); when no page qualifies, the whole LLM
+    # round-trip is skipped.
     candidates = []
     for rel_path, content in pages:
         _, body = parse_frontmatter(content)
-        if len(body) >= 100:
+        if len(body) >= 100 and "[[" not in body:
             candidates.append((rel_path, content))
+    skipped = len(pages) - len(candidates)
+    if skipped:
+        print(f"  [enrich] {skipped}/{len(pages)} page(s) already carry inline "
+              f"[[wikilinks]] — enriching {len(candidates)} zero-outlink page(s)")
     if not candidates:
         return {}
 
-    batch_slugs = [Path(rel_path).stem for rel_path, _ in candidates]
-    all_targets = list(dict.fromkeys(list(existing_slugs[:200]) + batch_slugs))
+    # Use ALL pages written by this ingest here, not only the zero-outlink
+    # candidates. Linked sibling pages are still batch pages and valid targets.
+    # On resume they also appear in the freshly rescanned ``existing_slugs``;
+    # leaving them there shifts the [:200] window and changes the prompt hash,
+    # which spuriously issues a SECOND enrichment handoff whenever the batch
+    # contains a mix of linked and zero-outlink pages.
+    batch_slugs = [Path(rel_path).stem for rel_path, _ in pages]
+    # Exclude this batch's own slugs from the "existing" snapshot so the target
+    # list is identical whether or not these pages are already on disk. All
+    # batch slugs are re-added below, so linked and zero-outlink sibling pages
+    # remain valid targets. (Also honors the documented "pre-ingest wiki
+    # snapshot" intent of existing_slugs.)
+    _batch_set = set(batch_slugs)
+    existing_pre = [s for s in existing_slugs if s not in _batch_set]
+    all_targets = list(dict.fromkeys(list(existing_pre[:200]) + batch_slugs))
     if not all_targets:
         return {}
 
@@ -127,6 +220,9 @@ Pages with no suggestions may be omitted from the object.
         suggestions = suggestions_by_path.get(rel_path, [])
         if not suggestions:
             continue
+        # Normalize block-style frontmatter arrays before the naive
+        # parse→write round-trip below, which would silently empty them.
+        content = normalize_block_arrays(content)
         fm, body = parse_frontmatter(content)
         this_slug = Path(rel_path).stem
         changed = False
@@ -141,11 +237,14 @@ Pages with no suggestions may be omitted from the object.
             # Replace only an occurrence NOT inside an existing [[...]] span,
             # otherwise we produce malformed nested links like
             # [[concepts/[[slug]]-suffix]] (bug found 2026-06-24).
-            new_body = _replace_first_outside_links(body, term, f"[[{target}]]")
+            new_body = _replace_first_outside_links(
+                body, term, _enrichment_link(target, term))
             if new_body is not None:
                 body = new_body
                 changed = True
         if changed:
-            enriched[rel_path] = write_frontmatter(fm, body)
+            result = write_frontmatter(fm, body)
+            result, _ = escape_markdown_table_wikilink_aliases(result)
+            enriched[rel_path] = result
 
     return enriched

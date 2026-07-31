@@ -55,7 +55,10 @@ class Stage23AssociationDetection(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("Thermal resistance", assoc)
-            self.assertIn("thermal-resistance", assoc["Thermal resistance"])
+            self.assertIn(
+                "concepts/thermal-resistance",
+                assoc["Thermal resistance"],
+            )
 
     def test_exact_slug_rename_still_matched(self):
         with tempfile.TemporaryDirectory() as d:
@@ -78,7 +81,10 @@ class Stage23AssociationDetection(unittest.TestCase):
                        "entities_found": []}]
             assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
             self.assertIn("Thevenin's Theorem", assoc)
-            self.assertIn("Thevenins-Theorem", assoc["Thevenin's Theorem"])
+            self.assertIn(
+                "concepts/Thevenins-Theorem",
+                assoc["Thevenin's Theorem"],
+            )
 
 
 if __name__ == "__main__":

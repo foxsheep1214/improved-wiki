@@ -1,17 +1,21 @@
 """_ingest_write.py — Stage 3+ file writing + post-ingest (extracted from ingest.py)."""
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from pathlib import Path
 
+from _paths import atomic_write
+from _page_ref import PageRef, canonical_page_refs
+from _task_manifest import bind_page_refs
+from _config import Config
 from _core import (
-    Config,
-    is_safe_ingest_path,
-    list_existing_slugs,
-    load_schema_md,
-    schema_folders,
-    parse_wiki_schema_routing,
-    BASE_PAGE_DIRS,
+    canonical_source_path,
+    is_query_bridge_source,
+    source_cache_key,
+)
+from _progress import (
     is_stage_done,
     get_stage_payload,
     mark_stage_done,
@@ -20,17 +24,34 @@ from _core import (
     clear_progress,
     load_progress,
 )
+from _schema import (
+    BASE_PAGE_DIRS,
+    list_existing_slugs,
+    load_schema_md,
+    parse_wiki_schema_routing,
+    schema_folders,
+)
 from _stage_3_write import (
     _stage_3_1_wiki_path_for_source,
-    _stage_3_1_auto_correct_wiki_path,
-    _stage_3_1_schema_route,
     _stage_3_1_canonicalize_sources_field,
+    _stage_3_1_sanitize_ingested_content,
     _stage_3_1_stamp_frontmatter_dates,
+    project_write_result_blocks,
+    resolve_ingest_write_path,
+    stage_3_1_build_slug_dirs,
+    stage_3_1_normalize_page_links,
     stage_3_1_write_wiki_file,
     stage_3_5_aggregate_repair,
 )
 from _stage_3_2_inject_images import stage_3_2_inject_images
-from _stage_3_4_review import stage_3_4_review_suggestions
+from _stage_3_4_review import (
+    stage_3_4_prepare_review_suggestions,
+    stage_3_4_persist_review_suggestions,
+)
+from _stage_2_6_source_page import (
+    build_fallback_source_summary_content,
+    source_analysis_text,
+)
 from _stage_validators import validate_stage_outputs
 from _enrich_wikilinks import enrich_wikilinks_batch
 
@@ -64,6 +85,151 @@ def _preserve_stage_counters(prev_stages: dict, new_stages: dict) -> dict:
     return out
 
 
+def _append_ingest_warning_log(config: Config, raw_file: Path, warnings: list[str]) -> None:
+    """Persist go/no-go warnings to runtime_dir/ingest-warnings.log.
+
+    validate_stage_outputs() already prints each warning, but the console
+    output is lost once the terminal scrolls. NashSU 0.6.0 added the same
+    persistent log (projectPath/.llm-wiki/ingest-warnings.log) so warnings
+    stay inspectable after the run ends.
+    """
+    log_path = config.runtime_dir / "ingest-warnings.log"
+    try:
+        config.runtime_dir.mkdir(parents=True, exist_ok=True)
+        entry_lines = [f"## {time.strftime('%Y-%m-%dT%H:%M:%S')} | {raw_file.name}", ""]
+        entry_lines += [f"{i}. {w}" for i, w in enumerate(warnings, 1)]
+        entry_lines.append("")
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(entry_lines) + "\n")
+    except OSError as e:
+        print(f"  ⚠️  failed to write ingest-warnings.log: {e}")
+
+
+def reconstruct_enrich_candidates(
+    files_written_paths: list[str], wiki_dir: Path, listing_pages: set[str]
+) -> list[tuple[str, "Path"]]:
+    """Rebuild the (rel_path, full_path) enrich list from a persisted file list.
+
+    On a ``write_loop_done`` resume the write loop is skipped, so enrich
+    candidates must be reconstructed from ``files_written_paths``. Those are
+    stored relative to wiki_root and therefore carry a leading ``wiki/`` segment
+    (e.g. ``wiki/concepts/foo.md``). The fresh write loop, by contrast, feeds
+    the enricher wiki_dir-relative paths (``_stage_3_write`` strips ``wiki/`` →
+    ``concepts/foo.md``).
+
+    The enrichment prompt is keyed by these rel_paths, so the two conventions
+    must match EXACTLY — otherwise a resume produces a different prompt hash than
+    the fresh run and the conversation router fires a spurious SECOND enrichment
+    handoff for the same ingest (bug 2026-07-01). This helper strips the
+    ``wiki/`` prefix so resume matches the fresh convention, and builds
+    full_path from wiki_dir/rel (== wiki_root/p) so the on-disk target is
+    unchanged. Listing pages (index/log/overview/schema) are excluded.
+    """
+    out: list[tuple[str, Path]] = []
+    for p in files_written_paths:
+        ref = PageRef.parse(p, wiki_dir.parent, wiki_dir)
+        if ref.name in listing_pages:
+            continue
+        out.append((ref.wiki_relative, ref.absolute_path))
+    return out
+
+
+def _is_redundant_duplicate_write(full_path, content: str, written_this_run: dict) -> bool:
+    """True when this exact (path, content) was already written earlier in THIS
+    write loop — a duplicate FILE block (e.g. the source page emitted by both
+    2.6 and a later step). Re-merging a page against our own byte-identical
+    just-written output wastes one LLM merge handoff per duplicate —
+    delegate-mode.md documented "2-3 redundant source-page merge prompts per
+    ingest" and told the operator to reuse the first merge result by hand; now
+    enforced in code. A duplicate path with DIFFERENT content is NOT redundant:
+    that is the designed same-slug collision merge — let it through.
+    """
+    return written_this_run.get(full_path) == content
+
+
+def _is_same_run_collision(full_path, content: str, written_this_run: dict) -> bool:
+    """True when THIS write loop already wrote this path with other content.
+
+    Two FILE blocks landing on one path is the designed same-slug collision
+    merge (see _is_redundant_duplicate_write for the byte-identical case). It
+    must not be mistaken for NashSU's corrected-source replacement: a page this
+    loop just wrote always passes the "every ``sources`` entry is the current
+    source" owner test, so replacing its body would silently drop the earlier
+    block. Observed shapes: a stray Stage 2.4 ``wiki/sources/<stem>.md`` block
+    arriving after Stage 2.6's real source page, two candidate names that
+    slugify identically, and two typed candidates that schema routing collapses
+    onto the same directory + stem.
+    """
+    previous = written_this_run.get(full_path)
+    return previous is not None and previous != content
+
+
+def _write_ledger_path(config: Config, source_hash: str) -> Path:
+    return config.runtime_dir / f"write-ledger-{source_hash[:16]}.json"
+
+
+def _blocks_fingerprint(blocks: list[tuple[str, str]]) -> str:
+    """Identity of the exact FILE-block set this write loop consumes."""
+    digest = hashlib.sha256()
+    for rel_path, content in blocks:
+        digest.update(rel_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(content.encode("utf-8")).digest())
+    return digest.hexdigest()
+
+
+def _load_write_ledger(
+    config: Config, source_hash: str, blocks_fp: str
+) -> dict[str, str]:
+    """Pages already written for THIS block set: rel_path → content sha256.
+
+    Conversation mode leaves the write loop on every merge handoff, so the
+    resumed loop replays from its first FILE block. The ledger lets a replayed
+    page skip a second LLM merge (``already_merged`` in merge_page_content).
+
+    It replaces the old "existing `sources:` is a superset of the incoming
+    ones" guess, which could not distinguish a replay from a genuine re-ingest
+    of a corrected source: on a page two or more books contributed to the
+    superset always held, so the freshly generated body was silently dropped.
+
+    A ledger recorded against a different block set is discarded — a re-ingest
+    regenerates the blocks, so its fingerprint changes and every page merges
+    for real.
+    """
+    path = _write_ledger_path(config, source_hash)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(
+            f"⚠️  [write] write ledger {path} unreadable "
+            f"({type(e).__name__}: {e}) — replayed pages will re-merge."
+        )
+        return {}
+    if not isinstance(data, dict) or data.get("blocks_fp") != blocks_fp:
+        return {}
+    pages = data.get("pages")
+    return {str(k): str(v) for k, v in pages.items()} if isinstance(pages, dict) else {}
+
+
+def _record_write_ledger(
+    config: Config, source_hash: str, blocks_fp: str, pages: dict[str, str]
+) -> None:
+    atomic_write(
+        _write_ledger_path(config, source_hash),
+        json.dumps(
+            {"blocks_fp": blocks_fp, "pages": pages},
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
+
+
+def _clear_write_ledger(config: Config, source_hash: str) -> None:
+    _write_ledger_path(config, source_hash).unlink(missing_ok=True)
+
+
 def _reconstruct_blocks_from_disk(
     config: Config, files_written_paths: list[str]
 ) -> list[tuple[str, str]]:
@@ -90,15 +256,53 @@ def _reconstruct_blocks_from_disk(
     """
     blocks: list[tuple[str, str]] = []
     for p in files_written_paths:
-        full = config.wiki_root / p
-        if not full.exists():
+        ref = PageRef.parse(p, config.wiki_root, config.wiki_dir)
+        if not ref.absolute_path.exists():
             continue
-        rel = p[len("wiki/"):] if p.startswith("wiki/") else p
         try:
-            blocks.append((rel, full.read_text(encoding="utf-8")))
-        except OSError:
+            blocks.append((
+                ref.wiki_relative,
+                ref.absolute_path.read_text(encoding="utf-8"),
+            ))
+        except OSError as e:
+            print(
+                "  ⚠️  [reconstruct] unreadable page excluded from review set: "
+                f"{ref.project_relative} — {e}")
             continue
     return blocks
+
+
+def _validated_marker_page_refs(
+    config: Config,
+    source_hash: str,
+    stage: str,
+) -> tuple[dict, list[str]]:
+    """Restore a post-write marker only when every bound page still exists."""
+    payload = get_stage_payload(config, source_hash, stage)
+    values = payload.get("page_refs")
+    if not isinstance(values, list):
+        raise RuntimeError(
+            f"{stage} marker has no page_refs list; refusing an "
+            "unauditable resume")
+    refs = canonical_page_refs(
+        values, config.wiki_root, config.wiki_dir)
+    missing: list[str] = []
+    empty: list[str] = []
+    for value in refs:
+        ref = PageRef.parse(value, config.wiki_root, config.wiki_dir)
+        if not ref.absolute_path.is_file():
+            missing.append(ref.project_relative)
+        elif ref.absolute_path.stat().st_size <= 0:
+            empty.append(ref.project_relative)
+    if missing:
+        raise RuntimeError(
+            f"{stage} marker binds missing pages: "
+            + ", ".join(missing[:5]))
+    if empty:
+        raise RuntimeError(
+            f"{stage} marker binds empty pages: "
+            + ", ".join(empty[:5]))
+    return payload, refs
 
 
 def _do_write(prepared: dict, verbose: bool = False) -> dict:
@@ -117,8 +321,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     stage_1_2_result = prepared["stage_1_2_result"]
     stage_1_3_result = prepared["stage_1_3_result"]
     template_name = prepared["template_name"]
-    query_count = prepared.get("query_count", 0)
     comp_count = prepared.get("comp_count", 0)
+    source_page_truncated = bool(prepared.get("source_page_truncated", False))
 
     print(f"\n=== [write] {raw_file.name} ===")
 
@@ -140,12 +344,17 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     _LISTING_PAGES = {"index.md", "log.md", "overview.md", "schema.md"}
 
     try:
-        from _language import detect_language
-        expected_lang = detect_language(extracted_text[:5000]) if extracted_text else "unknown"
+        from _language import get_output_language
+        # Policy target, not raw source language: the wiki only ever holds
+        # Chinese or English pages (get_output_language collapses everything
+        # else to English), so the per-block check below must compare against
+        # that same two-language policy rather than the source's raw language.
+        expected_lang = get_output_language(extracted_text[:5000]) if extracted_text else "English"
     except ImportError:
         expected_lang = "unknown"
 
-    canonical_source = f"raw/{raw_file.relative_to(config.raw_root)}"
+    canonical_source = canonical_source_path(raw_file, config)
+    query_bridge = is_query_bridge_source(raw_file, config)
     today_str = time.strftime("%Y-%m-%d")
 
     # ── Wikilink enrichment setup (round iv, 2026-06-22) ──
@@ -178,66 +387,124 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     if write_phase_done:
         print("  [write] write_phase marker present — skipping 3.1/3.2")
         _wp = get_stage_payload(config, h, "write_phase")
-        files_written_paths = _wp.get("files_written", [])
+        files_written_paths = canonical_page_refs(
+            list(_wp.get("files_written", [])),
+            config.wiki_root,
+            config.wiki_dir,
+        )
         source_block = ("source", "")  # source page already written
         hard_failures = []
         stage_3_2_result = {"injected": _wp.get("images_injected", 0)}
     elif write_loop_done:
         print("  [write] write_loop_done marker present — skipping 3.1 write loop")
         _wlp = get_stage_payload(config, h, "write_loop_done")
-        files_written_paths = list(_wlp.get("files_written", []))
+        files_written_paths = canonical_page_refs(
+            list(_wlp.get("files_written", [])),
+            config.wiki_root,
+            config.wiki_dir,
+        )
         hard_failures = []
         # If the source page was written in the prior loop, skip the placeholder
         # build below; otherwise leave source_block=None so the placeholder
         # runs and creates the source page (it hadn't been reached before the
         # enrich handoff).
-        _src_rel = str(source_path.relative_to(config.wiki_root))
+        _src_rel = PageRef.parse(
+            source_path, config.wiki_root, config.wiki_dir).project_relative
         source_block = ("source", "") if _src_rel in files_written_paths else None
         # Reconstruct enrich_candidates from the persisted file list so the
-        # enrich batch (below) still runs over the already-written pages.
-        # files_written_paths are stored relative to wiki_root (see
-        # full_path.relative_to(config.wiki_root) below), i.e. they include the
-        # leading "wiki/" segment. Reconstruct from wiki_root (NOT wiki_dir) to
-        # avoid doubling the "wiki/" prefix (wiki_dir is already wiki_root/wiki).
-        enrich_candidates = [
-            (p, config.wiki_root / p)
-            for p in files_written_paths
-            if Path(p).name not in _LISTING_PAGES
-        ]
+        # enrich batch (below) still runs over the already-written pages. The
+        # helper strips the leading "wiki/" so the rel_path matches the fresh
+        # write-loop convention exactly (else a resume re-keys the enrichment
+        # prompt and fires a spurious SECOND handoff — bug 2026-07-01).
+        enrich_candidates = reconstruct_enrich_candidates(
+            files_written_paths, config.wiki_dir, _LISTING_PAGES)
+
     _write_blocks = [] if (write_phase_done or write_loop_done) else file_blocks
 
+    # A5 write-time link normalizer (audit 2026-07-02, M6): slug→dir universe
+    # = this batch ∪ on-disk wiki, built once per book. Empty on resume passes
+    # (the loop below is skipped, so the universe is unused).
+    _slug_dirs = (stage_3_1_build_slug_dirs(_write_blocks, config, _VALID_SUBDIRS, _routing)
+                  if _write_blocks else {})
+    # D4 figure-ref backstop: wiki-relative slug of this book's source page —
+    # the normalizer wraps bare 图X.X/表X.X/Fig X-X/Table X-X body refs as
+    # [[<slug>|据<ref>]] and skips the source page itself (own slug match).
+    _source_page_slug = source_path.relative_to(config.wiki_dir).with_suffix("").as_posix()
+
+    # NashSU Phase-3 order: generate/validate review suggestions from the
+    # in-memory FILE generation BEFORE any page write.  Persistence remains
+    # post-write (after aggregate maintenance and media injection), matching
+    # NashSU's parse/store timing.  Historical resumes whose write loop already
+    # completed reconstruct the same logical input from the bound disk pages.
+    prepared_review: dict | None = None
+    if not is_stage_done(config, h, "review_done"):
+        if is_stage_done(config, h, "review_prepared"):
+            prepared_review = get_stage_payload(
+                config, h, "review_prepared")
+            if not isinstance(prepared_review.get("items_data"), list):
+                raise RuntimeError(
+                    "review_prepared marker has no validated items_data list")
+            print(
+                "[stage 3.4a] review_prepared marker present — restored "
+                f"{len(prepared_review['items_data'])} item(s)")
+        else:
+            # Review the generation as Stage 3.1 will write it. Schema routing
+            # and the strict missing-target de-link are deterministic, so
+            # reviewing the raw draft instead produced missing-page items the
+            # writer had already resolved and affected_pages entries pointing at
+            # pre-routing paths. The projection applies only that deterministic
+            # chain — no page merge, so this is still a review of the generation.
+            prewrite_review_blocks = project_write_result_blocks(
+                _write_blocks,
+                config,
+                _VALID_SUBDIRS,
+                _routing,
+                _slug_dirs,
+                canonical_source=canonical_source,
+                today=today_str,
+                source_page_slug=_source_page_slug,
+            )
+            if write_phase_done or write_loop_done:
+                prewrite_review_blocks = (
+                    _reconstruct_blocks_from_disk(config, files_written_paths)
+                    or prewrite_review_blocks
+                )
+            prepared_review = stage_3_4_prepare_review_suggestions(
+                prewrite_review_blocks,
+                raw_file,
+                config,
+                verbose=verbose,
+            )
+            mark_stage_done(
+                config,
+                h,
+                "review_prepared",
+                payload=prepared_review,
+            )
+
+    # Duplicate-block guard (redundancy fix 2026-07-09): (path → content)
+    # written earlier in THIS loop; see _is_redundant_duplicate_write.
+    _written_this_run: dict[Path, str] = {}
+    # Cross-process replay ledger (this loop may be resumed after a merge
+    # handoff); _written_this_run only covers the current process.
+    _blocks_fp = _blocks_fingerprint(_write_blocks)
+    _prior_pages = _load_write_ledger(config, h, _blocks_fp)
+    _ledger_pages = dict(_prior_pages)
+    if _prior_pages:
+        print(f"  [write] write ledger: {len(_prior_pages)} page(s) already "
+              "merged in an earlier pass — replays skip the LLM merge")
+
     for rel_path, content in _write_blocks:
-        if ".." in rel_path or rel_path.startswith("/"):
+        # Traversal/safety reject → application-managed aggregate reject →
+        # top-dir accept-list or auto-correct → `.md` suffix → schema routing
+        # (NashSU validateWikiPageRouting parity, applied at write time). The
+        # same resolver builds _slug_dirs and the Stage 3.4a review projection,
+        # so all three agree on where this block lands.
+        resolved = resolve_ingest_write_path(
+            rel_path, content, config, _VALID_SUBDIRS, _routing)
+        if not resolved:
             continue
-        if not is_safe_ingest_path(rel_path):
-            continue
-
-        top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
-        basename = Path(rel_path).name
-        if basename in _LISTING_PAGES:
-            pass
-        elif top_dir not in _VALID_SUBDIRS:
-            corrected = _stage_3_1_auto_correct_wiki_path(rel_path, content, config)
-            if corrected:
-                print(f"  [write] Auto-corrected: {rel_path} → {corrected}")
-                rel_path = corrected
-            else:
-                print(f"  [write] Dropped — cannot correct path: {rel_path}")
-                continue
-
-        if not rel_path.endswith(".md"):
-            rel_path = rel_path + ".md"
-
-        # Schema routing (NashSU validateWikiPageRouting parity): place the page
-        # in the directory its frontmatter `type` declares (schema typeDirs →
-        # base types). Auto-corrects type↔dir mismatches the accept-list above
-        # cannot catch — e.g. a type:concept page sitting in a schema folder, or
-        # a schema type:person page written to entities/.
-        if basename not in _LISTING_PAGES:
-            routed = _stage_3_1_schema_route(rel_path, content, _routing)
-            if routed != rel_path:
-                print(f"  [write] Schema-routed: {rel_path} → {routed}")
-                rel_path = routed
+        rel_path = resolved
 
         # Skip per-block language check for minerU OCR — OCR text from garbled
         # PDFs confuses the detector (e.g. C0 control chars → wrong language).
@@ -254,33 +521,160 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 except ImportError:
                     pass
 
+        # Sanitize FIRST, matching NashSU's order (ingest.ts:1846). Both
+        # helpers below bail out on content that does not start with `---`, so
+        # running them ahead of the outer-code-fence strip silently skipped
+        # sources canonicalization and the date stamps on exactly the pages
+        # that needed repair. Sanitizing is idempotent; stage_3_1_write_wiki_file
+        # still calls it for the callers that reach it directly.
+        content = _stage_3_1_sanitize_ingested_content(content)
         content = _stage_3_1_canonicalize_sources_field(content, canonical_source)
         content = _stage_3_1_stamp_frontmatter_dates(content, today_str)
 
+        # A5 (audit M6): single write-time normalization pass — related →
+        # prefixed bare slugs (unresolvable dropped), bare body wikilinks
+        # prefixed when uniquely resolvable, H1 wikilinks de-linked,
+        # self-links removed, bare figure/table refs wrapped as source-page
+        # links (D4 backstop). Loud per-page prints, never silent.
+        # (Listing pages never reach here — the resolver drops them.)
+        content = stage_3_1_normalize_page_links(
+            rel_path,
+            content,
+            _slug_dirs,
+            source_page_slug=_source_page_slug,
+            # The candidate inventory is now frozen and complete.  A
+            # Stage 2 candidate omitted from the emitted FILE blocks must
+            # not survive as a dangling link in newly generated content.
+            # The post-merge normalization keeps the legacy/default policy
+            # so existing user-authored forward links remain untouched.
+            strict_missing_targets=True,
+        )
+
         full_path = config.wiki_dir / rel_path
-        is_listing = basename in _LISTING_PAGES
-        do_merge = full_path.exists() and not is_listing
+
+        if _is_redundant_duplicate_write(full_path, content, _written_this_run):
+            print(f"  [skip] {rel_path} — duplicate block, identical to "
+                  f"content already written this ingest")
+            continue
+
+        # Aggregates were dropped above, so anything still here merges.
+        do_merge = full_path.exists()
+        # Hash the post-normalization bytes actually handed to the writer, so a
+        # replay (normalization is deterministic) matches exactly.
+        _content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        _already_merged = _prior_pages.get(rel_path) == _content_sha
+        _collision = _is_same_run_collision(
+            full_path, content, _written_this_run)
+        if _collision:
+            print(f"  [write] ⚠️  {rel_path}: second FILE block for a page "
+                  "this ingest already wrote — merging both bodies instead of "
+                  "replacing (same-slug collision)")
 
         try:
-            stage_3_1_write_wiki_file(full_path, content, config, merge=do_merge)
+            stage_3_1_write_wiki_file(
+                full_path,
+                content,
+                config,
+                merge=do_merge,
+                source_file=canonical_source,
+                normalize_rel_path=rel_path if do_merge else "",
+                slug_dirs=_slug_dirs if do_merge else None,
+                source_page_slug=_source_page_slug,
+                already_merged=_already_merged,
+                same_run_collision=_collision,
+            )
         except OSError as e:
             print(f"  [write] HARD ERROR: {rel_path} — {e}")
             hard_failures.append(rel_path)
             continue
 
-        files_written_paths.append(str(full_path.relative_to(config.wiki_root)))
+        _written_this_run[full_path] = content
+        if _ledger_pages.get(rel_path) != _content_sha:
+            _ledger_pages[rel_path] = _content_sha
+            _record_write_ledger(config, h, _blocks_fp, _ledger_pages)
+        files_written_paths.append(PageRef.parse(
+            full_path, config.wiki_root, config.wiki_dir).project_relative)
         if full_path == source_path:
             source_block = (rel_path, content)
-        action = "[merge]" if do_merge else "[overwrite]" if is_listing and full_path.exists() else "[write]"
-        print(f"  {action} {rel_path}")
+        print(f"  {'[merge]' if do_merge else '[write]'} {rel_path}")
 
-        if enrich_enabled and not is_listing:
+        if enrich_enabled:
             enrich_candidates.append((rel_path, full_path))
+
+    if not source_block and not query_bridge:
+        # Current NashSU guarantees a source summary even when the generation
+        # omitted or malformed its source FILE block. Mirror that final write
+        # guard here as well as in Stage 2.6, using the COMPLETE Stage 2
+        # analysis (never a shortened digest stub and never a per-concept
+        # fallback). This also repairs older cached prepared artifacts.
+        fallback_progress = load_progress(config, h) or {}
+        fallback_digest = (
+            global_digest
+            if global_digest
+            else fallback_progress.get("global_digest", {})
+        )
+        fallback_chunks = (
+            chunk_analyses
+            if chunk_analyses
+            else fallback_progress.get("chunk_analyses")
+        )
+        fallback_content = build_fallback_source_summary_content(
+            canonical_source,
+            source_analysis_text(
+                fallback_digest,
+                chunk_analyses=fallback_chunks,
+            ),
+            today_str,
+        )
+        try:
+            # NashSU's fallback is a deterministic write, not another semantic
+            # merge/generation turn. A source path belongs to this one source,
+            # so replacement is the correct recovery behavior.
+            stage_3_1_write_wiki_file(
+                source_path,
+                fallback_content,
+                config,
+                merge=False,
+            )
+        except OSError as exc:
+            print(f"  [write] HARD ERROR: source fallback — {exc}")
+            hard_failures.append("missing-source-page")
+        else:
+            source_ref = PageRef.parse(
+                source_path,
+                config.wiki_root,
+                config.wiki_dir,
+            ).project_relative
+            if source_ref not in files_written_paths:
+                files_written_paths.append(source_ref)
+            source_block = (
+                source_path.relative_to(config.wiki_dir).as_posix(),
+                fallback_content,
+            )
+            print(
+                "  [write] source summary missing — wrote deterministic "
+                "fallback from complete Stage 2 analysis"
+            )
+
+    # A partial write is diagnostic state, never a resumable "done" state.
+    # Do not run enrichment/review/aggregate or create write markers when any
+    # FILE block failed to persist.
+    if hard_failures:
+        partial_refs = canonical_page_refs(
+            files_written_paths, config.wiki_root, config.wiki_dir)
+        bind_page_refs(config, h, partial_refs)
+        print(f"  [write] STOPPED — {len(hard_failures)} hard failure(s)")
+        return {
+            "status": "hard-error",
+            "hard_failures": hard_failures,
+            "files_written": partial_refs,
+        }
 
     # Mark the 3.1 write loop complete so an enrich/3.2 ConversationPending
     # resume skips the loop (preventing spurious page re-merge). Only when the
     # loop ran fresh — not on write_phase_done / write_loop_done resumes.
     if not (write_phase_done or write_loop_done):
+        bind_page_refs(config, h, files_written_paths)
         mark_stage_done(config, h, "write_loop_done",
                         payload={"files_written": files_written_paths})
 
@@ -297,94 +691,99 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         enriched_pages = enrich_wikilinks_batch(pages_for_enrichment, existing_slugs, config)
         for rel_path, full_path in enrich_candidates:
             if rel_path in enriched_pages:
-                full_path.write_text(enriched_pages[rel_path], encoding="utf-8")
+                atomic_write(full_path, enriched_pages[rel_path])
                 print(f"  [enrich] {rel_path} (+wikilinks)")
 
-    if not source_block:
-        # Build NashSU-quality source page from digest data (no LLM needed)
-        book_meta = analysis.get("book_meta", {})
-        outline = analysis.get("outline", [])
-        key_claims = analysis.get("key_claims", [])
-        title = book_meta.get("title", raw_file.stem)
-        authors = book_meta.get("authors", [])
-        year = book_meta.get("year", "")
-        publisher = book_meta.get("publisher", "")
+    # Refresh the finer-grained marker after the generated source block has
+    # been confirmed. This closes the small window where the pre-enrichment
+    # marker contained only non-source FILE blocks.
+    if not write_phase_done:
+        files_written_paths = canonical_page_refs(
+            files_written_paths, config.wiki_root, config.wiki_dir)
+        bind_page_refs(config, h, files_written_paths)
+        mark_stage_done(config, h, "write_loop_done", payload={
+            "files_written": files_written_paths,
+        })
 
-        lines = [
-            "---",
-            "type: source",
-            f'title: "{title}"',
-            f"created: {today_str}",
-            f"updated: {today_str}",
-            "tags: []",
-            "related: []",
-            f'sources: ["{canonical_source}"]',
-            "---",
-            "",
-            f"# {title}",
-            "",
-        ]
-        if authors:
-            lines.append(f"**Authors:** {', '.join(str(a) for a in authors[:5])}")
-        if year:
-            lines.append(f"**Year:** {year}")
-        if publisher:
-            lines.append(f"**Publisher:** {publisher}")
-        lines.append("")
+    # NashSU Phase-3 order: maintain aggregate navigation immediately after
+    # FILE writes and before source-summary image injection / review
+    # persistence.  The marker makes retries idempotent; the aggregate
+    # implementation separately guards log.md against duplicate source/hash
+    # entries for legacy/marker-loss recovery.
+    if is_stage_done(config, h, "aggregate_done"):
+        _aggregate_payload, index_log_files = _validated_marker_page_refs(
+            config, h, "aggregate_done")
+        required_aggregate = {"wiki/log.md", "wiki/index.md"}
+        if not required_aggregate.issubset(set(index_log_files)):
+            raise RuntimeError(
+                "aggregate_done marker does not bind wiki/log.md and "
+                "wiki/index.md")
+        print(
+            f"[stage 3.5] aggregate_done marker present — restored "
+            f"{len(index_log_files)} aggregate page(s)")
+    else:
+        index_log_files = stage_3_5_aggregate_repair(
+            source_path, raw_file, analysis, h, method, config)
+        index_log_files = canonical_page_refs(
+            index_log_files, config.wiki_root, config.wiki_dir)
+        required_aggregate = {"wiki/log.md", "wiki/index.md"}
+        if not required_aggregate.issubset(set(index_log_files)):
+            raise RuntimeError(
+                "Stage 3.5 did not return wiki/log.md and wiki/index.md")
+        bind_page_refs(
+            config,
+            h,
+            files_written_paths + index_log_files,
+        )
+        mark_stage_done(config, h, "aggregate_done", payload={
+            "page_refs": index_log_files,
+        })
 
-        if outline:
-            lines.append("## Table of Contents & Key Concepts")
-            lines.append("")
-            for ch in outline[:40]:
-                if isinstance(ch, dict):
-                    ch_title = ch.get("title", "")
-                    topics = ch.get("key_topics", [])
-                    topics_str = ", ".join(str(t) for t in topics[:4]) if topics else ""
-                else:
-                    ch_title = str(ch)
-                    topics_str = ""
-                lines.append(f"1. **{ch_title}**" + (f" — {topics_str}" if topics_str else ""))
-            lines.append("")
-
-        if key_claims:
-            lines.append("## Key Takeaways")
-            lines.append("")
-            for claim in key_claims[:10]:
-                if isinstance(claim, dict):
-                    lines.append(f"- {claim.get('claim', str(claim))}")
-                else:
-                    lines.append(f"- {str(claim)}")
-            lines.append("")
-
-        placeholder_content = "\n".join(lines) + "\n"
-        try:
-            stage_3_1_write_wiki_file(source_path, placeholder_content, config)
-            files_written_paths.append(str(source_path.relative_to(config.wiki_root)))
-        except OSError as e:
-            hard_failures.append("source-placeholder")
-
-    # Stage 3.2: Image injection
+    # Stage 3.2: Image injection (after aggregate maintenance, as in NashSU).
     if not write_phase_done:
         stage_3_2_result: dict = {"injected": 0}
         if source_path.exists():
             stage_3_2_result = stage_3_2_inject_images(config, raw_file, source_path, method)
 
-        # Mark write phase complete so a post-review resume skips 3.1-3.2
-        # (prevents spurious page-merge / re-enrichment / re-injection).
+        try:
+            expected_images = int(stage_1_2_result.get("count", 0) or 0)
+            injected_images = int(stage_3_2_result.get("injected", 0) or 0)
+        except (TypeError, ValueError) as exc:
+            return {
+                "status": "hard-error",
+                "error": f"invalid Stage 3.2 media counts: {exc}",
+                "files_written": files_written_paths,
+            }
+        if (
+            getattr(config, "media_policy", "required") == "required"
+            and injected_images != expected_images
+        ):
+            print(
+                f"  [stage 3.2] HARD ERROR: injected "
+                f"{injected_images}/{expected_images} required images")
+            return {
+                "status": "hard-error",
+                "error": (
+                    f"Stage 3.2 injected {injected_images}/"
+                    f"{expected_images} required images"
+                ),
+                "files_written": files_written_paths,
+            }
+
+        # Mark write phase complete so a post-media resume skips 3.1/3.2.
+        # Aggregate pages already exist in the NashSU-aligned order, so keep
+        # them in the task binding even though the write_phase payload itself
+        # remains scoped to generated pages.
+        bind_page_refs(config, h, files_written_paths + index_log_files)
         mark_stage_done(config, h, "write_phase", payload={
             "files_written": files_written_paths,
-            "images_injected": stage_3_2_result.get("injected", 0),
+            "images_injected": injected_images,
         })
 
-    # Reconstruct the review set from the pages actually on disk. Done on EVERY
-    # pass (not just resumes): by Stage 3.4 the pages are written AND enriched,
-    # so disk content is identical on a fresh run and on any later resume. That
-    # determinism makes the Stage 3.4 conversation-mode prompt hash stable, so a
-    # post-write resume reuses the cached review answer instead of firing a
-    # second redundant review over "0 new pages". It also feeds validation and
-    # cache stats the real on-disk pages even when file_blocks is [] on resume
-    # (fixes false go/no-go failures and zeroed cache stage-stats). Falls back
-    # to the in-memory file_blocks only if nothing was written.
+    # Reconstruct the final disk set for validation/cache accounting. Review
+    # generation already ran pre-write over the original FILE generation; only
+    # persistence happens here, after writes + aggregates + media, matching
+    # NashSU's execution order.
     review_blocks = _reconstruct_blocks_from_disk(config, files_written_paths) or file_blocks
 
     # Total captioned images on disk. stage_1_3_result["captioned"] is NEW
@@ -399,9 +798,46 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         except OSError:
             _total_captioned = 0
 
-    # Stage 3.4: Review (quality review of generated pages)
-    stage_3_4_result = stage_3_4_review_suggestions(
-        review_blocks, raw_file, config, verbose=verbose)
+    # Stage 3.4b: Persist the pre-write review result. Persist the exact
+    # review-page set so a later cache/embedding retry never calls the reviewer
+    # twice or silently accepts deleted review output.
+    if is_stage_done(config, h, "review_done"):
+        _review_payload, review_page_refs = _validated_marker_page_refs(
+            config, h, "review_done")
+        stage_3_4_result = {
+            "items": int(_review_payload.get("items", 0) or 0),
+            "skipped": bool(_review_payload.get("skipped", False)),
+            "reason": _review_payload.get("reason", ""),
+            "stop_reason": _review_payload.get("stop_reason", ""),
+            "page_refs": review_page_refs,
+        }
+        print(
+            f"[stage 3.4] review_done marker present — restored "
+            f"{len(review_page_refs)} review page(s)")
+    else:
+        if prepared_review is None:
+            raise RuntimeError(
+                "Stage 3.4 review persistence reached without a prepared "
+                "pre-write result")
+        stage_3_4_result = stage_3_4_persist_review_suggestions(
+            prepared_review, raw_file, config)
+        review_page_refs = canonical_page_refs(
+            list(stage_3_4_result.get("page_refs", [])),
+            config.wiki_root,
+            config.wiki_dir,
+        )
+        bind_page_refs(
+            config,
+            h,
+            files_written_paths + index_log_files + review_page_refs,
+        )
+        mark_stage_done(config, h, "review_done", payload={
+            "items": int(stage_3_4_result.get("items", 0) or 0),
+            "skipped": bool(stage_3_4_result.get("skipped", False)),
+            "reason": stage_3_4_result.get("reason", ""),
+            "stop_reason": stage_3_4_result.get("stop_reason", ""),
+            "page_refs": review_page_refs,
+        })
 
     # Go/no-go validation
     go_nogo_warnings = validate_stage_outputs(
@@ -409,23 +845,17 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         stage_1_2_result, stage_1_3_result,
         review_blocks, source_path,
     )
-
-
-    # Stage 3.5: Aggregate repair
-    index_log_files = stage_3_5_aggregate_repair(source_path, raw_file, analysis, h, method, config)
+    if go_nogo_warnings:
+        _append_ingest_warning_log(config, raw_file, go_nogo_warnings)
 
     # Update cache
-    try:
-        rel = str(raw_file.relative_to(config.raw_root))
-    except ValueError:
-        rel = str(raw_file)
+    rel = source_cache_key(raw_file, config)
     # Stage stats: derive page counts from review_blocks (the real on-disk set)
     # and take the max against any in-memory analysis/params, so a write_phase
-    # resume — where file_blocks/analysis/query_count are empty — records the
+    # resume — where file_blocks/analysis are empty — records the
     # true counts instead of overwriting the cache entry with zeros.
     _n_concepts = sum(1 for p, _ in review_blocks if "concepts/" in p)
     _n_entities = sum(1 for p, _ in review_blocks if "entities/" in p)
-    _n_queries = sum(1 for p, _ in review_blocks if "queries/" in p)
     _n_comps = sum(1 for p, _ in review_blocks if "comparisons/" in p)
     _n_blocks = max(len(file_blocks), len(review_blocks))
     cache = load_cache(config)
@@ -461,33 +891,59 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         "images_extracted": stage_1_2_result.get("count", 0),
         "images_captioned": _total_captioned,
         "images_injected": stage_3_2_result.get("injected", 0),
-        "queries_generated": max(query_count, _n_queries),
         "comparisons_generated": max(comp_count, _n_comps),
         "review_items": stage_3_4_result.get("items", 0),
     }
     _merged_stages = _preserve_stage_counters(_prev_stages, _new_stages)
 
+    all_written_refs = canonical_page_refs(
+        files_written_paths + review_page_refs + index_log_files,
+        config.wiki_root,
+        config.wiki_dir,
+    )
+    bind_page_refs(config, h, all_written_refs)
+    cache_method = method
+    if method in ("", "cached") and _prev_entry.get("method"):
+        # write_phase resumes after progress cleanup no longer have the
+        # extraction artifact in memory. Preserve the authoritative original
+        # method (notably mineru-*) for later media audit/repair.
+        cache_method = _prev_entry["method"]
     cache["entries"][rel] = {
         "hash": h,
         "timestamp": int(time.time() * 1000),
-        "filesWritten": files_written_paths + index_log_files,
-        "method": method,
+        "filesWritten": all_written_refs,
+        "method": cache_method,
         "template": template_name,
         "sourceHash": h,
         "fileBlockCount": _merged_stages["file_blocks_generated"],
         "stages": _merged_stages,
     }
-    if hard_failures:
-        print(f"  [cache] SKIPPED — {len(hard_failures)} hard failure(s)")
-        return {"status": "hard-error", "hard_failures": hard_failures,
-                "files_written": files_written_paths + index_log_files}
+    if source_page_truncated:
+        # NashSU skips the cache entry whenever a truncated path stayed
+        # unrecovered, so the next ingest regenerates the page instead of
+        # replaying the degraded one without another LLM turn
+        # (ingest.ts:1326-1341). The deterministic source summary is already on
+        # disk; withholding the cache is what makes that stand-in temporary.
+        message = (
+            "source page fell back to the deterministic summary after an "
+            "unrecovered truncation — not caching, so the next ingest "
+            "regenerates it"
+        )
+        print(f"  [cache] SKIPPED: {message}")
+        _append_ingest_warning_log(config, raw_file, [message])
+        clear_progress(config, h)
+        _clear_write_ledger(config, h)
+        return {"status": "degraded", "reason": "source-page-truncated",
+                "files_written": all_written_refs}
+
     try:
         save_cache(config, cache)
         clear_progress(config, h)
+        _clear_write_ledger(config, h)
         print(f"  [cache] saved")
     except OSError as e:
         return {"status": "hard-error", "error": str(e),
-                "files_written": files_written_paths + index_log_files}
+                "files_written": all_written_refs}
 
     # Note: Detailed validation moved to separate 'validate' command (Phase 2 refactor)
     # Ingest now focuses on generation (Stages 0-3.5) with per-stage validation

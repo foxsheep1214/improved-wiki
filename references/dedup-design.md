@@ -6,7 +6,7 @@ improved-wiki 有**两种职责不同、不可互换**的去重。它们名字�
 
 | 种类 | 中文名 | 英文名 | 模块 | 入口 |
 |---|---|---|---|---|
-| ① 消化时 | **源内去重** | intra-source dedup | `_stage_2_5_dedup.py` | `stage_2_5_dedup()` |
+| ① 消化时 | **源内去重** | intra-source dedup | `_dedup_intra_source.py` | `dedup_intra_source()` |
 | ② 检查时 | **跨源去重** | cross-source dedup | `cross_source_dedup.py`（CLI）+ `_dedup.py`（引擎）| `cross_source_dedup.py` CLI |
 
 ## 职责对比
@@ -15,11 +15,11 @@ improved-wiki 有**两种职责不同、不可互换**的去重。它们名字�
 |---|---|---|
 | 范围 | 单源——只看本次 LLM 生成的 file_blocks | 全 wiki——跨所有已消化源 |
 | 目标问题 | LLM 在**同一本书内**把同一概念起两个名 | 跨源累积——多次 ingest 把同一主题命名不同 |
-| 时机 | 写盘前（3.1 之前），是 file_blocks 的**过滤器** | 离线，用户手动 `--dedup` 触发，在多次 ingest 之后 |
+| 时机 | 写盘前（3.1 之前），是 file_blocks 的**过滤器** | 离线，普通 lint 默认触发一轮（`--no-dedup` 可跳过），也可单独手动运行 |
 | 速度要求 | 必须快（inline，阻塞 ingest）| 可慢（离线，LLM 语义扫描）|
 | 激进度 | **保守**——页面还没写，误合并=丢数据，且无备份 | **彻底**——有 backup + report，可回滚，可大胆合并 |
 | 跨引用改写 | **不做**——页面尚未落盘，没有 `[[wikilink]]` 可改 | **必须做**——全 wiki 重写 `[[old-slug]]` + `related:` 指向 canonical |
-| 检测方法 | embedding 语义候选（cosine ≥0.82，复用 `_dedup_embedding`；无回退，缺 embedding stack 则 raise）+ LLM 逐组确认 | LLM 语义检测（NashSU `dedup.ts` 移植）|
+| 检测方法 | embedding 语义候选（cosine ≥0.82，复用 `_dedup_embedding`；无回退，缺 embedding stack 则 raise）+ LLM 逐组确认 | **默认 embedding 预筛**（cosine ≥0.68，比源内 0.82 更松，为捞跨语言/缩写别名）+ LLM 语义检测；`--no-embedding-prefilter` 退回全量单-prompt 扫描（仅小 wiki），`--token-only` 走确定性 token/CJK-bigram 匹配免网络 |
 | 输出 | 静默过滤——dup 块直接不写盘 | backup 目录 + JSON report，供人复核 |
 | 可逆性 | 不可逆（dup 页根本没生成）| 可逆（有 backup，可还原）|
 
@@ -31,11 +31,13 @@ improved-wiki 有**两种职责不同、不可互换**的去重。它们名字�
 ## 跨源去重的内部结构
 
 ```
-cross_source_dedup.py        # CLI + 编排：LLM 语义检测 + 合并，backup，report
+cross_source_dedup.py        # CLI + 编排：embedding 预筛 + LLM 语义检测 + 合并，backup，report
+  ├─ _dedup_embedding.py     # 预筛：candidate_pairs（cosine ≥0.68，默认开启）
   └─ _dedup.py               # 引擎：LLM 语义检测 + 合并（NashSU dedup.ts 移植）
 ```
 
-NashSU `dedup.ts` parity：纯 LLM 语义检测，无确定性预筛。三阶段：
+NashSU `dedup-runner.ts` parity：**默认先 embedding 预筛再 LLM 语义检测**（不预筛会把整个 wiki 塞进一个 prompt，即 #359 卡死；`--no-embedding-prefilter` 才退回全量单-prompt 扫描）。流程：
+0. `candidate_pairs`（`_dedup_embedding`）— embedding 预筛（cosine ≥`DEDUP_PREFILTER_THRESHOLD`=0.68；`--token-only` 时改用确定性 token/CJK-bigram 匹配，免网络）
 1. `extract_entity_summary` — 纯数据提取（slug, title, description, tags），无 LLM
 2. `detect_duplicate_groups` — LLM 识别同主题 slug 组（同义/中英/缩写/单复数）
 3. `merge_duplicate_group` — LLM body 合并 + 确定性 frontmatter union + 跨引用重写 + backup
@@ -45,6 +47,24 @@ NashSU `dedup.ts` parity：纯 LLM 语义检测，无确定性预筛。三阶段
 - **ingest 时**：自动跑源内去重（Stage 2.4 收尾子步，原 2.5），无需人工干预。
 - **积累了一批 ingest 后**：手动跑跨源去重清理全 wiki：
   ```bash
-  python3 scripts/cross_source_dedup.py --project /path/to/wiki            # LLM 语义去重
-  python3 scripts/cross_source_dedup.py --dry-run                          # preview only
+  python3 "$SKILL_DIR/scripts/cross_source_dedup.py" --project /path/to/wiki            # LLM 语义去重
+  python3 "$SKILL_DIR/scripts/cross_source_dedup.py" --dry-run                          # preview only
   ```
+
+## 已知遗留：跨书历史重复 slug 变体
+
+Stage 2.3 的标题 Jaccard 匹配曾漏判重音/标点变体（如 "Thévenin's" vs "Thevenin's"），已修（见 `known-issues.md`）——但只防未来新重复。已存在的跨书历史重复（同一概念的多个 slug 变体）是更大的内容去重课题，**不会**被这次修复回溯清理，需要靠上面的跨源去重手动扫一遍。
+
+## 通过 wiki-lint.sh 驱动跨源去重时：只跑一轮（2026-07-12，user-directed）
+
+普通 `wiki-lint.sh` 默认运行一轮跨源去重；`--no-dedup` 跳过，
+`--diagnostic-only` 则关闭全部 wiki 修改。
+
+`cross_source_dedup.py` 的检测器批次按**内容哈希**分组缓存。每次合并都会改变 wiki 页面集合，导致哈希整体偏移——`wiki-lint.sh` 每次重新调用几乎都会把 34 个检测批次几乎全部标记为 pending（不是仅重扫真正受影响的那几批），即使真实新增重复的数量正在收敛（观测到 34→20 合并、22→4 合并、4 全部合并后又反弹到 31 pending）。
+
+**因此调用方（agent）驱动默认 dedup 阶段时，只应答一轮
+conversation handoff**（不管这一轮产出的是检测 prompt 还是合并
+prompt）。应答完这一轮后，如还请求了其他阶段，用原参数重新调用但
+加上 `--no-dedup`；不要为了追求“零新增”而无限循环重新扫描。
+
+如果用户明确要求"跑到完全收敛"，才继续按原节奏应答后续轮次；否则一轮即止是默认行为。

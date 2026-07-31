@@ -1,6 +1,30 @@
 from __future__ import annotations
 
-from _stage_2_base import *
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+from _config import Config
+from _core import record_rate_limit as _record_rate_limit
+from _schema import (
+    list_existing_slugs,
+    load_purpose_md,
+    load_schema_md,
+    schema_candidate_routes,
+    schema_prompt_text,
+)
+from _llm_api import (
+    _is_retryable_exception,
+    _retry_jitter,
+    call_anthropic_protocol,
+)
+from _parse import parse_yaml_block
+from _stage_2_base import (
+    _stage_2_title_cjk_bigrams,
+    _stage_2_title_words,
+)
 from _language import build_language_directive
 
 # ── Token estimation (tiktoken if installed, else CJK-aware heuristic) ──
@@ -33,6 +57,46 @@ def _estimate_tokens(text: str) -> int:
 _HEADING_RE = re.compile(r"^#{1,6}\s+.+$", re.MULTILINE)
 _FENCE_RE = re.compile(r"^[ \t]*(```+|~~~+)", re.MULTILINE)
 
+# Rolling-digest cap fed from chunk N into chunk N+1's prompt. NashSU parity:
+# ingest.ts `LONG_SOURCE_DIGEST_MAX = 15_000` — a fixed constant, deliberately
+# not scaled to the model context window (user decision 2026-07-09).
+_DIGEST_PROMPT_CAP = 15_000
+
+# Cap on the existing-wiki slug list embedded in each 2.2 chunk prompt. The
+# uncapped list grew with the wiki (6,253 pages → one 259KB prompt line,
+# repeated per chunk — observed live 2026-07-09, and it broke answering
+# subagents' Read tooling). NashSU trims its Current Wiki Index to 40K chars
+# (ingest.ts buildChunkAnalysisSystemPrompt); 2.4 (_LINKABLE_TOTAL_CAP) and
+# 2.6 ([:1500]) already rank-and-cap. 1000 slugs ≈ 40K chars — same budget.
+_EXISTING_SLUGS_CAP = 1000
+
+
+def _stage_2_2_cap_existing_slugs(existing_slugs: list, chunk_text: str) -> list:
+    """Bound the existing-wiki slug list shown to a chunk-analysis prompt.
+
+    Rank by relevance to THIS chunk's text — containment of the slug's tokens
+    in the chunk's token set (ASCII words ∪ CJK bigrams, reusing the 2.4
+    linkable-fill tokenizers) — keep the best _EXISTING_SLUGS_CAP, alphabetize
+    for stable presentation. The chunk text is fixed for the whole ingest, so
+    the ranked prefix (and hence the conversation-handoff prompt hash) is
+    stable across resumes. An alphabetical cut would systematically drop
+    late-sorting CJK slugs — the same disease _rank_linkable_fill fixed for
+    2.4/2.6.
+    """
+    if len(existing_slugs) <= _EXISTING_SLUGS_CAP:
+        return existing_slugs
+    from _stage_2_4_generation import _linkable_relevance_tokens
+    ref = _stage_2_title_words(chunk_text) | _stage_2_title_cjk_bigrams(chunk_text)
+
+    def _score(slug: str) -> float:
+        cand = _linkable_relevance_tokens(slug)
+        if not cand:
+            return 0.0
+        return len(cand & ref) / len(cand)
+
+    ranked = sorted(existing_slugs, key=lambda s: (-_score(s), s))
+    return sorted(ranked[:_EXISTING_SLUGS_CAP])
+
 # Fraction of the window scanned backwards for a clean boundary.
 _SEARCH_FRAC = 0.15
 # A trailing chunk smaller than this fraction of the token budget is merged back
@@ -45,13 +109,35 @@ def _stage_2_1_find_protected_ranges(text: str) -> list[tuple[int, int]]:
     tables. Returns sorted, non-overlapping ``(start, end)`` spans."""
     ranges: list[tuple[int, int]] = []
 
-    # Fenced code blocks: pair consecutive fence markers (```/~~~).
-    fences = [m.start() for m in _FENCE_RE.finditer(text)]
-    for i in range(0, len(fences) - 1, 2):
-        open_pos = fences[i]
-        close_line_end = text.find("\n", fences[i + 1])
-        end = len(text) if close_line_end == -1 else close_line_end + 1
+    # Fenced code blocks: a closing fence must use the same marker character,
+    # be at least as long as its opener, and contain no trailing info string.
+    # Pairing every two fence-looking lines is unsafe for OCR/source excerpts:
+    # a literal `````asm`` line inside a `````txt`` block would otherwise be
+    # mistaken for its close, shifting every later pair and protecting a huge
+    # span of ordinary prose from chunking.
+    open_fence: tuple[int, str, int] | None = None
+    for match in _FENCE_RE.finditer(text):
+        marker = match.group(1)
+        line_end = text.find("\n", match.end())
+        content_end = len(text) if line_end == -1 else line_end
+        trailing = text[match.end():content_end]
+
+        if open_fence is None:
+            open_fence = (match.start(), marker[0], len(marker))
+            continue
+
+        open_pos, open_char, open_len = open_fence
+        is_close = (
+            marker[0] == open_char
+            and len(marker) >= open_len
+            and not trailing.strip()
+        )
+        if not is_close:
+            continue
+
+        end = len(text) if line_end == -1 else line_end + 1
         ranges.append((open_pos, end))
+        open_fence = None
 
     def _in_fence(pos: int) -> bool:
         return any(s <= pos < e for s, e in ranges)
@@ -150,6 +236,13 @@ def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int,
     window = min(int(target_tokens * chars_per_token), target_chars)
     window = max(window, 2000)  # never absurdly small
 
+    # Overlap scales with the ACTUAL chunk size (NashSU parity: overlapChars =
+    # clamp(chunk * 0.08, 800, 3000)). The passed ``overlap_chars`` (config, =3000)
+    # is the upper cap; small chunks get proportionally less. At large-context
+    # chunk sizes 8% far exceeds the cap, so this stays at 3000 there — it only
+    # shrinks once chunks fall below ~37.5K chars (small books / small context).
+    overlap_chars = max(800, min(overlap_chars, int(window * 0.08)))
+
     print(f"[chunk] Splitting {len(text)} chars (~{_estimate_tokens(text)} tok) into "
           f"~{target_tokens}-tok chunks (~{window} chars/chunk)...", flush=True)
 
@@ -191,13 +284,68 @@ def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int,
     return chunks
 
 
-def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> str:
-    """Find the heading hierarchy that a chunk falls under (NashSU parity).
+# ── Stage 2.2 chapter anchors ──
+# OCR'd books promote front-matter titles ("出版说明", "目录") and figure
+# captions to markdown headings, so the generic nearest-heading ancestor stack
+# mislabeled nearly every chunk. Explicit chapter markers are far more reliable
+# anchors; numeric section headings are the fallback tier when a book has none.
+_CHAPTER_ANCHOR_RE = re.compile(
+    r"^#{1,3}\s*(第[一二三四五六七八九十百0-9]+章[^\n]*|Chapter\s+\d+[^\n]*)",
+    re.MULTILINE | re.IGNORECASE)
+# Letter-spaced chapter-opener typography (Wiley ELINT live incident,
+# 2026-07-10): some books' decorative chapter-title-page graphic OCRs as a
+# BARE line of widely spaced single letters — "C H A P T E R 1", two-digit
+# chapters even space the digits ("C H A P T E R 1 0") — sitting above the
+# real "# <Chapter Title>" H1, not as a markdown heading itself. Meanwhile
+# that same book's own Table of Contents lists each chapter as "## CHAPTER N"
+# (OCR promotes TOC lines to real headings), which _CHAPTER_ANCHOR_RE matches
+# perfectly — 100% false-positive on TOC noise, 0% match on the real openers.
+# This anchor's true position is always far later in the book than any TOC
+# mention, so once detected it naturally wins the "last anchor before
+# chunk_end" comparison over the TOC's early-clustered noise.
+_CHAPTER_SPACED_RE = re.compile(r"^C\s+H\s+A\s+P\s+T\s+E\s+R\s+((?:\d\s*)+)$",
+                                 re.MULTILINE)
+_NUMERIC_HEADING_RE = re.compile(r"^#{1,3}\s*(\d+(?:\.\d+)*[ \t][^\n]*)", re.MULTILINE)
+_FRONT_MATTER_LABEL = "前置材料（前言/目录）"
 
-    Scans backwards from chunk_start to find the nearest H1-H6 heading, then
-    walks further back to build the full ancestor path. Returns a string like
-    "Chapter 3 > Section 3.2 > Subsection 3.2.1" or "" if no heading found.
+
+def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end: int) -> str:
+    """Resolve the heading label for a chunk's span, chapter-markers first.
+
+    Chapter anchors (第N章 / Chapter N, else numeric section headings) are
+    scanned and the label reflects the chunk's SPAN: the chapter most recently
+    opened at chunk_start plus, if different, the last chapter opened before
+    chunk_end — "第2章 MTI雷达 → 第3章 AMTI". A chunk starting before chapter 1
+    gets the front-matter label, so OCR pseudo-headings (出版说明/目录/figure
+    captions) can no longer leak into the path.
+
+    Texts without any chapter anchor fall back to the original behavior
+    (NashSU parity): nearest H1-H6 heading before chunk_start plus its ancestor
+    stack, e.g. "Chapter 3 > Section 3.2", or "" if no heading found.
     """
+    anchors = [(m.start(), m.group(1).strip())
+               for m in _CHAPTER_ANCHOR_RE.finditer(text)]
+    for m in _CHAPTER_SPACED_RE.finditer(text):
+        num = re.sub(r"\s+", "", m.group(1))
+        anchors.append((m.start(), f"Chapter {num}"))
+    anchors.sort(key=lambda a: a[0])
+    if not anchors:
+        anchors = [(m.start(), m.group(1).strip())
+                   for m in _NUMERIC_HEADING_RE.finditer(text)]
+    if anchors:
+        start_idx = end_idx = -1  # -1 → before the first chapter (front matter)
+        for i, (pos, _title) in enumerate(anchors):
+            if pos <= chunk_start:
+                start_idx = i
+            if pos < chunk_end:
+                end_idx = i
+            else:
+                break
+        start_label = anchors[start_idx][1] if start_idx >= 0 else _FRONT_MATTER_LABEL
+        if end_idx > start_idx:
+            return f"{start_label} → {anchors[end_idx][1]}"
+        return start_label
+
     _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
     _heading_stack: list[tuple[int, str]] = []  # (level, title)
 
@@ -216,109 +364,66 @@ def _stage_2_2_resolve_chunk_heading_path(text: str, chunk_start: int, chunk_end
     return ""
 
 
-# ---------- Stage 1: Global Digest ----------
+# ---------- Stage 2.2 prompt building + chunking ----------
 
-def _stage_2_1_build_prompt(
-    extracted_text: str,
-    file_path: Path,
-    config: Config,
-    template: str = "",
-) -> str:
-    """Build the prompt for Stage 1: Global Digest."""
-    summary_text = extracted_text[:config.source_budget]
-    existing_slugs = list_existing_slugs(config)
-
-    # Inject type-specific template instructions (first 4000 chars — enough for schema guidance)
-    template_section = ""
-    if template:
-        template_trimmed = template[:4000]
-        template_section = f"""
-# Document Type Instructions
-The source is a **{file_path.parent.name}** document. Follow these type-specific conventions:
-<template>
-{template_trimmed}
-</template>
-
-"""
-
-    language_directive = build_language_directive(summary_text)
-    return f"""{language_directive}
-
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You are performing **Stage 1: Global Digest** of a book ingest pipeline.
-{template_section}
-# Input
-- Source file: {file_path.stem}
-- Extracted text (first {config.source_budget:,} chars of full book):
-<extracted_text>
-{summary_text}
-</extracted_text>
-
-- Existing wiki pages: {', '.join(existing_slugs[:300])}
-
-# Task
-Read the extracted text and produce a **high-level structural summary** of this book.
-This will be used as context for per-chapter detailed analysis in the next stage.
-
-# Output (YAML only, in ```yaml block)
-```yaml
-book_meta:
-  title: "..."
-  authors: [...]
-  year: N
-  pages: N
-  publisher: "..."
-  language: "zh" | "en" | "mixed"
-
-outline:
-  # Complete chapter tree with approximate page/char ranges
-  - chapter: 1
-    title: "..."
-    key_topics: ["...", "..."]
-    # Key: give a unique start marker (first 30 chars of chapter text)
-    # so the chunker can align chunks to chapter boundaries
-    start_marker: "..."
-
-key_entities:
-  - name: "..."
-
-key_concepts:
-  - name: "..."
-    importance: "core" | "supporting" | "mentioned"
-
-key_claims:
-  - claim: "..."
-    chapter: N
-```
-
-# Constraints
-- Focus on STRUCTURE, not details — per-chapter details come in Stage 2.2
-- The outline must be as complete as possible
-- chapter_map.start_marker is critical for accurate chunking in Stage 2.2
-- Do NOT propose new wiki pages yet — that's Stage 2 (Synthesis)
-"""
+_SOURCE_KIND_LABELS = {
+    "applicationnote": "application note",
+    "book": "book",
+    "datasheet": "datasheet",
+    "designexample": "design example",
+    "news": "news article",
+    "paper": "paper",
+    "presentation": "presentation",
+    "standard": "standard",
+}
 
 
-def stage_2_1_global_digest(
-    extracted_text: str,
-    file_path: Path,
-    config: Config,
-    template: str = "",
-    verbose: bool = False,
-) -> dict:
-    """Stage 1: One LLM call for book-level structural summary."""
-    print(f"[stage 2.1] Global Digest — sending {min(len(extracted_text), config.source_budget):,} chars to LLM...")
-    prompt = _stage_2_1_build_prompt(extracted_text, file_path, config, template)
-    response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192, label="global digest")
-    if verbose:
-        print(f"[stage 2.1] Raw response ({len(response)} chars, stop={stop_reason}):\n{response[:3000]}...\n")
-    digest = parse_yaml_block(response)
-    print(f"[stage 2.1] Done — {len(digest)} top-level keys in digest")
-    return digest
+def _stage_2_2_source_kind(template: str, file_path: Path) -> str:
+    """Return a stable source kind without mistaking a topic folder for it.
+
+    ``raw/Paper/<topic>/x.pdf`` previously used ``file_path.parent.name`` and
+    told the model that ``<topic>`` was the document type. Prefer the selected
+    digest template; fall back to the first path component below ``raw/``.
+    """
+    match = re.match(r"\s*#\s*digest-([a-z0-9_-]+)", template or "", re.I)
+    if match:
+        key = match.group(1).lower().replace("-", "").replace("_", "")
+        return _SOURCE_KIND_LABELS.get(key, key.replace("_", " "))
+
+    parts = file_path.parts
+    for index, part in enumerate(parts[:-1]):
+        if part.lower() == "raw" and index + 1 < len(parts) - 1:
+            key = parts[index + 1].lower().replace("-", "").replace("_", "")
+            return _SOURCE_KIND_LABELS.get(key, "source")
+    return "source"
 
 
-# ---------- Stage 2.2: Chunk Analysis ----------
+def _stage_2_2_digest_meta_template(source_kind: str) -> str:
+    """Build the compatibility metadata block for the actual source kind.
+
+    ``book_meta`` is retained as an internal artifact key because existing
+    checkpoints and downstream validators consume it. Its fields, however,
+    must describe the real source instead of coercing papers into
+    publisher/textbook metadata.
+    """
+    common = (
+        "  book_meta:  # compatibility key used for every source type\n"
+        '    title: "..."\n'
+        '    authors: ["..."]\n'
+        '    year: "..."\n'
+        f'    source_kind: "{source_kind}"'
+    )
+    if source_kind == "book":
+        return (
+            common
+            + '\n    publisher: "..."\n'
+            + '    granularity: "textbook" | "manual"   '
+            + '# "manual" ONLY for implementation/maintenance monographs'
+        )
+    if source_kind == "paper":
+        return common + '\n    venue: "..."\n    doi: "..."\n    url: "..."'
+    return common + '\n    venue: "..."\n    publisher: "..."\n    url: "..."'
+
 
 def _stage_2_2_build_template_section(template: str, file_path: Path, max_chars: int = 4000) -> str:
     """Build the template injection section for a Stage 2.2 prompt.
@@ -330,9 +435,14 @@ def _stage_2_2_build_template_section(template: str, file_path: Path, max_chars:
     if not template:
         return ""
     template_trimmed = template[:max_chars]
+    source_kind = _stage_2_2_source_kind(template, file_path)
     return f"""
 # Document Type Instructions
-The source is a **{file_path.parent.name}** document. Follow these type-specific conventions:
+The source is a **{source_kind}**. Follow these type-specific conventions as
+content-emphasis guidance. If the template names a type-specific metadata block
+such as `paper_meta`, map those fields into the required compatibility
+`book_meta` block in the Stage 2.2 output below; do not emit a competing second
+metadata block.
 <template>
 {template_trimmed}
 </template>
@@ -340,29 +450,122 @@ The source is a **{file_path.parent.name}** document. Follow these type-specific
 """
 
 
-def _stage_2_2_schema_types_block(config: Config) -> str:
-    """NashSU parity — tell Stage 2.2 which schema-defined page types
-    (beyond entity/concept) this project supports, so the analysis can flag
-    schema-typed candidates for the generation stage to route.
-
-    Empty for default projects (schema.md absent or no extra folders) so the
-    heavily-tuned book-ingest prompt sees zero noise.
-    """
+def _stage_2_2_schema_types_block(
+    config: Config,
+    wiki_index_context: str = "",
+) -> str:
+    """Inject NashSU-style schema, purpose, and frozen current-index context."""
     text = load_schema_md(config)
-    if not text.strip():
+    schema_context = schema_prompt_text(text)
+    purpose_context = load_purpose_md(config).strip()[:6000]
+    index_context = str(wiki_index_context or "").strip()[:40_000]
+    if not schema_context and not purpose_context and not index_context:
         return ""
-    extra = schema_folders(text) - BASE_PAGE_DIRS - SCHEMA_NON_PAGE_DIRS
-    if not extra:
+
+    routes = schema_candidate_routes(text)
+    route_lines = ", ".join(
+        f"{page_type} → wiki/{route}/"
+        for page_type, route in sorted(routes.items())
+    ) or "(none — generate only the pipeline-managed source/entity/concept pages)"
+    schema_block = (
+        "\n# Project Schema and Routing (AUTHORITATIVE)\n"
+        "<schema>\n"
+        f"{schema_context}\n"
+        "</schema>\n"
+        "Treat the Page Types table as the primary routing and frontmatter contract. "
+        "For schema-typed candidates, `type` and `folder` MUST use the exact mapping "
+        "below in the `schema_typed_candidates` output field. Recommend a typed page "
+        "only when this source actually supports creating it or materially updating "
+        "an existing page; NEVER invent goals, habits, journal entries, decisions, "
+        "findings, or hypotheses.\n"
+        f"Eligible source-grounded schema types: {route_lines}\n"
+    ) if schema_context else ""
+    lifecycle_lines: list[str] = []
+    if "synthesis" in routes:
+        lifecycle_lines.extend([
+            "- `synthesis` is a cross-cutting summary or conclusion, distinct "
+            "from the mandatory source summary. The current source may seed a "
+            "new synthesis when it materially connects multiple concepts, "
+            "findings, entities, or existing wiki topics; later sources merge "
+            "into and refine that page.",
+            "- Do not require a synthesis to be multi-source before its first "
+            "creation unless the project schema explicitly requires that. "
+            "Never infer cross-source facts from index titles alone.",
+        ])
+    if "thesis" in routes:
+        lifecycle_lines.extend([
+            "- `thesis` is a falsifiable working hypothesis and a living page. "
+            "The current source may seed a `speculative` thesis when it "
+            "explicitly advances a supported hypothesis; later evidence updates "
+            "its confidence/status and supporting or refuting links.",
+            "- Do not wait for multi-source consensus before creating a thesis "
+            "unless the project schema explicitly requires it. Do not convert "
+            "an ordinary source claim into a hypothesis.",
+        ])
+    lifecycle_block = (
+        "\n# NashSU Synthesis / Thesis Lifecycle\n"
+        + "\n".join(lifecycle_lines)
+        + "\n"
+    ) if lifecycle_lines else ""
+    purpose_block = (
+        "\n# Wiki Purpose\n"
+        "<purpose>\n"
+        f"{purpose_context}\n"
+        "</purpose>\n"
+        "Use the purpose to prioritize relevant material; it never overrides source "
+        "evidence or the schema's routing contract.\n"
+    ) if purpose_context else ""
+    index_block = (
+        "\n# Current Wiki Index (FROZEN FOR THIS SOURCE)\n"
+        "<current_wiki_index>\n"
+        f"{index_context}\n"
+        "</current_wiki_index>\n"
+        "This matches NashSU's stable ingest context. Use it to preserve page "
+        "identity, recognize an existing synthesis/thesis that should be "
+        "updated, and avoid duplicate pages. Index titles/descriptions are "
+        "navigation context, not factual evidence; ground every new statement "
+        "in the current source or explicitly available evidence.\n"
+    ) if index_context else ""
+    return schema_block + lifecycle_block + purpose_block + index_block
+
+
+def _stage_2_2_granularity_block(accumulated_digest) -> str:
+    """D2 (user ruling 2026-07-02): book-level granularity switch.
+
+    Source: book_meta.granularity in the accumulated digest (rolled up by
+    prior chunks; the first chunk has no prior digest yet → no granularity).
+    For a "manual" (implementation/maintenance monograph organized around
+    one device's circuits) inject a stronger COARSE-granularity directive on
+    top of the always-on granularity gate below. "textbook" or absent → empty
+    string (existing gate only).
+    """
+    book_meta = None
+    if isinstance(accumulated_digest, dict):
+        book_meta = accumulated_digest.get("book_meta")
+    elif accumulated_digest:
+        s_str = str(accumulated_digest).strip()
+        if s_str and s_str not in ("{}", '""'):
+            for _loader in (lambda t: __import__("json").loads(t),
+                            lambda t: __import__("yaml").safe_load(t)):
+                try:
+                    d = _loader(s_str)
+                    if isinstance(d, dict):
+                        book_meta = d.get("book_meta")
+                        break
+                except Exception:
+                    pass
+    if not isinstance(book_meta, dict):
+        return ""
+    if str(book_meta.get("granularity", "")).strip().lower() != "manual":
         return ""
     return (
-        "\n# Schema-Defined Page Types (NashSU parity)\n"
-        "This project's schema.md defines extra typed page types beyond entity/concept. "
-        "When THIS chunk genuinely contains content fitting one of these types, record it "
-        "under `schema_typed_candidates` below so the generation stage can route a page "
-        "into the matching folder. Use a type ONLY when the source actually supports it; "
-        "NEVER invent goals, habits, journal entries, decisions, or other user-authored "
-        "records that are not present in the source.\n"
-        f"Available schema types: {', '.join(sorted(extra))}\n"
+        "\n# Book Granularity: MANUAL — extract COARSE\n"
+        "The accumulated digest classifies this book as a device manual "
+        "(implementation/maintenance monograph organized around one device's "
+        "circuits).\n"
+        "COARSE granularity: chip/board/pin-level implementation details are NOT "
+        "concepts — fold into system-level pages or entities; target "
+        "system/subsystem-level concepts only.\n"
     )
 
 
@@ -408,6 +611,8 @@ def _stage_2_2_build_prompt(
     accumulated_digest: str = "",
     overlap_before: str = "",
     heading_path: str = "",
+    existing_slugs: list | None = None,
+    wiki_index_context: str = "",
 ) -> str:
     """Build the prompt for Stage 2.2: Chunk Analysis.
 
@@ -421,6 +626,15 @@ def _stage_2_2_build_prompt(
 
     If heading_path is provided, it tells the LLM which chapter/section
     hierarchy this chunk belongs to (NashSU parity: chunk.headingPath).
+
+    ``existing_slugs`` and ``wiki_index_context`` are per-source SNAPSHOTS
+    taken when the source first enters Stage 2.2 (persisted under
+    "slugs_snapshot_2_2" and "wiki_index_snapshot_2_2" by _ingest_chunks).
+    Stage 2.2 is contractually snapshot-stable: fresh live reads while a
+    parallel batch source writes wiki pages would make prompt hashes drift and
+    cause conversation cache misses on every resume. ``existing_slugs=None``
+    retains a live-read fallback for legacy callers/tests only; the pipeline
+    always passes both snapshots.
     """
     if accumulated_digest:
         # Sequential mode: use accumulated digest from previous chunks
@@ -432,61 +646,76 @@ def _stage_2_2_build_prompt(
             if key in global_digest:
                 digest_compact[key] = global_digest[key]
         digest_str = json.dumps(digest_compact, ensure_ascii=False, indent=2)
-    # cap to keep prompts lean
-    if len(digest_str) > 6000:
-        digest_str = digest_str[:6000] + "\n... (truncated)"
-    existing_slugs = list_existing_slugs(config)
+    # NashSU parity (user decision 2026-07-09): the chunk→chunk digest transfer
+    # matches NashSU's volume AND granularity. NashSU ingest.ts caps the rolling
+    # digest at a FIXED `LONG_SOURCE_DIGEST_MAX = 15_000` chars — deliberately
+    # NOT scaled to the model context (chunk size scales; the digest does not) —
+    # paired with a "compact document-level digest" instruction so the LLM
+    # condenses rather than accumulates verbatim (see the updated_global_digest
+    # template below). Detail is NOT lost by this: each chunk's full analysis is
+    # persisted in chunk_analyses; Stage 2.4 selects eligible key page candidates
+    # and Stage 2.6 synthesizes core claims separately. The digest is only the
+    # lightweight continuity channel. Earlier fixed caps (6K, 24K) and an
+    # interim dynamic cap (target_chars) predate this parity decision.
+    if len(digest_str) > _DIGEST_PROMPT_CAP:
+        digest_str = digest_str[:_DIGEST_PROMPT_CAP] + "\n... (truncated)"
+    if existing_slugs is None:
+        existing_slugs = list_existing_slugs(config)
+    existing_slugs = _stage_2_2_cap_existing_slugs(list(existing_slugs), chunk_text)
 
+    source_kind = _stage_2_2_source_kind(template, file_path)
+    digest_meta_template = _stage_2_2_digest_meta_template(source_kind)
     template_section = _stage_2_2_build_template_section(template, file_path, max_chars=2000)
 
     overlap_section = _stage_2_2_build_overlap_section(overlap_before)
 
-    schema_types_section = _stage_2_2_schema_types_block(config)
+    schema_types_section = _stage_2_2_schema_types_block(
+        config, wiki_index_context=wiki_index_context)
+
+    granularity_section = _stage_2_2_granularity_block(accumulated_digest)
 
     # ── Heading path (NashSU parity: chunk.headingPath) ──
     heading_section = ""
     if heading_path:
         heading_section = f"""
-# Current location in the book
+# Current location in the source
 You are analyzing content from: **{heading_path}**
 
 """
 
     language_directive = build_language_directive(chunk_text)
 
-    # Extraction-density guideline (2026-06-30): scale the expected concept count
-    # with chunk size so large, multi-chapter chunks (e.g. ~768K chars under a
-    # 1M-context model) are not under-extracted at the same ~12-concept rate as a
-    # small chunk. Heuristic ~1 page-worthy concept per 20K chars of substantive
-    # text, floored at 8. This is a NON-BINDING target with an explicit anti-
-    # padding guard — quality over count.
-    _approx_concepts = max(8, round(len(chunk_text) / 20000))
+    # NashSU v0.6.6 policy: identify only genuinely important key
+    # entities/concepts and stay "thorough but concise". There is deliberately no
+    # per-character target, minimum count, completeness ledger, or instruction to
+    # turn every mentioned building block into a page candidate.
     density_hint = (
         f"This chunk is ~{len(chunk_text):,} characters"
         + (f" spanning **{heading_path}**" if heading_path else "")
-        + f". A chunk this size typically yields on the order of **{_approx_concepts} "
-        "distinct page-worthy concepts** — enumerate section by section so a large, "
-        "multi-chapter chunk is not under-extracted. Treat this as a guideline, not a "
-        "quota: list every genuine concept the source defines or materially uses, and "
-        "do NOT pad with trivial mentions or split one concept into several to hit a "
-        "number."
+        + ". Be thorough but concise. Focus on what is genuinely important: identify "
+        "new or materially updated key concepts/entities, not an inventory of every "
+        "term, prerequisite, or passing mention. There is no numeric target; do not "
+        "pad, split one coherent topic into several entries, or copy background "
+        "knowledge merely because it appears in the text."
     )
 
     return f"""{language_directive}
 
 # Role
 You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a book ingest pipeline.
-{template_section}{schema_types_section}
+You are performing **Stage 2.2: Chunk Analysis** (chunk {chunk_index + 1}/{chunk_total}) of a source ingest pipeline.
+{template_section}{schema_types_section}{granularity_section}
 # Context: Accumulated Global Digest
-This digest is cumulative context from the Stage 2.1 outline and all PREVIOUS
-chunks — use it for continuity and to avoid re-writing the same *prose* twice.
-It is NOT a list of existing wiki pages: a concept named here has NOT necessarily
-been turned into a page yet. Do NOT drop a page-worthy concept from
-`concepts_found` just because its name appears in this digest — that includes
-foundational / "preliminaries" concepts (the well-known building blocks a new
-method is built from). Deduplication against REAL existing pages happens
-downstream (Stage 2.3/2.4), not here. When in doubt, LIST the concept.
+This digest is cumulative context rolled up across all PREVIOUS chunks — use
+it for continuity and to avoid re-writing the same *prose* twice.
+Keep stable names consistent with the existing wiki and prior digest: when this
+chunk re-encounters a concept/entity already named there, reuse that EXACT name
+(stable names → stable slugs → downstream dedup works).
+It is prior cross-chunk context, not a checklist to reproduce. If this chunk
+materially updates an earlier concept/entity, reuse its stable name and record
+the update. Otherwise do not repeat it merely to keep an exhaustive inventory.
+Deduplication against REAL existing pages still happens downstream
+(Stage 2.3/2.4).
 
 ```yaml
 {digest_str}
@@ -500,33 +729,48 @@ downstream (Stage 2.3/2.4), not here. When in doubt, LIST the concept.
 {chunk_text}
 </extracted_text>
 
-- Existing wiki pages: {', '.join(existing_slugs[:200])}
+- Existing wiki pages: {', '.join(existing_slugs)}
 
 # Task
 {density_hint}
 
-Analyze THIS CHUNK of the book. Extract:
+Analyze THIS CHUNK of the source. Extract:
 
-1. Every concept this chunk defines, derives, or materially relies on — INCLUDING
-   foundational / "preliminaries" concepts the source treats as background (e.g. the
-   building-block techniques a new method is built from). Each distinct building
-   block the source actually defines or uses deserves its own concept entry. Do NOT
-   collapse several distinct concepts into one page, and do NOT skip a concept merely
-   because it is "well known" or already named in the digest — downstream dedup
-   (Stage 2.3/2.4) will link it to an existing page if one already exists.
-2. All entities (people, organizations, systems, models, standards) mentioned
-3. Key claims, formulas, data points
+1. **Key concepts** — theories, methods, techniques, and phenomena that are new
+   or materially updated in this chunk and genuinely important to understanding
+   the source. Recommend a standalone page only when the topic is coherent,
+   reusable, and substantively explained or applied. Exclude passing mentions,
+   prerequisites used only as background, and facets better kept together on one
+   page. Chip/board implementation details are not concepts; fold them into the
+   relevant system page or entity.
+2. **Key entities** — people, organizations, products/systems, standards, tools,
+   or datasets that are central or materially discussed, not every proper noun.
+   A named theoretical/statistical model, method, or technique (e.g. Swerling
+   model, matched filter) is a CONCEPT, not an entity.
+3. Core claims/findings, their evidence, formulas, and material data points
 4. Connections to existing wiki pages (if any)
-5. An **Updated Global Digest** — merge this chunk's key discoveries into the
-   Accumulated Global Digest above, so the next chunk benefits from everything
-   learned so far. Keep it concise but cumulative: add new concepts, entities,
-   and key claims. Do NOT remove anything from the existing digest.
-6. **Schema-typed page candidates** — if the project schema defines page types
-   beyond entity/concept (e.g. finding, decision, methodology) AND this chunk
-   genuinely contains matching content, note it for the generation stage. Use a
-   schema-defined type ONLY when the source actually supports it; NEVER invent
-   goals, habits, journal entries, decisions, or other user-authored records
-   that are not present in the source.
+5. An **Updated Global Digest** — a COMPACT document-level digest that
+   incorporates this chunk and preserves prior cross-chunk context. This is a
+   continuity digest, NOT an archive. Preserve the prior cross-chunk context
+   needed to interpret later chunks, but condense or drop peripheral detail.
+   Your full per-chunk detail is already saved separately (concepts_found /
+   claims / formulas above); do NOT duplicate it here. Target well under
+   15,000 characters — anything beyond is hard-truncated before the next
+   chunk sees it.
+6. **Schema-typed page candidates** — use only the eligible type→directory
+   mappings in the authoritative schema block above (for example finding,
+   methodology, thesis, comparison, or synthesis). Recommend a page only when
+   the current source evidence genuinely satisfies that type's schema semantics
+   and creates a useful new page or materially updates an indexed existing page.
+   A later chunk may recommend a comparison or other typed page when THIS chunk
+   plus the accumulated digest substantively establish it; the digest is
+   continuity evidence, not permission to invent facts. Follow the NashSU
+   synthesis/thesis lifecycle above: a synthesis candidate may be seeded from
+   a source that supports a cross-cutting conclusion, and an explicitly
+   supported working thesis may begin as speculative, unless the project schema
+   imposes a stricter gate. NEVER invent goals, habits, journal entries,
+   decisions, findings, hypotheses, or other records that are not present in
+   the source.
 
 # Output (YAML only, in ```yaml block)
 ```yaml
@@ -556,22 +800,51 @@ entities_found:
 concepts_found:
   - name: "..."
     importance: "core" | "supporting" | "mentioned"
-    definition: "..."      # the concept's definition as stated in the book
-    key_details: ["...", "..."]   # 2-4 key facts / formulas / design rules
+    definition: "..."      # the concept's definition as stated in the source
+    key_details: ["...", "..."]   # concise source-grounded facts/formulas/rules; [] is valid
 
-# ⚠️  CONCEPT NAMING RULES (CRITICAL):
+# ⚠️  CONCEPT NAMING RULES:
 #   - name MUST be a SHORT, SPECIFIC topic (3-6 words), e.g. "DC-Link Voltage Control", "IGBT Thermal Modeling"
-#   - NEVER use the book title or filename as a concept name
+#   - NEVER use the source title or filename as a concept name
 #   - NEVER include "Chunk N", "Chapter N" or page numbers in the name
-#   - If the chunk covers multiple topics, list each topic as a SEPARATE concept
-#   - Use the actual technical term from the book, not a generic description
+#   - Create separate entries only for independently useful topics; keep facets
+#     of one coherent topic together
+#   - Use the actual technical term from the source, not a generic description
+#   - `mentioned` is context only and will not become a standalone page. Prefer
+#     omitting such items unless retaining the name prevents ambiguity.
+
+# ⚠️  CLAIM EXTRACTION RULES (ground every claim in the source text):
+#   1. READ the <extracted_text> for THIS chunk before listing claims.
+#      Do NOT generate claims from domain knowledge or memory — every claim
+#      must be grounded in text you actually read in this chunk.
+#   2. EVERY claim MUST have an evidence field citing a SPECIFIC source-text
+#      anchor: section number (§X.X), equation number (式(N) or Eq. (N)),
+#      figure number (Figure N / 图N.N), or table number (Table N).
+#      Generic evidence like "Ch.3" or "this section" is NOT acceptable —
+#      use the most specific anchor available. (Front-matter chunks — preface,
+#      TOC, colophon before chapter 1 — may cite the preface/section name when
+#      no numbered anchor exists in the text.)
+#   3. Keep only core claims/findings. Their number is determined by the source;
+#      zero is valid for a chunk with no substantive claim. Never pad to a quota.
+#   4. Claims must be falsifiable/actionable assertions (quantitative results,
+#      design rules, comparative verdicts, limits, mechanisms) — NOT scope
+#      descriptions or bare definitions.
+#   5. `source_quotes` is optional audit support, not a count gate. Include a
+#      short exact excerpt only when it materially helps verify a claim.
+
+source_quotes: |
+  # Optional short verbatim excerpt(s) from THIS chunk with a precise anchor.
+  # Leave empty when the claims' evidence anchors are sufficient. Example:
+  # §2.3.4: "The Barker code of length 13 provides optimal peak sidelobe
+  # level of -1/N for code length N."
+  # 式(3.6): "Modulating waveform = exp(j*pi*tau*B*t^2)"
 
 claims:
   - claim: "..."
-    evidence: "..."
+    evidence: "§X.X or 式(N) or Figure N — specific source-text anchor (NOT generic chapter ref)"
     confidence: "high" | "medium" | "low"
-    table_ref: "Table N or Figure N"   # for datasheets: REQUIRED; for books: omit if no table source
-    page_ref: "p.NN"                   # for datasheets: REQUIRED; for books: omit if not applicable
+    table_ref: "Table N or Figure N"   # for datasheets: REQUIRED; otherwise omit if no table/figure source
+    page_ref: "p.NN"                   # for datasheets: REQUIRED; otherwise omit if not applicable
 
 formulas:
   - formula: '\\text{{Energy}} = \\frac{{1}}{{2}} C V^2'   # SINGLE-quoted; transcribe verbatim, never paraphrase
@@ -582,26 +855,213 @@ connections_to_existing_wiki:
   - existing_page: "..."
     relationship: "extends" | "contrasts" | "applies" | "cites"
 
-# Schema-typed page candidates (NashSU parity). ONLY when the project
-# schema defines extra types AND this chunk genuinely contains matching content.
-# `type` MUST be one of the schema types listed above. Leave empty (`[]`) when
-# the schema adds no types or this chunk has no matching content. NEVER invent
-# goals/habits/journal/decisions not present in the source.
+# Schema-typed page candidates (NashSU 0.6.6 parity). ONLY use eligible mappings
+# listed in the authoritative schema block. The current source may create or
+# materially update one when its evidence satisfies that type's schema
+# semantics. Cross-chunk candidates may use the accumulated digest for
+# continuity, and existing page identity may come from the frozen wiki index.
+# Leave empty (`[]`) when no eligible type fits.
+# NEVER invent goals/habits/journal/decisions/findings/hypotheses.
 schema_typed_candidates:
-  - type: "finding" | "decision" | "methodology" | "..."   # a schema-declared type
+  - type: "finding" | "methodology" | "thesis" | "comparison" | "synthesis" | "..."   # a schema-declared type
     name: "..."        # short specific kebab-case-friendly name (3-6 words)
     folder: "findings"  # the wiki/<folder>/ the page should land in
-    rationale: "..."    # one sentence: why this chunk supports this typed page
+    rationale: "..."    # one sentence: why the source evidence supports this typed page
 
 updated_global_digest: |
-  # Accumulated Global Digest (after chunk {chunk_index + 1}/{chunk_total})
-  # Merge this chunk's key concepts, entities, and claims into the prior digest.
-  # Be cumulative — keep everything from before, add only what's new.
-  ...
+  # Compact Global Digest (after chunk {chunk_index + 1}/{chunk_total}) — NashSU parity
+  # A compact document-level digest that incorporates this chunk and preserves
+  # useful prior cross-chunk context. Keep the whole digest well under 15,000
+  # chars — overflow is hard-truncated. Condense or drop peripheral detail under
+  # budget pressure; retain stable names for concepts/entities that remain
+  # genuinely important, keep key_claims to the source's core arguments, and
+  # retain only genuinely supported schema-typed candidates needed by later
+  # chunks. MUST contain the first 5 top-level keys below; the optional sixth
+  # carries typed-candidate continuity. The FIRST chunk ESTABLISHES the
+  # compatibility `book_meta` source-metadata block and outline; later chunks
+  # refine them and append to the other fields. The key remains `book_meta`
+  # for checkpoint compatibility even when source_kind is not a book.
+{digest_meta_template}
+  outline:
+    - "Chapter/Section ..."
+  key_entities:
+    - name: "..."
+      type: "person" | "organization" | "system" | "model"
+  key_concepts:
+    - name: "..."
+      definition: "..."   # ONE short line, not a paragraph; no key_details here
+  key_claims:
+    - claim: "..."        # ONE line; keep only the source's MAIN arguments here
+      evidence: "..."
+  schema_typed_candidates:
+    - type: "..."
+      name: "..."
+      rationale: "..."    # compact; omit weak or unsupported candidates
 
-# Do NOT propose new wiki pages — that's Stage 2
+# Do not turn this compact digest into an additional exhaustive page inventory.
 ```
 """
+
+
+class _YamlNotDictError(RuntimeError):
+    """Stage 2.2 agent answered with YAML that parses to a non-dict (list /
+    plain text). Treated as a parse failure: retried like a transient error,
+    raised when retries are exhausted (no-silent-fallback)."""
+
+
+class ChunkAnalysisValidationError(RuntimeError):
+    """Stage 2.2 returned a mapping whose nested schema is unsafe to consume."""
+
+
+_CHUNK_ANALYSIS_LIST_FIELDS = (
+    "entities_found",
+    "concepts_found",
+    "claims",
+    "formulas",
+    "connections_to_existing_wiki",
+    "schema_typed_candidates",
+)
+
+
+def _analysis_nonempty_string(value, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ChunkAnalysisValidationError(
+            f"{field} must be a non-empty string")
+    return value.strip()
+
+
+def normalize_and_validate_chunk_analysis(
+    analysis: dict,
+    *,
+    expected_index: int | None = None,
+    expected_total: int | None = None,
+) -> dict:
+    """Normalize optional fields and strictly validate Stage 2.2's contract.
+
+    The previous boundary accepted any top-level mapping. A malformed YAML
+    fallback could therefore turn ``concepts_found`` into a list of strings
+    while the stage was still cached as complete. Downstream code then either
+    crashed or silently coerced those strings. This function is the one schema
+    gate used both immediately after parsing and when restoring a checkpoint.
+    """
+    if not isinstance(analysis, dict):
+        raise ChunkAnalysisValidationError(
+            f"analysis must be a mapping, got {type(analysis).__name__}")
+    normalized = dict(analysis)
+
+    for field in _CHUNK_ANALYSIS_LIST_FIELDS:
+        value = normalized.get(field, [])
+        if value is None:
+            value = []
+        if not isinstance(value, list):
+            raise ChunkAnalysisValidationError(
+                f"{field} must be a list, got {type(value).__name__}")
+        if any(not isinstance(item, dict) for item in value):
+            bad = next(item for item in value if not isinstance(item, dict))
+            raise ChunkAnalysisValidationError(
+                f"{field} items must be mappings, got "
+                f"{type(bad).__name__}: {str(bad)[:80]}")
+        normalized[field] = [dict(item) for item in value]
+
+    for position, concept in enumerate(normalized["concepts_found"], 1):
+        prefix = f"concepts_found[{position}]"
+        concept["name"] = _analysis_nonempty_string(
+            concept.get("name"), f"{prefix}.name")
+        importance = _analysis_nonempty_string(
+            concept.get("importance"), f"{prefix}.importance").lower()
+        if importance not in {"core", "supporting", "mentioned"}:
+            raise ChunkAnalysisValidationError(
+                f"{prefix}.importance must be core/supporting/mentioned, "
+                f"got {importance!r}")
+        concept["importance"] = importance
+        concept["definition"] = _analysis_nonempty_string(
+            concept.get("definition"), f"{prefix}.definition")
+        details = concept.get("key_details", [])
+        if not isinstance(details, list):
+            raise ChunkAnalysisValidationError(
+                f"{prefix}.key_details must be a list")
+        concept["key_details"] = [
+            _analysis_nonempty_string(item, f"{prefix}.key_details")
+            for item in details
+        ]
+
+    for position, entity in enumerate(normalized["entities_found"], 1):
+        prefix = f"entities_found[{position}]"
+        entity["name"] = _analysis_nonempty_string(
+            entity.get("name"), f"{prefix}.name")
+        entity["significance"] = _analysis_nonempty_string(
+            entity.get("significance"), f"{prefix}.significance")
+
+    for position, claim in enumerate(normalized["claims"], 1):
+        prefix = f"claims[{position}]"
+        claim["claim"] = _analysis_nonempty_string(
+            claim.get("claim"), f"{prefix}.claim")
+        claim["evidence"] = _analysis_nonempty_string(
+            claim.get("evidence"), f"{prefix}.evidence")
+        if "confidence" in claim:
+            confidence = _analysis_nonempty_string(
+                claim["confidence"], f"{prefix}.confidence").lower()
+            if confidence not in {"high", "medium", "low"}:
+                raise ChunkAnalysisValidationError(
+                    f"{prefix}.confidence must be high/medium/low")
+            claim["confidence"] = confidence
+
+    if "source_quotes" in normalized:
+        if normalized.get("source_quotes") not in (None, ""):
+            normalized["source_quotes"] = _analysis_nonempty_string(
+                normalized.get("source_quotes"), "source_quotes")
+        else:
+            normalized["source_quotes"] = ""
+
+    for position, formula in enumerate(normalized["formulas"], 1):
+        prefix = f"formulas[{position}]"
+        formula["formula"] = _analysis_nonempty_string(
+            formula.get("formula"), f"{prefix}.formula")
+        formula["meaning"] = _analysis_nonempty_string(
+            formula.get("meaning"), f"{prefix}.meaning")
+
+    for position, connection in enumerate(
+            normalized["connections_to_existing_wiki"], 1):
+        prefix = f"connections_to_existing_wiki[{position}]"
+        connection["existing_page"] = _analysis_nonempty_string(
+            connection.get("existing_page"), f"{prefix}.existing_page")
+        connection["relationship"] = _analysis_nonempty_string(
+            connection.get("relationship"), f"{prefix}.relationship")
+
+    for position, candidate in enumerate(
+            normalized["schema_typed_candidates"], 1):
+        prefix = f"schema_typed_candidates[{position}]"
+        for field in ("type", "name", "folder", "rationale"):
+            candidate[field] = _analysis_nonempty_string(
+                candidate.get(field), f"{prefix}.{field}")
+
+    digest = normalized.get("updated_global_digest")
+    if isinstance(digest, str):
+        if len(digest.strip()) <= 50:
+            raise ChunkAnalysisValidationError(
+                "updated_global_digest must be a substantive string")
+        normalized["updated_global_digest"] = digest.strip()
+    elif not isinstance(digest, dict) or not digest:
+        raise ChunkAnalysisValidationError(
+            "updated_global_digest must be a non-empty string or mapping")
+
+    for field, expected in (
+        ("chunk_index", expected_index),
+        ("chunk_total", expected_total),
+    ):
+        if expected is None:
+            continue
+        try:
+            actual = int(normalized.get(field))
+        except (TypeError, ValueError):
+            raise ChunkAnalysisValidationError(
+                f"{field} must equal {expected}")
+        if actual != expected:
+            raise ChunkAnalysisValidationError(
+                f"{field}={actual}, expected {expected}")
+        normalized[field] = actual
+
+    return normalized
 
 
 def _stage_2_2_chunk_retries() -> int:
@@ -630,31 +1090,60 @@ def _stage_2_2_analyze_chunk(
     template: str = "",
     max_retries: int = 2,
     verbose: bool = False,
+    existing_slugs: list | None = None,
+    wiki_index_context: str = "",
 ) -> dict:
     """Analyze a single chunk.
 
-    Used by the barrier-free pipeline in _do_prepare where each chunk is
-    analyzed and immediately generated before moving to the next chunk.
+    Used by Stage 2.2's serial analysis pass. Every chunk is analyzed first;
+    Stage 2.3 association and the single consolidated Stage 2.4 generation call
+    run only after the full analysis pass completes.
 
     Returns analysis dict with keys: concepts_found, entities_found, claims,
     formulas, connections_to_existing_wiki, digest_updates, plus _chunk_index,
     _chunk_size, _attempts.
-    On failure: returns dict with chunk_index + error key.
+    On failure (transient retries exhausted, or a non-retryable error):
+    raises RuntimeError — no error-dict sentinel (no-silent-fallback; the
+    cached prior chunks make a resume cheap).
     """
     prompt = _stage_2_2_build_prompt(
         chunk, chunk_idx, chunk_total, global_digest, file_path, config,
         template=template, accumulated_digest=accumulated_digest,
         overlap_before=overlap_before, heading_path=heading_path,
+        existing_slugs=existing_slugs,
+        wiki_index_context=wiki_index_context,
     )
 
+    validation_feedback = ""
     for attempt in range(1 + max_retries):
         try:
             t0 = time.time()
             if attempt == 0:
                 print(f"  [chunk {chunk_idx+1}/{chunk_total}] analyzing ({len(chunk):,} chars)...",
                       flush=True)
-            response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=8192)
+            active_prompt = prompt
+            if validation_feedback:
+                active_prompt += (
+                    "\n\n# REQUIRED CORRECTION FOR THIS RETRY\n"
+                    "The previous answer was rejected by the Stage 2.2 schema "
+                    f"validator: {validation_feedback}\n"
+                    "Return a fresh complete YAML answer following the exact "
+                    "output schema above. Do not omit required nested fields "
+                    "and do not turn mapping items into strings.\n"
+                )
+            response, stop_reason = call_anthropic_protocol(
+                active_prompt, config,
+                max_tokens=config.compute_max_tokens(8192))
             analysis = parse_yaml_block(response)
+            if not isinstance(analysis, dict):
+                raise _YamlNotDictError(
+                    f"chunk {chunk_idx+1}/{chunk_total}: parse_yaml_block returned "
+                    f"{type(analysis).__name__}, expected a YAML mapping (dict)")
+            analysis = normalize_and_validate_chunk_analysis(
+                analysis,
+                expected_index=chunk_idx + 1,
+                expected_total=chunk_total,
+            )
             analysis["_chunk_index"] = chunk_idx + 1
             analysis["_chunk_size"] = len(chunk)
             analysis["_attempts"] = attempt + 1
@@ -666,10 +1155,15 @@ def _stage_2_2_analyze_chunk(
                   f"{n_c} concepts, {n_e} entities, {dt:.0f}s")
             if verbose:
                 print(f"    response: {response[:500]}...")
-            return analysis
+            break  # success — exit retry loop
 
         except Exception as e:
-            if attempt < max_retries and _is_retryable_exception(e):
+            schema_error = isinstance(
+                e, (_YamlNotDictError, ChunkAnalysisValidationError))
+            if attempt < max_retries and (
+                    _is_retryable_exception(e) or schema_error):
+                if schema_error:
+                    validation_feedback = str(e)[:500]
                 _record_rate_limit()
                 wait = _retry_jitter(2.0, attempt)
                 err_label = type(e).__name__
@@ -678,10 +1172,11 @@ def _stage_2_2_analyze_chunk(
                 time.sleep(wait)
                 continue
             print(f"  [chunk {chunk_idx+1}/{chunk_total}] analyze FAILED: {e}")
-            return {
-                "chunk_index": chunk_idx + 1, "error": str(e),
-                "chunk_text_length": len(chunk), "_attempts": 1 + max_retries,
-            }
+            # No error-dict sentinel: a failed chunk analysis must PAUSE the
+            # ingest (no-silent-fallback). Prior chunks are cached, so a
+            # resume after the transient clears is cheap.
+            raise RuntimeError(
+                f"Stage 2.2 chunk {chunk_idx+1}/{chunk_total} analysis failed "
+                f"after {attempt+1} attempt(s): {type(e).__name__}: {e}") from e
 
-
-
+    return analysis

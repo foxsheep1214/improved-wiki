@@ -12,7 +12,7 @@ Public API mirrors sources-merge.ts:
   - write_frontmatter_array(content, field, vals)  -> str
   - merge_array_fields_into_content(new, existing, fields) -> str
   - merge_lists(existing, incoming)                -> list[str]
-  - parse_sources / write_sources / merge_sources_lists / merge_sources_into_content
+  - normalize_block_arrays(content)                -> str
 """
 from __future__ import annotations
 
@@ -23,15 +23,14 @@ __all__ = [
     "write_frontmatter_array",
     "merge_array_fields_into_content",
     "merge_lists",
-    "parse_sources",
-    "write_sources",
-    "merge_sources_lists",
-    "merge_sources_into_content",
+    "normalize_block_arrays",
 ]
 
-# Frontmatter block: leading `---\n` ... `\n---`. DOTALL so the body spans lines.
-_FM_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
-_FM_REPLACE_RE = re.compile(r"^(---\n)(.*?)(\n---)", re.DOTALL)
+# Frontmatter block: leading `---` ... `---`. DOTALL so the body spans lines.
+# `\r?\n` (not bare `\n`) — aligned with _frontmatter.py so CRLF pages don't
+# silently no-op through every array operation here.
+_FM_RE = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
+_FM_REPLACE_RE = re.compile(r"^(---\r?\n)(.*?)(\r?\n---)", re.DOTALL)
 
 
 def _escape(name: str) -> str:
@@ -184,7 +183,7 @@ def merge_array_fields_into_content(
     """
     if not existing_content:
         return new_content
-    if not re.match(r"^---\n", existing_content):
+    if not re.match(r"^---\r?\n", existing_content):
         return new_content
 
     result = new_content
@@ -204,19 +203,32 @@ def merge_array_fields_into_content(
     return result if changed else new_content
 
 
-# ─── Backward-compatible single-field wrappers (sources-merge.ts parity) ───
-
-def parse_sources(content: str) -> list[str]:
-    return parse_frontmatter_array(content, "sources")
-
-
-def write_sources(content: str, sources: list[str]) -> str:
-    return write_frontmatter_array(content, "sources", sources)
+# Array fields subject to block→inline normalization (== _frontmatter.UNION_FIELDS;
+# not imported to keep this module dependency-free).
+_NORMALIZE_FIELDS = ("tags", "related", "sources")
 
 
-def merge_sources_lists(existing: list[str], incoming: list[str]) -> list[str]:
-    return merge_lists(existing, incoming)
+def normalize_block_arrays(content: str) -> str:
+    """Rewrite block-style frontmatter arrays (``related:\\n  - a``) for
+    tags/related/sources into the inline form (``related: ["a"]``).
 
-
-def merge_sources_into_content(new_content: str, existing_content: str | None) -> str:
-    return merge_array_fields_into_content(new_content, existing_content, ["sources"])
+    The naive ``_frontmatter.parse_frontmatter`` only understands the inline
+    form: a parse→write round-trip over a page with block-style arrays would
+    silently empty them. Callers that do such round-trips normalize first.
+    Content without frontmatter, or with all-inline arrays, passes through
+    unchanged.
+    """
+    fm_match = _FM_RE.match(content)
+    if not fm_match:
+        return content
+    for field in _NORMALIZE_FIELDS:
+        block_re = re.compile(
+            rf"^{_escape(field)}:\s*\n(?:[ \t]+-\s+.+\n?)+",
+            re.MULTILINE,
+        )
+        fm_match = _FM_RE.match(content)
+        if not fm_match or not block_re.search(fm_match.group(1)):
+            continue
+        values = parse_frontmatter_array(content, field)
+        content = write_frontmatter_array(content, field, values)
+    return content

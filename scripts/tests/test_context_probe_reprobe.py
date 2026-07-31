@@ -135,3 +135,53 @@ def test_unknown_model_keeps_self_report(monkeypatch, tmp_path):
     monkeypatch.setattr(_llm_api, "call_anthropic_protocol",
                         lambda *a, **k: ("deepseek-v4\n524288", None))
     assert cp.probe_context(cfg) == 524288
+
+
+# ── Regression: 2026-07-09 Claude Sonnet 5 incident ──
+# Sonnet 5 (genuinely 1M) was missing from _KNOWN_MODEL_CONTEXT, so a
+# confidently-wrong self-reported 200000 (matching the codebase's own
+# _CONTEXT_SIZE_DEFAULT fallback) went through unchecked.
+
+def test_known_context_covers_sonnet_5_and_mythos_5():
+    assert cp._known_context("claude-sonnet-5") == 1_000_000
+    assert cp._known_context("claude-mythos-5") == 1_000_000
+
+
+def test_sonnet_5_lowballed_self_report_is_corrected(monkeypatch, tmp_path):
+    rt = tmp_path / ".llm-wiki"
+    cfg = _Cfg(rt, "claude-sonnet-5")
+    cfg.conversation_prefix = "x"
+    import _llm_api  # noqa: E402
+    monkeypatch.setattr(_llm_api, "call_anthropic_protocol",
+                        lambda *a, **k: ("claude-sonnet-5\n200000", None))
+    assert cp.probe_context(cfg) == 1_000_000
+
+
+# ── "Don't guess" path: UNKNOWN instead of a number ──
+
+def test_parse_probe_unknown_context_returns_none():
+    model_self, ctx = cp._parse_probe("claude-sonnet-5\nUNKNOWN")
+    assert ctx is None and model_self == "claude-sonnet-5"
+
+
+def test_unknown_answer_from_known_model_uses_known_spec(monkeypatch, tmp_path):
+    rt = tmp_path / ".llm-wiki"
+    cfg = _Cfg(rt, "claude-sonnet-5")
+    cfg.conversation_prefix = "x"
+    import _llm_api  # noqa: E402
+    monkeypatch.setattr(_llm_api, "call_anthropic_protocol",
+                        lambda *a, **k: ("claude-sonnet-5\nUNKNOWN", None))
+    assert cp.probe_context(cfg) == 1_000_000
+
+
+def test_unknown_answer_from_unrecognized_model_uses_conservative_default(monkeypatch, tmp_path):
+    # A genuinely new/unrecognized model that honestly declines to guess must
+    # fall back to the codebase's conservative default, not error or guess.
+    from _core import _CONTEXT_SIZE_DEFAULT
+    rt = tmp_path / ".llm-wiki"
+    cfg = _Cfg(rt, "some-future-model")
+    cfg.conversation_prefix = "x"
+    import _llm_api  # noqa: E402
+    monkeypatch.setattr(_llm_api, "call_anthropic_protocol",
+                        lambda *a, **k: ("some-future-model\nUNKNOWN", None))
+    assert cp.probe_context(cfg) == _CONTEXT_SIZE_DEFAULT

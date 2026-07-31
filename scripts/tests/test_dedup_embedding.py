@@ -87,6 +87,86 @@ class TestCandidatePairs(unittest.TestCase):
     def test_empty_pages(self):
         self.assertEqual(e.candidate_pairs([]), [])
 
+    def test_matches_cosine_similarity_at_moderate_scale(self):
+        """2026-07-10: candidate_pairs' inner loop was rewritten to normalize
+        each vector once and use a fast dot product instead of calling
+        cosine_similarity() (which recomputes both vectors' norms) on every
+        pairwise comparison — confirmed live as the dominant cost of an
+        O(N^2) sweep (~40 CPU-minutes on a ~7500-page wiki). This is a
+        correctness regression guard at a scale (200 pages) big enough that
+        a normalization or dot-product mistake would show up as wrong
+        membership, not just a rounding blip: every result must still equal
+        what the original per-pair cosine_similarity() call would produce.
+        """
+        import random
+        random.seed(42)
+        n = 200
+        pages = [{"id": f"p{i}"} for i in range(n)]
+        emb = {f"p{i}": [random.random() for _ in range(16)] for i in range(n)}
+        # Force a handful of near-duplicate pairs above threshold so the
+        # test isn't just checking an all-empty result.
+        emb["p1"] = list(emb["p0"])
+        emb["p1"][0] += 1e-6
+        emb["p50"] = list(emb["p49"])
+        emb["p50"][0] += 1e-6
+
+        threshold = 0.9
+        pairs = e.candidate_pairs(pages, threshold=threshold, top_k=n, embeddings=emb)
+        got = {frozenset(p) for p in pairs}
+        # The pure-Python fallback must agree with whichever path ran above
+        # (numpy when installed) — both against the cosine_similarity reference.
+        pure = e.candidate_pairs(pages, threshold=threshold, top_k=n,
+                                 embeddings=emb, _force_pure=True)
+        self.assertEqual({frozenset(p) for p in pure}, got)
+
+        expected = set()
+        for i in range(n):
+            for j in range(i + 1, n):
+                sim = e.cosine_similarity(emb[f"p{i}"], emb[f"p{j}"])
+                if sim >= threshold:
+                    expected.add(frozenset((f"p{i}", f"p{j}")))
+
+        self.assertEqual(got, expected)
+        self.assertIn(frozenset(("p0", "p1")), got)
+        self.assertIn(frozenset(("p49", "p50")), got)
+
+
+class TestNumpyPurePathEquivalence(unittest.TestCase):
+    """2026-07-11 (#7): the numpy fast path and the pure-Python fallback must
+    produce identical pair sets, including top_k truncation and threshold
+    filtering, on data with realistic score spread."""
+
+    def test_paths_agree_with_topk_truncation(self):
+        import random
+        random.seed(7)
+        n, d, top_k, threshold = 120, 24, 3, 0.75
+        pages = [{"id": f"p{i}"} for i in range(n)]
+        # Clustered vectors so many candidates clear the threshold and top_k
+        # truncation actually bites.
+        base = [[random.random() for _ in range(d)] for _ in range(4)]
+        emb = {}
+        for i in range(n):
+            b = base[i % 4]
+            emb[f"p{i}"] = [x + random.gauss(0, 0.05) for x in b]
+        fast = e.candidate_pairs(pages, threshold=threshold, top_k=top_k,
+                                 embeddings=emb)
+        pure = e.candidate_pairs(pages, threshold=threshold, top_k=top_k,
+                                 embeddings=emb, _force_pure=True)
+        self.assertEqual({frozenset(p) for p in fast},
+                         {frozenset(p) for p in pure})
+        self.assertGreater(len(fast), 0)
+
+    def test_pages_without_embeddings_skipped_identically(self):
+        pages = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        emb = {"a": [1.0, 0.0], "b": None, "c": [0.99, 0.01]}
+        fast = e.candidate_pairs(pages, threshold=0.9, top_k=8, embeddings=emb,
+                                 min_success_ratio=0.5)
+        pure = e.candidate_pairs(pages, threshold=0.9, top_k=8, embeddings=emb,
+                                 min_success_ratio=0.5, _force_pure=True)
+        self.assertEqual({frozenset(p) for p in fast},
+                         {frozenset(p) for p in pure})
+        self.assertEqual({frozenset(p) for p in fast}, {frozenset(("a", "c"))})
+
 
 class TestClusterByPairs(unittest.TestCase):
     def test_clusters_pairs_into_groups(self):
@@ -103,6 +183,65 @@ class TestClusterByPairs(unittest.TestCase):
     def test_handles_unknown_pair_ids_gracefully(self):
         groups = e.cluster_by_pairs(["a", "b"], [("a", "b"), ("a", "z")])
         self.assertEqual([frozenset(g) for g in groups], [frozenset({"a", "b"})])
+
+
+class TestEmbedPagesBoundedAccess(unittest.TestCase):
+    """2026-07-12: embed_pages passes the bounded EMBED_TIMEOUT_S to
+    embed_texts and trips a consecutive-failure circuit breaker instead of
+    grinding through every batch against a dead endpoint."""
+
+    def test_timeout_forwarded_to_embed_texts(self):
+        import build_embeddings
+        seen = {}
+
+        def _stub(texts, base_url, model, api_key, timeout=None):
+            seen["timeout"] = timeout
+            return [[1.0, 0.0]] * len(texts)
+
+        real = build_embeddings.embed_texts
+        build_embeddings.embed_texts = _stub
+        try:
+            out = e.embed_pages([{"id": "a", "title": "A", "body": "x"}])
+        finally:
+            build_embeddings.embed_texts = real
+        self.assertEqual(seen["timeout"], e.EMBED_TIMEOUT_S)
+        self.assertEqual(out["a"], [1.0, 0.0])
+
+    def test_consecutive_failures_trip_breaker(self):
+        import build_embeddings
+
+        def _always_fail(texts, base_url, model, api_key, timeout=None):
+            raise OSError("connection refused")
+
+        # 3 batches of 16 → breaker (threshold 3) trips on the third.
+        pages = [{"id": f"p{i}", "title": "t", "body": "b"} for i in range(33)]
+        real = build_embeddings.embed_texts
+        build_embeddings.embed_texts = _always_fail
+        try:
+            with self.assertRaises(e.DuplicatePrefilterError):
+                e.embed_pages(pages)
+        finally:
+            build_embeddings.embed_texts = real
+
+    def test_single_failure_still_non_fatal(self):
+        import build_embeddings
+        calls = {"n": 0}
+
+        def _fail_once(texts, base_url, model, api_key, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("blip")
+            return [[1.0, 0.0]] * len(texts)
+
+        pages = [{"id": f"p{i}", "title": "t", "body": "b"} for i in range(32)]
+        real = build_embeddings.embed_texts
+        build_embeddings.embed_texts = _fail_once
+        try:
+            out = e.embed_pages(pages)
+        finally:
+            build_embeddings.embed_texts = real
+        self.assertIsNone(out["p0"])          # first batch failed → None
+        self.assertEqual(out["p16"], [1.0, 0.0])  # second batch fine
 
 
 if __name__ == "__main__":

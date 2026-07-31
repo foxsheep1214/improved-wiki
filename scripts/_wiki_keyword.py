@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+
+from _frontmatter import TITLE_LINE_RE as _FM_TITLE_RE
 from typing import Optional
 
 __all__ = [
@@ -49,7 +51,6 @@ RRF_K = 60.0
 MAX_SEARCH_FILES = 10_000
 
 _CJK_RE = re.compile(r"[㐀-鿿]")
-_FM_TITLE_RE = re.compile(r'^title:\s*["\']?(.+?)["\']?\s*$', re.MULTILINE)
 _HEADING_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 
 _CJK_SEPARATORS = set("，。！？、；：“”‘’（）·～…")

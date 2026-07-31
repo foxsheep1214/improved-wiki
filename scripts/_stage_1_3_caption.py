@@ -1,9 +1,24 @@
-"""Stage 1.3 unified image captioning (MiniMax VLM via Anthropic protocol).
+"""Stage 1.3 unified image captioning (configurable VLM provider, with failover).
 
 Extracted from _stage_1_extract.py on 2026-06-24. Owns the per-image caption
 dispatch, VLM-failure detection, image preprocessing, the no-API-key hard-stop
 (no silent fallback per the 2026-06-24 policy), and the NashSU-style
 context-aware prompt (one image per call, 2026-06-24 port).
+
+Provider is configured via ~/.agents/config.json caption_provider entry
+(primary) + an optional caption_fallback_provider entry. Supported protocols:
+anthropic (Anthropic Messages API), openai (OpenAI chat/completions compatible
+— e.g. Ollama / local models).
+
+Failover (2026-07-08): when a fallback provider is configured, each image
+tries the primary first (its normal 3-attempt retry); only on primary
+exhaustion does it try the fallback (also 3 attempts). This is NOT the
+"no-silent-fallback" degradation the rest of the policy forbids — both
+providers are real VLM captioning, so using the fallback is loud (one log
+line per failover) rather than silent, and the final boundary is unchanged:
+if BOTH are exhausted, Stage 1.3 still pauses (raise). Recommended pairing:
+primary GLM-5v-turbo (cloud, higher quality), fallback a local Ollama model
+(qwen3-vl:8b-instruct) for when the cloud path is rate-limited or down.
 
 Design (NashSU parity, 2026-06-24):
   - One image per LLM call (was: 8-image batches). Each figure gets the full
@@ -23,29 +38,72 @@ Design (NashSU parity, 2026-06-24):
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
-import sys
+import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 
-# Shared infrastructure
-_script_dir = Path(__file__).resolve().parent
-if str(_script_dir) not in sys.path:
-    sys.path.insert(0, str(_script_dir))
-from _core import Config  # noqa: E402
+from _config import Config  # noqa: E402
+from _batch_worker_status import update_worker_phase  # noqa: E402
+from _paths import atomic_write  # noqa: E402
+from _review_utils import resolve_review_path  # noqa: E402
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Constants
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Default 12 parallel VLM calls — captioning is pure I/O-bound (one HTTP call
-# per image), so threads give real speedup and 12 fits comfortably under the
-# MiniMax caption API rate limit for typical book figure counts. Override per
-# run with the CAPTION_MAX_WORKERS env var.
-CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "12"))
+# Default 4 parallel VLM calls — captioning is pure I/O-bound (one HTTP call
+# per image), so threads give real speedup. 12 (the former default) overruns the
+# GLM-5v-turbo free-tier rate limit and trips HTTP 429 after ~3 images; 4 stays
+# under it while still parallelizing. Override per run with the
+# CAPTION_MAX_WORKERS env var. This cap applies to the PRIMARY provider only —
+# see _FALLBACK_SEMAPHORE below for why the fallback provider is not scaled by it.
+CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "4"))
+
+# The fallback provider (2026-07-08 failover, typically a local single-instance
+# server like Ollama) gets exactly ONE concurrent call, independent of
+# CAPTION_MAX_WORKERS: unlike GLM's cloud endpoint, a local model has no real
+# parallel capacity — Ollama serializes inference per model unless the server
+# is explicitly configured with OLLAMA_NUM_PARALLEL, which this skill does not
+# assume. Sending it 4 concurrent requests wouldn't error, but would only
+# queue at the server (see image-caption-strategy.md "并发：本地 fallback
+# provider 需要单独限流吗"). Serializing client-side avoids piling up threads
+# that are all just waiting on the same single-threaded local inference queue.
+_FALLBACK_SEMAPHORE = threading.Semaphore(1)
+
+# Detached batch workers may overlap one book's captioning with the next
+# book's minerU OCR.  Serialize caption *rounds* across processes so two
+# four-thread pools never multiply the provider load into eight or more calls.
+# The lock lives in the global temporary directory, is per-user, and is
+# released automatically by the kernel if a worker exits.
+CAPTION_BATCH_LOCK_FILE = (
+    Path(tempfile.gettempdir())
+    / f"improved-wiki-caption-{getattr(os, 'getuid', lambda: 0)()}.lock"
+)
+
+
+@contextmanager
+def _caption_batch_slot():
+    fd = os.open(CAPTION_BATCH_LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+# Per-call HTTP timeout for the VLM request (default 180s, configurable via
+# ~/.agents/config.json providers.<name>.timeout_seconds — NashSU parity,
+# 2026-07-16: llm_wiki 0.6.4 made its equivalent LLM request timeout
+# configurable for slow local/CPU-inference models. CAPTION_TIMEOUT_SECONDS
+# env var overrides per-run without touching config.json.
+_TIMEOUT_ENV_OVERRIDE = os.environ.get("CAPTION_TIMEOUT_SECONDS", "").strip()
 
 # How many chars of before/after body text to pass as anchoring context.
 # NashSU parity (image-caption-pipeline.ts CONTEXT_CHARS): NashSU tuned this
@@ -54,9 +112,11 @@ CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "12"))
 # 150 chars/side covers the figure-caption sweet spot (a figure label + the
 # referring sentence) while staying cheap. We match 150 exactly.
 CONTEXT_CHARS = 150
-# A per-image call is declared systemically failed after this many consecutive
-# failures — at that point the VLM main path is assumed down and we pause
-# (no silent fallback). Isolated single failures get a retryable placeholder.
+# A per-image call (all configured providers already tried, see
+# _stage_1_3_caption_one_image_with_failover) is declared systemically failed
+# after this many consecutive failures — at that point every configured VLM
+# path is assumed down and we pause (no silent fallback to a non-caption
+# path). Isolated single failures get a retryable placeholder.
 CONSECUTIVE_FAIL_PAUSE = 3
 
 
@@ -83,6 +143,10 @@ CAPTION_SYSTEM_PROMPT = (
     "Describe what is drawn in your own words."
     "\n\nFormulas: transcribe as LaTeX ($inline$ / $$display$$), not Unicode "
     "subscripts or Greek letters (write x_1, \\eta, \\alpha — not x₁, η, α)."
+    "\n\n⚠️ IMPORTANT: ALL mathematical symbols, parameters, numbers, and "
+    "expressions in your caption MUST be wrapped in LaTeX ($...$). For "
+    "example: write $T=30$, $B=4$, $f_0=0$, $t=0$, $-20$ — NOT T=30, f₀, "
+    "t=0, -20. This is mandatory."
     "\n\nOutput format: plain text, 2-4 sentences, no markdown, no preamble, no numbering."
 )
 
@@ -94,6 +158,14 @@ CAPTION_SYSTEM_PROMPT = (
 def _stage_1_3_is_caption_failed(text: str) -> bool:
     """Detect VLM failure responses that shouldn't be treated as valid captions."""
     if not text or len(text) < 15:
+        return True
+    # The "[待重试]" placeholder itself (written on retry-exhaustion — see
+    # _stage_1_3_caption_images_batch) must always be re-detected as pending.
+    # Bug 2026-07-06: it wasn't, because its trailing {err} text (e.g.
+    # "TimeoutError: timed out") rarely matches the markers below, so
+    # _stage_1_3_pending_images silently treated the placeholder as a
+    # permanent cached caption and never retried it.
+    if text.startswith("[待重试]"):
         return True
     failure_markers = ["解析失败", "无法识别", "unable to", "cannot describe",
                        "抱歉", "sorry", "I can't", "not clear", "无法描述"]
@@ -110,16 +182,17 @@ def _emit_caption_skip_review(config, source_label: str, media_dir: Path,
     full warn + REVIEW + pause behavior."""
     import time
     date_str = time.strftime("%Y-%m-%d")
-    safe_source = re.sub(r'[^\w\s-]', '', source_label or media_dir.parent.name).strip()[:40]
-    if not safe_source:
-        safe_source = "unknown"
     reviews_dir = config.wiki_dir / "REVIEW" / "suggestion"
     reviews_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{date_str}-{safe_source}-vlm-captioning-skipped-no-api-key.md"
-    page_path = reviews_dir / filename
+    # Generic title → one content-hash review for "captioning is unconfigured"
+    # (NashSU-style: same content = same review; the source is in source_ingest).
+    title = "VLM image captioning skipped — no caption provider API key"
+    page_path, review_id = resolve_review_path(
+        reviews_dir, "suggestion", title, date_str.replace("-", ""))
     pending = max(0, total_images - already_captioned)
     md = f"""---
 type: review
+review_id: {review_id}
 review_type: suggestion
 severity: high
 affected_pages: []
@@ -130,26 +203,24 @@ source_ingest: "{source_label or media_dir.parent.name}"
 
 # [suggestion] VLM image captioning skipped — no caption provider API key
 
-Stage 1.3 (MiniMax VLM captioning) was **entirely skipped** because
-`caption_api_key` is empty: `~/.agents/config.json` is absent and neither
-`CAPTION_API_KEY` nor `LLM_API_KEY` is set in the environment.
+Stage 1.3 (VLM image captioning) was **entirely skipped** because
+`caption_api_key` is empty: `~/.agents/config.json` has no `caption_provider`
+entry configured.
 
 **Impact:** {total_images} image(s) were NOT captioned by the VLM.
 {already_captioned} already had a caption (prior run); **{pending} have no
 VLM description** and remain uncaptioned. Image search/retrieval quality is
 degraded.
 
-**Fix:** configure the MiniMax caption provider — create `~/.agents/config.json`
-with a `providers.minimax` entry (`api_key` + `base_url`), or
-`export CAPTION_API_KEY=...`, then re-run ingest. Stage 1.3 resumes from
-cache and only captions pending images.
+**Fix:** configure a caption provider — create `~/.agents/config.json`
+with a `caption_provider` field and a matching `providers.<name>` entry
+(`api_key` + `base_url` + `protocol` + `model`), then re-run ingest.
+Stage 1.3 resumes from cache and only captions pending images.
 
 ## Resolution
 _配置 caption provider API key 后重跑 ingest 即可补齐；处理完成后将 `resolved: false` 改为 `resolved: true`。_
 """
-    tmp = page_path.with_suffix(page_path.suffix + ".tmp")
-    tmp.write_text(md, encoding="utf-8")
-    tmp.rename(page_path)
+    atomic_write(page_path, md)
 
 
 def _caption_no_key_pause(config, source_label: str, media_dir: Path,
@@ -168,14 +239,13 @@ def _caption_no_key_pause(config, source_label: str, media_dir: Path,
           f"{already_captioned}/{total_images} images have prior captions, "
           f"{pending} will get NO VLM description.")
     print(f"⚠️  [caption] PAUSING ingest — no silent fallback. Configure "
-          f"~/.agents/config.json (providers.minimax.api_key) or export "
-          f"CAPTION_API_KEY, then re-run (cached, resumes here).\n")
+          f"~/.agents/config.json (caption_provider + providers.<name>.api_key), "
+          f"then re-run (cached, resumes here).\n")
     _emit_caption_skip_review(config, source_label, media_dir, total_images, already_captioned)
     raise RuntimeError(
         "Caption provider API key missing — VLM captioning (Stage 1.3) cannot run. "
-        "No fallback: configure ~/.agents/config.json (providers.minimax.api_key) or "
-        "export CAPTION_API_KEY, then re-run (extraction is cached, resumes from "
-        "Stage 1.3)."
+        "No fallback: configure ~/.agents/config.json with a caption_provider entry, "
+        "then re-run (extraction is cached, resumes from Stage 1.3)."
     )
 
 
@@ -211,17 +281,52 @@ def _stage_1_3_preprocess_image(img_path: Path, max_dim: int = 1568) -> str:
 # Context map — NashSU-style before/after text, sourced from minerU content_list
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Module-level cache so the two call sites (per-chunk OCR dispatch + final
-# Stage 1.3) don't rescan the content_list files. Keyed by the mineru-api-out
-# root path. Invalidated only by process restart (a single ingest run does not
-# change the content_list files mid-run).
+# Module-level cache so the OCR finalizer and Stage 1.3 checkpoint wrapper do
+# not rebuild the same context map. Keyed by the current source's media_dir,
+# not the project-wide mineru-api-out tree. Invalidated on process restart (the
+# source's content-list sidecars do not change after OCR finalization).
 _CONTEXT_MAP_CACHE: dict[str, dict[str, dict]] = {}
 
 # Block types that carry describable body text for context anchoring.
 _TEXT_BLOCK_TYPES = ("text", "header", "ref_text", "page_number")
 
 
-def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
+def _stage_1_3_context_from_blocks(
+    blocks: list,
+    basename_to_md5: dict[str, str],
+    ctx_map: dict[str, dict],
+) -> None:
+    """Add image contexts from one source-scoped minerU content list."""
+    for i, block in enumerate(blocks):
+        if not isinstance(block, dict) or block.get("type") not in ("image", "chart"):
+            continue
+        img_path = block.get("img_path", "")
+        if not img_path:
+            continue
+        md5_8 = basename_to_md5.get(os.path.basename(img_path))
+        if not md5_8:
+            continue
+
+        caps = block.get("image_caption", []) or block.get("chart_caption", [])
+        if isinstance(caps, str):
+            caps = [caps]
+        mineru_caption = " ".join(
+            str(c).strip() for c in caps if c and str(c).strip()
+        )
+        ctx_map[md5_8] = {
+            "mineru_caption": mineru_caption,
+            "context_before": _collect_block_text(blocks, i, -1, CONTEXT_CHARS),
+            "context_after": _collect_block_text(blocks, i, +1, CONTEXT_CHARS),
+        }
+
+
+def _stage_1_3_saved_md5(filename: str) -> str:
+    """Extract the content hash embedded in pNNNN-mineru_<md5> filenames."""
+    match = re.search(r"-mineru_([0-9a-fA-F]{8})(?:\.|$)", filename)
+    return match.group(1).lower() if match else ""
+
+
+def _stage_1_3_build_context_map(config: Config, media_dir: Path) -> dict[str, dict]:
     """Scan persisted minerU content_list files and build {md5_8: context}.
 
     For each image/chart block, captures:
@@ -236,19 +341,62 @@ def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
     `p{page}-mineru_{md5_8}.{ext}` files in wiki/media/. This matching is
     robust because harvest saves the raw minerU bytes verbatim.
 
-    Returns {} when no mineru-api-out exists (Path A / PyMuPDF images have no
-    content_list — those images are captioned with the no-context prompt).
+    Prefer the source-scoped content-list sidecars persisted beside the OCR
+    chunk cache. Older checkpoints without those sidecars use a compatibility
+    scan of mineru-api-out, filtered to hashes that actually exist in this
+    source's media directory. This prevents another book's contexts from
+    entering the current caption prompt and avoids reporting a project-wide
+    figure count for one source.
+
+    Returns {} when no matching content_list exists (Path A / PyMuPDF images
+    have no content_list — those images are captioned with the no-context
+    prompt).
     """
     api_out = config.runtime_dir / "mineru-api-out"
-    cache_key = str(api_out)
+    cache_key = str(media_dir)
     if cache_key in _CONTEXT_MAP_CACHE:
         return _CONTEXT_MAP_CACHE[cache_key]
-    if not api_out.exists():
-        _CONTEXT_MAP_CACHE[cache_key] = {}
-        return _CONTEXT_MAP_CACHE[cache_key]
 
-    import hashlib
     ctx_map: dict[str, dict] = {}
+    target_md5s = {
+        md5_8
+        for path in media_dir.iterdir()
+        if path.is_file()
+        for md5_8 in [_stage_1_3_saved_md5(path.name)]
+        if md5_8
+    } if media_dir.is_dir() else set()
+
+    # Current format: every OCR chunk persists its own content list and the
+    # basename→saved-file join metadata under this source's extract cache.
+    source_extract_dir = config.extract_tmp_dir / media_dir.name
+    for cl_path in sorted(source_extract_dir.glob("_chunk_*/_mineru_content_list.json")):
+        figures_path = cl_path.with_name("_mineru_figures.json")
+        try:
+            blocks = json.loads(cl_path.read_text(encoding="utf-8"))
+            figures = json.loads(figures_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(blocks, list) or not isinstance(figures, list):
+            continue
+        basename_to_md5 = {
+            str(item.get("mineru_basename", "")): _stage_1_3_saved_md5(
+                str(item.get("filename", ""))
+            )
+            for item in figures
+            if isinstance(item, dict)
+            and item.get("mineru_basename")
+            and _stage_1_3_saved_md5(str(item.get("filename", "")))
+        }
+        _stage_1_3_context_from_blocks(blocks, basename_to_md5, ctx_map)
+
+    missing_md5s = target_md5s - set(ctx_map)
+    if not missing_md5s or not api_out.exists():
+        _CONTEXT_MAP_CACHE[cache_key] = ctx_map
+        return ctx_map
+
+    # Compatibility for old OCR caches: scan the global UUID output tree, but
+    # retain only contexts whose image bytes match this source's media hashes.
+    import hashlib
     for cl_path in sorted(api_out.glob("*/chunk/hybrid_auto/chunk_content_list.json")):
         try:
             blocks = json.loads(cl_path.read_text(encoding="utf-8"))
@@ -256,10 +404,11 @@ def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
             continue
         if not isinstance(blocks, list):
             continue
-        for i, b in enumerate(blocks):
-            if b.get("type") not in ("image", "chart"):
+        basename_to_md5: dict[str, str] = {}
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("type") not in ("image", "chart"):
                 continue
-            img_path = b.get("img_path", "")
+            img_path = block.get("img_path", "")
             if not img_path:
                 continue
             img_file = cl_path.parent / img_path
@@ -269,34 +418,12 @@ def _stage_1_3_build_context_map(config: Config) -> dict[str, dict]:
                 md5_8 = hashlib.md5(img_file.read_bytes()).hexdigest()[:8]
             except Exception:
                 continue
-
-            # chart blocks carry their printed label in chart_caption (not
-            # image_caption); read both so a chart's figure label still anchors
-            # the caption now that charts are first-class at effort=high.
-            caps = b.get("image_caption", []) or b.get("chart_caption", [])
-            mineru_caption = " ".join(c.strip() for c in caps if c and c.strip())
-
-            # minerU Image Analysis structured extraction — present only at
-            # effort=high (IMPROVED_WIKI_MINERU_EFFORT=high). For image/chart
-            # blocks the VLM emits a `content` field: chart → markdown data
-            # table, formula-image → LaTeX, flowchart → mermaid, text-image →
-            # OCR'd on-figure text, plus a `sub_type` (line/spectrogram/
-            # flowchart/text_image/natural_image/...). Captured here as GROUNDING
-            # for the Stage 1.3 caption (a faithful data anchor), NOT as a
-            # replacement for the description. Empty string at effort=medium, so
-            # this is a no-op unless high is enabled.
-            mineru_content = (b.get("content") or "").strip()
-            mineru_sub_type = (b.get("sub_type") or "").strip()
-
-            before = _collect_block_text(blocks, i, -1, CONTEXT_CHARS)
-            after = _collect_block_text(blocks, i, +1, CONTEXT_CHARS)
-            ctx_map[md5_8] = {
-                "mineru_caption": mineru_caption,
-                "mineru_content": mineru_content,
-                "mineru_sub_type": mineru_sub_type,
-                "context_before": before,
-                "context_after": after,
-            }
+            if md5_8 in missing_md5s:
+                basename_to_md5[os.path.basename(img_path)] = md5_8
+        _stage_1_3_context_from_blocks(blocks, basename_to_md5, ctx_map)
+        missing_md5s = target_md5s - set(ctx_map)
+        if not missing_md5s:
+            break
     _CONTEXT_MAP_CACHE[cache_key] = ctx_map
     return ctx_map
 
@@ -350,14 +477,24 @@ _CAPTION_BY_BASENAME_CACHE: dict[str, dict[str, str]] = {}
 def _stage_1_3_build_caption_by_basename_map(config: Config, media_dir: Path) -> dict[str, str]:
     """Map minerU image basename (e.g. ``<sha256>.jpg``) → VLM caption text.
 
-    Scans persisted minerU content_list files; for each image/chart block,
-    reads the original image bytes (at the block's img_path), md5-hashes them
-    to find the saved ``p<page>-mineru_<md5_8>.jpg`` in ``media_dir``, and
-    reads its ``.caption.txt`` sidecar. The minerU basename is the key because
-    that is what appears in the chunk markdown's ``![](images/<basename>)``.
+    The minerU basename is the key because that is what appears in the chunk
+    markdown's ``![](images/<basename>)``.
 
-    Returns ``{}`` when there is no mineru-api-out (Path A / PyMuPDF images —
-    no chunk markdown image refs to inline).
+    Primary source is this source's persisted extract sidecars, the same ones
+    _stage_1_3_build_context_map reads: ``_mineru_figures.json`` already stores
+    ``mineru_basename`` → saved ``filename`` (written by _stage_1_2_images), so
+    the caption sidecar is one lookup away — no image bytes re-read, no md5
+    recomputation.
+
+    ``runtime_dir/mineru-api-out`` is only a fallback. It is a transient
+    scratch directory keyed by job uuid: once it is cleaned up (or the project
+    moves machines) it is gone, while the sidecars live with the source. Making
+    it the sole input meant inlining silently became a no-op — every image kept
+    an empty alt through Stages 2.2/2.4, so generated pages lost the figure
+    grounding rule D4 depends on.
+
+    Returns ``{}`` when neither source exists (Path A / PyMuPDF images — no
+    chunk markdown image refs to inline).
     """
     cache_key = str(media_dir)
     if cache_key in _CAPTION_BY_BASENAME_CACHE:
@@ -366,6 +503,33 @@ def _stage_1_3_build_caption_by_basename_map(config: Config, media_dir: Path) ->
     import hashlib
     api_out = config.runtime_dir / "mineru-api-out"
     out: dict[str, str] = {}
+
+    source_extract_dir = config.extract_tmp_dir / media_dir.name
+    for figures_path in sorted(
+            source_extract_dir.glob("_chunk_*/_mineru_figures.json")):
+        try:
+            figures = json.loads(figures_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            continue
+        if not isinstance(figures, list):
+            continue
+        for item in figures:
+            if not isinstance(item, dict):
+                continue
+            basename = str(item.get("mineru_basename", ""))
+            filename = str(item.get("filename", ""))
+            if not basename or not filename or basename in out:
+                continue
+            cap_path = media_dir / (filename + ".caption.txt")
+            if not cap_path.exists() or cap_path.stat().st_size < 20:
+                continue
+            try:
+                cap = cap_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if cap and not _stage_1_3_is_caption_failed(cap):
+                out[basename] = cap
+
     if not api_out.exists():
         _CAPTION_BY_BASENAME_CACHE[cache_key] = out
         return out
@@ -475,7 +639,7 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
     page_hint = f" (source page {page})" if page is not None else ""
 
     has_ctx = bool(ctx and (ctx.get("context_before") or ctx.get("context_after")
-                            or ctx.get("mineru_caption") or ctx.get("mineru_content")))
+                            or ctx.get("mineru_caption")))
     if not has_ctx:
         return (
             f"Describe this image factually{page_hint} for a knowledge-base index. "
@@ -500,22 +664,6 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
         parts.append(f"[Figure caption (reference only — do NOT copy)] {mineru_cap}")
     parts.append(f"[Text before image]\n{before or '(none)'}")
     parts.append(f"[Text after image]\n{after or '(none)'}")
-    mineru_content = (ctx or {}).get("mineru_content", "")
-    mineru_sub_type = (ctx or {}).get("mineru_sub_type", "")
-    if mineru_content:
-        st = f" classified as '{mineru_sub_type}'" if mineru_sub_type else ""
-        parts.append(
-            f"[minerU structured extraction of THIS figure{st} — GROUNDING] "
-            "minerU's layout model already parsed this figure into the structured "
-            "form below (a chart's data as a markdown table, a formula as LaTeX, a "
-            "flowchart as mermaid, or OCR'd on-figure text). Treat any numbers, "
-            "axis labels, units, or structure it contains as ground truth and fold "
-            "those specifics into your description so the caption carries the real "
-            "data, not vague prose. BUT if it is clearly degenerate (e.g. a table of "
-            "repeated or placeholder values that do not reflect actual readings), "
-            "ignore it and describe what you actually see.\n"
-            f"{mineru_content[:1800]}"
-        )
     parts.append(
         "Now describe this image factually for a knowledge-base index. Include: any "
         "visible text verbatim (original language, do not translate), chart axes and "
@@ -533,15 +681,50 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
 # Per-image VLM call (one image, one call, plain-text reply)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
+def _stage_1_3_vlm_post_json(url: str, body: bytes, headers: dict,
+                             extract_text, timeout: int = 180) -> tuple[str | None, str | None]:
+    """Shared 3-attempt retry shell for one VLM HTTP call.
+
+    POSTs ``body`` to ``url``, parses the JSON response, and applies
+    ``extract_text(data)`` (protocol-specific callback) to pull the caption
+    text. Transient failures retry with exponential backoff. Returns
+    (text, None) on success, (None, last_err) on exhaustion. ``timeout`` is
+    the per-attempt HTTP timeout in seconds (see provider["timeout"] —
+    configurable per NashSU parity, 2026-07-16).
+    """
+    import urllib.request
+    last_err = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, data=body, method="POST", headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+            text = extract_text(data)
+            if text:
+                return text, None
+            last_err = "empty VLM response"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+        if attempt < 2:
+            time.sleep(2 ** attempt)
+    return None, last_err
+
+
+def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
                                  ctx_map: dict[str, dict]) -> tuple[str | None, str | None]:
-    """Caption a single image with one VLM call. Returns (caption, error).
+    """Caption a single image against ONE provider with one VLM call.
+
+    ``provider`` is a flat bundle (api_key/base_url/model/protocol) — see
+    ``_stage_1_3_provider_bundles``. Callers needing failover between a
+    primary and fallback provider use ``_stage_1_3_caption_one_image_with_failover``.
 
     On a transient API failure, retries up to 3 times. A final failure is
     surfaced as an error string so the caller can decide (placeholder vs
-    systemic pause); it does NOT silently write a degraded caption.
+    systemic pause); it does NOT silently write a degraded caption. A corrupt
+    image file (preprocessing failure) is surfaced with a ``corrupt-image:``
+    error prefix — callers classify it separately (no fallback provider
+    attempt, no circuit-breaker count).
     """
-    import urllib.request, urllib.error
     if "path" in img and img["path"]:
         img_path = Path(img["path"])
         if not img_path.is_absolute():
@@ -551,7 +734,10 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
     if not img_path.exists():
         return None, f"missing image file: {img.get('filename')}"
 
-    img_data = _stage_1_3_preprocess_image(img_path)
+    try:
+        img_data = _stage_1_3_preprocess_image(img_path)
+    except Exception as e:
+        return None, f"corrupt-image: {type(e).__name__}: {e}"
     ext = img_path.suffix.lstrip(".").lower()
     media_type = f"image/{'jpeg' if ext in ('jpg', 'jpeg') else ext}"
 
@@ -563,39 +749,139 @@ def _stage_1_3_caption_one_image(img: dict, config: Config, media_dir: Path,
         ctx = None
     prompt_text = _stage_1_3_build_user_prompt(img, ctx)
 
+    # ── Protocol dispatch: anthropic vs openai ──
+    protocol = (provider["protocol"] or "anthropic").lower()
+
+    if protocol == "openai":
+        # OpenAI chat/completions format (Ollama /v1, vLLM, etc.)
+        data_url = f"data:{media_type};base64,{img_data}"
+        content_parts = [
+            {"type": "text", "text": prompt_text},
+            {"type": "image_url", "image_url": {"url": data_url}},
+        ]
+        url = f"{provider['base_url'].rstrip('/')}/v1/chat/completions"
+        body = json.dumps({
+            "model": provider["model"],
+            "max_tokens": 1024,
+            "messages": [
+                {"role": "system", "content": CAPTION_SYSTEM_PROMPT},
+                {"role": "user", "content": content_parts},
+            ],
+            "temperature": 0,
+        }).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if provider["api_key"]:
+            headers["Authorization"] = f"Bearer {provider['api_key']}"
+
+        def _extract_openai(data: dict) -> str:
+            choices = data.get("choices", [])
+            if not choices:
+                return ""
+            msg = choices[0].get("message", {})
+            return (msg.get("content") or "").strip()
+
+        return _stage_1_3_vlm_post_json(url, body, headers, _extract_openai, provider["timeout"])
+
+    # Default: Anthropic Messages API
     content = [
         {"type": "text", "text": prompt_text},
         {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": img_data}},
     ]
-    url = f"{config.caption_base_url.rstrip('/')}/anthropic/v1/messages"
+    url = f"{provider['base_url'].rstrip('/')}/anthropic/v1/messages"
     body = json.dumps({
-        "model": config.caption_model,
+        "model": provider["model"],
         "max_tokens": 1024,
         "system": CAPTION_SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": content}],
         "temperature": 0,
     }).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": provider["api_key"],
+        "anthropic-version": "2023-06-01",
+    }
 
+    def _extract_anthropic(data: dict) -> str:
+        return "".join(c["text"] for c in data.get("content", [])
+                       if c.get("type") == "text").strip()
+
+    return _stage_1_3_vlm_post_json(url, body, headers, _extract_anthropic, provider["timeout"])
+
+
+def _stage_1_3_provider_bundles(config: Config) -> list[tuple[str, dict]]:
+    """``[("primary", {...})]`` plus ``("fallback", {...})`` when a fallback
+    provider is configured (non-empty base_url/model — an api_key can
+    legitimately be empty for an unauthenticated local server)."""
+    bundles = [("primary", {
+        "api_key": config.caption_api_key,
+        "base_url": config.caption_base_url,
+        "model": config.caption_model,
+        "protocol": config.caption_protocol,
+        "timeout": _stage_1_3_resolve_timeout(config.caption_timeout_seconds),
+    })]
+    if config.caption_fallback_base_url and config.caption_fallback_model:
+        bundles.append(("fallback", {
+            "api_key": config.caption_fallback_api_key,
+            "base_url": config.caption_fallback_base_url,
+            "model": config.caption_fallback_model,
+            "protocol": config.caption_fallback_protocol,
+            "timeout": _stage_1_3_resolve_timeout(config.caption_fallback_timeout_seconds),
+        }))
+    return bundles
+
+
+def _stage_1_3_resolve_timeout(configured: int) -> int:
+    """CAPTION_TIMEOUT_SECONDS env var overrides the per-provider config.json
+    value for quick tuning; falls back to ``configured`` (which itself
+    defaults to 180 — see Config.caption_timeout_seconds)."""
+    if _TIMEOUT_ENV_OVERRIDE.isdigit():
+        return int(_TIMEOUT_ENV_OVERRIDE)
+    return configured
+
+
+def _stage_1_3_caption_one_image_with_failover(
+    img: dict, config: Config, media_dir: Path, ctx_map: dict[str, dict],
+) -> tuple[str | None, str | None, str]:
+    """Try the primary provider, then the fallback (if configured) on primary
+    exhaustion. Returns (caption, error, provider_label) — label is whichever
+    provider produced the final result (or attempted last, on total failure).
+
+    Loud, not silent: a fallback attempt prints one line so the operator can
+    see how often the primary is failing. The no-silent-fallback boundary is
+    unchanged — if every configured provider fails, the caller still treats
+    this as a failure (placeholder / circuit-breaker / final raise).
+
+    Non-primary (fallback) calls are serialized process-wide via
+    _FALLBACK_SEMAPHORE — one image at a time, regardless of how many primary
+    calls are running concurrently (see the constant's comment for why).
+    """
+    bundles = _stage_1_3_provider_bundles(config)
     last_err = None
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(url, data=body, method="POST", headers={
-                "Content-Type": "application/json",
-                "x-api-key": config.caption_api_key,
-                "anthropic-version": "2023-06-01",
-            })
-            with urllib.request.urlopen(req, timeout=180) as resp:
-                data = json.loads(resp.read())
-            text = "".join(c["text"] for c in data.get("content", [])
-                           if c.get("type") == "text").strip()
-            if text:
-                return text, None
-            last_err = "empty VLM response"
-        except Exception as e:
-            last_err = f"{type(e).__name__}: {e}"
-        if attempt < 2:
-            time.sleep(2 ** attempt)
-    return None, last_err
+    for i, (label, provider) in enumerate(bundles):
+        if label == "primary":
+            caption, err = _stage_1_3_caption_one_image(img, provider, media_dir, ctx_map)
+        else:
+            if not _FALLBACK_SEMAPHORE.acquire(blocking=False):
+                print(f"    [caption] {img['filename']}: waiting for the fallback "
+                      f"provider ({provider['model']}) — one image at a time...")
+                _FALLBACK_SEMAPHORE.acquire()
+            try:
+                caption, err = _stage_1_3_caption_one_image(img, provider, media_dir, ctx_map)
+            finally:
+                _FALLBACK_SEMAPHORE.release()
+        if caption:
+            return caption, None, label
+        last_err = err
+        if err and err.startswith("corrupt-image:"):
+            # The image file itself is unreadable — no provider can fix that.
+            # Don't burn fallback-provider attempts on it.
+            return None, err, label
+        if i < len(bundles) - 1:
+            print(f"    [caption] {img['filename']}: {label} ({provider['model']}) "
+                  f"failed ({err}) — trying fallback ({bundles[i+1][1]['model']})...")
+    return None, last_err, bundles[-1][0]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -624,6 +910,161 @@ def _stage_1_3_pending_images(images: list[dict], media_dir: Path) -> list[dict]
     return pending
 
 
+def validate_stage_1_3_artifact(
+    stage_1_2_result: dict,
+    config: Config,
+) -> tuple[bool, str, dict]:
+    """Validate real caption sidecars according to the explicit media policy."""
+    policy = getattr(config, "media_policy", "required")
+    if policy not in {"required", "best_effort", "off"}:
+        return False, f"unknown media policy: {policy}", {}
+    images = stage_1_2_result.get("images", [])
+    if not isinstance(images, list):
+        return False, "Stage 1.2 images is not a list", {}
+    media_dir_value = stage_1_2_result.get("media_dir")
+    if not images:
+        return True, "", {
+            "captioned": 0,
+            "total": 0,
+            "complete": 0,
+            "pending": 0,
+            "policy": policy,
+        }
+    if not media_dir_value:
+        return False, "Stage 1.2 has images but no media_dir", {}
+    media_dir = Path(media_dir_value)
+    pending = _stage_1_3_pending_images(images, media_dir)
+    complete = len(images) - len(pending)
+    result = {
+        "captioned": 0,
+        "total": len(images),
+        "complete": complete,
+        "pending": len(pending),
+        "policy": policy,
+        "degraded": bool(pending),
+    }
+    if policy == "off":
+        result["skipped"] = True
+        result["reason"] = "media-policy-off"
+        return True, "", result
+    if pending and policy == "required":
+        names = ", ".join(
+            str(image.get("filename", "?")) for image in pending[:5])
+        more = f" (+{len(pending) - 5} more)" if len(pending) > 5 else ""
+        return (
+            False,
+            f"{len(pending)}/{len(images)} captions missing or invalid: "
+            f"{names}{more}",
+            result,
+        )
+    return True, "", result
+
+
+# C-caption (2026-07-08): rounds + backoff before Stage 1.3 is allowed to hand
+# off to Stage 2. Diagnosed on "EW and Radar Systems Handbook" — a single pass
+# left 17/331 images as `[待重试]` placeholders, and nothing forced a retry
+# before generation ran against the (still-incomplete) media directory; the
+# only thing that ever picked them back up was a human happening to re-run
+# ingest.py for that exact book again. Isolated stragglers now get up to
+# _MAX_CAPTION_ROUNDS passes with cooldown between rounds; only if they are
+# STILL failing after all rounds does the batch raise (see final check in
+# _stage_1_3_caption_images_batch) — so Stage 1.3 either finishes clean or
+# pauses loudly, it no longer silently hands off a partial result.
+_MAX_CAPTION_ROUNDS = 3
+_ROUND_BACKOFF_SECONDS = (15, 45)  # before round 2, round 3 (rate-limit cooldown)
+
+
+def _stage_1_3_caption_one_round(
+    pending: list[dict],
+    config: Config,
+    media_dir: Path,
+    ctx_map: dict,
+    label: str,
+    max_workers: int = CAPTION_MAX_WORKERS,
+) -> int:
+    """One parallel pass over `pending`. Returns captioned count.
+
+    CONSECUTIVE_FAIL_PAUSE failures in a row within THIS round still raises
+    immediately (fast circuit breaker for a fully-down provider — no point
+    burning a whole round's backoff on a config that's simply broken).
+    Isolated failures write a `[待重试]` placeholder and are left for the
+    next round (or the caller's final no-fallback raise).
+    """
+    captioned = 0
+    fallback_used = 0
+    consecutive_fail = 0
+    workers = min(max(1, max_workers), len(pending)) or 1
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_img = {
+            executor.submit(_stage_1_3_caption_one_image_with_failover,
+                            img, config, media_dir, ctx_map): img
+            for img in pending
+        }
+        done = 0
+        for future in as_completed(future_to_img):
+            img = future_to_img[future]
+            done += 1
+            try:
+                caption, err, used = future.result()
+            except Exception as e:
+                caption, err, used = None, f"unhandled {type(e).__name__}: {e}", "primary"
+            if caption:
+                consecutive_fail = 0
+                cap_text = caption.strip()
+                if _stage_1_3_is_caption_failed(cap_text):
+                    cap_text = (f"[待重试] 图片 {img['filename']}，"
+                                f"尺寸 {img.get('width','?')}×{img.get('height','?')}")
+                    atomic_write(
+                        media_dir / (img["filename"] + ".caption.txt"),
+                        cap_text,
+                    )
+                    print(
+                        f"  [{done}/{len(pending)}] {img['filename']} "
+                        "✗ invalid caption response, queued for retry"
+                    )
+                    continue
+                atomic_write(
+                    media_dir / (img["filename"] + ".caption.txt"),
+                    cap_text,
+                )
+                captioned += 1
+                tag = " (fallback)" if used == "fallback" else ""
+                if used == "fallback":
+                    fallback_used += 1
+                print(f"  [{done}/{len(pending)}] {img['filename']} ✓{tag}")
+            elif err and err.startswith("corrupt-image:"):
+                # Corrupt/unreadable image file — a VLM retry can never fix it.
+                # Write a permanent skip marker (NOT [待重试], so later rounds /
+                # runs don't re-try it) and keep it out of the provider circuit
+                # breaker: the providers are fine, the image is not.
+                marker = f"[图片损坏，跳过 VLM 描述] {img['filename']} — {err}"
+                atomic_write(media_dir / (img["filename"] + ".caption.txt"), marker)
+                print(f"  [{done}/{len(pending)}] {img['filename']} ✗ corrupt image, "
+                      f"skipped: {err}")
+            else:
+                consecutive_fail += 1
+                placeholder = (f"[待重试] 图片 {img['filename']}，"
+                               f"尺寸 {img.get('width','?')}×{img.get('height','?')} "
+                               f"— {err}")
+                atomic_write(media_dir / (img["filename"] + ".caption.txt"), placeholder)
+                print(f"  [{done}/{len(pending)}] {img['filename']} ✗ {err}")
+                if consecutive_fail >= CONSECUTIVE_FAIL_PAUSE:
+                    # Cancel queued futures so the circuit breaker propagates
+                    # NOW — otherwise the with-block shutdown would wait for
+                    # every queued image to burn through its full retry stack
+                    # against a provider that is already known to be down.
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise RuntimeError(
+                        f"Caption VLM failed {consecutive_fail} images in a row "
+                        f"(last: {err}). All configured providers exhausted — the "
+                        f"main captioning path is not working. Fix the provider(s) "
+                        f"and re-run (cached, resumes from Stage 1.3)."
+                    )
+    if fallback_used:
+        print(f"  [caption] {fallback_used}/{captioned} images this round used the fallback provider")
+    return captioned
+
+
 def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_dir: Path,
                     source_label: str = "",
                     max_workers: int = CAPTION_MAX_WORKERS) -> int:
@@ -632,14 +1073,17 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
     NashSU parity (2026-06-24): one image per call with a context-aware
     prompt. `max_workers` caps the parallel calls.
 
-    No-silent-fallback policy: a missing API key pauses the ingest. Isolated
-    per-image failures after retries get a loud `[待重试]` placeholder (which
-    is itself pending, so the next run retries it). CONSECUTIVE_FAIL_PAUSE
-    failures in a row means the VLM main path is down → pause (raise), so we
-    never silently produce a wave of placeholders.
+    No-silent-fallback policy: a missing API key pauses the ingest. Each
+    image tries the primary provider, then a configured fallback provider
+    (2026-07-08, loud not silent — see _stage_1_3_caption_one_image_with_failover);
+    that is provider failover, not the policy's "silent degrade to no caption"
+    case. Isolated per-image failures (both providers exhausted) get up to
+    _MAX_CAPTION_ROUNDS retry rounds with backoff (C-caption, 2026-07-08) —
+    Stage 1.3 does NOT hand off to Stage 2 with placeholders still in place.
+    CONSECUTIVE_FAIL_PAUSE failures in a row within any round means every
+    configured provider's main path is down → pause (raise) immediately,
+    without waiting for the remaining rounds.
     """
-    from _stage_1_1_scanned import log_event
-
     if not images:
         return 0
     if not config.caption_api_key:
@@ -648,62 +1092,61 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
         _caption_no_key_pause(config, source_label, media_dir, len(images), already)
         return 0  # unreachable — _caption_no_key_pause always raises
 
-    pending = _stage_1_3_pending_images(images, media_dir)
-    if not pending:
-        label = f" [{source_label}]" if source_label else ""
+    label = f" [{source_label}]" if source_label else ""
+    first_pending = _stage_1_3_pending_images(images, media_dir)
+    if not first_pending:
         print(f"[caption]{label} (cached) All {len(images)} images already captioned")
         return 0
 
-    ctx_map = _stage_1_3_build_context_map(config)
-    label = f" [{source_label}]" if source_label else ""
-    print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
-          f"→ one VLM call each (parallel, max {max_workers} workers, "
-          f"{len(ctx_map)} figures with context)")
+    ctx_map = _stage_1_3_build_context_map(config, media_dir)
+    total_captioned = 0
+    pending = first_pending
+    for round_idx in range(_MAX_CAPTION_ROUNDS):
+        if round_idx == 0:
+            pending_with_context = sum(
+                1 for image in pending
+                if _stage_1_3_saved_md5(str(image.get("filename", ""))) in ctx_map
+            )
+            print(f"[caption]{label} {len(pending)}/{len(images)} pending images "
+                  f"→ one VLM call each (parallel, max {max_workers} workers, "
+                  f"{pending_with_context} pending figures with context)")
+        else:
+            wait = _ROUND_BACKOFF_SECONDS[min(round_idx - 1, len(_ROUND_BACKOFF_SECONDS) - 1)]
+            print(f"[caption]{label} round {round_idx+1}/{_MAX_CAPTION_ROUNDS}: "
+                  f"{len(pending)} still pending — waiting {wait}s "
+                  f"(rate-limit cooldown) before retry...")
+            time.sleep(wait)
+        update_worker_phase("waiting_caption")
+        with _caption_batch_slot():
+            update_worker_phase("captioning")
+            total_captioned += _stage_1_3_caption_one_round(
+                pending,
+                config,
+                media_dir,
+                ctx_map,
+                label,
+                max_workers=max_workers,
+            )
+        pending = _stage_1_3_pending_images(images, media_dir)
+        if not pending:
+            break
 
-    captioned = 0
-    consecutive_fail = 0
-    workers = min(max_workers, len(pending)) or 1
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_img = {
-            executor.submit(_stage_1_3_caption_one_image, img, config, media_dir, ctx_map): img
-            for img in pending
-        }
-        done = 0
-        for future in as_completed(future_to_img):
-            img = future_to_img[future]
-            done += 1
-            try:
-                caption, err = future.result()
-            except Exception as e:
-                caption, err = None, f"unhandled {type(e).__name__}: {e}"
-            if caption:
-                consecutive_fail = 0
-                cap_text = caption.strip()
-                if _stage_1_3_is_caption_failed(cap_text):
-                    cap_text = (f"[待重试] 图片 {img['filename']}，"
-                                f"尺寸 {img.get('width','?')}×{img.get('height','?')}")
-                (media_dir / (img["filename"] + ".caption.txt")).write_text(
-                    cap_text, encoding="utf-8")
-                captioned += 1
-                print(f"  [{done}/{len(pending)}] {img['filename']} ✓")
-            else:
-                consecutive_fail += 1
-                placeholder = (f"[待重试] 图片 {img['filename']}，"
-                               f"尺寸 {img.get('width','?')}×{img.get('height','?')} "
-                               f"— {err}")
-                (media_dir / (img["filename"] + ".caption.txt")).write_text(
-                    placeholder, encoding="utf-8")
-                print(f"  [{done}/{len(pending)}] {img['filename']} ✗ {err}")
-                if consecutive_fail >= CONSECUTIVE_FAIL_PAUSE:
-                    raise RuntimeError(
-                        f"Caption VLM failed {consecutive_fail} images in a row "
-                        f"(last: {err}). No fallback — the main captioning path "
-                        f"is not working. Fix the provider and re-run (cached, "
-                        f"resumes from Stage 1.3)."
-                    )
+    if pending:
+        names = ", ".join(img["filename"] for img in pending[:8])
+        more = f" (+{len(pending) - 8} more)" if len(pending) > 8 else ""
+        raise RuntimeError(
+            f"Caption: {len(pending)}/{len(images)} images still failing after "
+            f"{_MAX_CAPTION_ROUNDS} rounds: {names}{more}. All configured "
+            f"providers (primary + fallback, if any) exhausted — the ingest "
+            f"does not advance to Stage 2 with incomplete captions. Fix the "
+            f"provider (rate limit window, or add/switch caption_fallback_provider "
+            f"in ~/.agents/config.json) and re-run (cached, resumes from "
+            f"Stage 1.3, only re-does the images still pending)."
+        )
 
-    print(f"[caption] Done — {captioned}/{len(pending)} captions written")
-    return captioned
+    print(f"[caption]{label} Done — {total_captioned} new captions written, "
+          f"{len(images)}/{len(images)} images now captioned")
+    return total_captioned
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -716,17 +1159,59 @@ def stage_1_3_caption_images(config: Config, stage_1_2_result: dict) -> dict:
     Thin wrapper around _stage_1_3_caption_images_batch() for the Stage 1.3
     pipeline checkpoint."""
     images = stage_1_2_result.get("images", [])
+    policy = getattr(config, "media_policy", "required")
+    if policy == "off":
+        print("[stage 1.3] Media policy is off — captioning intentionally skipped")
+        return {
+            "captioned": 0,
+            "total": len(images),
+            "complete": 0,
+            "pending": len(images),
+            "policy": "off",
+            "skipped": True,
+            "reason": "media-policy-off",
+        }
     if not images:
         print("[stage 1.3] No images to caption — skipping")
-        return {"captioned": 0, "total": 0}
+        return {
+            "captioned": 0,
+            "total": 0,
+            "complete": 0,
+            "pending": 0,
+            "policy": policy,
+        }
     if not config.caption_api_key:
         media_dir = Path(stage_1_2_result.get("media_dir", "."))
         already = sum(1 for img in images
                       if (media_dir / (img["filename"] + ".caption.txt")).exists())
+        if policy == "best_effort":
+            print(
+                "  [stage 1.3] ⚠️ best_effort media degraded: caption "
+                "provider API key is missing")
+            valid, _reason, actual = validate_stage_1_3_artifact(
+                stage_1_2_result, config)
+            actual["captioned"] = 0
+            actual["reason"] = "no-api-key"
+            return actual
         _caption_no_key_pause(config, "stage-1.3", media_dir, len(images), already)
         return {"captioned": 0, "total": len(images), "skipped": True, "reason": "no-api-key"}
 
     media_dir = Path(stage_1_2_result["media_dir"])
-    captioned = _stage_1_3_caption_images_batch(images, config, media_dir,
-                                source_label="stage-1.3")
-    return {"captioned": captioned, "total": len(images)}
+    try:
+        captioned = _stage_1_3_caption_images_batch(
+            images, config, media_dir, source_label="stage-1.3")
+    except RuntimeError as exc:
+        if policy != "best_effort":
+            raise
+        print(f"  [stage 1.3] ⚠️ best_effort media degraded: {exc}")
+        valid, _reason, actual = validate_stage_1_3_artifact(
+            stage_1_2_result, config)
+        actual["captioned"] = 0
+        actual["error"] = str(exc)
+        return actual
+    valid, reason, actual = validate_stage_1_3_artifact(
+        stage_1_2_result, config)
+    if not valid:
+        raise RuntimeError(f"[Stage 1.3] caption artifact validation failed: {reason}")
+    actual["captioned"] = captioned
+    return actual

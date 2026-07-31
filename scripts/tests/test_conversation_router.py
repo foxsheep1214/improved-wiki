@@ -23,7 +23,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _llm_api
 import ingest  # noqa: F401  (import side-effect: registers the router)
 from _core import Config, ConversationPending
-from _conversation_router import _infer_stage
+from _conversation_router import (
+    _infer_stage,
+    _is_stale_result,
+    _load_task_manifest,
+)
 
 
 def _make_config(tmp: Path) -> Config:
@@ -35,14 +39,10 @@ def _make_config(tmp: Path) -> Config:
         cache_path=tmp / "rt" / "ingest-cache.json",
         progress_dir=tmp / "rt" / "ingest-progress",
         extract_tmp_dir=tmp / "rt" / "extract-tmp",
-        llm_base_url="https://example.invalid",
         llm_model="test-model",
-        llm_api_key="",
-        llm_protocol="anthropic",
         caption_api_key="",
         caption_base_url="https://example.invalid",
         caption_model="test-caption",
-        chunk_size=60000,
         chunk_overlap=3000,
         source_budget=100000,
         target_chars=60000,
@@ -59,6 +59,22 @@ class TestRouterRegistration(unittest.TestCase):
 
 
 class TestConversationHandoff(unittest.TestCase):
+    def test_secondary_role_heading_is_not_stale_prompt_copy(self):
+        prompt = "# Role\nYou are merging a wiki page.\n" + ("instructions " * 300)
+        response = (
+            "# Nested Vectored Interrupt Controller (NVIC)\n\n"
+            "## Role\n\n"
+            "The NVIC selects the highest-priority pending interrupt.\n"
+        )
+
+        self.assertFalse(_is_stale_result(response, prompt))
+
+    def test_primary_role_heading_still_detects_stale_prompt_copy(self):
+        prompt = "# Role\nYou are merging a wiki page.\n" + ("instructions " * 300)
+        response = "# Role\nYou are merging a wiki page.\n"
+
+        self.assertTrue(_is_stale_result(response, prompt))
+
     def test_writes_prompt_and_raises_pending(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
@@ -84,6 +100,13 @@ class TestConversationHandoff(unittest.TestCase):
             text, stop = _llm_api.call_anthropic_protocol("build a digest", cfg, max_tokens=2048)
             self.assertEqual(text, "digest: ready")
             self.assertEqual(stop, "end_turn")
+            manifest = _load_task_manifest(cfg)
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertEqual(len(manifest["completed"]), 1)
+            task = manifest["tasks"][manifest["completed"][0]]
+            self.assertEqual(task["status"], "completed")
+            self.assertEqual(task["attempts"], 1)
+            self.assertEqual(task["response_chars"], len("digest: ready"))
 
     def test_cached_result_survives_replay_for_multi_stage_resume(self):
         # Regression: ingest.py replays every stage from the top on each
@@ -107,10 +130,35 @@ class TestConversationHandoff(unittest.TestCase):
             self.assertEqual(t2, "digest: ready")
             # The .txt must still exist for future replays.
             self.assertTrue(md.with_suffix(".txt").exists())
+            # Replaying a cached result must not grow completed[] forever.
+            manifest = _load_task_manifest(cfg)
+            self.assertEqual(len(manifest["completed"]), 1)
+
+    def test_v1_task_arrays_migrate_and_deduplicate(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            manifest_path = (
+                cfg.runtime_dir / "conversation"
+                / cfg.conversation_prefix / "tasks.json"
+            )
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text(
+                '{"pending":["a","a","b"],'
+                '"completed":["b","b","c"]}',
+                encoding="utf-8",
+            )
+
+            manifest = _load_task_manifest(cfg)
+
+            self.assertEqual(manifest["schema_version"], 2)
+            self.assertEqual(manifest["pending"], ["a"])
+            self.assertEqual(manifest["completed"], ["b", "c"])
+            self.assertEqual(manifest["tasks"]["b"]["status"], "completed")
 
     def test_distinct_prompts_get_distinct_slugs(self):
         # Regression: _infer_stage maps several distinct Stage-2 calls
-        # (source page, main generation, per-concept fallback) to the same
+        # (source page and main generation) to the same
         # 'LLM-task' stage name. They must still get distinct cache files,
         # or the source-page answer gets reused for concept/entity generation
         # (wrong content → 0 valid blocks). A content-hash suffix guarantees
@@ -126,6 +174,52 @@ class TestConversationHandoff(unittest.TestCase):
             md_files = list(conv_dir.glob("*.md"))
             self.assertEqual(len(md_files), 2,
                              "distinct prompts must get distinct cache files")
+
+    def test_completed_replacement_supersedes_only_same_stage_chunk(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            old_chunk_1 = (
+                "# Role\nYou are generating wiki pages for ONE chunk.\n"
+                "# Source\nSource: book\nChunk: 1\nold policy\n"
+            )
+            chunk_2 = (
+                "# Role\nYou are generating wiki pages for ONE chunk.\n"
+                "# Source\nSource: book\nChunk: 2\ncurrent policy\n"
+            )
+            new_chunk_1 = (
+                "# Role\nYou are generating wiki pages for ONE chunk.\n"
+                "# Source\nSource: book\nChunk: 1\nnew policy\n"
+            )
+
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(old_chunk_1, cfg)
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(chunk_2, cfg)
+            with self.assertRaises(ConversationPending):
+                _llm_api.call_anthropic_protocol(new_chunk_1, cfg)
+
+            conv_dir = cfg.runtime_dir / "conversation" / cfg.conversation_prefix
+            new_prompt_path = next(
+                path for path in conv_dir.glob("*.md")
+                if path.read_text(encoding="utf-8") == new_chunk_1
+            )
+            new_prompt_path.with_suffix(".txt").write_text(
+                "NO_KEY_PAGES", encoding="utf-8"
+            )
+            text, _ = _llm_api.call_anthropic_protocol(new_chunk_1, cfg)
+            self.assertEqual(text, "NO_KEY_PAGES")
+
+            manifest = _load_task_manifest(cfg)
+            by_prompt = {
+                (conv_dir / task["prompt_file"]).read_text(encoding="utf-8"):
+                    task
+                for task in manifest["tasks"].values()
+            }
+            self.assertEqual(by_prompt[old_chunk_1]["status"], "superseded")
+            self.assertEqual(by_prompt[new_chunk_1]["status"], "completed")
+            self.assertEqual(by_prompt[chunk_2]["status"], "pending")
+            self.assertEqual(len(manifest["pending"]), 1)
 
     def test_volatile_wiki_page_list_does_not_invalidate_cache(self):
         # Regression: stage prompts embed an "Existing wiki pages" snapshot
@@ -157,7 +251,8 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
     # Regression (fallout of the c359232 output-language fix): the ~890-char
     # "## ⚠️ MANDATORY OUTPUT LANGUAGE" directive is prepended to every
     # generation/analysis prompt. It pushed the distinctive stage marker past
-    # _infer_stage's 500-char head window, collapsing Stage 2.4/2.6/2.7/2.9 to
+    # _infer_stage's 500-char head window, collapsing Stage 2.4/2.6 and legacy
+    # generation prompts to
     # the generic "LLM-task" label (observed live on the Printed Circuits
     # Handbook ingest — every chunk-generation cache file mis-prefixed). The
     # directive block must be skipped before inferring the stage.
@@ -189,13 +284,28 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
                   "for duplicates.\n\n### Concept 1: ...\n")
         self.assertEqual(_infer_stage(prompt), "Stage-2-4-DedupConfirm")
 
+    def test_truncated_file_repair_has_distinct_label(self):
+        prompt = (
+            "# Role\n"
+            "You are repairing truncated wiki FILE blocks from an earlier "
+            "generation.\n"
+        )
+        self.assertEqual(
+            _infer_stage(prompt),
+            "Stage-2-TruncatedFileRepair",
+        )
+
     def test_non_directive_prompt_untouched(self):
-        # Prompts that do NOT open with the directive (e.g. the cached 2.1/2.2
-        # digest/chunk-analysis prompts) must infer exactly as before, so their
-        # slug/cache key is unchanged across this fix.
+        # Prompts that do NOT open with the directive must infer exactly as
+        # before, so their slug/cache key is unchanged across this fix.
+        # (The Stage-2-1-Global-Digest label was removed with Stage 2.1,
+        # 2026-07-08 — its old prompt phrase now falls through to LLM-task.)
+        self.assertEqual(
+            _infer_stage("You are writing a **source page** for this book"),
+            "Stage-2-6-SourcePage")
         self.assertEqual(
             _infer_stage("performing **Stage 1: Global Digest** for this source"),
-            "Stage-2-1-Global-Digest")
+            "LLM-task")
         self.assertEqual(_infer_stage("plain prompt with no markers"), "LLM-task")
 
 

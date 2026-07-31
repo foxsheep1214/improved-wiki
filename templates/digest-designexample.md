@@ -117,53 +117,14 @@ connections_to_existing_wiki:
 Files to write:
 
 1. **`wiki/sources/<Mfr> - <Ref-Design-Name>.md`** — source page
-   - Body: design ID, specifications, measured performance, schematic description, key components table, design decisions, design notes, "参见"
+   - Body: a concise source summary; prioritize the design goal, specifications,
+     measured evidence, architecture, and consequential design decisions, with
+     source-driven structure rather than a fixed checklist
 
-2. **`wiki/concepts/<slug>.md`** — 1-5 concept pages (the topology, key sub-circuits)
+2. **`wiki/concepts/<slug>.md`** — pages only for genuinely important reusable ideas such as the topology or a materially explained sub-circuit; no count target
    - These are higher-value than the source page: they capture the design knowledge in a reusable form
 
 3. **Update `wiki/index.md`**, **`wiki/log.md`**, **`wiki/overview.md`**
-
----
-
-## Prompt template (the actual prompt sent to the LLM)
-
-```
-# Role
-You are the LLM maintainer of a Karpathy-pattern personal knowledge base.
-You ingest vendor reference designs into a structured wiki.
-
-# Input
-- Reference design ID: {ref_id}
-- Title: {title}
-- Manufacturer: {manufacturer}
-- File path: {raw_path}
-- Extracted text: <full text in <extracted_text>...</extracted_text>>
-- Existing wiki context: <slugs in <existing_wiki>...</existing_wiki>>
-
-# Task
-Two-step chain.
-
-## Step 1: Analysis
-YAML block with the full analysis. Use the schema in §Analysis above.
-A reference design is expected to produce 1 source page + 1-5 concept pages (the topology + sub-circuits).
-
-## Step 2: Generation
-File contents in order:
-### File 1: wiki/sources/<Mfr> - <Ref-Design-Name>.md
-### File 2..N: wiki/concepts/<slug>.md (1-5 files)
-### Update: wiki/index.md
-### Append: wiki/log.md
-
-# Constraints
-- Every `[[wikilink]]` MUST use the FULL filename stem (per improved-wiki §6.2)
-- Frontmatter must follow improved-wiki §5
-- The specifications table must be accurate — these are engineering claims
-- For each key_component, cross-ref to its datasheet if the datasheet is in the wiki
-- Mark all measured_performance values as "from Fig X" or "from Section Y"
-- Include design_notes (lessons learned) verbatim from the source
-- Note any limitations or uncharacterized conditions
-```
 
 ---
 
@@ -187,6 +148,6 @@ File contents in order:
 
 ## See also
 
-- `SKILL.md` §5, §6
+- `references/naming-conventions.md` — frontmatter schema + wikilink naming
 - `templates/digest-datasheet.md` — for each key_component's datasheet
 - `templates/digest-applicationnote.md` — for the design rationale of sub-circuits

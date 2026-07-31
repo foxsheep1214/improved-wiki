@@ -19,11 +19,9 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-# Shared infrastructure
-_script_dir = Path(__file__).resolve().parent
-if str(_script_dir) not in sys.path:
-    sys.path.insert(0, str(_script_dir))
-from _core import Config  # noqa: E402
+from _config import Config  # noqa: E402
+from _progress import file_sha256  # noqa: E402
+from _batch_worker_status import update_worker_phase  # noqa: E402
 
 from _stage_1_2_images import (  # noqa: E402
     _stage_1_2_harvest_images,
@@ -45,7 +43,10 @@ MINERU_API_PORT = int(os.environ.get("MINERU_API_PORT", "19999"))
 MINERU_LOCK_FILE = Path.home() / ".cache" / "improved-wiki" / ".mineru.lock"
 MINERU_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-MINERU_CHUNK_SIZE = 50  # pages per minerU invocation
+MINERU_CHUNK_SIZE = 32  # pages per minerU invocation (crash-recovery granularity; total time is minerU-bound, so prefer small chunks: shorter per-call wait + finer resume)
+
+# HTTP timeout for /file_parse submissions and async-task polling (seconds).
+MINERU_PARSE_TIMEOUT = 1200
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -108,6 +109,187 @@ def _clean_mineru_latex(text: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# minerU HTML table → Markdown (NashSU mineru.ts convertHtmlTablesToMarkdown parity)
+# ══════════════════════════════════════════════════════════════════════════════
+# minerU emits tables as raw HTML (<table>…</table>) inside md_content. NashSU
+# normalizes these to Markdown tables at extraction time so the generation LLM
+# and wiki pages never carry raw HTML. Faithful port of mineru.ts
+# convertHtmlTablesToMarkdown / convertHtmlTablesInSegment / htmlCellToMarkdown
+# (rowspan/colspan are NOT reconstructed — cells are flattened in order, matching
+# NashSU's lossy behavior; images inside cells become ![alt](src) refs).
+
+_HTMLTAB_TABLE_RE = re.compile(r"<table\b.*?</table>", re.I | re.S)
+_HTMLTAB_TR_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.I | re.S)
+_HTMLTAB_CELL_RE = re.compile(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", re.I | re.S)
+_HTMLTAB_IMG_RE = re.compile(r"<img\b[^>]*\bsrc=([\"'])([^\"']+)\1[^>]*>", re.I)
+_HTMLTAB_ALT_RE = re.compile(r"\balt=([\"'])([^\"']*)\1", re.I)
+_HTMLTAB_FENCE_RE = re.compile(r"(```.*?```|~~~.*?~~~)", re.S)
+
+
+# Named entities beyond NashSU's original 6 (nbsp/amp/lt/gt/quot/#39). NashSU's
+# decodeHtmlEntities (mineru.ts) only ever covers these 6 and is only ever
+# applied to HTML-table-cell text during OCR-to-markdown conversion — it is
+# NOT NashSU parity to extend the list or the call sites below; this is an
+# original addition (2026-07-04) after observing engineering-textbook content
+# where an LLM writes an inequality/symbol as a literal HTML entity (e.g.
+# "q&lt;3.15 kW/m^2", "L/W&gt;1.0") instead of the real character. Covers
+# entities plausible in engineering/math prose: typographic punctuation,
+# common math/unit symbols, and the Greek letters routinely used as symbols.
+_EXTRA_NAMED_ENTITIES: dict[str, str] = {
+    "mdash": "—", "ndash": "–", "hellip": "…", "deg": "°",
+    "plusmn": "±", "times": "×", "divide": "÷", "micro": "µ",
+    "middot": "·", "sect": "§", "para": "¶", "copy": "©", "reg": "®",
+    "trade": "™", "infin": "∞", "sum": "∑", "radic": "√", "part": "∂",
+    "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
+    "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
+    "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ", "omicron": "ο",
+    "pi": "π", "rho": "ρ", "sigma": "σ", "tau": "τ", "upsilon": "υ",
+    "phi": "φ", "chi": "χ", "psi": "ψ", "omega": "ω",
+    "Alpha": "Α", "Beta": "Β", "Gamma": "Γ", "Delta": "Δ", "Epsilon": "Ε",
+    "Zeta": "Ζ", "Eta": "Η", "Theta": "Θ", "Iota": "Ι", "Kappa": "Κ",
+    "Lambda": "Λ", "Mu": "Μ", "Nu": "Ν", "Xi": "Ξ", "Omicron": "Ο",
+    "Pi": "Π", "Rho": "Ρ", "Sigma": "Σ", "Tau": "Τ", "Upsilon": "Υ",
+    "Phi": "Φ", "Chi": "Χ", "Psi": "Ψ", "Omega": "Ω",
+}
+
+
+def _decode_html_entities(text: str) -> str:
+    """Port of NashSU decodeHtmlEntities (nbsp/amp/lt/gt/quot/#39 + numeric/hex
+    refs, leaving out-of-range refs untouched), extended with
+    _EXTRA_NAMED_ENTITIES (see comment above — not NashSU parity)."""
+    def _safe_codepoint(raw: str, radix: int) -> str:
+        fallback = f"&#x{raw};" if radix == 16 else f"&#{raw};"
+        try:
+            n = int(raw, radix)
+        except ValueError:
+            return fallback
+        if n < 0 or n > 0x10FFFF:
+            return fallback
+        try:
+            return chr(n)
+        except (ValueError, OverflowError):
+            return fallback
+
+    text = re.sub(r"&nbsp;", " ", text, flags=re.I)
+    text = re.sub(r"&amp;", "&", text, flags=re.I)
+    text = re.sub(r"&lt;", "<", text, flags=re.I)
+    text = re.sub(r"&gt;", ">", text, flags=re.I)
+    text = re.sub(r"&quot;", '"', text, flags=re.I)
+    text = text.replace("&#39;", "'")
+    for name, char in _EXTRA_NAMED_ENTITIES.items():
+        text = text.replace(f"&{name};", char)
+    text = re.sub(r"&#(\d+);", lambda m: _safe_codepoint(m.group(1), 10), text)
+    text = re.sub(r"&#x([0-9a-f]+);", lambda m: _safe_codepoint(m.group(1), 16),
+                  text, flags=re.I)
+    return text
+
+
+def _html_img_tags_to_markdown(html: str) -> str:
+    """Port of NashSU htmlImgTagsToMarkdown: <img src=… alt=…> → ![alt](src)."""
+    def _repl(m: "re.Match") -> str:
+        full = m.group(0)
+        src = m.group(2)
+        alt_m = _HTMLTAB_ALT_RE.search(full)
+        alt = alt_m.group(2) if alt_m else ""
+        return f"![{alt}]({src})"
+    return _HTMLTAB_IMG_RE.sub(_repl, html)
+
+
+def _html_cell_to_markdown(cell: str) -> str:
+    """Port of NashSU htmlCellToMarkdown: flatten one <td>/<th> to inline text."""
+    s = _html_img_tags_to_markdown(cell)
+    s = re.sub(r"<br\s*/?>", "<br>", s, flags=re.I)
+    s = re.sub(r"</p\s*>", "<br>", s, flags=re.I)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"\s*<br>\s*", "<br>", s, flags=re.I)
+    s = re.sub(r"\s+", " ", s).strip()
+    return _decode_html_entities(s).replace("|", "\\|")
+
+
+def _convert_html_tables_in_segment(segment: str) -> str:
+    def _repl(m: "re.Match") -> str:
+        table_html = m.group(0)
+        rows: list[list[str]] = []
+        for row_m in _HTMLTAB_TR_RE.finditer(table_html):
+            cells = [_html_cell_to_markdown(c.group(1))
+                     for c in _HTMLTAB_CELL_RE.finditer(row_m.group(1))]
+            if cells:
+                rows.append(cells)
+        if not rows:
+            return table_html
+        width = max(len(r) for r in rows)
+        padded = [r + [""] * (width - len(r)) for r in rows]
+        header = padded[0]
+        separator = ["---"] * width
+        body = padded[1:]
+        lines = ["", "| " + " | ".join(header) + " |",
+                 "| " + " | ".join(separator) + " |"]
+        lines += ["| " + " | ".join(r) + " |" for r in body]
+        lines.append("")
+        return "\n".join(lines)
+    return _HTMLTAB_TABLE_RE.sub(_repl, segment)
+
+
+def _convert_html_tables_to_markdown(markdown: str) -> str:
+    """Port of NashSU convertHtmlTablesToMarkdown: convert minerU HTML tables to
+    Markdown tables, skipping fenced code blocks so raw-HTML examples survive."""
+    parts = _HTMLTAB_FENCE_RE.split(markdown)
+    return "".join(
+        p if (p.startswith("```") or p.startswith("~~~"))
+        else _convert_html_tables_in_segment(p)
+        for p in parts
+    )
+
+
+# Degenerate-table-row thresholds: minerU OCR occasionally emits a single table
+# line tens of thousands of chars long whose cells are almost all empty
+# (observed live 2026-07-02: a 49,412-char line whose separator row carried
+# 8,179 empty `---` cells; a sibling book had a 24K-char one). Only lines this
+# pathological are rewritten; real tables — even wide ones — pass through.
+DEGENERATE_ROW_MIN_LINE_LEN = 2000
+DEGENERATE_ROW_EMPTY_RATIO = 0.95
+
+
+def _collapse_degenerate_table_rows(text: str) -> str:
+    """Collapse pathological minerU markdown table rows to their non-empty cells.
+
+    A line is degenerate when it (a) is longer than DEGENERATE_ROW_MIN_LINE_LEN
+    chars, (b) is a markdown table row/separator (starts and ends with '|'),
+    and (c) has >= DEGENERATE_ROW_EMPTY_RATIO of its cells empty ('' or only
+    '-'/':' after strip). Such lines carry zero content but bloat chunks and
+    break Read-tool line granularity for downstream agents. The rewrite keeps
+    the non-empty cells and appends a trailing marker cell noting how many
+    empty cells were removed. Anything under the thresholds passes through
+    byte-identical. Applied at extraction/assembly time only, so cached OCR
+    artifacts already on disk are untouched — only future extractions change.
+    """
+    if len(text) <= DEGENERATE_ROW_MIN_LINE_LEN:
+        return text
+
+    def _is_empty_cell(cell: str) -> bool:
+        s = cell.strip()
+        return not s or not s.strip("-:")
+
+    lines = text.split("\n")
+    changed = False
+    for i, line in enumerate(lines):
+        if len(line) <= DEGENERATE_ROW_MIN_LINE_LEN:
+            continue
+        stripped = line.strip()
+        if len(stripped) < 2 or not (stripped.startswith("|") and stripped.endswith("|")):
+            continue
+        cells = stripped[1:-1].split("|")
+        n_empty = sum(1 for c in cells if _is_empty_cell(c))
+        if not cells or n_empty / len(cells) < DEGENERATE_ROW_EMPTY_RATIO:
+            continue
+        kept = [c.strip() for c in cells if not _is_empty_cell(c)]
+        kept.append(f"…[degenerate row: {n_empty} empty cells removed]")
+        lines[i] = "| " + " | ".join(kept) + " |"
+        changed = True
+    return "\n".join(lines) if changed else text
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # minerU file lock
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -120,33 +302,43 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
     Rationale: pgrep-based counting is unreliable under concurrent stress (multiple
     conversations/cron jobs). File lock is atomic and system-wide.
     """
+    update_worker_phase("waiting_mineru")
     try:
         # Touch lock file if not exists
         if not MINERU_LOCK_FILE.exists():
             MINERU_LOCK_FILE.touch(mode=0o644)
 
         fd = os.open(str(MINERU_LOCK_FILE), os.O_RDWR)
-        start = time.time()
-        last_print_minute = -1
-        while True:
-            try:
-                # Non-blocking attempt
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                print(f"[mineru] Lock acquired")
-                return fd
-            except OSError:
-                # Lock busy, wait and retry
-                elapsed = time.time() - start
-                if elapsed > timeout:
-                    raise RuntimeError(f"minerU lock timeout after {elapsed:.0f}s")
-                # Print once per minute boundary crossed — `% 60 == 0` drifts
-                # past exact multiples due to the 5s sleep + work-time jitter
-                # and can silently stop firing for many minutes.
-                minute = int(elapsed // 60)
-                if minute != last_print_minute:
-                    last_print_minute = minute
-                    print(f"[mineru] Waiting for lock... ({elapsed:.0f}s elapsed)")
-                time.sleep(5)
+        acquired = False
+        try:
+            start = time.time()
+            last_print_minute = -1
+            while True:
+                try:
+                    # Non-blocking attempt
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    print(f"[mineru] Lock acquired")
+                    update_worker_phase("mineru")
+                    acquired = True
+                    return fd
+                except OSError:
+                    # Lock busy, wait and retry
+                    elapsed = time.time() - start
+                    if elapsed > timeout:
+                        raise RuntimeError(f"minerU lock timeout after {elapsed:.0f}s")
+                    # Print once per minute boundary crossed — `% 60 == 0` drifts
+                    # past exact multiples due to the 5s sleep + work-time jitter
+                    # and can silently stop firing for many minutes.
+                    minute = int(elapsed // 60)
+                    if minute != last_print_minute:
+                        last_print_minute = minute
+                        print(f"[mineru] Waiting for lock... ({elapsed:.0f}s elapsed)")
+                    time.sleep(5)
+        finally:
+            # Don't leak the fd on the timeout-raise path (the success path
+            # returns fd to the caller, who releases it).
+            if not acquired:
+                os.close(fd)
     except Exception as e:
         raise RuntimeError(f"Failed to acquire minerU lock: {e}")
 
@@ -157,13 +349,29 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
         print(f"[mineru] Lock released")
+        update_worker_phase("post_mineru")
     except Exception as e:
         print(f"[mineru] Warning: Failed to release lock: {e}")
 
 
+def _is_mineru_healthy() -> bool:
+    """Check if a healthy minerU API server is running on MINERU_API_PORT."""
+    try:
+        r = urllib.request.urlopen(
+            f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
+        return json.loads(r.read()).get("status") == "healthy"
+    except Exception:
+        return False
+
+
 def _stage_1_1_kill_mineru_servers() -> None:
-    """Kill lingering mineru-api processes to ensure clean state."""
-    import subprocess
+    """Kill lingering mineru-api processes to ensure clean state.
+
+    Skip if a healthy server is already running on MINERU_API_PORT — we want
+    to reuse it rather than kill+restart.
+    """
+    if _is_mineru_healthy():
+        return  # reuse existing server
     try:
         subprocess.run(
             ["pkill", "-f", "mineru-api"], capture_output=True, timeout=5,
@@ -173,18 +381,72 @@ def _stage_1_1_kill_mineru_servers() -> None:
 
 
 def _stage_1_1_extract_text_scanned_locked(file_path: Path, config: Config) -> str:
-    """Wrapper around _stage_1_1_extract_text_scanned_impl() with file lock management."""
-    lock_fd = _stage_1_1_acquire_mineru_lock()
+    """Wrapper around _stage_1_1_extract_text_scanned_impl() with file lock management.
+
+    The global minerU flock covers only the minerU extraction phase (API server
+    + per-chunk OCR). The impl releases it via the release_mineru_lock callback
+    right before the assemble/captioning phase — Stage 1.3 captioning is pure
+    VLM network IO and must not serialize other books' minerU runs behind it.
+    The idempotent callback + finally pair guarantees exactly one release on
+    every path (early cached return, mid-extraction raise, caption raise).
+    """
+    lock_state = {"fd": _stage_1_1_acquire_mineru_lock()}
+
+    def _release_lock() -> None:
+        fd = lock_state["fd"]
+        if fd is not None:
+            lock_state["fd"] = None
+            _stage_1_1_release_mineru_lock(fd)
+
     try:
-        text = _stage_1_1_extract_text_scanned_impl(file_path, config)
-        return _clean_mineru_latex(text)
+        text = _stage_1_1_extract_text_scanned_impl(
+            file_path, config, release_mineru_lock=_release_lock)
+        text = _clean_mineru_latex(text)
+        text = _convert_html_tables_to_markdown(text)
+        return _collapse_degenerate_table_rows(text)
     finally:
-        _stage_1_1_release_mineru_lock(lock_fd)
+        _release_lock()
 
 
 def _stage_1_1_extract_text_scanned(file_path: Path, config: Config) -> str:
     """Alias for _stage_1_1_extract_text_scanned_locked (entry point for OCR)."""
     return _stage_1_1_extract_text_scanned_locked(file_path, config)
+
+
+def _stage_1_1_reharvest_media(file_path: Path, config: Config) -> Path:
+    """Re-run minerU into an isolated cache solely to recover lost figures.
+
+    The normal OCR cache is deliberately left untouched: completed books may
+    still have valid per-page text and downstream wiki pages even when the
+    canonical media directory and minerU's transient API output were removed.
+    A source-hash-qualified directory makes this path resumable without ever
+    accepting another file with the same stem as a cache hit.
+    """
+    source_hash = file_sha256(file_path)
+    repair_dir = (
+        config.extract_tmp_dir
+        / file_path.stem
+        / f"_media_reharvest_v1_{source_hash[:16]}"
+    )
+    lock_state = {"fd": _stage_1_1_acquire_mineru_lock()}
+
+    def _release_lock() -> None:
+        fd = lock_state["fd"]
+        if fd is not None:
+            lock_state["fd"] = None
+            _stage_1_1_release_mineru_lock(fd)
+
+    try:
+        _stage_1_1_extract_text_scanned_impl(
+            file_path,
+            config,
+            release_mineru_lock=_release_lock,
+            out_dir_override=repair_dir,
+            finalize_media=False,
+        )
+    finally:
+        _release_lock()
+    return repair_dir
 
 
 _log_file: Path | None = None
@@ -207,11 +469,28 @@ def log_event(event_type: str, **kwargs) -> None:
 
 
 def _stage_1_1_scanned_load_stats(out_dir: Path) -> tuple[dict, Path]:
-    """Load _mineru_stats.json for crash-recovery, or init empty stats."""
+    """Load _mineru_stats.json for crash-recovery, or init empty stats.
+
+    A corrupt/unparseable stats file (e.g. a crash mid-rename) is the one
+    sanctioned "loud warning + reset" case: chunks re-run instead of the
+    whole ingest dying on its own recovery file. Missing keys (older schema)
+    are backfilled via setdefault.
+    """
     stats_path = out_dir / "_mineru_stats.json"
     stats: dict = {"completed_chunks": [], "failed_chunks": [], "images": {}}
     if stats_path.exists():
-        stats = json.loads(stats_path.read_text(encoding="utf-8"))
+        try:
+            loaded = json.loads(stats_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError(f"expected JSON object, got {type(loaded).__name__}")
+            stats = loaded
+        except Exception as e:
+            print(f"⚠️  [ocr] _mineru_stats.json is corrupt ({e}) — resetting "
+                  f"crash-recovery stats; completed chunks will re-run")
+            stats = {"completed_chunks": [], "failed_chunks": [], "images": {}}
+    stats.setdefault("completed_chunks", [])
+    stats.setdefault("failed_chunks", [])
+    stats.setdefault("images", {})
     return stats, stats_path
 
 
@@ -221,14 +500,19 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
     Returns (api_proc, venv_python). Raises RuntimeError if the API never
     becomes healthy (caller must close any open fitz doc on failure).
     """
-    import subprocess as _sp
     venv_python = Path.home() / ".venv" / "bin" / "python3"
     if not venv_python.exists():
         venv_python = Path(sys.executable)
-    api_proc = _sp.Popen(
+
+    # Check if minerU is already running on the port — if so, reuse it
+    if _is_mineru_healthy():
+        print(f"[ocr] minerU API already running on port {MINERU_API_PORT} — reusing")
+        return None, venv_python
+
+    api_proc = subprocess.Popen(
         [str(venv_python), "-m", "mineru.cli.fast_api",
          "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     for _ in range(30):
         time.sleep(2)
@@ -247,11 +531,10 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
 
 def _stage_1_1_scanned_restart_server(venv_python: Path):
     """Spawn a fresh minerU API server (after a crash / 5xx)."""
-    import subprocess as _sp
-    return _sp.Popen(
+    return subprocess.Popen(
         [str(venv_python), "-m", "mineru.cli.fast_api",
          "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
 
 
@@ -298,11 +581,6 @@ def _stage_1_1_scanned_build_parse_body(
     pdf_path.name). with_images requests return_images + return_content_list
     so figures can be harvested and mapped to source pages.
     """
-    # Late import: _PARSE_METHOD_OVERRIDE lives in the facade (_stage_1_extract)
-    # and is set by stage_1_1_extract_text before calling down into this path.
-    # Late import avoids a load-time circular dependency (facade imports this
-    # module at top level).
-    from _stage_1_extract import _PARSE_METHOD_OVERRIDE
 
     boundary = "----FormBoundary" + os.urandom(8).hex()
     parts: list[bytes] = []
@@ -316,35 +594,14 @@ def _stage_1_1_scanned_build_parse_body(
     parts.append(b'Content-Disposition: form-data; name="data"')
     parts.append(b"")
     parts.append(json.dumps({"lang": "ch"}).encode())
-    # parse_method override (set by stage_1_1_extract_text for garbled-font
-    # PDFs to force OCR). Omitting it lets the server default to "auto".
-    # NOTE: the "data" field above is actually ignored by the API (it reads
-    # lang_list/backend/parse_method as separate Form fields with defaults);
-    # parse_method here is the one that takes effect.
-    if _PARSE_METHOD_OVERRIDE:
-        parts.append(f"--{boundary}".encode())
-        parts.append(b'Content-Disposition: form-data; name="parse_method"')
-        parts.append(b"")
-        parts.append(_PARSE_METHOD_OVERRIDE.encode())
-    # minerU Image Analysis gate (opt-in, env-controlled). The hybrid-engine
-    # backend disables image/chart analysis on the default effort="medium" and
-    # only runs it on effort="high" (per-image class/sub_class/content: charts →
-    # markdown tables, formula-images → LaTeX, flowcharts → mermaid, text-images
-    # → OCR). Sending NO effort field preserves the server default (medium) and
-    # the current behavior exactly. Set IMPROVED_WIKI_MINERU_EFFORT=high to turn
-    # it on. effort is validated server-side to {medium,high}; ignore anything
-    # else so a typo can't break extraction.
-    _effort = os.environ.get("IMPROVED_WIKI_MINERU_EFFORT", "").strip().lower()
-    if _effort in ("medium", "high"):
-        parts.append(f"--{boundary}".encode())
-        parts.append(b'Content-Disposition: form-data; name="effort"')
-        parts.append(b"")
-        parts.append(_effort.encode())
-        if _effort == "high":
-            parts.append(f"--{boundary}".encode())
-            parts.append(b'Content-Disposition: form-data; name="image_analysis"')
-            parts.append(b"")
-            parts.append(b"true")
+    # No `effort` field is sent: minerU runs at its server default (medium),
+    # which OCRs text/tables/formulas but does NOT run per-figure image/chart
+    # analysis. The opt-in effort=high path (which fed minerU's structured
+    # per-figure extraction into the Stage 1.3 caption as grounding) was removed
+    # 2026-07-01: its curve-figure gain was redundant with the VLM's own pixel
+    # reading and it injected structurally-plausible-but-wrong grounding on
+    # block/geometry diagrams. Figure understanding is the VLM's job
+    # (Stage 1.3), grounded only on the actual image + surrounding text.
     if with_images:
         for field in ("return_images", "return_content_list"):
             parts.append(f"--{boundary}".encode())
@@ -390,11 +647,16 @@ def _stage_1_1_scanned_poll_task(
     task_id: str, chunk_pdf: Path, out_dir: Path, start: int, end: int,
     file_path: Path, config, t0: float,
 ) -> tuple["Path | None", bool]:
-    """Poll a minerU async task until completion. Returns (md_path, ok)."""
+    """Poll a minerU async task until completion. Returns (md_path, ok).
+
+    A "failed" task status or a poll timeout returns ok=False — the caller
+    (_stage_1_1_scanned_submit_chunk_with_retries) treats that as a retryable
+    attempt, not a terminal break."""
     for _ in range(60):
         time.sleep(5)
         tr = urllib.request.urlopen(
-            f"http://127.0.0.1:{MINERU_API_PORT}/tasks/{task_id}")
+            f"http://127.0.0.1:{MINERU_API_PORT}/tasks/{task_id}",
+            timeout=MINERU_PARSE_TIMEOUT)
         td = json.loads(tr.read())
         if td.get("status") == "completed":
             tdr = td.get("results", {})
@@ -410,7 +672,8 @@ def _stage_1_1_scanned_poll_task(
         if td.get("status") == "failed":
             print(f"TASK FAILED: {td.get('error_message', str(td)[:200])}")
             return None, False
-    return None, False  # poll timeout (5 min)
+    print(f"POLL TIMEOUT: task {task_id} not completed after 5 min")
+    return None, False
 
 
 def _stage_1_1_scanned_submit_chunk_with_retries(
@@ -435,7 +698,7 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
                 data=body,
                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
             )
-            r = urllib.request.urlopen(req, timeout=1200)
+            r = urllib.request.urlopen(req, timeout=MINERU_PARSE_TIMEOUT)
             resp = json.loads(r.read())
             if resp.get("status") == "completed":
                 results = resp.get("results", {})
@@ -468,6 +731,12 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
                         config, t0)
                     if ok:
                         return md_path, time.time() - t0, True, api_proc
+                    # Task failed / poll timed out — retry the submission
+                    # instead of breaking out with attempts left.
+                    if attempt < 2:
+                        print(f"ASYNC TASK FAILED (retry {attempt+1}/3)")
+                        continue
+                    print("ASYNC TASK FAILED (final)")
                 else:
                     print("NO TASK ID")
                     continue
@@ -476,11 +745,16 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
             if attempt < 2:
                 if e.code >= 500:
                     print(f"HTTP {e.code} (retry {attempt+1}/3, restarting server)...")
-                    api_proc.terminate()
-                    try:
-                        api_proc.wait(timeout=5)
-                    except Exception:
-                        api_proc.kill()
+                    if api_proc is not None:
+                        api_proc.terminate()
+                        try:
+                            api_proc.wait(timeout=5)
+                        except Exception:
+                            api_proc.kill()
+                    else:
+                        # Reused an externally-started server — can't terminate it.
+                        # Kill by port to free the slot for a fresh server.
+                        _stage_1_1_kill_mineru_servers()
                     time.sleep(3)
                     api_proc = _stage_1_1_scanned_restart_server(venv_python)
                     time.sleep(5)
@@ -534,7 +808,10 @@ def _stage_1_1_scanned_process_chunk(
     """Process one chunk: create chunk PDF, submit with retries, persist stats.
 
     Returns api_proc (may change on server restart). Raises RuntimeError if
-    cumulative failure rate exceeds 30% (fatal abort).
+    cumulative failure rate exceeds 30% (mid-run circuit breaker). Individual
+    failures (including EMPTY responses) are recorded in stats["failed_chunks"]
+    and caught by the final failure gate in _stage_1_1_extract_text_scanned_impl
+    — there is no "≤30% silent handoff" anymore.
     """
     chunk_key = f"{start}-{end}"
     if chunk_key in stats["completed_chunks"]:
@@ -590,7 +867,8 @@ def _stage_1_1_scanned_process_chunk(
                 f"Aborting. Check _mineru_stats.json in extract_tmp_dir.")
         return api_proc
 
-    # API wrote .md — read it (EMPTY → md_path None → record as failed, no fatal check)
+    # API wrote .md — read it (EMPTY → md_path None → record as failed; the
+    # final failure gate in the impl raises if it never recovers)
     if md_path is None or not md_path.exists():
         print(f"  [{ci+1:3d}/{len(chunks)}] FAILED — no output file")
         stats["failed_chunks"].append({"chunk": chunk_key, "error": "no .md output from API"})
@@ -602,6 +880,11 @@ def _stage_1_1_scanned_process_chunk(
     media_dir = config.wiki_dir / "media" / _media_slug
     media_dir.mkdir(parents=True, exist_ok=True)
     _stage_1_1_save_mineru_chunk_text(md_text, start, end, out_dir, stats, [])
+    # A chunk that failed earlier (this run or a previous one) and has now
+    # succeeded must not leave stale failed_chunks entries behind — they would
+    # accumulate across runs and falsely trip the final failure gate.
+    stats["failed_chunks"] = [fc for fc in stats["failed_chunks"]
+                              if fc.get("chunk") != chunk_key]
     stats["completed_chunks"].append(chunk_key)
     _stage_1_1_save_mineru_stats(stats_path, stats)
     print(f"  [{ci+1:3d}/{len(chunks)}] done — {len(md_text)} chars")
@@ -615,14 +898,14 @@ def _stage_1_1_scanned_assemble_manifest(
     """Assemble per-page OCR text into full text and write _manifest.json."""
     page_nums = list(range(total_pages))
     full_text = _stage_1_1_assemble_ocr_text(out_dir, page_nums)
-    total_imgs = sum(len(v) for v in stats.get("images", {}).values())
-    print(f"[ocr] Done — {len(full_text):,} chars OCR text, {total_imgs} images extracted")
 
     slug = media_slug(file_path, config)
     media_dir = config.wiki_dir / "media" / slug
     manifest_path = media_dir / "_manifest.json"
     extracted_figures: list[dict] = []
     for f in sorted(media_dir.glob("p*-mineru_*.*")):
+        if f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+            continue
         page_num = 0
         m = re.match(r"p(\d+)-mineru_", f.stem)
         if m:
@@ -631,6 +914,10 @@ def _stage_1_1_scanned_assemble_manifest(
             "filename": f.name, "page": page_num,
             "path": str(f.relative_to(config.wiki_root)),
         })
+    print(
+        f"[ocr] Done — {len(full_text):,} chars OCR text, "
+        f"{len(extracted_figures)} images extracted"
+    )
     if extracted_figures:
         _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, extracted_figures)
         print(f"[ocr] {len(extracted_figures)} extracted figures → _manifest.json")
@@ -649,7 +936,14 @@ def _stage_1_1_scanned_assemble_manifest(
     return full_text
 
 
-def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str:
+def _stage_1_1_extract_text_scanned_impl(
+    file_path: Path,
+    config: Config,
+    release_mineru_lock=None,
+    *,
+    out_dir_override: Path | None = None,
+    finalize_media: bool = True,
+) -> str:
     """Extract a PDF (any type) via the local minerU API server (hybrid-engine).
 
     Despite the legacy "_scanned" name, this is the shared extraction path for
@@ -661,8 +955,11 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
     or vlm-engine could be forced, but hybrid-engine is the verified default
     (see stage_1_1_extract_text docstring for the rationale).
 
-    Splits PDF into ~50-page chunks. Each chunk runs minerU independently.
-    Results persisted to extract_tmp_dir/<stem>/ with _mineru_stats.json for crash recovery.
+    Splits PDF into MINERU_CHUNK_SIZE-page chunks. Each chunk runs minerU independently.
+    Results normally persist to extract_tmp_dir/<stem>/ with
+    _mineru_stats.json for crash recovery. ``out_dir_override`` is reserved
+    for the isolated media-reharvest path; it prevents lost image bytes from
+    forcing deletion or mutation of a still-valid OCR text cache.
     Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.2 (mirrors raw/).
 
     Note: File-based lock managed by wrapper function _stage_1_1_extract_text_scanned_locked().
@@ -678,7 +975,7 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
 
     doc = fitz.open(file_path)
     total_pages = len(doc)
-    out_dir = config.extract_tmp_dir / file_path.stem
+    out_dir = out_dir_override or (config.extract_tmp_dir / file_path.stem)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Route the minerU API server's output root into the runtime temp dir
@@ -733,7 +1030,42 @@ def _stage_1_1_extract_text_scanned_impl(file_path: Path, config: Config) -> str
             except Exception:
                 api_proc.kill()
 
-    return _stage_1_1_scanned_assemble_manifest(out_dir, stats, file_path, config, total_pages)
+    # Final failure gate (no-silent-fallback): any chunk still failed after its
+    # retries fails the whole extraction — the old "≤30% failed → silent
+    # handoff of partial text" is gone. (The >30% mid-run circuit breaker in
+    # _stage_1_1_scanned_process_chunk still aborts early.) EMPTY responses are
+    # recorded in failed_chunks and caught here too. Entries whose chunk later
+    # succeeded were pruned at success time, so this reflects real gaps only.
+    failed_keys: list[str] = []
+    for fc in stats["failed_chunks"]:
+        key = fc.get("chunk", "?")
+        if key not in stats["completed_chunks"] and key not in failed_keys:
+            failed_keys.append(key)
+    if failed_keys:
+        def _page_range(key: str) -> str:
+            try:
+                s, e = key.split("-")
+                return f"pages {int(s) + 1}-{int(e)}"
+            except (ValueError, AttributeError):
+                return "pages ?"
+        detail = "; ".join(f"chunk {k} ({_page_range(k)})" for k in failed_keys)
+        raise RuntimeError(
+            f"minerU OCR: {len(failed_keys)}/{len(chunks)} chunks failed after "
+            f"retries — {detail}. Not handing off partial text. Completed "
+            f"chunks are cached; re-run ingest to retry only the failed chunks "
+            f"(details: _mineru_stats.json / ocr_log.jsonl in {out_dir}).")
+
+    # minerU work is finished and the API server is terminated — release the
+    # global minerU lock BEFORE Stage 1.3 captioning (pure VLM network IO), so
+    # other books' minerU runs don't queue behind captioning.
+    if release_mineru_lock is not None:
+        release_mineru_lock()
+
+    if finalize_media:
+        return _stage_1_1_scanned_assemble_manifest(
+            out_dir, stats, file_path, config, total_pages)
+    return _stage_1_1_assemble_ocr_text(
+        out_dir, list(range(total_pages)))
 
 def _stage_1_1_save_mineru_stats(stats_path: Path, stats: dict) -> None:
     """Atomically persist minerU stats for crash recovery."""

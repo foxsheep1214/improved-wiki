@@ -23,7 +23,10 @@ import _llm_api
 from _core import Config
 
 
-def _make_config(*, api_key: str = "sk-test", protocol: str = "openai") -> Config:
+def _make_config() -> Config:
+    # Config no longer carries llm_base_url/llm_api_key/llm_protocol (dropped
+    # 2026-07 with the dead direct-HTTP text-gen path) — routing must go
+    # through the conversation router regardless, which is what these tests pin.
     return Config(
         wiki_root=Path("/tmp/wiki"),
         raw_root=Path("/tmp/raw"),
@@ -32,14 +35,10 @@ def _make_config(*, api_key: str = "sk-test", protocol: str = "openai") -> Confi
         cache_path=Path("/tmp/rt/ingest-cache.json"),
         progress_dir=Path("/tmp/rt/ingest-progress"),
         extract_tmp_dir=Path("/tmp/rt/extract-tmp"),
-        llm_base_url="https://provider.example",
         llm_model="test-model",
-        llm_api_key=api_key,
-        llm_protocol=protocol,
         caption_api_key="",
         caption_base_url="https://provider.example",
         caption_model="test-caption",
-        chunk_size=60000,
         chunk_overlap=3000,
         source_budget=100000,
         target_chars=60000,
@@ -51,10 +50,9 @@ def _make_config(*, api_key: str = "sk-test", protocol: str = "openai") -> Confi
 
 class TestRouting(unittest.TestCase):
     def test_protocol_always_routes_to_conversation_router(self):
-        # Text generation has exactly one path now — even with an API key
-        # present, call_anthropic_protocol must hand off via the router and
-        # never touch HTTP directly.
-        cfg = _make_config(protocol="openai", api_key="sk-x")
+        # Text generation has exactly one path now — call_anthropic_protocol
+        # must hand off via the router and never touch HTTP directly.
+        cfg = _make_config()
         called = {"router": False}
 
         def _router(prompt, config, max_tokens):
@@ -69,7 +67,7 @@ class TestRouting(unittest.TestCase):
         urlopen.assert_not_called()
 
     def test_protocol_raises_when_no_router_registered(self):
-        cfg = _make_config(protocol="openai", api_key="sk-x")
+        cfg = _make_config()
         with mock.patch.object(_llm_api, "_conversation_router", None):
             with self.assertRaises(RuntimeError) as cm:
                 _llm_api.call_anthropic_protocol("hi", cfg)

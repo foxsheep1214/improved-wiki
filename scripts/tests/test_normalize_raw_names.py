@@ -1,6 +1,6 @@
 """Tests for normalize_raw_names._stage_0_1_parse_simple_yaml — block-list parsing.
 
-The NAMING.md rules block uses YAML block-list syntax (``- item`` on its own
+The schema.md rules block uses YAML block-list syntax (``- item`` on its own
 line). The parser previously skipped any line without a colon, so block lists
 were silently dropped → ``vendors`` came back as an empty dict and every
 datasheet was falsely flagged "未识别的 Vendor".
@@ -63,7 +63,7 @@ class TestParseSimpleYaml(unittest.TestCase):
         self.assertEqual(rules["vendors"], ["TI", "ADI", "ST"])
 
     def test_last_duplicate_key_wins(self):
-        # NAMING.md has two `vendors:` blocks; YAML semantics = last wins.
+        # schema.md has two `vendors:` blocks; YAML semantics = last wins.
         text = ("vendors:\n  - TI\n  - ADI\nrules:\n  Datasheet:\n"
                 "    min_parts: 2\nvendors:\n  - TI\n  - AMD\n")
         rules = nrn._stage_0_1_parse_simple_yaml(text)

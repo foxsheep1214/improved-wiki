@@ -86,6 +86,22 @@ class TestRepairWikilinkListsInFrontmatter(unittest.TestCase):
         self.assertEqual(sanitize(content), content)
 
 
+class TestRepairLatexControlEscapes(unittest.TestCase):
+    def test_restores_latex_command_prefixes_inside_math(self):
+        content = "$$" + chr(12) + "rac {1}{2} " + chr(13) + "ho " + chr(9) + "ag{1}$$"
+        self.assertEqual(sanitize(content), r"$$\frac {1}{2} \rho \tag{1}$$")
+
+    def test_restores_dropped_command_prefixes_inside_math(self):
+        self.assertEqual(
+            sanitize(r"$$hat {V} = sqrt {2} pi$$"),
+            r"$$\hat {V} = \sqrt {2} \pi$$",
+        )
+
+    def test_leaves_control_characters_outside_math_unchanged(self):
+        content = chr(9) + "list indentation\n\n$$" + chr(12) + "rac {1}{2}$$"
+        self.assertEqual(sanitize(content), chr(9) + "list indentation\n\n$$\\frac {1}{2}$$")
+
+
 class TestIdempotent(unittest.TestCase):
     def test_clean_content_unchanged(self):
         content = '---\ntype: entity\ntitle: "Foo Bar"\nrelated: ["[[a]]", "[[b]]"]\n---\n\n# Foo\n\nbody\n'

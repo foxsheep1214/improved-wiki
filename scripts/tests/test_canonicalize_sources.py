@@ -63,6 +63,19 @@ class TestCanonicalizeSources(unittest.TestCase):
         # comma-containing paths via the quote-aware parser).
         self.assertEqual(result.count(f'"{canonical}"'), 1)
 
+    def test_sources_line_absent_gets_appended(self):
+        # Frontmatter without a sources: line — the computed list must be
+        # appended (previously it was silently dropped).
+        canonical = "raw/Book/NoSources.pdf"
+        content = "---\ntype: concept\ntitle: T\n---\n# T\nbody\n"
+        result = _stage_3_1_canonicalize_sources_field(content, canonical)
+        src = _sources_list(result)
+        self.assertIn(f'"{canonical}"', src)
+        # Appended INSIDE the frontmatter block (before the closing ---).
+        fm_end = result.find("\n---", 3)
+        self.assertGreater(fm_end, -1)
+        self.assertIn("sources:", result[:fm_end])
+
 
 if __name__ == "__main__":
     unittest.main()

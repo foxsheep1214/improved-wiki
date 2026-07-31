@@ -119,5 +119,63 @@ class TestMergeArrayFieldsIntoContent(unittest.TestCase):
         self.assertIs(fa.merge_array_fields_into_content(new, "no fm here", ["sources"]), new)
 
 
+class TestNormalizeBlockArrays(unittest.TestCase):
+    def test_block_related_becomes_inline(self):
+        page = PAGE("type: concept\nrelated:\n  - concepts/a\n  - concepts/b\ntags: [x]")
+        out = fa.normalize_block_arrays(page)
+        self.assertIn('related: ["concepts/a", "concepts/b"]', out)
+        self.assertNotIn("\n  - concepts/a", out)
+        # Other fields untouched.
+        self.assertIn("type: concept", out)
+        self.assertIn("tags: [x]", out)
+
+    def test_multiple_block_fields(self):
+        page = PAGE("tags:\n  - t1\nrelated:\n  - r1\nsources:\n  - s1")
+        out = fa.normalize_block_arrays(page)
+        self.assertEqual(fa.parse_frontmatter_array(out, "tags"), ["t1"])
+        self.assertEqual(fa.parse_frontmatter_array(out, "related"), ["r1"])
+        self.assertEqual(fa.parse_frontmatter_array(out, "sources"), ["s1"])
+        self.assertNotIn("\n  - ", out)
+
+    def test_inline_passthrough_unchanged(self):
+        page = PAGE('related: ["concepts/a"]\ntags: []')
+        self.assertEqual(fa.normalize_block_arrays(page), page)
+
+    def test_no_frontmatter_passthrough(self):
+        text = "# just body\nrelated:\n  - not-frontmatter"
+        self.assertEqual(fa.normalize_block_arrays(text), text)
+
+    def test_naive_roundtrip_survives_after_normalize(self):
+        """The motivating bug: naive parse→write empties block arrays."""
+        from _frontmatter import parse_frontmatter, write_frontmatter
+        page = PAGE("type: concept\nrelated:\n  - concepts/a\n  - concepts/b")
+        fm, body = parse_frontmatter(fa.normalize_block_arrays(page))
+        out = write_frontmatter(fm, body)
+        self.assertEqual(
+            fa.parse_frontmatter_array(out, "related"), ["concepts/a", "concepts/b"])
+
+
+class TestCrlfFrontmatter(unittest.TestCase):
+    """_FM_RE / _FM_REPLACE_RE accept \\r\\n (aligned with _frontmatter.py) —
+    CRLF pages must not silently no-op."""
+
+    def test_parse_crlf_inline(self):
+        page = '---\r\ntags: ["a", "b"]\r\n---\r\n\r\nbody'
+        self.assertEqual(fa.parse_frontmatter_array(page, "tags"), ["a", "b"])
+
+    def test_write_crlf_page(self):
+        page = '---\r\ntags: ["a"]\r\n---\r\n\r\nbody'
+        out = fa.write_frontmatter_array(page, "tags", ["a", "b"])
+        self.assertEqual(fa.parse_frontmatter_array(out, "tags"), ["a", "b"])
+
+    def test_merge_crlf_existing(self):
+        existing = '---\r\nsources: ["doc-A.pdf"]\r\n---\r\n\r\nbody'
+        new = PAGE('sources: ["doc-B.pdf"]')
+        out = fa.merge_array_fields_into_content(new, existing, ["sources"])
+        self.assertEqual(
+            sorted(fa.parse_frontmatter_array(out, "sources")),
+            ["doc-A.pdf", "doc-B.pdf"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

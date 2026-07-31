@@ -7,7 +7,7 @@
 
 ## 1. 目录结构
 
-### 1.1 wiki/ 子目录（NashSU 9 种 page type）
+### 1.1 wiki/ 子目录（NashSU 基础类型 + Research 模板类型）
 
 ```
 wiki/
@@ -20,25 +20,45 @@ wiki/
 ├── findings/      # type: finding    — 研究发现
 ├── thesis/        # type: thesis     — 工作假说
 ├── methodology/   # type: methodology — 方法论（NashSU 支持的顶级 type）
-├── media/         # 提取的图片 (镜像 raw/ 结构: book/<slug>/ 等)
+├── media/         # 提取的图片 (镜像 raw/ 结构: <type>/<stem>/，如 Book/Foo/)
 ├── REVIEW/        # pipeline↔人类握手点 (improved-wiki 扩展)
 │   ├── confirm/       # 需要确认的可疑内容
 │   ├── suggestion/     # 改进建议
 │   ├── missing-page/   # 缺少的重要页面
 │   ├── contradiction/  # 内容矛盾
 │   └── duplicate/      # 重复内容
-├── lint/          # lint findings (improved-wiki 扩展)
 ├── index.md       # 聚合页：索引
 ├── overview.md    # 聚合页：概述
 └── log.md         # 聚合页：变更日志
 
 # 项目根（wiki/ 之外）：
 <project>/schema.md  # page type → directory 映射；放在根目录，不进 wiki/ 扫描
+<project>/purpose.md # 可选；项目目标/范围，与 schema 一同注入 LLM 上下文
 ```
 
-**Schema 驱动路由（NashSU parity, 2026-06-28）**：上面 9 种是**基础** page type，始终可用。`schema.md` 还可以声明**额外的 typed 文件夹**（如 `wiki/people/`、`wiki/methods/`、`wiki/decisions/`）。这些额外文件夹会：(1) 被注入 Stage 2.4 生成提示词，告诉 LLM "一个人物 → people/、一个方法 → methods/，否则用 concepts/entities"（`_schema_routing_block`）；(2) 被写盘阶段接受而非丢弃（`_VALID_SUBDIRS = BASE_PAGE_DIRS ∪ schema_folders(schema.md)`）。非 schema 声明的文件夹仍走 auto-correct/drop（拼写错误兜底）。基础 8 种之外无额外文件夹时，提示词不注入（默认项目无噪音）。
+**Schema 驱动路由（NashSU 0.6.6 parity）**：NashSU 通用模板的基础类型是
+`entity/concept/source/query/comparison/synthesis/overview`；Research 模板再声明
+`thesis/methodology/finding`。improved-wiki 的兼容常量仍允许这些历史目录，但项目
+`schema.md` 的 `## Page Types` 表才是权威类型映射。完整的语义 schema（排除
+improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/2.6/3.4；可选
+`purpose.md` 同时注入。Stage 2.2 把除 source/entity/concept/query/overview
+之外的 schema 类型（含 comparison/synthesis/finding/thesis/methodology）
+作为 `schema_typed_candidates`，并在 Stage 2.4 按解析后的 type→dir 重新裁决，
+绝不信任 LLM 自报 folder。
 
-**来源**：`wiki-page-types.ts:1-21`（9 种 type 枚举 + `WIKI_TYPE_DIRS` 映射）；`ingest.ts:44`（3 个聚合页，均在 wiki/ 下）；`ingest.ts:1830/1839/1840`（schema-defined typed pages 路由）；`create-project-dialog.tsx`（schema.md 写入项目根 `${pp}/schema.md`）。
+**来源**：NashSU 0.6.6 `templates.ts`（通用/Research 场景 schema）、
+`wiki-schema.ts`（Page Types 结构化解析与路由校验）、`ingest.ts`
+（analysis/generation 全 schema 注入）。
+
+**entity `role:` 字段——已删除，无替代轴**：NashSU 没有 entity `role:` frontmatter 字段（`wiki-schema.ts` 的 frontmatter 是开放的 `Record<string,unknown>`）。improved-wiki 曾自造一个封闭集 `role:` 轴（person/organization/system/standard/model/device），已从生成提示词、Stage 2.2 analyze YAML、`graph.py` 的 by-role 配色模式、以及 invalid-role lint 检查里全部移除。人物/机构/系统的区分**只**靠 schema.md 声明的 typed 文件夹，没有其它机制（封闭集或开放集都没有）。
+
+**Schema 路由——两层机制，同时生效（不是新旧替换关系）**：
+1. **Accept-list 门禁**：`schema_folders()` 只消费 `parse_wiki_schema_routing()`
+   对 `## Page Types` 表的结构化结果，再与兼容基础目录合并。禁止全文正则扫描；
+   `wiki/index.md`/`wiki/log.md` 等正文提及不能泄漏为 phantom folder。
+2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_1_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
+
+两层在同一次写盘中都跑：第 1 层管"这个目录能不能收"，第 2 层管"具体该放哪个目录"。**与 NashSU 的刻意分歧**：NashSU 路由不上就丢弃该页；improved-wiki 自动纠正、把页面挪到正确目录（不丢数据，符合 no-silent-fallback 策略）。
 
 ### 1.2 raw/ 子目录（improved-wiki 布局）
 
@@ -70,6 +90,8 @@ raw/
 | `synthesis` | `synthesis/` | 恒等 |
 | `finding` | `findings/` | 恒等 |
 | `thesis` | `thesis/` | 恒等 |
+| `methodology` | `methodology/` | 恒等 |
+| `overview` | `wiki/` 根 | 聚合页 |
 
 **来源**：`wiki-page-types.ts:11-21`。
 
@@ -85,7 +107,7 @@ wiki/sources/<raw-rel-path>.md
 
 **规则**：`<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），**镜像 `raw/` 的目录结构**。
 
-**improved-wiki 实现**：`ingest.py:wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
+**improved-wiki 实现**：`_stage_3_write.py:_stage_3_1_wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
 
 ```
 # 示例
@@ -105,9 +127,9 @@ wiki/queries/<slug>.md
 ...
 ```
 
-**规则**：`slug` 由 LLM 在 Stage 2.3 生成，**必须用 kebab-case**（`ingest.ts` prompt 指令）。CJK 标题保留可读字符，不强制转拼音。
+**规则**（**2026-07-02 用户裁决**，取代此前任何按页型"英文 kebab-case"的表述）：**slug 语言 = 源文语言**——中文书 → 中文 slug，英文书 → 英文 kebab-case slug。英文术语放 `title`，**不进 slug**；**例外**：约定俗成的缩写（mti、cfar、dds）可留在 slug 中。**禁止中英双拼混合 slug**。英文 slug 仍用 kebab-case；CJK slug 保留可读字符，不强制转拼音。（历史注记：该裁决曾同样约束 Stage 2.7 query slug；2.7 已于 2026-07-12 整体移除，query 页现仅来自 deep-research/save-chat/process-reviews，slug 规则不变。）
 
-**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.3 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
+**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.4 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
 
 **冲突处理**：同名 slug 加数字后缀，如 `impedance-matching-2.md`。
 
@@ -175,7 +197,7 @@ updated: 2026-06-14
 ---
 ```
 
-**来源**：`ingest.ts:634-648`（prompt 指令）；`parse_and_write.py:104-111`（improved-wiki 校验）。
+**来源**：`ingest.ts:634-648`（prompt 指令）；`_ingest_write.py`（improved-wiki 写盘校验）。
 
 **格式约束**：
 - 文件第一行必须是 `---`，前置 matter 后紧跟 `---`
@@ -232,24 +254,24 @@ wiki/media/<raw_subpath>/<source_stem>/
 ### 5.2 图片文件
 
 ```
-p<page_number>-fig<figure_index>.<ext>
+p<NNNN>-mineru_<md5前8>.<ext>
 ```
 
-- `page_number`：PDF 页码（0-based）
-- `figure_index`：该页内图片序号（0-based）
-- 示例：`p0-fig1.png`、`p123-fig4.jpeg`
+- `NNNN`：PDF 页码（zero-padded，4 位）
+- `mineru_<md5前8>`：minerU 提取，图片内容 md5 前 8 位
+- 示例：`p0007-mineru_a1b2c3d4.png`
 
-**去重**：sha256 相同只存一份。**过滤**：< 100×100px 的装饰/logo 剔除。
+**去重**：按 `page+md5前8` 命名，**不做跨页 sha256 全局去重**（同一图重复出现在不同页会各存一份）。**过滤**：`MINERU_IMG_MIN_WIDTH/HEIGHT` 默认 20px（故意设低，只过滤 1×1/2×2 噪声，保留公式截图）。
 
-**来源**：`ingest.py:975`；`ingest-stages-mandatory.md:62-65`。
+**来源**：`_stage_1_2_images.py`；`ingest-stages-mandatory.md` Stage 1.2；`image-caption-strategy.md`。
 
 ### 5.3 Caption 文件
 
 ```
-p123-fig4.png.caption.txt
+p0007-mineru_a1b2c3d4.png.caption.txt
 ```
 
-每图一个 `.caption.txt`，长度 ≥ 20 字符。VLM 生成，中文优先。
+每图一个 `.caption.txt`，长度 ≥ 20 字符。VLM 生成，与源文本同语言（NashSU `captionImage` parity）。
 
 ### 5.4 Manifest
 
@@ -259,7 +281,7 @@ wiki/media/<slug>/_manifest.json
 
 记录：图片路径 / 来源页 / 尺寸 / sha256。文件名以下划线开头（`_manifest.json`，不是 `manifest.json`）。
 
-**来源**：`ingest.py:914`。
+**来源**：`_stage_1_2_images.py::_stage_1_2_write_manifest`。
 
 ---
 
@@ -273,8 +295,8 @@ wiki/media/<slug>/_manifest.json
 ├── ingest-queue.json           # 待处理队列
 ├── ingest-progress/            # <hash[:16]>.json 检查点
 ├── extract-tmp/<slug>/         # 文本抽取临时文件
-├── review-suggestions.json     # Stage 3.4 产物
-├── review.json                 # Stage 3.4 产物（run_review_suggestions.py）
+├── review-suggestions.json     # Stage 3.4 产物（`_stage_3_4_review.py`）
+├── review.json                 # review store（LLM Wiki app 维护，NashSU review-store.ts）
 ├── lint-cache.json             # lint 结果缓存
 ├── lint-semantic.json          # 语义 lint 结果
 ├── ingest-lock                 # 并发锁
@@ -290,7 +312,7 @@ wiki/media/<slug>/_manifest.json
       "hash": "<sha256>",
       "timestamp": 1718300000000,
       "filesWritten": ["wiki/sources/xxx.md", "wiki/concepts/yyy.md", ...],
-      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "mineru-api" | "mineru-api-ocr" | "mineru-api-low-quality" | "mineru-api-ocr-low-quality",
+      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "mineru-api",   // ocr/low-quality 变体已随质量门于 2026-07-08 移除，存量 cache 可能仍带旧值
       "template": "digest-book.md",
       "fileBlockCount": 15,
       "stages": {
@@ -307,7 +329,7 @@ wiki/media/<slug>/_manifest.json
 }
 ```
 
-**来源**：`ingest.py:2630-2647`。
+**来源**：`_core.py::save_cache`（cache schema `{"version": "2", "entries": {...}}`）。
 
 ---
 
@@ -329,7 +351,7 @@ N 为单调递增计数器（`lint.ts` 实现）。improved-wiki 使用更具体
 
 Lint 页面位于运行时目录（不在 `wiki/` 下）——它们是派生诊断产物，非源知识；放在 `.llm-wiki/` 下避免污染 search/graph 扫描，与 NashSU「lint state 属 runtime，非 wiki 内容」的边界一致。首次运行时旧 `wiki/lint/` 会自动迁移到此处。Lint 页面含 frontmatter `resolved: false`，修复后改 `true`，下次 lint 自动清理。
 
-### 7.3 6 种 structural lint 类型
+### 7.3 4 种 structural lint 类型
 
 | type | severity | 说明 |
 |------|----------|------|
@@ -369,8 +391,8 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | 文件 | 来源 |
 |------|------|
 | `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 3.4 每项一个 md |
-| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON |
-| `<runtime>/review.json` | `run_review_suggestions.py` Stage 3.4 产物 |
+| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON（`_stage_3_4_review.py`） |
+| `<runtime>/review.json` | review store（LLM Wiki app 维护，NashSU review-store.ts；review 状态维护见 `sweep_reviews.py`） |
 | `wiki/REVIEW/_summaries/_audit_<scope>.md` | LLM 审计汇总报告（meta，非 review item） |
 
 **`_summaries/` 约定**：
@@ -381,17 +403,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 ---
 
-## 9. Stage Compliance 文件
-
-(removed — validate_ingest.py covers stage compliance)
-
-记录每个 source 的 15 阶段完成状态（Markdown 表格）。每行含 Stage 编号、状态（✅/❌/⚪）、详情。
-
-**来源**：`ingest.py:1436-1528`。
-
----
-
-## 10. 日期格式
+## 9. 日期格式
 
 | 位置 | 格式 | 示例 |
 |------|------|------|
@@ -399,11 +411,11 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | Log 条目标题 | `## [YYYY-MM-DD] ingest \| <Title>` | `## [2026-06-14] ingest \| ADL8113` |
 | Review 文件名 | `<date>-<stem>-<NNN>.md` | `2026-06-14-ADL8113-001.md` |
 
-**来源**：`ingest.ts:302-307`（log 格式）；`parse_and_write.py`（frontmatter 校验）。
+**来源**：`ingest.ts:302-307`（log 格式）；`_ingest_write.py`（frontmatter 校验）。
 
 ---
 
-## 11. 禁止的文件名模式
+## 10. 禁止的文件名模式
 
 | 禁止项 | 原因 |
 |--------|------|
@@ -417,25 +429,15 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 ---
 
-## 12. improved-wiki 与 NashSU 的已知差异
+## 11. improved-wiki 与 NashSU 的已知差异
 
-以下为残余差异。标注"已对齐"的项不再列出。
+以下为残余差异。已对齐的项不列出。
 
 | 项目 | NashSU 原生 | improved-wiki | 说明 |
 |------|------------|---------------|------|
 | Raw 布局 | `raw/sources/<type>/<file>` | `raw/<type>/<任意子目录>/<file>` | 刻意设计，人类友好 |
+| Raw 命名门禁 | schema 中为自然语言约定 | schema 末尾另有 machine-readable YAML，Stage 0.1 强制 | improved-wiki 扩展；不注入 LLM prompt |
 | 聚合页排除 | `index.md` + `log.md`（lint universe） | findings 豁免 `index/log/overview/schema` | 分层模型见 `_lint_suggest.py` |
-| schema.md 位置 | 项目根 `${pp}/schema.md` | 项目根 `<project>/schema.md`（已对齐） | 旧版曾放 wiki/，0.5.2 起对齐到根 |
 | Manifest 命名 | 无独立文件 | `_manifest.json` | improved-wiki Stage 1.2 独有产物 |
 | Lint 页面 | app UI 直接展示（内存） | `.llm-wiki/lint/<type>-<page>.md` | CLI 场景需要文件化输出；属 runtime 状态，不放入 wiki/ |
 | Review 页面 | `review.json`（app UI） | `wiki/REVIEW/<type>/<date>-<stem>-<NNN>.md` + `review.json` | 人类可浏览 + 机器可读双输出 |
-| 页面合并 | 3-layer LLM merge | 同 NashSU | — |
-| 路径安全 | 8 项 `isSafeIngestPath` | 同 NashSU | — |
-| 栅栏感知解析 | CommonMark fence tracking | 同 NashSU | — |
-| CRLF 规范化 | `\r\n` → `\n` | 同 NashSU | — |
-| 内容清理 | `ingest-sanitize.ts` | `sanitize_ingested_content()` | — |
-| 页面历史备份 | `.llm-wiki/page-history/` | 同 NashSU | — |
-| 动态 token 预算 | 4 层缩放 | `compute_max_tokens()` | — |
-| 内联 embedding | Stage 6 auto-run | `_auto_embed_new_pages()` | — |
-| Lint orphan 检测 | 无条件 | 同 NashSU | — |
-| Slug 优先级 | last-write-wins | 同 NashSU | — |

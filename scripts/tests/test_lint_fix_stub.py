@@ -78,17 +78,23 @@ class TestStubFixRewritesSource(unittest.TestCase):
 
     def test_rewrite_before_append_no_duplicate_link(self):
         # Regression: an append action that adds [[concepts/transformer]] used to
-        # run BEFORE the rewrite that fixed a typo'd [[concepts/transfromer]] into
-        # the same link → two identical links. Link-fixing actions must run first.
+        # run BEFORE the rewrite that fixed a broken variant of the same link →
+        # two identical links. Link-fixing actions must run first.
+        # 2026-07-10: the broken link here is a quote-leak variant
+        # ([[concepts/transformer"]], suggestion score 1.0) rather than the old
+        # letter-transposition typo (score ~0.82) — fuzzy-tier suggestions now
+        # route to REVIEW instead of auto-rewriting (see
+        # test_lint_fix_score_gate), so the ordering scenario needs a
+        # suggestion that clears the 0.9 auto-rewrite gate.
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             wiki = tmp / "wiki"
             (wiki / "concepts").mkdir(parents=True)
             (wiki / "concepts" / "transformer.md").write_text(
                 _page("# Transformer\nA transformer."), encoding="utf-8")
-            # Typo broken link → rewrite suggestion is concepts/transformer.
+            # Quote-leak broken link → exact match after strip, score 1.0.
             (wiki / "concepts" / "usage.md").write_text(
-                _page("# Usage\nSee [[concepts/transfromer]]."), encoding="utf-8")
+                _page('# Usage\nSee [[concepts/transformer"]].'), encoding="utf-8")
 
             pages = wlf._collect_pages(wiki)
             findings = run_structural_lint(pages, with_suggestions=True)
@@ -99,7 +105,7 @@ class TestStubFixRewritesSource(unittest.TestCase):
             self.assertEqual(
                 usage.count("[[concepts/transformer]]"), 1,
                 f"expected exactly one canonical link, got:\n{usage}")
-            self.assertNotIn("[[concepts/transfromer]]", usage)
+            self.assertNotIn('[[concepts/transformer"]]', usage)
 
     def test_dry_run_writes_nothing(self):
         with tempfile.TemporaryDirectory() as td:

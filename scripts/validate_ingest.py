@@ -12,26 +12,36 @@ ingest.py does not write — those artifacts live in progress checkpoints and
 are cleared on successful ingest.
 
 Usage:
-    python3 scripts/validate_ingest.py
-    SOURCE_SLUG=INA1H94-SEP python3 scripts/validate_ingest.py
+    python3 scripts/validate_ingest.py --root /path/to/wiki --source INA1H94-SEP
+    IMPROVED_WIKI_ROOT=/path/to/wiki SOURCE_SLUG=INA1H94-SEP \
+        python3 scripts/validate_ingest.py
 """
-import hashlib
+from __future__ import annotations
+
+import argparse
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Optional
 
-# === Per-project constants ===
+# === Per-project runtime context ===
+# Defaults keep helper imports side-effect free. main() rebinds these paths from
+# explicit CLI arguments (preferred) or the matching environment variables.
 PROJECT_ROOT = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
 WIKI = PROJECT_ROOT / "wiki"
 # Use shared detection (_paths.py: .llm-wiki/ default, auto-migrates from .iwiki-runtime/)
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
-from _paths import detect_runtime_dir
-from _lint_suggest import run_structural_lint, ANCHOR_FILES as _LINT_ANCHOR_FILES
+from _paths import detect_runtime_dir, iter_wiki_pages
+from _lint_suggest import (
+    run_structural_lint,
+    ANCHOR_FILES as _LINT_ANCHOR_FILES,
+    STATE_FILES as _LINT_STATE_FILES,
+)
+from _progress import file_sha256
 RUNTIME = detect_runtime_dir(PROJECT_ROOT)
-SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "ADL8113")
+SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "")
 
 CACHE_PATH = RUNTIME / "ingest-cache.json"
 MEDIA_DIR = WIKI / "media"
@@ -42,7 +52,52 @@ SOURCES_DIR = WIKI / "sources"
 CACHE_KEY = os.environ.get("CACHE_KEY", "")
 
 
-def _stage_4_1_find_cache_entry(slug: str) -> Optional[dict]:
+def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    """Parse the standalone validator CLI without project-specific defaults."""
+    parser = argparse.ArgumentParser(
+        description="Read-only post-hoc validation for one improved-wiki source.",
+    )
+    parser.add_argument(
+        "--root",
+        default=os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()),
+        help="improved-wiki project root (default: IMPROVED_WIKI_ROOT or cwd)",
+    )
+    parser.add_argument(
+        "--source",
+        default=os.environ.get("SOURCE_SLUG", ""),
+        help="source page stem/cache-key substring (or set SOURCE_SLUG)",
+    )
+    parser.add_argument(
+        "--cache-key",
+        default=os.environ.get("CACHE_KEY", ""),
+        help="exact ingest-cache key when substring matching would be ambiguous",
+    )
+    args = parser.parse_args(argv)
+    if not str(args.source).strip():
+        parser.error("--source is required (or set SOURCE_SLUG)")
+    return args
+
+
+def _configure_runtime(
+    project_root: str | Path,
+    source_slug: str,
+    cache_key: str = "",
+) -> None:
+    """Bind all derived paths to the CLI-selected project and source."""
+    global PROJECT_ROOT, WIKI, RUNTIME, SOURCE_SLUG
+    global CACHE_PATH, MEDIA_DIR, SOURCES_DIR, CACHE_KEY
+
+    PROJECT_ROOT = Path(project_root).expanduser().resolve()
+    WIKI = PROJECT_ROOT / "wiki"
+    RUNTIME = detect_runtime_dir(PROJECT_ROOT)
+    SOURCE_SLUG = str(source_slug).strip()
+    CACHE_KEY = str(cache_key).strip()
+    CACHE_PATH = RUNTIME / "ingest-cache.json"
+    MEDIA_DIR = WIKI / "media"
+    SOURCES_DIR = WIKI / "sources"
+
+
+def _validate_find_cache_entry(slug: str) -> Optional[dict]:
     """Find the cache entry whose key or filesWritten contains *slug*.
 
     Matching strategy (in order):
@@ -87,7 +142,7 @@ def _stage_4_1_find_cache_entry(slug: str) -> Optional[dict]:
     return None
 
 
-def _stage_4_1_find_media_dir(slug: str) -> Optional[Path]:
+def _validate_find_media_dir(slug: str) -> Optional[Path]:
     """Find media directory matching slug (recursive search — media/ mirrors raw/)."""
     if not MEDIA_DIR.is_dir():
         return None
@@ -102,18 +157,39 @@ def _stage_4_1_find_media_dir(slug: str) -> Optional[Path]:
     return None
 
 
+def _validate_recorded_source_pages(entry: dict, project_root: Path) -> tuple[list[str], list[Path]]:
+    """Return source-page paths recorded by this cache entry and those on disk.
+
+    Cache entries are not globally one-to-one with source pages: deep-research
+    entries intentionally write no source page, while older ingests may retain
+    pre-migration paths.  Per-source validation must therefore inspect the
+    selected entry instead of comparing project-wide cache/page totals.
+    """
+    recorded: list[str] = []
+    existing: list[Path] = []
+    for value in entry.get("filesWritten", []):
+        if not isinstance(value, str):
+            continue
+        normalized = value.replace("\\", "/").lstrip("./")
+        if not normalized.startswith("wiki/sources/"):
+            continue
+        recorded.append(value)
+        path = Path(value)
+        if not path.is_absolute():
+            path = project_root / path
+        if path.is_file():
+            existing.append(path)
+    return recorded, existing
+
+
 # ── Structural lint suggestions (wiki-wide, non-gating) ─────────────────────
 # Scan universe = NashSU {index, log} from _lint_suggest (overview/schema stay
-# valid targets; engine exempts aggregates from findings). + state + lint/REVIEW/media.
-_LINT_STATE_FILES = {
-    "lint-cache.json", "ingest-cache.json", "ingest-queue.json",
-    "review.json", "review-suggestions.json", "embed-cache.json",
-    "lint-semantic.json", "dedup-report.json",
-}
-_LINT_SKIP_DIRS = {"lint", "REVIEW", "media"}
+# valid targets; engine exempts aggregates from findings). + state files
+# (shared _lint_suggest.STATE_FILES) + artifact dirs (shared
+# _paths.WIKI_ARTIFACT_DIRS) — the local copies here had drifted.
 
 
-def _stage_4_1_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
+def _validate_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
     """Run structural lint with deterministic link suggestions over wiki/.
 
     Returns findings from _lint_suggest.run_structural_lint — broken-link,
@@ -121,28 +197,19 @@ def _stage_4_1_collect_structural_lint_findings(wiki_dir: Path) -> list[dict]:
     suggested_source when a confident match exists. Non-gating: the caller
     (validate_ingest.main) surfaces these without affecting the exit code.
     """
-    pages: list[tuple[str, str]] = []
-    if not wiki_dir.is_dir():
-        return []
-    for path in sorted(wiki_dir.rglob("*.md")):
-        rel = path.relative_to(wiki_dir)
-        if rel.name in _LINT_ANCHOR_FILES or rel.name in _LINT_STATE_FILES:
-            continue
-        if rel.parts and rel.parts[0] in _LINT_SKIP_DIRS:
-            continue
-        try:
-            pages.append((str(rel), path.read_text(encoding="utf-8")))
-        except OSError:
-            continue
+    pages = list(iter_wiki_pages(
+        wiki_dir, anchor_files=_LINT_ANCHOR_FILES, state_files=_LINT_STATE_FILES,
+    ))
     # with_suggestions=False: detection only (O(n)). The O(n^2) suggestion
     # scan is left to wiki-lint.sh; running it here on a 7594-page wiki took
     # minutes and blew the ingest's final-validation subprocess timeout.
     return run_structural_lint(pages, with_suggestions=False)
 
 
-def main():
+def main(argv: Optional[list[str]] = None):
+    args = _parse_args(argv)
+    _configure_runtime(args.root, args.source, args.cache_key)
     results: list[bool] = []
-    warnings: list[str] = []
 
     def check(label: str, ok: bool, detail: str = ""):
         status = "✅" if ok else "❌"
@@ -160,10 +227,10 @@ def main():
     print("=" * 60)
 
     # ── Resolve cache entry ──
-    entry = _stage_4_1_find_cache_entry(SOURCE_SLUG)
+    entry = _validate_find_cache_entry(SOURCE_SLUG)
     stages = entry.get("stages", {}) if entry else {}
 
-    media = _stage_4_1_find_media_dir(SOURCE_SLUG)
+    media = _validate_find_media_dir(SOURCE_SLUG)
     source_page = None
     if SOURCES_DIR.is_dir():
         for f in SOURCES_DIR.rglob("*.md"):
@@ -226,9 +293,9 @@ def main():
         check("media dir found", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 1: Global Digest
+    # Global Digest (rolled up by Stage 2.2; standalone 2.1 removed 2026-07-08)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.1] Global Digest")
+    print("\n[Stage 2.2] Global Digest (roll-up)")
     if entry:
         dk = stages.get("global_digest_keys", 0)
         check(f"global digest complete", dk >= 1,
@@ -253,7 +320,6 @@ def main():
     print("\n[Stage 2.4] Generation (synthesis)")
     if entry:
         fb = stages.get("file_blocks_generated", 0)
-        identified = stages.get("concepts_identified", fb)
         generated = stages.get("concepts_generated", fb)
         core = stages.get("concepts_core", 0)
         supp = stages.get("concepts_supporting", 0)
@@ -266,41 +332,29 @@ def main():
     else:
         check("cache entry found", False)
 
-    # ═══════════════════════════════════════════════
-    # Stage 2.7: Query generation (conditional)
-    # ═══════════════════════════════════════════════
-    print("\n[Stage 2.7] Query generation")
-    queries_dir = WIKI / "queries"
-    query_pages = list(queries_dir.glob("*.md")) if queries_dir.is_dir() else []
-    src_query_pages = [p for p in query_pages
-                       if SOURCE_SLUG in p.read_text(encoding="utf-8", errors="ignore")] if query_pages else []
-    if entry:
-        tmpl = (entry.get("template") or "").lower()
-        qg = stages.get("queries_generated", 0)
-        if tmpl in ("datasheet", "standard"):
-            note("auto-skipped", f"template={tmpl} (datasheet/standard skip Stage 2.7)")
-        else:
-            check(f"{qg} query page(s) generated", 0 <= qg <= 5,
-                  f"cache={qg} disk_attributed={len(src_query_pages)} (0-5 valid; 0 = ---QUERIES: 0---)")
-    else:
-        note("no cache entry", f"disk queries/ has {len(query_pages)} page(s) total")
+    # (Stage 2.7 query-generation check removed 2026-07-12 — NashSU parity:
+    # ingest no longer generates query pages.)
 
     # ═══════════════════════════════════════════════
-    # Stage 2.9 (cmp): Comparison generation (conditional)
+    # Stage 2.4 typed pages: comparison is optional and schema-driven
     # ═══════════════════════════════════════════════
-    print("\n[Stage 2.9 cmp] Comparison generation")
+    print("\n[Stage 2.4 typed] Comparison pages (optional)")
     comparisons_dir = WIKI / "comparisons"
     comp_pages = list(comparisons_dir.glob("*.md")) if comparisons_dir.is_dir() else []
     src_comp_pages = [p for p in comp_pages
                       if SOURCE_SLUG in p.read_text(encoding="utf-8", errors="ignore")] if comp_pages else []
     if entry:
         cg = stages.get("comparisons_generated", 0)
-        fb = stages.get("file_blocks_generated", 0)
-        if fb == 0:
-            note("auto-skipped", "no concept output — Stage 2.9 cmp skipped")
-        else:
-            check(f"{cg} comparison page(s) generated", 0 <= cg <= 2,
-                  f"cache={cg} disk_attributed={len(src_comp_pages)} (0-2 valid; 0 = ---COMPARISONS: 0---)")
+        check(
+            f"{cg} comparison page(s) generated through Stage 2.4",
+            isinstance(cg, int) and cg >= 0,
+            "comparison is a schema-typed candidate; zero is valid and there "
+            "is no dedicated-stage sentinel or numeric cap",
+        )
+        note(
+            "disk attribution",
+            f"{len(src_comp_pages)} comparison page(s) reference this source",
+        )
     else:
         note("no cache entry", f"disk comparisons/ has {len(comp_pages)} page(s) total")
 
@@ -317,19 +371,33 @@ def main():
         check(f"{len(fw)} files written, all on disk",
               not missing and len(fw) >= 1,
               f"missing={len(missing)}" if missing else f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
+        recorded_sources, existing_recorded_sources = _validate_recorded_source_pages(
+            entry, PROJECT_ROOT,
+        )
+        check(
+            "target source page is recorded and exists",
+            bool(recorded_sources) and bool(existing_recorded_sources),
+            (
+                f"recorded={len(recorded_sources)} "
+                f"existing={len(existing_recorded_sources)}"
+            ),
+        )
     else:
         check("sources/concepts/entities all populated",
               len(sources) > 0 and len(concepts) > 0 and len(entities) > 0,
               f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
-    # Source page coverage (project-wide health check)
+    # Project-wide inventory is diagnostic only. Cache entries and source pages
+    # are not one-to-one because research-query entries intentionally have no
+    # source page and historical entries may retain pre-migration paths.
     if CACHE_PATH.exists():
         _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
         _entries = _cache.get("entries", {})
         ingested = sum(1 for v in _entries.values()
                        if isinstance(v, dict) and (v.get("filesWritten") or v.get("hash")))
-        check(f"ingested files covered by source pages",
-              ingested <= len(sources),
-              f"ingested={ingested} sources={len(sources)}")
+        note(
+            "project-wide source-page inventory (non-gating)",
+            f"cache entries={ingested} source pages={len(sources)}",
+        )
 
     # ═══════════════════════════════════════════════
     # Stage 3.2: Image injection
@@ -411,7 +479,7 @@ def main():
         rel = entry.get("key", "")
         raw_file = raw_root / rel
         if raw_file.exists():
-            actual = hashlib.sha256(raw_file.read_bytes()).hexdigest()
+            actual = file_sha256(raw_file)
             expected = entry.get("hash", "")
             check("cache hash matches file",
                   actual[:16] == expected[:16],
@@ -425,42 +493,64 @@ def main():
         check("ingest-cache.json has matching entry", False, f"slug={SOURCE_SLUG}")
 
     # ═══════════════════════════════════════════════
-    # Stage 3.7: Embeddings (mandatory attempt — local Ollama bge-m3)
+    # Stage 3.7: Embeddings (mandatory touched-page coverage)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.7] Embeddings (mandatory attempt)")
+    print("\n[Stage 3.7] Embeddings (mandatory touched-page coverage)")
     lance = RUNTIME / "lancedb"
-    embed_cache = RUNTIME / "embed-cache.json"
     lance_present = lance.is_dir() and bool(list(lance.glob("*.lance")))
-
-    # Check embed-cache.json for entries
-    embed_entries = 0
-    embed_cache_exists = False
-    if embed_cache.exists():
+    if lance_present:
         try:
-            with open(embed_cache, "r") as f:
-                ec_data = json.load(f)
-            if isinstance(ec_data, dict):
-                embed_entries = len(ec_data)
-            elif isinstance(ec_data, list):
-                embed_entries = len(ec_data)
-            embed_cache_exists = embed_entries > 0
-        except (json.JSONDecodeError, OSError):
-            embed_cache_exists = False
+            import lancedb
+            import build_embeddings as _be
 
-    if lance_present and embed_cache_exists:
-        check("lancedb table present + embed-cache populated",
-              True, f"{embed_entries} cache entries")
-    elif lance_present and not embed_cache_exists:
-        check("lancedb tables present", True,
-              "WARNING: embed-cache.json empty/missing — embeddings may be stale")
-    elif lance_present or embed_cache_exists:
-        # Partial: one exists but not the other
-        check("lancedb + embed-cache consistency", False,
-              f"lance={'yes' if lance_present else 'no'}, embed-cache={'populated' if embed_cache_exists else 'no'}")
+            db = lancedb.connect(str(lance))
+            table = db.open_table(_be.TABLE_NAME)
+            total_rows = table.count_rows()
+            check("lancedb table present + non-empty",
+                  total_rows > 0, f"{total_rows} chunks")
+
+            refs = list((entry or {}).get("filesWritten", []))
+            _be.ROOT = str(PROJECT_ROOT)
+            _be.WIKI = str(WIKI)
+            pages = _be.collect_pages(refs) if refs else []
+            embedding_config = _be.embedding_config_from_env()
+            chunks = _be.build_chunks(
+                pages,
+                target_chars=embedding_config.target_chars,
+                overlap_chars=embedding_config.overlap_chars,
+            )
+            expected: dict[str, int] = {}
+            for chunk in chunks:
+                pid = chunk["page_id"]
+                expected[pid] = expected.get(pid, 0) + 1
+            mismatches = []
+            for page_id, count_expected in expected.items():
+                predicate = _be._page_filter(page_id)
+                count_actual = table.count_rows(predicate)
+                if count_actual != count_expected:
+                    mismatches.append(
+                        f"{page_id}: expected {count_expected}, found {count_actual}"
+                    )
+            check(
+                "source pages have exact embedding coverage",
+                not mismatches,
+                (
+                    f"{sum(expected.values())} chunks across {len(expected)} pages"
+                    if not mismatches
+                    else "; ".join(mismatches[:5])
+                ),
+            )
+        except Exception as exc:
+            check("lancedb embedding coverage readable", False,
+                  f"{type(exc).__name__}: {exc}")
     else:
         sys.path.insert(0, str(_script_dir))
-        from ingest import _stage_3_7_check_embed_capability
-        base_url = os.environ.get("EMBEDDING_BASE_URL", "http://127.0.0.1:11434/v1")
+        from _stage_3_7_embed import _stage_3_7_check_embed_capability
+        base_url = (
+            os.environ.get("EMBEDDING_ENDPOINT")
+            or os.environ.get("EMBEDDING_BASE_URL")
+            or "http://127.0.0.1:11434/v1"
+        )
         model = os.environ.get("EMBEDDING_MODEL", "bge-m3")
         cap_ok, cap_reason = _stage_3_7_check_embed_capability(base_url, model)
         if cap_ok:
@@ -475,7 +565,7 @@ def main():
     # ═══════════════════════════════════════════════
     print("\n[Lint suggestions] Structural (wiki-wide, non-gating)")
     try:
-        lint_findings = _stage_4_1_collect_structural_lint_findings(WIKI)
+        lint_findings = _validate_collect_structural_lint_findings(WIKI)
     except Exception as e:  # defensive: lint must never break the validator
         lint_findings = []
         note("structural lint skipped", f"{type(e).__name__}: {e}")

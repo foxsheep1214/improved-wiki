@@ -10,15 +10,12 @@ import hashlib
 import json
 import os
 import shutil
-import sys
 import time
 from pathlib import Path
 
 # Shared infrastructure
-_script_dir = Path(__file__).resolve().parent
-if str(_script_dir) not in sys.path:
-    sys.path.insert(0, str(_script_dir))
-from _core import Config, file_sha256  # noqa: E402
+from _config import Config  # noqa: E402
+from _progress import file_sha256  # noqa: E402
 from _paths import media_slug  # noqa: E402
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -27,11 +24,25 @@ from _paths import media_slug  # noqa: E402
 
 # Images below this are treated as noise (1x1/2x2 artifacts, stray pixels) and
 # dropped. Threshold is deliberately very conservative: tiny formula strips
-# (29-70px tall) are valuable because MiniMax-M3 transcribes them to
+# (29-70px tall) are valuable because the VLM transcribes them to
 # LaTeX/Unicode ~81% of the time, so we must NOT filter them out. See
 # image-caption-strategy.md.
 MINERU_IMG_MIN_WIDTH = int(os.environ.get("MINERU_IMG_MIN_WIDTH", "20"))
 MINERU_IMG_MIN_HEIGHT = int(os.environ.get("MINERU_IMG_MIN_HEIGHT", "20"))
+
+
+def _stage_1_2_image_size(path: Path) -> tuple[int, int]:
+    """Read (width, height) via PIL; (0, 0) if the file can't be opened
+    (matches _stage_1_2_harvest_images()'s defensive "unknown dims" fallback
+    rather than hardcoding 0,0 unconditionally — see bug 2026-07-06)."""
+    try:
+        from PIL import Image
+        im = Image.open(path)
+        w, h = im.size
+        im.close()
+        return w, h
+    except Exception:
+        return 0, 0
 
 
 def _is_image_too_small(width: int, height: int) -> bool:
@@ -39,7 +50,7 @@ def _is_image_too_small(width: int, height: int) -> bool:
 
     Filters only true noise (stray 1x1/2x2 pixel artifacts). Does NOT filter
     formula strips — tiny formula images (29-70px tall) are valuable because
-    MiniMax-M3 transcribes them to LaTeX/Unicode ~81% of the time. The
+    the VLM transcribes them to LaTeX/Unicode ~81% of the time. The
     threshold is intentionally very low (default 20px) to avoid throwing away
     recoverable formula content.
     """
@@ -51,20 +62,215 @@ def _is_image_too_small(width: int, height: int) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _stage_1_2_write_manifest(manifest_path: Path, source: str, raw_file: Path, images: list[dict]) -> None:
-    """改进4：manifest 版本控制和提取配置记录。"""
+def _stage_1_2_write_manifest(
+    manifest_path: Path,
+    source: str,
+    raw_file: Path,
+    images: list[dict],
+) -> list[dict]:
+    """Write a content-addressed media manifest and return enriched entries."""
+    enriched_images: list[dict] = []
+    for image in images:
+        item = dict(image)
+        image_path = manifest_path.parent / str(item.get("filename", ""))
+        if image_path.is_file():
+            item["size_bytes"] = image_path.stat().st_size
+            item["sha256"] = file_sha256(image_path)
+        enriched_images.append(item)
     manifest = {
-        "manifest_version": 2,  # 版本控制
+        "manifest_version": 3,
         "extraction_time": time.strftime("%Y-%m-%d %H:%M:%S"),  # 时间戳
-        "extraction_config": {"min_size": 100},  # 配置记录
+        "extraction_config": {
+            "min_width": MINERU_IMG_MIN_WIDTH,
+            "min_height": MINERU_IMG_MIN_HEIGHT,
+        },
         "source": source,
         "source_sha256": file_sha256(raw_file),
-        "total_images": len(images),
-        "images": images,
+        "total_images": len(enriched_images),
+        "images": enriched_images,
     }
     tmp = manifest_path.with_suffix(".tmp")
     tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.rename(manifest_path)
+    return enriched_images
+
+
+def _migrate_v2_media_manifest(
+    manifest: dict, media_dir: Path, manifest_path: Path,
+) -> tuple[dict | None, str]:
+    """Auto-upgrade a v2 media manifest in place (Route A, 2026-07-30).
+
+    v3 added per-image ``sha256``/``size_bytes`` integrity fields. A v2
+    manifest predates that and would otherwise hard-fail
+    ``assert_cached_media_complete`` forever, on every source that has one —
+    observed on HardwareWiki: 31 of 68 already-ingested books still carry a v2
+    manifest, each blocking the very next ``ingest.py`` touch (re-ingest,
+    media repair, or a stalled resume) even though every one of their
+    referenced image files is verifiably intact on disk.
+
+    Computes the missing fields from the REAL current files — this is not a
+    weaker check than a fresh v3 write, it is the same check performed
+    retroactively. Only upgrades when every referenced image is present,
+    non-empty, and safely/uniquely named, mirroring the per-image checks
+    ``validate_stage_1_2_artifact`` runs on a v3 manifest; any real gap still
+    hard-fails, exactly as before, and the on-disk manifest is left untouched
+    (still v2) so a later re-check sees the same unresolved problem.
+    """
+    images = manifest.get("images")
+    if not isinstance(images, list):
+        return None, "media manifest images is not a list"
+    seen: set[str] = set()
+    for position, image in enumerate(images, 1):
+        if not isinstance(image, dict):
+            return None, f"manifest image {position} is not a mapping"
+        filename = image.get("filename")
+        if not isinstance(filename, str) or not filename:
+            return None, f"manifest image {position} has no filename"
+        if Path(filename).name != filename:
+            return None, f"unsafe manifest image filename: {filename}"
+        if filename in seen:
+            return None, f"duplicate manifest image filename: {filename}"
+        seen.add(filename)
+        image_path = media_dir / filename
+        if not image_path.is_file():
+            return None, f"media image missing: {filename}"
+        if image_path.stat().st_size <= 0:
+            return None, f"media image is empty: {filename}"
+
+    upgraded = dict(manifest)
+    upgraded_images = []
+    for image in images:
+        image_path = media_dir / image["filename"]
+        entry = dict(image)
+        entry["size_bytes"] = image_path.stat().st_size
+        entry["sha256"] = file_sha256(image_path)
+        upgraded_images.append(entry)
+    upgraded["images"] = upgraded_images
+    upgraded["manifest_version"] = 3
+
+    tmp = manifest_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(upgraded, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(manifest_path)
+    print(
+        f"  [media] ⚠️  auto-upgraded legacy v2 manifest to v3 for "
+        f"{media_dir.name} — computed sha256/size_bytes for "
+        f"{len(upgraded_images)} image(s) already on disk"
+    )
+    return upgraded, ""
+
+
+def validate_stage_1_2_artifact(
+    stage_result: dict,
+    config: Config,
+    raw_file: Path,
+    *,
+    expected_count: int | None = None,
+) -> tuple[bool, str, dict]:
+    """Validate cached Stage 1.2 metadata against real media files.
+
+    A cache hit is safe only when the canonical media directory, v3 manifest,
+    source hash, image count, paths, byte sizes, and SHA-256 hashes all agree.
+    The normalized result returned on success is rebuilt from the manifest,
+    making disk state authoritative instead of stale progress counters.
+    """
+    if not isinstance(stage_result, dict):
+        return False, "Stage 1.2 result is not a mapping", {}
+    try:
+        recorded_count = int(stage_result.get("count", 0))
+    except (TypeError, ValueError):
+        return False, "Stage 1.2 count is not an integer", {}
+    if recorded_count < 0:
+        return False, "Stage 1.2 count is negative", {}
+    if expected_count is not None and recorded_count != expected_count:
+        return (
+            False,
+            f"cached count {recorded_count} != expected count {expected_count}",
+            {},
+        )
+
+    has_media_contract = (
+        recorded_count > 0
+        or bool(stage_result.get("media_dir"))
+        or bool(stage_result.get("manifest"))
+        or bool(stage_result.get("mineru"))
+    )
+    if not has_media_contract:
+        return True, "", {"count": 0, "images": []}
+
+    canonical_dir = config.wiki_dir / "media" / media_slug(raw_file, config)
+    media_dir = Path(stage_result.get("media_dir") or canonical_dir)
+    if media_dir.resolve() != canonical_dir.resolve():
+        return False, f"media_dir is not canonical: {media_dir}", {}
+    if not media_dir.is_dir():
+        return False, f"media directory missing: {media_dir}", {}
+
+    manifest_path = media_dir / "_manifest.json"
+    if not manifest_path.is_file():
+        return False, f"media manifest missing: {manifest_path}", {}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"media manifest unreadable: {type(exc).__name__}: {exc}", {}
+    if manifest.get("manifest_version") not in (2, 3):
+        return (
+            False,
+            f"media manifest version {manifest.get('manifest_version')} is not v2 or v3",
+            {},
+        )
+    if manifest.get("manifest_version") == 2:
+        upgraded, reason = _migrate_v2_media_manifest(manifest, media_dir, manifest_path)
+        if upgraded is None:
+            return False, reason, {}
+        manifest = upgraded
+    if manifest.get("source_sha256") != file_sha256(raw_file):
+        return False, "media manifest source hash does not match raw source", {}
+
+    images = manifest.get("images")
+    if not isinstance(images, list):
+        return False, "media manifest images is not a list", {}
+    try:
+        manifest_count = int(manifest.get("total_images", -1))
+    except (TypeError, ValueError):
+        return False, "media manifest total_images is invalid", {}
+    if manifest_count != len(images) or manifest_count != recorded_count:
+        return (
+            False,
+            f"media count mismatch: result={recorded_count}, "
+            f"manifest={manifest_count}, entries={len(images)}",
+            {},
+        )
+
+    seen: set[str] = set()
+    for position, image in enumerate(images, 1):
+        if not isinstance(image, dict):
+            return False, f"manifest image {position} is not a mapping", {}
+        filename = image.get("filename")
+        if not isinstance(filename, str) or not filename:
+            return False, f"manifest image {position} has no filename", {}
+        if Path(filename).name != filename:
+            return False, f"unsafe manifest image filename: {filename}", {}
+        if filename in seen:
+            return False, f"duplicate manifest image filename: {filename}", {}
+        seen.add(filename)
+        image_path = media_dir / filename
+        if not image_path.is_file():
+            return False, f"media image missing: {filename}", {}
+        size = image_path.stat().st_size
+        if size <= 0 or image.get("size_bytes") != size:
+            return False, f"media image size mismatch: {filename}", {}
+        expected_hash = image.get("sha256")
+        if not isinstance(expected_hash, str) or file_sha256(image_path) != expected_hash:
+            return False, f"media image hash mismatch: {filename}", {}
+
+    normalized = {
+        "count": manifest_count,
+        "media_dir": str(media_dir),
+        "manifest": str(manifest_path),
+        "images": images,
+        "mineru": bool(stage_result.get("mineru")),
+        "validated": True,
+    }
+    return True, "", normalized
 
 
 def _stage_1_2_find_uncaptioned_images(media_dir: Path) -> list[dict]:
@@ -165,7 +371,6 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
 
     # Save images and build metadata
     saved: list[dict] = []
-    img_counter: dict[int, int] = {}
 
     for page_num in sorted(page_figs):
         for img_name in page_figs[page_num]:
@@ -179,7 +384,11 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
                 data = b64_uri
 
             # 改进5：用 MD5 ID 替代位置索引
-            raw_bytes = _b64.b64decode(data)
+            try:
+                raw_bytes = _b64.b64decode(data)
+            except Exception as e:
+                print(f"  ⚠ skipping malformed image data URI ({img_name}): {e}")
+                continue
             img_id = hashlib.md5(raw_bytes).hexdigest()[:8]
 
             # Determine extension
@@ -190,12 +399,19 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
             filename = f"p{page_num:04d}-mineru_{img_id}.{ext}"
             out_path = media_dir / filename
 
-            if not out_path.exists():
+            # The canonical media tree is the serving copy. Keep a second,
+            # chunk-local byte cache beside the OCR metadata so Stage 1.2 can
+            # reconstruct canonical media without depending on minerU's
+            # transient UUID output tree. The completed-chunk marker is only
+            # written after this function returns, so a cached chunk always
+            # implies its durable figure bytes were persisted too.
+            if (not out_path.exists()
+                    or hashlib.md5(out_path.read_bytes()).hexdigest()[:8] != img_id):
                 try:
                     out_path.write_bytes(raw_bytes)
-                except Exception:
+                except Exception as e:
+                    print(f"[mineru-figures] failed to save {filename}: {e} — skipped")
                     continue
-
             # Get dimensions if possible; drop true noise (1x1/2x2 artifacts).
             # PIL open is wrapped (can fail on corrupt bytes), but the size
             # check is outside the try so a NameError in _is_image_too_small
@@ -214,12 +430,24 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
                 out_path.unlink(missing_ok=True)
                 continue
 
+            durable_dir = chunk_out / "_media_bytes"
+            durable_dir.mkdir(parents=True, exist_ok=True)
+            durable_path = durable_dir / filename
+            if (not durable_path.exists()
+                    or hashlib.md5(durable_path.read_bytes()).hexdigest()[:8] != img_id):
+                durable_path.write_bytes(raw_bytes)
+
             saved.append({
                 "filename": filename,
                 "page": page_num,
                 "path": str(out_path.relative_to(config.wiki_root)),
                 "width": w, "height": h,
                 "source": "mineru-extracted",
+                # Persist the original minerU basename so Stage 1.3 can join
+                # this saved image back to its source-scoped content-list
+                # context without scanning every prior minerU job in the
+                # project.
+                "mineru_basename": img_name,
             })
 
             # NOTE (2026-06-24): minerU's image_caption is NO LONGER written as
@@ -235,6 +463,14 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
         harvest_path = chunk_out / "_mineru_figures.json"
         harvest_path.write_text(json.dumps(saved, ensure_ascii=False, indent=2),
                                 encoding="utf-8")
+        # The global minerU UUID output tree accumulates every source in the
+        # project. Keep the current chunk's content list beside its durable
+        # figure metadata so Stage 1.3 can build a source-scoped context map.
+        context_path = chunk_out / "_mineru_content_list.json"
+        context_path.write_text(
+            json.dumps(all_content, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         print(f"[mineru-figures] {len(saved)} extracted figures saved to {media_dir.name}")
 
     return saved
@@ -252,7 +488,6 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
     Uses Python stdlib zipfile — no external deps needed.
     """
     import zipfile as _zf
-    import io as _io
 
     fmt = raw_file.suffix.lower().lstrip(".")
     print(f"[stage 1.2] Extracting embedded images from {fmt.upper()}...")
@@ -286,7 +521,6 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
                 # Determine page context if available (from slide/word numbering)
                 # PPTX: ppt/slides/slideN.xml → N; DOCX: no direct page mapping
                 page = 0
-                rel_parts = name.split("/")
                 # For PPTX, try to extract slide number from parent dir structure
                 if fmt == "pptx":
                     # Images are in ppt/media/, referenced from ppt/slides/slideN.xml
@@ -295,12 +529,17 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
 
                 filename = Path(name).name
                 out_path = media_dir / filename
-                # Avoid overwriting: append hash prefix if collision
+                # Name collision (e.g. prior run): reuse the existing file when
+                # its content is identical; only fork to a hash-suffixed name
+                # when the bytes actually differ.
                 if out_path.exists():
-                    stem, ext2 = out_path.stem, out_path.suffix
-                    out_path = media_dir / f"{stem}_{fhash[:6]}{ext2}"
+                    existing_hash = hashlib.sha256(out_path.read_bytes()).hexdigest()
+                    if existing_hash != fhash:
+                        stem, ext2 = out_path.stem, out_path.suffix
+                        out_path = media_dir / f"{stem}_{fhash[:6]}{ext2}"
 
-                out_path.write_bytes(data)
+                if not out_path.exists():
+                    out_path.write_bytes(data)
 
                 all_images.append({
                     "filename": out_path.name,
@@ -311,17 +550,15 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
                 })
 
     except Exception as e:
-        print(f"[stage 1.2] {fmt.upper()} image extraction failed: {e}")
-        return {"count": 0, "error": str(e)}
+        # No-silent-fallback: callers don't check an "error" key, so returning
+        # an error dict was a silent degrade (0 images, pipeline continues).
+        # Raise loudly instead — mirrors the office TEXT path in
+        # _stage_1_extract.py.
+        raise RuntimeError(f"Failed to extract images from {raw_file.name}: {e}")
 
-    # Write manifest
-    manifest_data = {
-        "source": str(raw_file),
-        "format": fmt,
-        "total_images": len(all_images),
-        "images": all_images,
-    }
-    manifest_path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Write manifest (atomic tmp+rename via the shared v2 writer)
+    all_images = _stage_1_2_write_manifest(
+        manifest_path, fmt, raw_file, all_images)
     print(f"[stage 1.2] {fmt.upper()}: {len(all_images)} images → {media_dir}")
     return {"count": len(all_images), "media_dir": str(media_dir),
             "manifest": str(manifest_path), "images": all_images}
@@ -400,7 +637,6 @@ def _stage_1_2_recover_from_api_out(
                 "path": str(dest.relative_to(config.wiki_root)),
                 "page": e["page"],
                 "caption": meta.get("caption", ""),
-                "sub_type": meta.get("sub_type", ""),
                 "width": e["width"],
                 "height": e["height"],
             })
@@ -410,36 +646,48 @@ def _stage_1_2_recover_from_api_out(
     return images
 
 
-def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path) -> dict:
+def _stage_1_2_extract_from_mineru(
+    out_dir: Path,
+    config: Config,
+    raw_file: Path,
+    *,
+    allowed_filenames: set[str] | None = None,
+) -> dict:
     """Extract images from minerU output (pipeline txt / vlm / auto backends).
 
     minerU writes images to <out_dir>/<stem>/<method>/images/ where <method>
     is txt (pipeline -m txt), vlm (vlm-engine), or auto. Also reads
     content_list.json to harvest minerU's own image_caption (the PDF figure
-    caption) and sub_type (flowchart/curve/text_image) so downstream Stage 1.3
-    can skip re-captioning figures minerU already described.
+    caption) so downstream Stage 1.3 can use it as anchoring context.
     """
     media_dir = config.wiki_dir / "media" / media_slug(raw_file, config)
     media_dir.mkdir(parents=True, exist_ok=True)
 
-    # Locate image source dir across backends: txt (pipeline), vlm, auto.
+    # Locate image source dirs across backends: txt (pipeline), vlm, auto,
+    # plus improved-wiki's durable per-chunk byte cache.
     # minerU nests output as <out_dir>/<stem>/<method>/images/.
     stem = raw_file.stem
-    img_source_dir = None
+    img_source_dirs: list[Path] = []
     for method in ("txt", "vlm", "auto"):
         cand = out_dir / stem / method / "images"
         if cand.exists():
-            img_source_dir = cand
-            break
+            img_source_dirs.append(cand)
     # Fallback: older flat layout <out_dir>/vlm/images or auto/images
-    if img_source_dir is None:
-        for method in ("vlm", "auto"):
-            cand = out_dir / method / "images"
-            if cand.exists():
-                img_source_dir = cand
-                break
+    for method in ("vlm", "auto"):
+        cand = out_dir / method / "images"
+        if cand.exists() and cand not in img_source_dirs:
+            img_source_dirs.append(cand)
+    for cand in sorted(out_dir.rglob("_media_bytes")):
+        if cand.is_dir() and cand not in img_source_dirs:
+            img_source_dirs.append(cand)
+    # For an analysis-only re-ingest, the canonical media directory is the
+    # preserved source of truth.  Include it when a caller supplied a
+    # source-bound filename allow-list, so valid kept media is not masked by
+    # incomplete transient minerU byte caches.
+    if allowed_filenames is not None and media_dir not in img_source_dirs:
+        img_source_dirs.append(media_dir)
 
-    # Harvest minerU image_caption + sub_type from content_list.json.
+    # Harvest minerU image_caption from content_list.json.
     # Keyed by image basename so we can attach during copy.
     caption_map: dict[str, dict] = {}
     cl_files = sorted(out_dir.rglob("*content_list.json"))
@@ -456,34 +704,56 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
                     caps = b.get("image_caption", [])
                     caption_map[bn] = {
                         "caption": caps[0] if caps else "",
-                        "sub_type": b.get("sub_type", ""),
                         "page": b.get("page_idx", 0),
                     }
         if caption_map:
             break  # use first content_list that yields images
 
     images = []
-    if img_source_dir:
-        for img_path in sorted(img_source_dir.glob("*")):
-            if not img_path.is_file():
-                continue
-            dest = media_dir / img_path.name
-            shutil.copy2(img_path, dest)
-            meta = caption_map.get(img_path.name, {})
-            # NOTE (2026-06-24): no .caption.txt sidecar is written here.
-            # minerU's image_caption is a figure label, not a description —
-            # using it as the final caption caused lazy label-only captions
-            # (bug 2026-06-24). Stage 1.3 VLM-captions every image, using
-            # minerU's caption as context (see _stage_1_3_caption.py).
-            images.append({
-                "filename": img_path.name,
-                "path": str(dest.relative_to(config.wiki_root)),
-                "page": meta.get("page", 0),
-                "caption": meta.get("caption", ""),
-                "sub_type": meta.get("sub_type", ""),
-                "width": 0,
-                "height": 0,
-            })
+    if img_source_dirs:
+        seen_source_names: set[str] = set()
+        for img_source_dir in img_source_dirs:
+            for img_path in sorted(img_source_dir.glob("*")):
+                if not img_path.is_file():
+                    continue
+                if img_path.name in seen_source_names:
+                    continue
+                if (allowed_filenames is not None
+                        and img_path.name not in allowed_filenames):
+                    continue
+                seen_source_names.add(img_path.name)
+                dest = media_dir / img_path.name
+                # A source-bound keep-media directory may itself be the
+                # selected input.  It is already canonical, so copying it onto
+                # itself would raise SameFileError and falsely turn a valid
+                # analysis-only re-ingest into a media-repair failure.
+                if img_path != dest:
+                    shutil.copy2(img_path, dest)
+                meta = caption_map.get(img_path.name, {})
+                # NOTE (2026-06-24): no .caption.txt sidecar is written here.
+                # minerU's image_caption is a figure label, not a description —
+                # using it as the final caption caused lazy label-only captions
+                # (bug 2026-06-24). Stage 1.3 VLM-captions every image, using
+                # minerU's caption as context (see _stage_1_3_caption.py).
+                # BUGFIX 2026-07-06: this branch hardcoded width/height to 0
+                # instead of reading the actual copied image (the sibling
+                # _stage_1_2_harvest_images() computes real dims) — every book
+                # extracted via this path got a manifest of all-zero dims, which
+                # then showed up as "尺寸 0×0" in every retry-placeholder caption
+                # regardless of the image's real size.
+                w, h = _stage_1_2_image_size(dest)
+                try:
+                    page = int(img_path.name[1:img_path.name.index("-")])
+                except (ValueError, IndexError):
+                    page = meta.get("page", 0)
+                images.append({
+                    "filename": img_path.name,
+                    "path": str(dest.relative_to(config.wiki_root)),
+                    "page": page,
+                    "caption": meta.get("caption", ""),
+                    "width": w,
+                    "height": h,
+                })
     else:
         # BUGFIX 2026-06-24: on OCR cache-resume the minerU API output dir is
         # not persisted (img_source_dir is None), so the original code wrote an
@@ -494,19 +764,21 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
             if not img_path.is_file() or img_path.name.endswith(".caption.txt"):
                 continue
             bn = img_path.name
+            if allowed_filenames is not None and bn not in allowed_filenames:
+                continue
             try:
                 page = int(bn[1:bn.index("-")])
             except (ValueError, IndexError):
                 page = 0
             meta = caption_map.get(bn, {})
+            w, h = _stage_1_2_image_size(img_path)
             images.append({
                 "filename": bn,
                 "path": str(img_path.relative_to(config.wiki_root)),
                 "page": page,
                 "caption": meta.get("caption", ""),
-                "sub_type": meta.get("sub_type", ""),
-                "width": 0,
-                "height": 0,
+                "width": w,
+                "height": h,
             })
 
     # BUGFIX 2026-06-25: --delete wipes media_dir, and Stage 1.1 chunk cache
@@ -516,11 +788,12 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
     # MD5[:8] id embedded in each _mineru_figures.json filename against the
     # MD5[:8] of every image minerU saved. Without this, --delete + re-ingest
     # of a cached source silently produces 0 figures.
-    if not images:
+    if not images and allowed_filenames is None:
         images = _stage_1_2_recover_from_api_out(out_dir, media_dir, config, caption_map)
 
     manifest_path = media_dir / "_manifest.json"
-    _stage_1_2_write_manifest(manifest_path, "mineru-ocr", raw_file, images)
+    images = _stage_1_2_write_manifest(
+        manifest_path, "mineru-ocr", raw_file, images)
     print(f"[stage 1.2] minerU: {len(images)} images from {media_dir.name} "
           f"(Stage 1.3 will VLM-caption all)")
     return {
@@ -532,13 +805,99 @@ def _stage_1_2_extract_from_mineru(out_dir: Path, config: Config, raw_file: Path
     }
 
 
+def _stage_1_2_extract_markdown_images(raw_file: Path, media_dir: Path, manifest_path: Path,
+                                        config: Config, min_size: int = 100) -> dict:
+    """Extract local images referenced by a Markdown source into wiki/media/<slug>/.
+
+    NashSU parity: extractAndSaveMarkdownImages + findLocalMarkdownImageRefs
+    (extract-source-images.ts). A .md source may embed images via ![[ref]]
+    (Obsidian/wikilink) or ![alt](ref) (standard markdown) pointing at local
+    files; each referenced image is copied into the media dir and recorded in
+    the manifest so Stage 1.3 captions it and Stage 3.2 injects it — same
+    pipeline as minerU-harvested figures.
+
+    Remote (http/https/ftp/data:) URIs are left in place (not copied). Only
+    local refs, resolved against the source file's directory, are copied.
+    Returns: {"count": int, "media_dir": str, "manifest": str, "images": list}
+    """
+    import re as _re
+    import shutil
+
+    _MARKDOWN_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
+    text = raw_file.read_text(encoding="utf-8")
+    source_dir = raw_file.parent
+
+    refs: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw_ref: str) -> None:
+        ref = raw_ref.split("#")[0].split("|")[0].strip()
+        if not ref:
+            return
+        if ref.lower().startswith(("http://", "https://", "ftp://", "data:")):
+            return
+        if os.path.splitext(ref)[1].lower() not in _MARKDOWN_IMAGE_EXTS:
+            return
+        if ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+
+    for m in _re.finditer(r'!\[\[([^\]]+)\]\]', text):
+        _add(m.group(1))
+    for m in _re.finditer(r'!\[[^\]]*\]\(([^)\s]+)(?:\s+["\'][^"\']*["\'])?\)', text):
+        _add(m.group(1))
+
+    saved: list[dict] = []
+    for ref in refs:
+        src = Path(ref) if Path(ref).is_absolute() else source_dir / ref
+        if not src.exists():
+            print(f"[stage 1.2] markdown image not found, skipped: {ref}")
+            continue
+        idx = len(saved) + 1
+        ext = os.path.splitext(src.name)[1].lower() or ".png"
+        dest_name = f"md_{idx:03d}_{src.stem}{ext}"
+        dest = media_dir / dest_name
+        try:
+            shutil.copyfile(str(src), str(dest))
+        except Exception as e:
+            print(f"[stage 1.2] markdown image copy failed ({ref}): {e}")
+            continue
+        w, h = 0, 0
+        try:
+            from PIL import Image
+            im = Image.open(dest)
+            w, h = im.size
+            im.close()
+        except Exception:
+            pass
+        if w and h and _is_image_too_small(w, h):
+            dest.unlink(missing_ok=True)
+            continue
+        saved.append({
+            "filename": dest_name,
+            "page": None,
+            "path": str(dest.relative_to(config.wiki_root)),
+            "width": w, "height": h,
+            "source": "markdown-embedded",
+        })
+
+    saved = _stage_1_2_write_manifest(
+        manifest_path, "markdown", raw_file, saved)
+    print(f"[stage 1.2] {len(saved)} markdown-embedded images copied to {media_dir.name}")
+    return {"count": len(saved), "media_dir": str(media_dir),
+            "manifest": str(manifest_path), "images": saved}
+
+
 def stage_1_2_extract_images(raw_file: Path, config: Config, min_size: int = 100) -> dict:
-    """Extract embedded images from PPTX / DOCX via their internal zipfile media/ directory
-    (NashSU parity: extractAndSaveSourceImages).
+    """Extract embedded images from PPTX / DOCX / Markdown sources.
+
+    - PPTX/DOCX: internal zipfile media/ directory (NashSU parity: extractAndSaveSourceImages).
+    - Markdown: local images referenced via ![[ref]] / ![alt](ref), copied into the media
+      dir (NashSU parity: extractAndSaveMarkdownImages, added 2026-07-08).
 
     PDF images are extracted separately by _stage_1_2_extract_from_mineru(), since all PDF
-    text extraction routes through minerU (pipeline or VLM), which extracts images as part
-    of the same pass.
+    text extraction routes through minerU (hybrid-engine/auto), which extracts images as
+    part of the same pass.
 
     Returns: {"count": int, "media_dir": str, "manifest": str, "images": list}
     """
@@ -557,4 +916,6 @@ def stage_1_2_extract_images(raw_file: Path, config: Config, min_size: int = 100
             pass  # corrupt manifest, re-extract
 
     media_dir.mkdir(parents=True, exist_ok=True)
+    if raw_file.suffix.lower() in (".md", ".markdown"):
+        return _stage_1_2_extract_markdown_images(raw_file, media_dir, manifest_path, config, min_size)
     return _stage_1_2_extract_images_office(raw_file, media_dir, manifest_path, min_size)

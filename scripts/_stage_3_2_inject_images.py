@@ -10,8 +10,81 @@ import os
 import re
 from pathlib import Path
 
-from _core import Config
-from _paths import media_slug
+from _config import Config
+from _language import get_output_language
+from _paths import media_slug, atomic_write
+from _wikilinks import WIKILINK_RE
+
+
+def _stage_3_2_language_sample(content: str) -> str:
+    """Return page prose without metadata/link targets that can spoof script.
+
+    A nested raw path such as ``Paper/01_反无人机探测与识别/...`` appears in
+    source frontmatter. ``detect_language`` quite reasonably sees those Han
+    characters, but they are an identifier, not the English page's prose.
+    """
+    sample = re.sub(
+        r"\A---\s*\n.*?\n---\s*\n?",
+        "",
+        content,
+        count=1,
+        flags=re.DOTALL,
+    )
+    sample = sample.split("\n## Embedded Images", 1)[0]
+    sample = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", sample)
+    sample = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", sample)
+
+    def _wikilink_label(match: re.Match) -> str:
+        target = match.group(1)
+        label = match.group(2)
+        return label or target.rsplit("/", 1)[-1]
+
+    sample = WIKILINK_RE.sub(_wikilink_label, sample)
+    return sample[:4000]
+
+
+def _stage_3_2_source_kind(raw_file: Path, config: Config) -> str:
+    try:
+        category = raw_file.relative_to(config.raw_root).parts[0].lower()
+    except (ValueError, IndexError):
+        return "document"
+    return {
+        "book": "book",
+        "paper": "paper",
+        "standard": "standard",
+        "presentation": "presentation",
+        "news": "article",
+    }.get(category, "document")
+
+
+def _stage_3_2_count_line(
+    *, is_zh: bool, source_kind: str, count: int, is_mineru: bool,
+) -> str:
+    if is_zh:
+        subject = {
+            "book": "本书",
+            "paper": "本文",
+            "standard": "本标准",
+            "presentation": "本演示文稿",
+            "article": "本报道",
+        }.get(source_kind, "本文档")
+        noun = "图表" if is_mineru else "嵌入图"
+        return f"{subject}共抽出 {count} 张{noun}。"
+
+    subject = {
+        "book": "This book",
+        "paper": "This paper",
+        "standard": "This standard",
+        "presentation": "This presentation",
+        "article": "This article",
+    }.get(source_kind, "This document")
+    singular, plural = (
+        ("figure", "figures")
+        if is_mineru else
+        ("embedded image", "embedded images")
+    )
+    noun = singular if count == 1 else plural
+    return f"{subject} contains {count} extracted {noun}."
 
 
 def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
@@ -25,6 +98,18 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
     content = source_path.read_text(encoding="utf-8")
     content = re.sub(r"^## Embedded Images.*?(?=^## |\Z)", "", content, flags=re.MULTILINE | re.DOTALL)
     content = content.rstrip() + "\n\n"
+
+    # Two-language KB policy (2026-07-15): the boilerplate prose in this
+    # section (count line, attribution line) must follow the page's own
+    # language, not be hardcoded Chinese — sampling the already-written body
+    # is the correct signal since earlier stages already wrote it in the
+    # page's target language (get_output_language collapses everything to
+    # Chinese or English). Structural headings ("## Embedded Images",
+    # "### Page N") stay English in both cases, matching the rest of the
+    # pipeline's FILE-block convention: only prose
+    # vocabulary is localized, not structural markup).
+    is_zh = get_output_language(_stage_3_2_language_sample(content)) == "Chinese"
+    source_kind = _stage_3_2_source_kind(raw_file, config)
 
     # Unified image injection: reads _manifest.json (the single source of truth
     # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
@@ -42,10 +127,23 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
         images = m.get("images", [])
         # Filter out legacy page-render entries (pre-2026-06-19 ingests)
         images = [i for i in images if i.get("source") != "page-render"]
+        # Manifest schema guard: every entry must carry page + filename (the
+        # grouping/caption code below indexes them directly). A malformed
+        # manifest fails loud with its path instead of a bare KeyError.
+        for img in images:
+            if "page" not in img or "filename" not in img:
+                raise RuntimeError(
+                    f"[stage 3.2] malformed image entry in {source_path_to_read}: "
+                    f"missing 'page'/'filename' — entry: {img}")
         if images:
             is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
             section = f"## Embedded Images\n\n"
-            section += f"本书共抽出 {len(images)} 张{'图表' if is_mineru else '嵌入图'}。\n\n"
+            section += _stage_3_2_count_line(
+                is_zh=is_zh,
+                source_kind=source_kind,
+                count=len(images),
+                is_mineru=is_mineru,
+            ) + "\n\n"
             # NashSU parity (extract-source-images.ts:buildImageMarkdownSection):
             # group by page under `### Page N`, emit markdown image syntax
             # ![caption](path) with the FULL caption as alt text (sanitized —
@@ -68,11 +166,12 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
                     except ValueError:
                         rel = img.get("path", "")
                     section += f"![{cap}]({rel})\n\n"
-            section += f"\n> 图片由 {'minerU VLM' if is_mineru else 'PyMuPDF'} 提取，caption 由 {config.caption_model} 生成。详细 manifest 见 `wiki/media/{slug}/`\n"
+            if is_zh:
+                section += f"\n> 图片由 {'minerU VLM' if is_mineru else 'PyMuPDF'} 提取，caption 由 {config.caption_model} 生成。详细 manifest 见 `wiki/media/{slug}/`\n"
+            else:
+                section += f"\n> Images extracted by {'minerU VLM' if is_mineru else 'PyMuPDF'}; captions generated by {config.caption_model}. Full manifest: `wiki/media/{slug}/`\n"
             content += section
-            tmp = source_path.with_suffix(source_path.suffix + ".tmp")
-            tmp.write_text(content, encoding="utf-8")
-            tmp.rename(source_path)
+            atomic_write(source_path, content)
             print(f"[stage 3.2] Injected {len(images)} images into {source_path.name}")
             return {"injected": len(images)}
 
@@ -98,18 +197,27 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
 
     if images_in_media:
         section = f"## Embedded Images\n\n"
-        section += f"本书共提取 {len(images_in_media)} 张图表。\n\n"
-        section += "| 文件/页码 | Caption |\n|------------|----------|\n"
+        section += _stage_3_2_count_line(
+            is_zh=is_zh,
+            source_kind=source_kind,
+            count=len(images_in_media),
+            is_mineru=True,
+        ) + "\n\n"
+        if is_zh:
+            section += "| 文件/页码 | Caption |\n|------------|----------|\n"
+        else:
+            section += "| File/Page | Caption |\n|------------|----------|\n"
         for name, cap in images_in_media[:200]:  # cap at 200 rows
             cap_short = cap[:80] + "..." if len(cap) > 80 else cap
             section += f"| `{name}` | {cap_short} |\n"
         if len(images_in_media) > 200:
             section += f"| ... | ({len(images_in_media) - 200} more) |\n"
-        section += f"\n> Caption 由 {config.caption_model} 生成。图片文件见 `wiki/media/{slug}/`\n"
+        if is_zh:
+            section += f"\n> Caption 由 {config.caption_model} 生成。图片文件见 `wiki/media/{slug}/`\n"
+        else:
+            section += f"\n> Captions generated by {config.caption_model}. Image files: `wiki/media/{slug}/`\n"
         content += section
-        tmp = source_path.with_suffix(source_path.suffix + ".tmp")
-        tmp.write_text(content, encoding="utf-8")
-        tmp.rename(source_path)
+        atomic_write(source_path, content)
         print(f"[stage 3.2] Injected {len(images_in_media)} images into {source_path.name}")
         return {"injected": len(images_in_media)}
 

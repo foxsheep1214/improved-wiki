@@ -36,9 +36,9 @@ def _make_config(tmp: Path) -> _core.Config:
         cache_path=tmp / "rt" / "ingest-cache.json",
         progress_dir=tmp / "rt" / "ingest-progress",
         extract_tmp_dir=tmp / "rt" / "extract-tmp",
-        llm_base_url="https://example.invalid", llm_model="m", llm_api_key="",
-        llm_protocol="anthropic", caption_api_key="", caption_base_url="x",
-        caption_model="c", chunk_size=60000, chunk_overlap=3000,
+        llm_model="m",
+        caption_api_key="", caption_base_url="x",
+        caption_model="c", chunk_overlap=3000,
         source_budget=100000, target_chars=60000, target_tokens=30000,
         max_tokens=8192, conversation_prefix="ab12cd34",
     )
@@ -123,7 +123,7 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
             cfg.wiki_root.mkdir(parents=True, exist_ok=True)
             # schema.md declares an extra typed folder beyond the base set.
             (cfg.wiki_root / "schema.md").write_text(
-                "# Schema\n| type | directory |\n|--|--|\n"
+                "# Schema\n\n## Page Types\n\n| type | directory |\n|--|--|\n"
                 "| person | wiki/people/ |\n| concept | wiki/concepts |\n",
                 encoding="utf-8")
             stem = "Some Book"
@@ -138,6 +138,31 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
             self.assertFalse(person.exists(), "orphan schema-folder page should be deleted")
             self.assertTrue(person_shared.exists(), "multi-source schema-folder page must be kept")
             self.assertEqual(removed, 1)
+
+    def test_cleanup_reports_deleted_page_paths_for_embedding_cascade(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = _make_config(Path(tmp))
+            page = cfg.wiki_root / "wiki" / "concepts" / "single.md"
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text(
+                "---\n"
+                "type: concept\n"
+                "title: Single\n"
+                'sources: ["Book.pdf"]\n'
+                "---\n\n# Single\n",
+                encoding="utf-8",
+            )
+            deleted: list[str] = []
+
+            removed = _source_lifecycle._cleanup_orphan_pages(
+                cfg.wiki_root,
+                "Book",
+                cfg,
+                deleted_page_paths=deleted,
+            )
+
+            self.assertEqual(removed, 1)
+            self.assertEqual(deleted, ["concepts/single.md"])
 
 
 class TestPreserveStageCounters(unittest.TestCase):

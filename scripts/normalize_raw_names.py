@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stage 0.1: raw/ file name normalizer for any wiki project.
 
-The pregate (Stage 0) pre-processing gate. Reads <project>/raw/NAMING.md and
+The pregate (Stage 0) pre-processing gate. Reads <project>/schema.md and
 extracts machine-readable rules from the ```yaml rules``` block. Checks all
 (or recent) files against those rules. In --fix mode, renames files that can
 be automatically corrected.
@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import os
 import re
 import sys
 import time as _time
@@ -27,7 +26,7 @@ from typing import Optional, List, Dict, Tuple
 # ── Lightweight YAML block parser (no PyYAML dependency) ────────
 
 def _stage_0_1_parse_yaml_block(text: str) -> dict:
-    """Parse the naming-rules ```yaml block from schema.md / NAMING.md.
+    """Parse the naming-rules ```yaml block from schema.md.
 
     schema.md contains several ```yaml fences (e.g. the frontmatter example);
     pick the one that actually holds the rules — identified by a top-level
@@ -43,13 +42,13 @@ def _stage_0_1_parse_yaml_block(text: str) -> dict:
 
 
 def _stage_0_1_parse_simple_yaml(text: str) -> dict:
-    """Minimal YAML parser for the NAMING.md rules block subset.
+    """Minimal YAML parser for the schema.md rules block subset.
 
     Supports nested dicts, scalars, and lists in TWO syntaxes:
       * inline:  ``key: - a - b - c``            (single line, split on ' - ')
       * block:   ``key:\\n  - a\\n  - b``          (one item per line)
 
-    Block lists are the form NAMING.md actually uses; the previous impl
+    Block lists are the form schema.md actually uses; the previous impl
     skipped any line without a colon, silently dropping every ``- item``
     line and leaving ``vendors`` / ``vendor_prefixes`` empty — which made
     every datasheet fail the vendor check with a false "未识别的 Vendor".
@@ -293,7 +292,7 @@ def _stage_0_1_fix_file(filepath: Path, rule: dict, vendors: List[str],
 
 def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
              verbose: bool = False, recent_minutes: Optional[int] = None) -> Dict:
-    """Scan raw/ files against parsed rules from NAMING.md."""
+    """Scan raw/ files against parsed rules from schema.md."""
     results = {"ok": 0, "issues": 0, "warns": 0, "fixed": 0, "unfixable": 0}
     cutoff = _time.time() - (recent_minutes * 60) if recent_minutes else 0
     files_skipped = 0
@@ -319,8 +318,6 @@ def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: boo
             if filepath.suffix.lower() not in ('.pdf',):
                 continue
             if filepath.name.startswith('.'):
-                continue
-            if filepath.name == 'NAMING.md':
                 continue
 
             if recent_minutes:
@@ -371,6 +368,61 @@ def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: boo
         print(f"  ⏭️  跳过 {files_skipped} 个旧文件（超过 {recent_minutes} 分钟前修改）")
 
     return results
+
+
+def stage_0_1_check_file(raw_file: Path, project_root: Path) -> List[str]:
+    """Per-file Stage 0.1 naming gate for the ingest pipeline (wired 2026-07-08).
+
+    Returns error strings (empty = compliant or out of scope). Scope mirrors
+    ``stage_0_1_scan_raw``: only ``.pdf`` files under a folder that declares a
+    rule are checked — so e.g. ``.md`` deep-research pages (``wiki/queries/*.md``,
+    ingested directly since 2026-07-16, or a pre-2026-07-16 ``raw/queries/*.md``
+    bridge copy) always pass. Warn-level heuristics do not block.
+
+    Raises ``RuntimeError`` when the project has no parseable naming rules
+    (``schema.md`` missing or lacking the ```yaml rules block) — the documented
+    Stage 0.1 "draft the rules first" stop, no-silent-fallback aligned.
+    """
+    schema_md = project_root / 'schema.md'
+    if not schema_md.exists():
+        raise RuntimeError(
+            f"[Stage 0.1] {schema_md} not found — draft the project naming "
+            f"rules first (see references/raw-naming-conventions.md).")
+    rules = _stage_0_1_parse_yaml_block(schema_md.read_text(encoding='utf-8'))
+    if not rules or not rules.get('rules'):
+        raise RuntimeError(
+            f"[Stage 0.1] no ```yaml naming-rules block in {schema_md} — "
+            f"draft it first (see references/raw-naming-conventions.md).")
+
+    if raw_file.suffix.lower() != '.pdf':
+        return []
+    raw_root = project_root / 'raw'
+    try:
+        rel = raw_file.resolve().relative_to(raw_root.resolve())
+    except ValueError:
+        return []
+    if len(rel.parts) < 2 or rel.parts[0] not in rules['rules']:
+        return []
+
+    vendors_file = raw_root / 'Datasheet' / 'VENDORS.yaml'
+    if vendors_file.exists():
+        vdata = _stage_0_1_parse_simple_yaml(vendors_file.read_text(encoding='utf-8'))
+        if vdata.get('vendors'):
+            rules['vendors'] = vdata['vendors']
+        if vdata.get('vendor_prefixes'):
+            rules['vendor_prefixes'] = vdata['vendor_prefixes']
+
+    rule = _stage_0_1_resolve_rule(rules['rules'], rel.parts[0])
+    prefix_map = _stage_0_1_flatten_prefixes(rules.get('vendor_prefixes', {}))
+    issues = _stage_0_1_check_rule(raw_file, rule, rules.get('vendors', []), prefix_map)
+    forbidden_chars = rules.get('forbidden_chars') or [',', '，']
+    if isinstance(forbidden_chars, str):
+        forbidden_chars = [forbidden_chars]
+    for ch in forbidden_chars:
+        if ch and ch in raw_file.stem:
+            issues.append(("error",
+                f"文件名含禁用字符「{ch}」（逗号会被来源引用按逗号切分书名→断链），改用 ' - '"))
+    return [m for s, m in issues if s == "error"]
 
 
 # ── CLI ─────────────────────────────────────────────────────────

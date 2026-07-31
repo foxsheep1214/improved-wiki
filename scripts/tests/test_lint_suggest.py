@@ -8,6 +8,7 @@ Run:  python3 scripts/tests/test_lint_suggest.py
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -56,6 +57,29 @@ class TestTokenizeForSuggestion(unittest.TestCase):
 
 
 class TestRunStructuralLint(unittest.TestCase):
+    def test_escaped_table_alias_resolves_to_real_target(self):
+        pages = [
+            (
+                "concepts/motor.md",
+                "---\ntitle: Motor\n---\n# Motor\nMotor body.",
+            ),
+            (
+                "comparisons/motors.md",
+                "# Motors\n\n"
+                "| Dimension | Value |\n"
+                "|---|---|\n"
+                "| Kind | [[concepts/motor\\|Motor]] |\n",
+            ),
+        ]
+        results = ls.run_structural_lint(pages)
+        self.assertIsNone(
+            finding(
+                results,
+                type="broken-link",
+                page="comparisons/motors.md",
+            )
+        )
+
     def test_suggests_closest_page_for_broken_wikilink(self):
         pages = [
             ("transformer.md", "---\ntitle: Transformer\n---\n# Transformer\nAttention model."),
@@ -67,11 +91,43 @@ class TestRunStructuralLint(unittest.TestCase):
         self.assertEqual(broken["broken_target"], "transfomer")
         self.assertEqual(broken["suggested_target"], "transformer.md")
 
+    def test_broken_link_finding_carries_suggestion_score(self):
+        """2026-07-10: findings must carry `suggested_score` so the headless
+        fixer can gate auto-rewrites (>=0.9 auto, below -> review). NashSU
+        never persists the score because its Fix is human-clicked per item;
+        this is an improved-wiki extension field on the cache."""
+        pages = [
+            ("transformer.md", "---\ntitle: Transformer\n---\n# Transformer\nAttention model."),
+            # fuzzy typo: "transfomer" vs "transformer" -> Levenshtein ~0.909
+            ("attention.md", "# Attention\nSee [[transfomer]]."),
+            # contains-tier: broken target contains an existing slug -> 0.82
+            ("recurrent.md", "# RNN\nSee [[the transformer architecture overview]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        fuzzy = finding(results, type="broken-link", broken_target="transfomer")
+        self.assertIsNotNone(fuzzy)
+        self.assertAlmostEqual(fuzzy["suggested_score"], 1 - 1 / 11, places=4)
+        contains = finding(results, type="broken-link",
+                           broken_target="the transformer architecture overview")
+        self.assertIsNotNone(contains)
+        self.assertEqual(contains["suggested_target"], "transformer.md")
+        self.assertAlmostEqual(contains["suggested_score"], ls.CONTAINS_TARGET_SCORE)
+
+    def test_no_suggestion_has_none_score(self):
+        pages = [
+            ("transformer.md", "---\ntitle: Transformer\n---\n# T\nbody."),
+            ("attention.md", "# Attention\nSee [[completely-unrelated-xyzzy-target]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        broken = finding(results, type="broken-link")
+        self.assertIsNotNone(broken)
+        self.assertIsNone(broken.get("suggested_target"))
+        self.assertIsNone(broken.get("suggested_score"))
+
     def test_with_suggestions_false_skips_slow_suggestion_engine(self):
-        # validate_ingest.py runs over the whole wiki; the O(n^2) suggestion
-        # engine (suggest_related_page / suggest_broken_target) is too slow on
-        # large wikis. with_suggestions=False must still DETECT broken-link /
-        # orphan / no-outlinks but leave suggested_* = None (no suggestion scan).
+        # validate_ingest.py only needs structural detection, not the indexed
+        # candidate/scoring pass. with_suggestions=False must still DETECT
+        # broken-link / orphan / no-outlinks but leave suggested_* = None.
         pages = [
             ("transformer.md", "---\ntitle: Transformer\n---\n# Transformer\nAttention model."),
             ("attention.md", "# Attention\nSee [[transfomer]] for the architecture."),
@@ -141,6 +197,26 @@ class TestRunStructuralLint(unittest.TestCase):
         self.assertIsNone(finding(results, type="broken-link"))
         self.assertIsNone(finding(results, type="orphan", page="transformer.md"))
 
+    def test_normalizes_prefix_suffix_and_backslashes_for_resolution(self):
+        pages = [
+            ("concepts/transformer.md", "# Transformer\nCore page."),
+            ("notes/a.md", "# A\nSee [[wiki/concepts/transformer.md]]."),
+            ("notes/b.md", "# B\nSee [[concepts\\transformer.md]]."),
+            ("notes/c.md", "# C\nSee [[transformer.md]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        broken_targets = {
+            item["broken_target"]
+            for item in results
+            if item["type"] == "broken-link"
+        }
+        self.assertNotIn("wiki/concepts/transformer.md", broken_targets)
+        self.assertNotIn("concepts\\transformer.md", broken_targets)
+        self.assertNotIn("transformer.md", broken_targets)
+        self.assertIsNone(
+            finding(results, type="orphan", page="concepts/transformer.md")
+        )
+
 
 class TestHeadlessApplySafety(unittest.TestCase):
     """The headless --fix-links applier must never auto-write a guessed/aggregate
@@ -176,6 +252,94 @@ class TestHeadlessApplySafety(unittest.TestCase):
         orph = finding(ls.run_structural_lint(pages), type="orphan", page="concepts/lonely.md")
         self.assertIsNotNone(orph)
         self.assertIsNone(orph.get("suggested_source"))
+
+
+class TestNashsu066CandidateIndex(unittest.TestCase):
+    def test_top_candidates_are_stable_and_capped_at_64(self):
+        scores = {index: 1.0 for index in range(100)}
+        candidates = ls._top_candidates(scores, excluded=3)
+        self.assertEqual(len(candidates), ls.MAX_SUGGESTION_CANDIDATES)
+        self.assertEqual(candidates[:5], [0, 1, 2, 4, 5])
+        self.assertNotIn(3, candidates)
+
+    def test_5000_page_cycle_avoids_quadratic_candidate_expansion(self):
+        total = 5_000
+        pages = [
+            (
+                f"entities/page-{index}.md",
+                f"# Page {index}\nshared topic-{index}\n"
+                f"See [[entities/page-{(index + 1) % total}]].",
+            )
+            for index in range(total)
+        ]
+        started = time.perf_counter()
+        findings = ls.run_structural_lint(pages)
+        elapsed = time.perf_counter() - started
+        self.assertEqual(findings, [])
+        self.assertLess(elapsed, 10.0)
+
+
+class TestCrossDirectorySlugCollision(unittest.TestCase):
+    """Two pages sharing a basename across directories must be reported.
+
+    The dedup/merge path is keyed by basename slug, so `concepts/x.md` and
+    `methodology/x.md` collapse to one id. ``cross_source_dedup`` already
+    refuses to merge such a group (guard added 2026-07-11) rather than risk
+    acting on the wrong file — but that refusal only fires if a detector group
+    happens to include the slug, so collisions were otherwise invisible and
+    known-issues.md documented a MANUAL `find wiki -name "<slug>.md"` sweep as
+    the workaround. This check automates that sweep (2026-07-30): measured on
+    the live corpus it surfaces 10 collisions in HardwareWiki and 3 in
+    RadarWiki, all `concepts/X` vs `methodology/X` / `comparisons/X` — same
+    topic filed under two types, which needs a human content decision."""
+
+    def test_same_basename_in_two_directories_is_reported(self):
+        pages = [
+            ("concepts/mode-separation.md",
+             "---\ntitle: Mode Separation\n---\n# Mode Separation\nSee [[concepts/emc]]."),
+            ("methodology/mode-separation.md",
+             "---\ntitle: Mode Separation\n---\n# Mode Separation\nSee [[concepts/emc]]."),
+            ("concepts/emc.md", "---\ntitle: EMC\n---\n# EMC\nSee [[concepts/mode-separation]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        hit = finding(results, type="slug-collision", page="concepts/mode-separation.md")
+        self.assertIsNotNone(hit, "collision on concepts/ side must be reported")
+        self.assertIn("methodology/mode-separation.md", hit["detail"])
+        # Reported on every colliding page, so either one can be triaged.
+        self.assertIsNotNone(
+            finding(results, type="slug-collision", page="methodology/mode-separation.md"))
+
+    def test_distinct_basenames_produce_no_collision_finding(self):
+        pages = [
+            ("concepts/alpha.md", "---\ntitle: Alpha\n---\n# Alpha\nSee [[concepts/beta]]."),
+            ("methodology/beta.md", "---\ntitle: Beta\n---\n# Beta\nSee [[concepts/alpha]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        self.assertIsNone(finding(results, type="slug-collision"))
+
+    def test_collision_finding_carries_all_colliding_paths(self):
+        pages = [
+            ("concepts/x.md", "---\ntitle: X\n---\n# X\nSee [[concepts/y]]."),
+            ("methodology/x.md", "---\ntitle: X\n---\n# X\nSee [[concepts/y]]."),
+            ("comparisons/x.md", "---\ntitle: X\n---\n# X\nSee [[concepts/y]]."),
+            ("concepts/y.md", "---\ntitle: Y\n---\n# Y\nSee [[concepts/x]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        hit = finding(results, type="slug-collision", page="concepts/x.md")
+        self.assertIsNotNone(hit)
+        for other in ("methodology/x.md", "comparisons/x.md"):
+            self.assertIn(other, hit["detail"])
+        # The page's own path is not listed as one of its collisions.
+        self.assertNotIn("concepts/x.md", hit["detail"])
+
+    def test_root_level_anchor_pages_are_not_collisions(self):
+        # index/log/overview are filtered as anchors before this check.
+        pages = [
+            ("index.md", "# Index\nSee [[concepts/a]]."),
+            ("concepts/a.md", "---\ntitle: A\n---\n# A\nSee [[index]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        self.assertIsNone(finding(results, type="slug-collision"))
 
 
 if __name__ == "__main__":

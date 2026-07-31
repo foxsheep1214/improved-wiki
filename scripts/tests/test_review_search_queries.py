@@ -97,7 +97,7 @@ class TestPromptAsksForSearchQueries(unittest.TestCase):
 
     def test_prompt_mentions_search_queries(self):
         import inspect
-        src = inspect.getsource(review.stage_3_4_review_suggestions)
+        src = inspect.getsource(review.stage_3_4_prepare_review_suggestions)
         self.assertIn("search_queries", src)
         self.assertIn("suggestion", src)
         self.assertIn("missing-page", src)
