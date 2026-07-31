@@ -263,7 +263,8 @@ default; its delete-orphans continuation is always human-gated at exit 102.
 ## Reference map
 
 - Pipeline: `ingest-stages-mandatory.md`, `batch-parallel-prefetch.md`,
-  `batch-digest-loop.md`, `scanned-pdf-ocr-pipeline.md`
+  `batch-digest-loop.md`, `scanned-pdf-ocr-pipeline.md`,
+  `mineru-version-tracking.md`
 - Agent driving: `delegate-mode.md`, `conversation-mode-agent-workflow.md`,
   `context-probe.md`
 - Generation: `comparison-generation.md`, `dedup-design.md`,
@@ -271,8 +272,12 @@ default; its delete-orphans continuation is always human-gated at exit 102.
 - Conventions: `naming-conventions.md`, `raw-naming-conventions.md`,
   `raw-layout-compat.md`, `review-file-naming.md`
 - Operations: `initial-setup.md`, `re-ingest-comparison.md`,
-  `maintenance-cleanup.md`, `known-issues.md`, `cron-installation.md`
+  `maintenance-cleanup.md`, `known-issues.md`, `cron-installation.md`,
+  `scripting-pitfalls.md`
 - Retrieval and search: `kb-retrieval.md`, `nashsu-search-architecture.md`
+- Background: `architecture-decisions.md`, `roadmap.md` (planned, not built),
+  `nashsu-lint-source-analysis.md`, `query-generation.md` (Stage 2.7
+  tombstone — the stage is removed)
 
 Templates live under `templates/`. Ingest templates are selected by source
 type; aggregate templates cover schema, index, log, and overview.

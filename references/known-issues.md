@@ -2,31 +2,6 @@
 
 ## Open issues
 
-### Several files exceed the 800-line guideline
-清单核对于 2026-07-30（此前版本已失效：`_core.py` 记的 ~1480 行、`ingest.py`
-记的 ~680 行都早已被 `b01ea6f` 拆成 facade，现分别是 381 / 202 行）。
-
-当前实际超阈值的模块：
-
-| 文件 | 行数 | 说明 |
-|---|---|---|
-| `_stage_2_4_generation.py` | 1599 | 单次整书 generation prompt + 旧 direct helper 与 FILE repair 集中，暂无干净切分点 |
-| `_stage_3_write.py` | 1506 | 写盘 + 链接归一化 + Stage 3.5 聚合重建三块职责 |
-| `_stage_1_3_caption.py` | 1217 | VLM 配文 + 上下文映射 + 内联三块 |
-| `graph.py` | 1188 | 独立命令，含 HTML/JS 输出模板 |
-| `_stage_2_analyze.py` | 1182 | 分块器 + 滚动 digest + schema 校验 |
-| `_stage_1_1_scanned.py` | 1136 | minerU 编排 + OCR 分块 + sidecar 持久化 |
-| `_batch_supervisor.py` | 916 | 批处理协调（worker lease / 预取 / 暂停标记） |
-
-这是**风格指标超标，不是缺陷**：没有已知的错误行为与之关联，且每个模块的职责本身是内聚的（表中"说明"列即其不易切分的原因）。拆分需改动大量导入面并使既有测试的 import 路径失效，收益仅为满足行数阈值。**结论：保持记录、不主动重构**；等某个模块因真实需求要改结构时顺带拆。
-
-`_stage_1_extract.py` 是 facade，re-export 兄弟模块 `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py` 的公开名，外部导入者无需改动。
-
-### minerU 偶尔把公式区域分类为 `image` 而非 `equation`
-~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。
-
-**为何不在本仓库修（评估 2026-07-30）**：误分类发生在 minerU 的版面分析里，我们拿到的 block 已经带着 `type="image"` 标签（`_stage_1_2_images.py` 按 `type in ("image","chart")` 收割）。本地没有任何可靠信号区分"真图"与"被误标的公式图"——除非再跑一次视觉识别，而那正是当前已在做的事（VLM 配文），或者去和该页 markdown 文本做启发式比对，脆弱且可能误伤真图。代价仅是若干次 VLM 调用与相对 LaTeX 略低的保真度，产出仍可用。**待上游 minerU 修复**；若要本地兜底，应先有一批标注样本再评估。
-
 ### 跨目录同名 basename 的 slug 碰撞（危险已堵，剩余为内容取舍问题；记录更新 2026-07-30）
 `cross_source_dedup.py` 全链路用 `_slug_from_path()`（只取文件名 stem）作页面 id：`concepts/x.md` 和 `methodology/x.md` 映射到同一个 slug，slug 键的 dict 会静默塌缩成一条。
 
@@ -35,9 +10,6 @@
 **剩余（非代码缺陷）**：碰撞页永远被 dedup 跳过。实测全库碰撞：HardwareWiki 10 组、RadarWiki 3 组，**全部是 `concepts/X` vs `methodology/X`（或 `comparisons/X`）**——同一主题被同时归成两种 schema 类型。这属于内容归类取舍（schema 上 concept=原理/现象、methodology=方法/流程，二者**可以**合法并存），需要人工判定合并还是保留，不适合自动合并。lint 的 `slug-collision` 条目已给出该判定所需信息。
 
 **未做**：全链路改用路径作 id。评估（2026-07-30）：涉及 ~60 处 slug 引用、detector 的 LLM 协议（返回 `{"slugs": [...]}`）与分组缓存键格式，会使既有 dedup 对话缓存全部失效；而收益仅是让上述 13 组可自动合并——而它们本就需要人工内容判定。风险收益不成比例，暂不改。
-
-### Stage 2.6 source 页曾在生成后、写盘前异常丢失内容（单次事件 2026-07-07，根因未锁定）
-历史现象：归档的 Stage 2.6 conversation 响应完整，但首次落盘 source 页与响应不一致。source summary 现已按 NashSU 改为自由结构，不再用固定 H2 判断质量；当前防线是：(1) 未闭合 FILE 块丢弃并做一次 exact-path targeted repair；(2) 最终 source block 做 exact-path/frontmatter/END/non-empty 结构校验；(3) 仍缺失时从**完整 Stage 2 analysis**确定性写 fallback；(4) Stage 3.1 写盘前再做同一 fallback gate。**行动项：如再出现“完整响应与落盘内容不一致”，保留当次 `.llm-wiki/conversation/<hash>/` 与 progress 文件，继续追写盘窗口根因。**
 
 ## Design decisions (not bugs)
 
