@@ -57,6 +57,16 @@ minerU 32 页/chunk 串行。272 页书（9 chunks）可能超 600s 终端超时
 
 ## Fixed bugs（回归意识——已修但值得记录症状）
 
+### 旧书（无 `.task.json`）若原写入页被后续 lint dedup/delete-orphans 合并/删除，曾无法干净 resume（已修，2026-07-30，Route A）
+`_task_manifest.py` 的 `ensure_task_manifest` 首次为某源建立 `.task.json` 时（2026-07-21 硬化引入），`_new_manifest` 用 legacy `ingest-cache.json` 的 `filesWritten` 快照回填 `resume.page_refs`，随即 `_validate_bound_artifacts` 要求这些页**此刻全部存在**，否则硬失败（"task manifest binds missing written pages"）。这个快照是该源**当年写盘时**的产物，此后 wiki 全局 lint 的 dedup/delete-orphans 会持续合并/删除任何源的页面——这是正常生命周期维护，不是数据损坏，但硬化逻辑没有区分二者。实测（HardwareWiki，`Op Amps for Everyone - 2002 - Carter.pdf`，write_phase 卡住的遗留书）：79 个原写入页里 7 个已被后续 lint 合并/删除，其中每一个都能在 `wiki/REVIEW/missing-page/*`（2026-07-05 lint 生成，至今 `resolved: false`）里找到对应记录，证实是已知、已追踪的正常缺口而非静默丢失。`ingest.py` 在 Stage 0 manifest 引导阶段直接崩溃，无法继续。
+
+**决策（用户 2026-07-30 明确裁定）：Route A——自动容忍并放行**，而非"每本旧书人工核实后手动纠正"。已实现 `_reconcile_stale_legacy_page_refs()`：仅在源的**首次** manifest 引导（无 `.task.json`）时生效——把已从磁盘消失的 legacy 页从 `resume.page_refs` 中剪除（打印明确警告，从不静默），同步纠正 legacy `ingest-cache.json` 的 `filesWritten` 与 stages.json 里 `write_phase`/`write_loop_done` payload 的 `files_written`（`_do_write` 在 write_phase 恢复时直接读这个 payload），使三方在完成闸门 `assert_task_ready_for_completion` 处重新一致。**边界**：只裁剪真正"已消失"（`is_file()` 为假）的条目；存在但为空文件（0 字节）的条目保留在列表里，仍会命中原有的 "empty written pages" 硬失败——lint 的 dedup/delete-orphans 是整个删文件，不会留 0 字节空壳，空文件更像真事故。**且只作用于首次引导**：一旦 manifest 已存在并在实时追踪（`bind_page_refs` 绑定过的页），同一轮 resume 内页面消失仍然硬失败——那是当前这次 resume 自己记录里的真实数据完整性问题，不是多年 lint 历史。测试见 `test_task_manifest.py`（`test_legacy_bootstrap_auto_heals_pages_removed_by_later_lint`、`test_legacy_bootstrap_still_raises_on_empty_page_not_missing`、`test_active_manifest_still_raises_when_a_bound_page_vanishes`）。
+
+### 媒体清单（`_manifest.json`）v2 legacy 版本曾让完成闸门永久硬失败（已修，2026-07-30，Route A 扩展到媒体子系统）
+`_stage_1_2_images.py::validate_stage_1_2_artifact` 要求 `manifest_version == 3`（v3 比 v2 多两个逐图字段：`sha256`、`size_bytes`），否则硬失败（"media manifest version 2 is not v3"），这个检查在 `_finalize_book` 设置 `ingested` 标记前必经。v2 是该字段引入前的旧格式，全库扫描发现 **68 本里 31 本媒体清单仍是 v2**（多数已是 `ingested`），只要该源被再次触碰（重摄取、媒体修复、或像 Op Amps 这样卡住的 resume）就会撞上这堵墙——与task-manifest那条是**同一类**问题：legacy 快照 vs 新硬化检查，只是发生在媒体子系统。实测（HardwareWiki，Op Amps for Everyone）：v2 清单引用的 396 张图逐一核实**全部存在、非空、文件名安全无重复**——v2/v3 的唯一差距就是缺这两个可从磁盘现有文件直接算出来的完整性字段，不是数据丢失。
+
+**处理与 Route A 一致**：`_migrate_v2_media_manifest()` 只在 `manifest_version == 2` 时触发——逐图核对存在性/非空/文件名安全唯一性（复用 v3 校验的同一套检查），全部通过才补算 `sha256`/`size_bytes`、把 `manifest_version` 升到 3、原子写回，并打印明确警告（从不静默）。这不是弱化检查——补算的字段和全新 v3 写入时算出来的完全一样，只是补做而不是重新做一遍摄取。**任何真实缺口**（图片确实丢了、为空、文件名不安全或重复）仍然硬失败，磁盘上的清单原样保留为 v2，不会被静默改写掩盖问题。测试见 `test_media_artifact_cache.py`（`test_legacy_v2_manifest_auto_upgrades_when_images_intact`、`test_legacy_v2_manifest_with_missing_image_still_fails`、`test_manifest_version_other_than_2_or_3_still_fails`）。
+
 ### 合法 `## Role` 页合并曾被 stale 检测删除（已修，2026-07-30）
 conversation router 原先用子串 `"# Role" in response` 识别“代理复制了 prompt”；
 合法 Wiki 二级标题 `## Role` 也包含该子串。NVIC 合并因此每次验证通过后仍被当作

@@ -108,6 +108,84 @@ class TestStage12ArtifactValidation(unittest.TestCase):
             self.assertTrue(
                 "size mismatch" in reason or "hash mismatch" in reason)
 
+    def test_legacy_v2_manifest_auto_upgrades_when_images_intact(self):
+        """v3 added per-image sha256/size_bytes (2026-07-08ish). A v2 manifest
+        predates that and would otherwise hard-fail every source that has one
+        forever — observed on HardwareWiki: 31 of 68 already-ingested books
+        still carry a v2 manifest, each blocking the very next ingest.py touch
+        even though their referenced image files are verifiably intact.
+        Route A (2026-07-30): auto-upgrade in place when every image is
+        present, non-empty, and safely/uniquely named — computing the SAME
+        fields a fresh v3 write would produce, not weakening the check."""
+        with tempfile.TemporaryDirectory() as d:
+            cfg, raw, image, result = _artifact(Path(d))
+            manifest_path = Path(result["manifest"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["manifest_version"] = 2
+            for entry in manifest["images"]:
+                entry.pop("sha256", None)
+                entry.pop("size_bytes", None)
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+
+            valid, reason, normalized = validate_stage_1_2_artifact(
+                result, cfg, raw, expected_count=1)
+
+            self.assertTrue(valid, reason)
+            self.assertEqual(normalized["count"], 1)
+
+            upgraded = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(upgraded["manifest_version"], 3)
+            self.assertEqual(
+                upgraded["images"][0]["size_bytes"], image.stat().st_size)
+            self.assertEqual(
+                upgraded["images"][0]["sha256"],
+                _core.file_sha256(image),
+            )
+
+    def test_legacy_v2_manifest_with_missing_image_still_fails(self):
+        """Auto-upgrade only covers a verifiably-intact v2 manifest. A real
+        gap (image gone) must still hard-fail exactly as before, and the
+        on-disk manifest must NOT be silently rewritten as if nothing were
+        wrong."""
+        with tempfile.TemporaryDirectory() as d:
+            cfg, raw, image, result = _artifact(Path(d))
+            manifest_path = Path(result["manifest"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["manifest_version"] = 2
+            for entry in manifest["images"]:
+                entry.pop("sha256", None)
+                entry.pop("size_bytes", None)
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            image.unlink()
+
+            valid, reason, _ = validate_stage_1_2_artifact(
+                result, cfg, raw, expected_count=1)
+
+            self.assertFalse(valid)
+            self.assertIn("missing", reason)
+            still_v2 = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(still_v2["manifest_version"], 2)
+
+    def test_manifest_version_other_than_2_or_3_still_fails(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg, raw, _image, result = _artifact(Path(d))
+            manifest_path = Path(result["manifest"])
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["manifest_version"] = 1
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+                encoding="utf-8")
+
+            valid, reason, _ = validate_stage_1_2_artifact(
+                result, cfg, raw, expected_count=1)
+
+            self.assertFalse(valid)
+            self.assertIn("not v2 or v3", reason)
+
 
 class TestStage13ArtifactValidation(unittest.TestCase):
     def test_required_policy_rejects_missing_caption(self):

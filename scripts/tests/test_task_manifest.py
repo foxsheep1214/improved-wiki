@@ -101,27 +101,113 @@ class TestTaskManifest(unittest.TestCase):
                 first["contract_sha256"], second["contract_sha256"])
             self.assertEqual(len(second["contract_history"]), 1)
 
-    def test_legacy_completed_cache_bootstraps_and_checks_page_refs(self):
+    def test_legacy_bootstrap_auto_heals_pages_removed_by_later_lint(self):
+        """Route A (2026-07-30, explicit user decision after Op Amps for
+        Everyone hit this live on HardwareWiki): a source's FIRST-EVER
+        manifest bootstrap auto-heals legacy filesWritten entries that a
+        later, LEGITIMATE wiki-lint dedup/delete-orphans pass has since
+        removed — normal wiki lifecycle, not corruption. The stale entry is
+        pruned (with a loud warning, never silently) from both the new
+        manifest and the legacy ingest-cache.json entry, so downstream
+        consumers agree on the same, currently-true page set. A page that IS
+        still on disk is kept untouched."""
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             cfg = _config(root)
             raw = _raw(root)
             source_hash = _core.file_sha256(raw)
             key = _core.source_cache_key(raw, cfg)
+
+            present = cfg.wiki_dir / "concepts" / "present.md"
+            present.parent.mkdir(parents=True, exist_ok=True)
+            present.write_text("# Present\n", encoding="utf-8")
+
             _core.save_cache(cfg, {
                 "version": "2",
                 "entries": {
                     key: {
                         "hash": source_hash,
-                        "filesWritten": ["wiki/concepts/missing.md"],
+                        "filesWritten": [
+                            "wiki/concepts/present.md",
+                            "wiki/concepts/missing.md",
+                        ],
+                    },
+                },
+            })
+            _core.mark_stage_done(cfg, source_hash, "ingested")
+
+            manifest = ensure_task_manifest(raw, cfg)  # must NOT raise
+
+            self.assertEqual(
+                manifest["resume"]["page_refs"],
+                ["wiki/concepts/present.md"],
+            )
+            cache = _core.load_cache(cfg)
+            self.assertEqual(
+                cache["entries"][key]["filesWritten"],
+                ["wiki/concepts/present.md"],
+            )
+
+    def test_legacy_bootstrap_still_raises_on_empty_page_not_missing(self):
+        """Auto-heal only covers pages that are truly GONE (merged/removed by
+        lint, which deletes files outright). A page that exists but is EMPTY
+        is a different, more corruption-like signal and must still hard-fail
+        even at first bootstrap — the same as before Route A."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg = _config(root)
+            raw = _raw(root)
+            source_hash = _core.file_sha256(raw)
+            key = _core.source_cache_key(raw, cfg)
+
+            empty_page = cfg.wiki_dir / "concepts" / "empty.md"
+            empty_page.parent.mkdir(parents=True, exist_ok=True)
+            empty_page.write_text("", encoding="utf-8")
+
+            _core.save_cache(cfg, {
+                "version": "2",
+                "entries": {
+                    key: {
+                        "hash": source_hash,
+                        "filesWritten": ["wiki/concepts/empty.md"],
                     },
                 },
             })
             _core.mark_stage_done(cfg, source_hash, "ingested")
 
             with self.assertRaisesRegex(
-                TaskManifestError, "missing written pages"):
+                TaskManifestError, "empty written pages"):
                 ensure_task_manifest(raw, cfg)
+
+    def test_active_manifest_still_raises_when_a_bound_page_vanishes(self):
+        """Route A auto-heals ONLY a source's first-ever manifest bootstrap.
+        Once a manifest exists and is actively tracking a page (bound via
+        bind_page_refs during a real resume), that page vanishing is a live
+        corruption signal within the CURRENT resume's own bookkeeping — not
+        years of accumulated lint drift — and must still hard-fail, with the
+        same actionable guidance."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg = _config(root)
+            raw = _raw(root)
+            source_hash = _core.file_sha256(raw)
+            ensure_task_manifest(raw, cfg)  # bootstrap: empty legacy cache
+
+            page = cfg.wiki_dir / "concepts" / "present.md"
+            page.parent.mkdir(parents=True, exist_ok=True)
+            page.write_text("# Present\n", encoding="utf-8")
+            bind_page_refs(cfg, source_hash, ["concepts/present.md"])
+            _core.mark_stage_done(cfg, source_hash, "write_phase")
+
+            page.unlink()  # simulate the page vanishing mid-resume
+
+            with self.assertRaises(TaskManifestError) as ctx:
+                ensure_task_manifest(raw, cfg)
+
+            message = str(ctx.exception)
+            self.assertIn("missing written pages", message)
+            self.assertIn("dedup", message)
+            self.assertIn("--delete", message)
 
     def test_chunk_plan_and_page_set_are_resume_invariants(self):
         with tempfile.TemporaryDirectory() as d:

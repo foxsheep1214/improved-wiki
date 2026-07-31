@@ -24,6 +24,7 @@ from _progress import (
     load_progress,
     load_stages,
     progress_path,
+    save_cache,
     stages_path,
 )
 from _page_ref import PageRef, canonical_page_refs
@@ -190,6 +191,95 @@ def _sync_from_disk(manifest: dict, config, source_hash: str) -> dict:
     return manifest
 
 
+def _reconcile_stale_legacy_page_refs(
+    page_refs: list[str],
+    config,
+    source_hash: str,
+    cache_key: str,
+) -> list[str]:
+    """Auto-heal a source's FIRST-EVER manifest bootstrap (Route A, 2026-07-30).
+
+    ``page_refs`` reflects an ``ingest-cache.json`` "filesWritten" snapshot
+    taken when the source was originally written — years before task
+    manifests existed (2026-07-21), for some sources before this fix. The
+    wiki's own lint (dedup merges, delete-orphans) runs continuously and
+    legitimately removes/merges any source's pages afterward; that is normal
+    lifecycle, not corruption. Treating the stale snapshot as a forever-
+    binding invariant made an ordinary ``ingest.py <file>`` touch of an old,
+    otherwise-healthy source crash outright. Observed live on HardwareWiki's
+    "Op Amps for Everyone": 7 of 79 originally-written concept pages had
+    already been merged away by dedup, each with its own long-unresolved
+    ``wiki/REVIEW/missing-page/*`` item from a 2026-07-05 lint run — the gap
+    was already known and tracked, not a silent loss.
+
+    Only entries that are truly GONE are pruned (lint deletes files outright).
+    An entry that still exists but is empty is left untouched here so
+    ``_validate_bound_artifacts``'s "empty written pages" hard-fail still
+    catches it — that is a more corruption-like signal this policy does not
+    cover. Dropped entries are logged loudly (never silent) and the legacy
+    ``ingest-cache.json`` entry is corrected to match, so the completion gate's
+    cached/manifest/supplied three-way equality can still hold later.
+
+    Only called from a source's first-ever bootstrap (no ``.task.json`` yet).
+    An EXISTING, actively-tracked manifest keeps the strict behavior — a page
+    vanishing there is a live corruption signal within the current resume's
+    own bookkeeping, not accumulated lint history, and must still hard-fail.
+    """
+    kept, dropped = [], []
+    for value in page_refs:
+        ref = PageRef.parse(value, config.wiki_root, config.wiki_dir)
+        if ref.absolute_path.is_file():
+            kept.append(value)  # existing (even if empty) — let the caller validate size
+        else:
+            dropped.append(value)
+    if not dropped:
+        return page_refs
+
+    preview = ", ".join(dropped[:5])
+    more = f" (+{len(dropped) - 5} more)" if len(dropped) > 5 else ""
+    print(
+        f"  [task-manifest] ⚠️  auto-healed {len(dropped)} stale legacy page "
+        f"ref(s) at first-time manifest bootstrap — no longer on disk, "
+        f"treated as legitimate wiki-lint dedup/delete-orphans history, not "
+        f"corruption: {preview}{more}"
+    )
+
+    cache = load_cache(config)
+    entry = cache.get("entries", {}).get(cache_key)
+    if isinstance(entry, dict) and isinstance(entry.get("filesWritten"), list):
+        entry["filesWritten"] = kept
+        save_cache(config, cache)
+
+    # A write_phase/write_loop_done resume reads its files_written straight
+    # from this stages.json payload (_ingest_write._do_write), independent of
+    # the manifest/cache above. Leaving it stale would reintroduce the same
+    # gone pages into the review/finalization set on the very next resume.
+    stages = load_stages(config, source_hash)
+    changed = False
+    for marker in ("write_phase", "write_loop_done"):
+        payload = stages.get(f"{marker}__payload")
+        if not isinstance(payload, dict):
+            continue
+        values = payload.get("files_written")
+        if not isinstance(values, list):
+            continue
+        refs = canonical_page_refs(values, config.wiki_root, config.wiki_dir)
+        pruned = [
+            r for r in refs
+            if PageRef.parse(r, config.wiki_root, config.wiki_dir).absolute_path.is_file()
+        ]
+        if len(pruned) != len(refs):
+            payload["files_written"] = pruned
+            changed = True
+    if changed:
+        atomic_write(
+            stages_path(config, source_hash),
+            json.dumps(stages, ensure_ascii=False, indent=2),
+        )
+
+    return kept
+
+
 def _validate_bound_artifacts(
     manifest: dict,
     config,
@@ -239,7 +329,14 @@ def _validate_bound_artifacts(
             more = f" (+{len(missing) - 5} more)" if len(missing) > 5 else ""
             raise TaskManifestError(
                 f"task manifest binds missing written pages: "
-                f"{preview}{more}")
+                f"{preview}{more}. Likely cause: this is a pre-2026-07-21 "
+                "source (no .task.json existed yet) whose original write set "
+                "was legitimately merged or removed by a later wiki-lint "
+                "dedup/delete-orphans pass, not corruption — verify the pages "
+                "are genuinely gone (not renamed/merged elsewhere) before "
+                "resolving with `ingest.py --delete <file>` followed by a "
+                "normal ingest, which establishes a fresh, consistent "
+                "completion record.")
         if empty:
             preview = ", ".join(empty[:5])
             more = f" (+{len(empty) - 5} more)" if len(empty) > 5 else ""
@@ -287,6 +384,16 @@ def ensure_task_manifest(raw_file: Path, config) -> dict:
     path = task_manifest_path(config, source_hash)
     current = _new_manifest(raw_file, config, source_hash)
     if not path.exists():
+        # First-ever manifest for this source: its legacy-cache page_refs
+        # snapshot may predate later, legitimate wiki-lint dedup/delete-
+        # orphans activity. Auto-heal that drift (Route A) instead of hard-
+        # failing — see _reconcile_stale_legacy_page_refs.
+        current["resume"]["page_refs"] = _reconcile_stale_legacy_page_refs(
+            current["resume"]["page_refs"],
+            config,
+            source_hash,
+            current["source"]["cache_key"],
+        )
         manifest = _sync_from_disk(current, config, source_hash)
         _validate_bound_artifacts(manifest, config, source_hash)
         atomic_write(

@@ -95,6 +95,70 @@ def _stage_1_2_write_manifest(
     return enriched_images
 
 
+def _migrate_v2_media_manifest(
+    manifest: dict, media_dir: Path, manifest_path: Path,
+) -> tuple[dict | None, str]:
+    """Auto-upgrade a v2 media manifest in place (Route A, 2026-07-30).
+
+    v3 added per-image ``sha256``/``size_bytes`` integrity fields. A v2
+    manifest predates that and would otherwise hard-fail
+    ``assert_cached_media_complete`` forever, on every source that has one —
+    observed on HardwareWiki: 31 of 68 already-ingested books still carry a v2
+    manifest, each blocking the very next ``ingest.py`` touch (re-ingest,
+    media repair, or a stalled resume) even though every one of their
+    referenced image files is verifiably intact on disk.
+
+    Computes the missing fields from the REAL current files — this is not a
+    weaker check than a fresh v3 write, it is the same check performed
+    retroactively. Only upgrades when every referenced image is present,
+    non-empty, and safely/uniquely named, mirroring the per-image checks
+    ``validate_stage_1_2_artifact`` runs on a v3 manifest; any real gap still
+    hard-fails, exactly as before, and the on-disk manifest is left untouched
+    (still v2) so a later re-check sees the same unresolved problem.
+    """
+    images = manifest.get("images")
+    if not isinstance(images, list):
+        return None, "media manifest images is not a list"
+    seen: set[str] = set()
+    for position, image in enumerate(images, 1):
+        if not isinstance(image, dict):
+            return None, f"manifest image {position} is not a mapping"
+        filename = image.get("filename")
+        if not isinstance(filename, str) or not filename:
+            return None, f"manifest image {position} has no filename"
+        if Path(filename).name != filename:
+            return None, f"unsafe manifest image filename: {filename}"
+        if filename in seen:
+            return None, f"duplicate manifest image filename: {filename}"
+        seen.add(filename)
+        image_path = media_dir / filename
+        if not image_path.is_file():
+            return None, f"media image missing: {filename}"
+        if image_path.stat().st_size <= 0:
+            return None, f"media image is empty: {filename}"
+
+    upgraded = dict(manifest)
+    upgraded_images = []
+    for image in images:
+        image_path = media_dir / image["filename"]
+        entry = dict(image)
+        entry["size_bytes"] = image_path.stat().st_size
+        entry["sha256"] = file_sha256(image_path)
+        upgraded_images.append(entry)
+    upgraded["images"] = upgraded_images
+    upgraded["manifest_version"] = 3
+
+    tmp = manifest_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(upgraded, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.rename(manifest_path)
+    print(
+        f"  [media] ⚠️  auto-upgraded legacy v2 manifest to v3 for "
+        f"{media_dir.name} — computed sha256/size_bytes for "
+        f"{len(upgraded_images)} image(s) already on disk"
+    )
+    return upgraded, ""
+
+
 def validate_stage_1_2_artifact(
     stage_result: dict,
     config: Config,
@@ -147,12 +211,17 @@ def validate_stage_1_2_artifact(
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return False, f"media manifest unreadable: {type(exc).__name__}: {exc}", {}
-    if manifest.get("manifest_version") != 3:
+    if manifest.get("manifest_version") not in (2, 3):
         return (
             False,
-            f"media manifest version {manifest.get('manifest_version')} is not v3",
+            f"media manifest version {manifest.get('manifest_version')} is not v2 or v3",
             {},
         )
+    if manifest.get("manifest_version") == 2:
+        upgraded, reason = _migrate_v2_media_manifest(manifest, media_dir, manifest_path)
+        if upgraded is None:
+            return False, reason, {}
+        manifest = upgraded
     if manifest.get("source_sha256") != file_sha256(raw_file):
         return False, "media manifest source hash does not match raw source", {}
 
