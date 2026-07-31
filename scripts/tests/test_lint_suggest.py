@@ -279,5 +279,68 @@ class TestNashsu066CandidateIndex(unittest.TestCase):
         self.assertLess(elapsed, 10.0)
 
 
+class TestCrossDirectorySlugCollision(unittest.TestCase):
+    """Two pages sharing a basename across directories must be reported.
+
+    The dedup/merge path is keyed by basename slug, so `concepts/x.md` and
+    `methodology/x.md` collapse to one id. ``cross_source_dedup`` already
+    refuses to merge such a group (guard added 2026-07-11) rather than risk
+    acting on the wrong file — but that refusal only fires if a detector group
+    happens to include the slug, so collisions were otherwise invisible and
+    known-issues.md documented a MANUAL `find wiki -name "<slug>.md"` sweep as
+    the workaround. This check automates that sweep (2026-07-30): measured on
+    the live corpus it surfaces 10 collisions in HardwareWiki and 3 in
+    RadarWiki, all `concepts/X` vs `methodology/X` / `comparisons/X` — same
+    topic filed under two types, which needs a human content decision."""
+
+    def test_same_basename_in_two_directories_is_reported(self):
+        pages = [
+            ("concepts/mode-separation.md",
+             "---\ntitle: Mode Separation\n---\n# Mode Separation\nSee [[concepts/emc]]."),
+            ("methodology/mode-separation.md",
+             "---\ntitle: Mode Separation\n---\n# Mode Separation\nSee [[concepts/emc]]."),
+            ("concepts/emc.md", "---\ntitle: EMC\n---\n# EMC\nSee [[concepts/mode-separation]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        hit = finding(results, type="slug-collision", page="concepts/mode-separation.md")
+        self.assertIsNotNone(hit, "collision on concepts/ side must be reported")
+        self.assertIn("methodology/mode-separation.md", hit["detail"])
+        # Reported on every colliding page, so either one can be triaged.
+        self.assertIsNotNone(
+            finding(results, type="slug-collision", page="methodology/mode-separation.md"))
+
+    def test_distinct_basenames_produce_no_collision_finding(self):
+        pages = [
+            ("concepts/alpha.md", "---\ntitle: Alpha\n---\n# Alpha\nSee [[concepts/beta]]."),
+            ("methodology/beta.md", "---\ntitle: Beta\n---\n# Beta\nSee [[concepts/alpha]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        self.assertIsNone(finding(results, type="slug-collision"))
+
+    def test_collision_finding_carries_all_colliding_paths(self):
+        pages = [
+            ("concepts/x.md", "---\ntitle: X\n---\n# X\nSee [[concepts/y]]."),
+            ("methodology/x.md", "---\ntitle: X\n---\n# X\nSee [[concepts/y]]."),
+            ("comparisons/x.md", "---\ntitle: X\n---\n# X\nSee [[concepts/y]]."),
+            ("concepts/y.md", "---\ntitle: Y\n---\n# Y\nSee [[concepts/x]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        hit = finding(results, type="slug-collision", page="concepts/x.md")
+        self.assertIsNotNone(hit)
+        for other in ("methodology/x.md", "comparisons/x.md"):
+            self.assertIn(other, hit["detail"])
+        # The page's own path is not listed as one of its collisions.
+        self.assertNotIn("concepts/x.md", hit["detail"])
+
+    def test_root_level_anchor_pages_are_not_collisions(self):
+        # index/log/overview are filtered as anchors before this check.
+        pages = [
+            ("index.md", "# Index\nSee [[concepts/a]]."),
+            ("concepts/a.md", "---\ntitle: A\n---\n# A\nSee [[index]]."),
+        ]
+        results = ls.run_structural_lint(pages)
+        self.assertIsNone(finding(results, type="slug-collision"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -372,6 +372,8 @@ for _f in run_structural_lint(structural_pages):
         _f["id"] = f"lint-orphan-{_stem_key}"
     elif _f["type"] == "no-outlinks":
         _f["id"] = f"lint-nol-{_stem_key}"
+    elif _f["type"] == "slug-collision":
+        _f["id"] = f"lint-slugcol-{_stem_key}"
     _f["createdAt"] = now_ms
     findings.append(_f)
 

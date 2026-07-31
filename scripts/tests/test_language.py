@@ -213,6 +213,156 @@ class TestMathAndAcronymFalsePositivesStayEnglish(unittest.TestCase):
         text = "Esta es una técnica de detección por radar, muy útil para el seguimiento de objetivos también."
         self.assertEqual(detect_language(text), "Spanish")
 
+    def test_german_org_name_expansion_not_german(self):
+        # Real hit (HardwareWiki entities/VDE.md, found 2026-07-30 while
+        # verifying the non-Latin share fix): spelling out a German standards
+        # body's official name inside an English page supplies two function
+        # words on its own — "Verband DER Elektrotechnik, Elektronik UND
+        # Informationstechnik" — which used to be the entire bar for German.
+        # Same proper-noun false-positive class as Ćuk (Polish) and LOS/EL
+        # (Spanish); an English page citing VDE, TÜV or a German paper title
+        # must stay English.
+        text = (
+            "VDE is a European safety specification (Verband der "
+            "Elektrotechnik, Elektronik und Informationstechnik). In the "
+            "context of transformer design, VDE standards require specific "
+            "insulation creepage distances that affect the winding space "
+            "factor and the overall isolation barrier construction."
+        )
+        self.assertEqual(detect_language(text), "English")
+
+    def test_genuine_german_still_detected(self):
+        text = (
+            "Das ist ein wichtiger Punkt für die Konstruktion, und der "
+            "Wirkungsgrad der Schaltung ist dabei entscheidend."
+        )
+        self.assertEqual(detect_language(text), "German")
+
+    def test_fpga_logic_element_acronym_not_french(self):
+        # Real hit (RadarWiki concepts/fpga-architecture-for-ew-systems.md,
+        # found 2026-07-30 while verifying the non-Latin share fix): "LE"
+        # (Logic Element) and its plural "LEs" lowercase to the French
+        # articles le/les, which used to be 2 of French's 6 function words.
+        # Identical to the LOS/EL → Spanish hit already fixed above.
+        text = (
+            "LE count has grown enormously: from 1,728 LEs in a legacy FPGA "
+            "to 5,540,850 LEs in a new advanced device. Each LE contains a "
+            "lookup table and a register, and the routing fabric between LEs "
+            "dominates both area and propagation delay in this architecture."
+        )
+        self.assertEqual(detect_language(text), "English")
+
+
+class TestNonLatinScriptNeedsShareNotJustPresence(unittest.TestCase):
+    """A handful of stray non-Latin characters must not outvote thousands of
+    ASCII letters (known-issues.md, fixed 2026-07-30).
+
+    The dominant-script test used to be a bare absolute count
+    (``max_count >= 2``). Latin-script text is pure ASCII and contributes
+    nothing to the script counts, so ANY two non-Latin characters anywhere in
+    an otherwise all-English document won the vote outright. Latin-script
+    detectors had already been hardened one by one (Greek word runs, Polish
+    Ćuk, Portuguese ã, Vietnamese ũ, Spanish LOS/EL); the non-Latin branch
+    had no equivalent guard at all.
+
+    Measured on the real HardwareWiki corpus before the fix: 346 pages whose
+    only Han characters were the pipeline's own ``参见`` / ``据图`` boilerplate
+    were being detected as Chinese, and genuine Chinese pages sat at 15-90%
+    share — a gap of two orders of magnitude, so a 5% floor separates them
+    cleanly."""
+
+    def test_pipeline_boilerplate_han_does_not_flip_english_page(self):
+        # Real hit (346 HardwareWiki pages): Stage 2.4/2.6 inject the Chinese
+        # figure-citation word 据图 and the see-also heading 参见 into pages
+        # whose prose is entirely English. 2 Han chars vs ~1500 ASCII letters.
+        text = (
+            "Stripline return current flows on the reference planes directly "
+            "above and below the trace, concentrated under the signal path. "
+            "Splitting that plane forces the return current to detour around "
+            "the gap, which raises loop inductance and radiates. Keep the "
+            "reference continuous beneath every high-speed net, and place "
+            "stitching vias where a signal changes reference layer. 据图 "
+            "the measured impedance discontinuity grows with gap width. 参见"
+        )
+        self.assertEqual(detect_language(text), "English")
+
+    def test_foreign_library_stamp_on_scanned_title_page_stays_english(self):
+        # The originally reported symptom: OCR of a scanned English textbook's
+        # title page picks up a dozen Cyrillic characters from a library
+        # ownership stamp, and the whole book's generation stages then receive
+        # a "MANDATORY OUTPUT LANGUAGE: Russian" directive.
+        text = (
+            "МОСКВА БИБЛИОТЕКА "  # library stamp OCR'd off the title page
+            "Fundamentals of Power Electronics. This textbook develops the "
+            "converter modeling techniques used throughout the power "
+            "electronics field, beginning with steady-state converter "
+            "analysis and the principles of inductor volt-second balance and "
+            "capacitor charge balance. Later chapters cover small-signal "
+            "averaged models, converter transfer functions, and the design "
+            "of feedback loops for switching regulators operating in both "
+            "continuous and discontinuous conduction modes."
+        )
+        self.assertEqual(detect_language(text), "English")
+
+    def test_single_foreign_citation_does_not_flip_english_document(self):
+        text = (
+            "The original derivation appears in Котельников's 1933 sampling "
+            "paper, but the result is usually attributed to Shannon in the "
+            "English-language literature. This section restates the sampling "
+            "theorem in the form used later for bandpass sampling, then "
+            "applies it to the intermediate-frequency digitizer design and "
+            "works through the aliasing budget for the chosen sample rate."
+        )
+        self.assertEqual(detect_language(text), "English")
+
+    def test_genuine_chinese_prose_still_detected(self):
+        text = (
+            "热设计的核心是建立从芯片结点到环境的完整传热路径。"
+            "热阻是描述这一路径的基本参数，串联各段热阻即可估算结温。"
+            "工程上还需要考虑接触热阻、界面材料的压力与厚度关系。"
+        )
+        self.assertEqual(detect_language(text), "Chinese")
+
+    def test_chinese_page_heavy_with_english_identifiers_stays_chinese(self):
+        # HardwareWiki reality: Chinese hardware pages carry many English part
+        # numbers and units. Han share drops but stays far above the floor.
+        text = (
+            "本页说明 BCM56970 交换芯片与 Intel Xeon D-1518 之间的气流耦合问题。"
+            "在 FloTHERM 热仿真中，方案5 的结温达到 135°C，超出 110°C 规格；"
+            "将 CPU 左移、散热器加宽加高、基板改用均温板后降至 108°C。"
+            "相关标准为 GR-63-CORE (NEBS) 与 IEC 62368-1, 环境温度取 45°C。"
+        )
+        self.assertEqual(detect_language(text), "Chinese")
+
+    def test_short_pure_cjk_string_still_detected(self):
+        # A short string with no ASCII at all must still resolve — the share
+        # gate must not require a long document.
+        self.assertEqual(detect_language("北京大学"), "Chinese")
+
+    def test_genuine_russian_still_detected(self):
+        text = (
+            "Радиолокационная станция обнаруживает цели с помощью "
+            "отражённого сигнала и измеряет дальность по времени задержки."
+        )
+        self.assertEqual(detect_language(text), "Russian")
+
+    def test_genuine_korean_still_detected(self):
+        text = "이 문서는 레이더 신호 처리에 대한 한국어 설명을 제공합니다."
+        self.assertEqual(detect_language(text), "Korean")
+
+    def test_stray_kana_and_han_together_do_not_flip_english_page(self):
+        # The Japanese branch compares kana against Han only — both being
+        # incidental against a wall of ASCII must be filtered before that
+        # relative comparison runs.
+        text = (
+            "The datasheet's Japanese edition is titled パス and 通過, but "
+            "the rest of this application note is written in English and "
+            "describes the passband ripple budget for the anti-aliasing "
+            "filter ahead of the analog-to-digital converter stage, "
+            "including the group-delay variation across the passband."
+        )
+        self.assertEqual(detect_language(text), "English")
+
 
 class TestOutputLanguageCollapsesToTwoLanguages(unittest.TestCase):
     """Policy (user ruling 2026-07-15): the wiki only ever holds Chinese or

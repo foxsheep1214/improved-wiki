@@ -51,6 +51,14 @@ def detect_language(text: str) -> str:
     if counts.get("Greek", 0) and not _has_greek_word_run(text):
         del counts["Greek"]
 
+    # Non-Latin script must be a meaningful SHARE of the letter content, not
+    # merely present. Latin-script text is pure ASCII and contributes nothing
+    # to `counts`, so the old bare "≥2 characters" test let any two stray
+    # non-Latin characters outvote thousands of ASCII letters and relabel a
+    # whole document (see _NON_LATIN_MIN_SHARE).
+    if counts and _incidental_non_latin(text, sum(counts.values())):
+        counts.clear()
+
     # Japanese: Hiragana/Katakana + Kanji → Japanese (not Chinese). Kana must
     # make up a non-trivial share of the CJK content, not just a single
     # borrowed term — e.g. パス ("pass", as in a filter's passband) cited
@@ -166,6 +174,38 @@ def build_language_directive(text: str) -> str:
 
 
 # ── Script detection ──
+
+# Minimum share of the letter content a non-Latin script must hold before it
+# can name the document's language. Latin-script languages are pure ASCII and
+# never enter the script counts, so without this floor a bare "≥2 characters"
+# test let a dozen incidental characters decide a whole book's output language
+# — the failure this constant exists to prevent:
+#   * a foreign library ownership stamp OCR'd off a scanned English title page
+#     flipped the entire book's generation prompts to that language;
+#   * the pipeline's own Chinese boilerplate (据图 / 参见, injected by Stage
+#     2.4/2.6 into English pages) marked 346 all-English HardwareWiki pages as
+#     Chinese;
+#   * a single foreign-language citation in an English reference list.
+# Measured on the real HardwareWiki corpus: incidental cases sit below 1%
+# while genuine Chinese pages run 15-90%, and real Chinese books exceed 40%
+# even when dense with English part numbers — a two-order-of-magnitude gap, so
+# 5% separates them with wide margin on both sides.
+_NON_LATIN_MIN_SHARE = 0.05
+
+
+def _incidental_non_latin(text: str, non_latin_count: int) -> bool:
+    """True when non-Latin characters are too small a share to be the language.
+
+    Compares them against the ASCII letters they compete with — the baseline
+    the raw script counts leave invisible. Text with no ASCII letters at all
+    (a short pure-CJK string) is never incidental.
+    """
+    ascii_letters = sum(1 for ch in text if ch.isascii() and ch.isalpha())
+    total = non_latin_count + ascii_letters
+    if not total:
+        return False
+    return (non_latin_count / total) < _NON_LATIN_MIN_SHARE
+
 
 _GREEK_WORD_RUN = re.compile(r"[Ͱ-Ͽἀ-῿]{3,}")
 
@@ -286,11 +326,20 @@ def _detect_latin(text: str):
     if (re.search(r"[őű]", lower)
             and len(words & {"és", "hogy", "nem", "egy", "van", "de", "az"}) >= 2):
         return "Hungarian"
-    # German
-    if len(words & {"und", "der", "die", "das", "ist"}) >= 2:
+    # German (≥3, not ≥2: spelling out a German organization's official name
+    # inside an English page supplies two of these on its own — "Verband DER
+    # Elektrotechnik, Elektronik UND Informationstechnik" for VDE. Real hit:
+    # entities/VDE.md. Genuine German prose carries far more than three.)
+    if len(words & {"und", "der", "die", "das", "ist", "mit", "für",
+                    "auf", "eine", "einen", "nicht", "werden"}) >= 3:
         return "German"
-    # French
-    if len(words & {"le", "la", "les", "est", "une", "des"}) >= 2:
+    # French. "le"/"les"/"la"/"des" were dropped from the word set: they
+    # collide with technical acronyms this wiki is full of — LE/LEs (FPGA
+    # logic elements, real hit: fpga-architecture-for-ew-systems.md), LA,
+    # and DES (the cipher). Replaced with longer, unambiguously French
+    # function words, same rationale as the Spanish LOS/EL fix above.
+    if len(words & {"est", "une", "qui", "dans", "pour", "avec", "cette",
+                    "sont", "aux", "être", "leur", "nous"}) >= 2:
         return "French"
     # Portuguese (before Spanish — stricter chars). "a"/"as"/"o"/"os" were
     # dropped from the word set: they're single/short tokens that collide

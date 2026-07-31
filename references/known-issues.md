@@ -3,31 +3,38 @@
 ## Open issues
 
 ### Several files exceed the 800-line guideline
-清单核对于 2026-07-29（此前版本已失效：`_core.py` 记的 ~1480 行、`ingest.py`
+清单核对于 2026-07-30（此前版本已失效：`_core.py` 记的 ~1480 行、`ingest.py`
 记的 ~680 行都早已被 `b01ea6f` 拆成 facade，现分别是 381 / 202 行）。
 
 当前实际超阈值的模块：
 
 | 文件 | 行数 | 说明 |
 |---|---|---|
-| `_stage_2_4_generation.py` | 1595 | 单次整书 generation prompt + 旧 direct helper 与 FILE repair 集中，暂无干净切分点 |
-| `_stage_3_write.py` | 1367 | 写盘 + 链接归一化 + Stage 3.5 聚合重建三块职责 |
-| `_stage_1_3_caption.py` | 1205 | VLM 配文 + 上下文映射 + 内联三块 |
-| `graph.py` | 1185 | 独立命令，含 HTML/JS 输出模板 |
-| `_stage_2_analyze.py` | 1160 | 分块器 + 滚动 digest + schema 校验 |
+| `_stage_2_4_generation.py` | 1599 | 单次整书 generation prompt + 旧 direct helper 与 FILE repair 集中，暂无干净切分点 |
+| `_stage_3_write.py` | 1506 | 写盘 + 链接归一化 + Stage 3.5 聚合重建三块职责 |
+| `_stage_1_3_caption.py` | 1217 | VLM 配文 + 上下文映射 + 内联三块 |
+| `graph.py` | 1188 | 独立命令，含 HTML/JS 输出模板 |
+| `_stage_2_analyze.py` | 1182 | 分块器 + 滚动 digest + schema 校验 |
 | `_stage_1_1_scanned.py` | 1136 | minerU 编排 + OCR 分块 + sidecar 持久化 |
 | `_batch_supervisor.py` | 916 | 批处理协调（worker lease / 预取 / 暂停标记） |
+
+这是**风格指标超标，不是缺陷**：没有已知的错误行为与之关联，且每个模块的职责本身是内聚的（表中"说明"列即其不易切分的原因）。拆分需改动大量导入面并使既有测试的 import 路径失效，收益仅为满足行数阈值。**结论：保持记录、不主动重构**；等某个模块因真实需求要改结构时顺带拆。
 
 `_stage_1_extract.py` 是 facade，re-export 兄弟模块 `_stage_1_1_scanned.py` / `_stage_1_2_images.py` / `_stage_1_3_caption.py` 的公开名，外部导入者无需改动。
 
 ### minerU 偶尔把公式区域分类为 `image` 而非 `equation`
 ~112 公式图被当图片送 VLM，而非用 minerU 已提取的 LaTeX 文本（上游 minerU 版面分析问题）。
 
-### 跨目录同名 basename 的 slug 碰撞（dedup/merge 侧未彻底解决，2026-07-10）
-`cross_source_dedup.py` 全链路用 `_slug_from_path()`（只取文件名 stem）作页面 id：`queries/skolnik-m-i.md` 和 `entities/skolnik-m-i.md` 映射到同一个 slug，slug 键的 dict 会静默塌缩成一条（后者覆盖前者）。实测（RadarWiki 2026-07-10）：`matched-filter`、`skolnik-m-i` 在 detector 候选清单里各出现两次。**已修的部分**：embedding 预筛的 `emb_pages` 现在按 slug 去重，不再产生重复 id。**未修的部分**：若一个合并组恰好包含碰撞 slug，merge 可能读到/删掉错误目录下的同名文件——根治需要全链路改用路径作 id（较大改动）。**规避**：合并前先核对组内 slug 是否存在跨目录同名文件（`find wiki -name "<slug>.md"` 多于一个结果即碰撞）；这类组先人工处理。
+**为何不在本仓库修（评估 2026-07-30）**：误分类发生在 minerU 的版面分析里，我们拿到的 block 已经带着 `type="image"` 标签（`_stage_1_2_images.py` 按 `type in ("image","chart")` 收割）。本地没有任何可靠信号区分"真图"与"被误标的公式图"——除非再跑一次视觉识别，而那正是当前已在做的事（VLM 配文），或者去和该页 markdown 文本做启发式比对，脆弱且可能误伤真图。代价仅是若干次 VLM 调用与相对 LaTeX 略低的保真度，产出仍可用。**待上游 minerU 修复**；若要本地兜底，应先有一批标注样本再评估。
 
-### `detect_language()` 非拉丁文字阈值过低，几个杂散字符就能误判全书语言
-`_language.py::detect_language()` 的非拉丁脚本判定阈值只是 `max_count >= 2`，而英文本身纯 ASCII、不计入对照基准。实测：某书扉页的外文图书馆公章（OCR 出十几个非拉丁字符）导致全书正文被误判成该语言，各生成 stage 收到错误的 "MANDATORY OUTPUT LANGUAGE" 指令，而全书 99%+ 是英文——与已记录的"São Paulo 陷阱"（`improved-wiki-language-detect-false-positive` 内存条目）同一类假阳性，但触发方式更直接。Greek 分支已有"孤立单字符不算希腊语"的保护（`_has_greek_word_run`），其他非拉丁脚本分支没有。**当前规避**：生成阶段人工判断源文本主体语言、忽略错误的语言指令；项目级可用 `IMPROVED_WIKI_OUTPUT_LANGUAGE=English` 强制覆盖整本书。**未修复**：给非拉丁脚本分支加类似 Greek 的保护（改动前需先补测试用例，避免影响现有中文等双语页面的检测）。
+### 跨目录同名 basename 的 slug 碰撞（危险已堵，剩余为内容取舍问题；记录更新 2026-07-30）
+`cross_source_dedup.py` 全链路用 `_slug_from_path()`（只取文件名 stem）作页面 id：`concepts/x.md` 和 `methodology/x.md` 映射到同一个 slug，slug 键的 dict 会静默塌缩成一条。
+
+**已修**：(1) embedding 预筛的 `emb_pages` 按 slug 去重，不再产生重复 id；(2) **合并路径有机械 guard（2026-07-11，`cross_source_dedup.py` 约 L680）——含碰撞 slug 的合并组直接 SKIP 并打印原因，不会读/删错文件**（本条此前记载的"merge 可能删错文件"已不成立，2026-07-30 核实）；(3) 结构 lint 新增 `slug-collision` 检查（2026-07-30），主动列出全库碰撞，取代原先"手工 `find wiki -name` 核对"的规避步骤。
+
+**剩余（非代码缺陷）**：碰撞页永远被 dedup 跳过。实测全库碰撞：HardwareWiki 10 组、RadarWiki 3 组，**全部是 `concepts/X` vs `methodology/X`（或 `comparisons/X`）**——同一主题被同时归成两种 schema 类型。这属于内容归类取舍（schema 上 concept=原理/现象、methodology=方法/流程，二者**可以**合法并存），需要人工判定合并还是保留，不适合自动合并。lint 的 `slug-collision` 条目已给出该判定所需信息。
+
+**未做**：全链路改用路径作 id。评估（2026-07-30）：涉及 ~60 处 slug 引用、detector 的 LLM 协议（返回 `{"slugs": [...]}`）与分组缓存键格式，会使既有 dedup 对话缓存全部失效；而收益仅是让上述 13 组可自动合并——而它们本就需要人工内容判定。风险收益不成比例，暂不改。
 
 ### Stage 2.6 source 页曾在生成后、写盘前异常丢失内容（单次事件 2026-07-07，根因未锁定）
 历史现象：归档的 Stage 2.6 conversation 响应完整，但首次落盘 source 页与响应不一致。source summary 现已按 NashSU 改为自由结构，不再用固定 H2 判断质量；当前防线是：(1) 未闭合 FILE 块丢弃并做一次 exact-path targeted repair；(2) 最终 source block 做 exact-path/frontmatter/END/non-empty 结构校验；(3) 仍缺失时从**完整 Stage 2 analysis**确定性写 fallback；(4) Stage 3.1 写盘前再做同一 fallback gate。**行动项：如再出现“完整响应与落盘内容不一致”，保留当次 `.llm-wiki/conversation/<hash>/` 与 progress 文件，继续追写盘窗口根因。**
@@ -56,6 +63,15 @@ minerU 32 页/chunk 串行。272 页书（9 chunks）可能超 600s 终端超时
 `ingest.py` 靠 `Config.from_env`（`IMPROVED_WIKI_ROOT` env 或 `os.getcwd()`）解析项目根；没有 `--project` 参数。每次调用前必须显式 `cd <project> && ...`——不能指望上一次 `cd` 还生效。cwd 错了会直接 file-not-found。
 
 ## Fixed bugs（回归意识——已修但值得记录症状）
+
+### `detect_language()` 几个杂散字符就能误判全书语言（已修，2026-07-30）
+三个同源假阳性，症状都是"少数字符压倒全篇"，一并修掉：
+
+1. **非拉丁脚本无份额门槛**（本条原始记载）：判定只是 `max_count >= 2`，而拉丁文本纯 ASCII、根本不进 `counts`，于是任意 2 个非拉丁字符即可独占投票。扫描线上语料实测：**346 个全英文页**仅因管线自己注入的中文格式词 `据图`/`参见` 被判成中文；扫描版英文书扉页的外文图书馆藏书章（OCR 出十几个西里尔字符）会让整本书收到错误的 "MANDATORY OUTPUT LANGUAGE" 指令。已修：新增 `_incidental_non_latin()`，把非拉丁字符数与它真正竞争的 ASCII 字母数相比，低于 `_NON_LATIN_MIN_SHARE`（5%）即整体丢弃、回落到拉丁检测；无 ASCII 的纯 CJK 短串（"北京大学"）不受影响。阈值依据：线上语料中偶发夹杂 < 1%，真中文页 15–90%，中文书即便密集夹带英文型号仍 > 40%，两端各留一个数量级余量。
+2. **德语 `und`/`der` 撞专有名词**（修复过程中在语料里发现）：英文页里展开德国机构全称即可凑齐 2 词——`Verband **der** Elektrotechnik, Elektronik **und** Informationstechnik`（VDE）。实测命中 `entities/VDE.md`。已修：词表扩充并把门槛提到 ≥3。
+3. **法语 `le`/`les` 撞技术缩写**（同上）：FPGA 页里的 **LE**（Logic Element）与复数 **LEs** 小写后正是法语冠词。实测命中 `concepts/fpga-architecture-for-ew-systems.md`。已修：剔除会撞缩写的 `le`/`les`/`la`/`des`（`DES` 是加密标准、`PAR` 是精密进近雷达），换成无歧义的长功能词。
+
+与 Ćuk→Polish、LOS/EL→Spanish、ũ→Vietnamese 是同一类"专有名词/记号冒充语言证据"。**验证**：两库共 25,589 页重新检测，结果**全部**落入 English/Chinese 两类，零残留假阳性（修复前 HardwareWiki 有 346 个伪中文页 + 1 个伪德语页，RadarWiki 有 1 个伪法语页）。测试见 `test_language.py::TestNonLatinScriptNeedsShareNotJustPresence` 等共 49 例。
 
 ### 旧书（无 `.task.json`）若原写入页被后续 lint dedup/delete-orphans 合并/删除，曾无法干净 resume（已修，2026-07-30，Route A）
 `_task_manifest.py` 的 `ensure_task_manifest` 首次为某源建立 `.task.json` 时（2026-07-21 硬化引入），`_new_manifest` 用 legacy `ingest-cache.json` 的 `filesWritten` 快照回填 `resume.page_refs`，随即 `_validate_bound_artifacts` 要求这些页**此刻全部存在**，否则硬失败（"task manifest binds missing written pages"）。这个快照是该源**当年写盘时**的产物，此后 wiki 全局 lint 的 dedup/delete-orphans 会持续合并/删除任何源的页面——这是正常生命周期维护，不是数据损坏，但硬化逻辑没有区分二者。实测（HardwareWiki，`Op Amps for Everyone - 2002 - Carter.pdf`，write_phase 卡住的遗留书）：79 个原写入页里 7 个已被后续 lint 合并/删除，其中每一个都能在 `wiki/REVIEW/missing-page/*`（2026-07-05 lint 生成，至今 `resolved: false`）里找到对应记录，证实是已知、已追踪的正常缺口而非静默丢失。`ingest.py` 在 Stage 0 manifest 引导阶段直接崩溃，无法继续。

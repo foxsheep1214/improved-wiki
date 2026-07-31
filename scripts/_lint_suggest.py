@@ -451,6 +451,19 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             _broken_cache[key] = suggest_broken_target(target)
         return _broken_cache[key]
 
+    # Cross-directory basename collisions. The dedup/merge path is keyed by
+    # basename slug (_dedup._slug_from_path), so concepts/x.md and
+    # methodology/x.md collapse to one id. cross_source_dedup already REFUSES
+    # to merge such a group (guard 2026-07-11) rather than risk reading or
+    # deleting the wrong file, but that refusal only fires when a detector
+    # group happens to contain the slug — otherwise the collision stays
+    # invisible. known-issues.md documented a manual `find wiki -name
+    # "<slug>.md"` sweep as the workaround; this automates it (2026-07-30).
+    paths_by_basename: dict[str, list[str]] = {}
+    for p in data:
+        stem = re.sub(r"\.md$", "", _get_file_name(p.short_name), flags=re.IGNORECASE)
+        paths_by_basename.setdefault(stem, []).append(p.short_name)
+
     results: list[dict] = []
     for page_index, p in enumerate(data):
         short_name = p.short_name
@@ -459,6 +472,25 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         # but are exempt from findings so the headless fixer never mutates them.
         if _get_file_name(short_name) in AGGREGATE_FILES:
             continue
+
+        # Slug collision: same basename filed under two or more directories.
+        _stem = re.sub(r"\.md$", "", _get_file_name(short_name), flags=re.IGNORECASE)
+        _twins = [q for q in paths_by_basename.get(_stem, []) if q != short_name]
+        if _twins:
+            results.append({
+                "type": "slug-collision",
+                "severity": "warning",
+                "page": short_name,
+                "detail": (
+                    "Basename collides across directories with "
+                    + ", ".join(sorted(_twins))
+                    + ". Dedup/merge is keyed by basename, so these share one "
+                    "id and are skipped by cross-source dedup. Decide whether "
+                    "they are one topic (merge, keep the schema-correct type) "
+                    "or genuinely distinct (rename one to a type-specific "
+                    "slug)."
+                ),
+            })
 
         # Orphan: no inbound links.
         if page_index not in inbound_counts:
