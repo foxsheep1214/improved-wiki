@@ -1243,6 +1243,30 @@ def _assert_aggregate_outputs(
             f"Stage 3.5 index does not contain a link to {source_stem}")
 
 
+def _project_aggregate_context(text: str, limit: int) -> str:
+    """Return a visibly bounded aggregate prompt excerpt at a safe boundary."""
+    if len(text) <= limit:
+        return text
+
+    projected = text[:limit]
+    # Never leave a half-open wikilink in a prompt excerpt.  Prefer trimming
+    # the whole link over teaching the aggregate writer malformed Markdown.
+    if projected.rfind("[[") > projected.rfind("]]"):
+        projected = projected[:projected.rfind("[[")]
+
+    # Prefer a complete paragraph/line when enough useful context remains.
+    paragraph = projected.rfind("\n\n")
+    line = projected.rfind("\n")
+    boundary = paragraph if paragraph >= int(limit * 0.6) else line
+    if boundary >= int(limit * 0.6):
+        projected = projected[:boundary]
+
+    return (
+        projected.rstrip()
+        + "\n\n[Source excerpt truncated at a content boundary.]"
+    )
+
+
 def stage_3_3_aggregate_repair(
     source_path: Path,
     raw_file: Path,
@@ -1442,7 +1466,9 @@ Output ONLY the complete new index.md. No commentary.
                 body = text[end + 4:] if end != -1 else text
             else:
                 body = text
-            sources_lines.append(f"### {f.stem}\n{body[:800]}")
+            sources_lines.append(
+                f"### {f.stem}\n{_project_aggregate_context(body, 800)}"
+            )
 
     prompt = f"""You maintain the overview of a knowledge-base wiki. Below is the
 CURRENT overview.md, followed by the newly ingested source page and recent
@@ -1464,7 +1490,7 @@ sources, not a per-source walkthrough.
 {current_overview or "(empty)"}
 
 # New source page: {source_path.stem}
-{source_content[:3000]}
+{_project_aggregate_context(source_content, 3000)}
 
 # Recent source pages (for context)
 {chr(10).join(sources_lines[:8])}

@@ -55,6 +55,7 @@ _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_9_done",  # legacy name: Stage 2.4 closing + source-page gate
     "review_prepared",
     "write_loop_done",
+    "enrichment_done",
     "aggregate_done",
     "write_phase",
     "review_done",
@@ -96,6 +97,7 @@ _STAGE_2_GENERATION_MARKERS = (
 
 _POST_WRITE_MARKERS = (
     "write_loop_done",
+    "enrichment_done",
     "aggregate_done",
     "write_phase",
     "review_done",

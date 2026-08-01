@@ -34,6 +34,7 @@ TASK_MANIFEST_SCHEMA_VERSION = 1
 PIPELINE_CONTRACT_VERSION = "improved-wiki-ingest-v1"
 POSTWRITE_COMPLETION_MARKERS = (
     "write_loop_done",
+    "enrichment_done",
     "write_phase",
     "review_done",
     "aggregate_done",

@@ -134,6 +134,63 @@ def reconstruct_enrich_candidates(
     return out
 
 
+def run_wikilink_enrichment_once(
+    config: Config,
+    source_hash: str,
+    *,
+    enrich_enabled: bool,
+    enrich_candidates: list[tuple[str, Path]],
+    existing_slugs: list[str],
+    write_phase_done: bool,
+) -> int:
+    """Run the post-write enrichment projection at most once per ingest.
+
+    An empty/partial enrichment answer is a valid terminal decision: some
+    zero-outlink pages genuinely have no safe exact surface-text match.  The
+    durable marker is therefore written after the answer is applied even when
+    zero pages changed.  ConversationPending escapes before the marker, so a
+    resume can consume the pending answer exactly once.
+
+    ``write_phase_done`` only occurs for legacy/in-flight states created before
+    this marker existed.  Backfill the marker without rerunning enrichment;
+    those pages have already crossed the complete write-phase boundary.
+    """
+    if is_stage_done(config, source_hash, "enrichment_done"):
+        payload = get_stage_payload(config, source_hash, "enrichment_done")
+        changed = int(payload.get("pages_enriched", 0) or 0)
+        print(
+            "  [enrich] enrichment_done marker present — skipping projection "
+            f"({changed} page(s) changed)"
+        )
+        return changed
+
+    candidates = len(enrich_candidates)
+    changed = 0
+    status = "legacy-write-phase" if write_phase_done else "disabled"
+    if not write_phase_done and enrich_enabled and enrich_candidates:
+        pages_for_enrichment = [
+            (rel_path, full_path.read_text(encoding="utf-8"))
+            for rel_path, full_path in enrich_candidates
+        ]
+        enriched_pages = enrich_wikilinks_batch(
+            pages_for_enrichment, existing_slugs, config)
+        for rel_path, full_path in enrich_candidates:
+            if rel_path in enriched_pages:
+                atomic_write(full_path, enriched_pages[rel_path])
+                changed += 1
+                print(f"  [enrich] {rel_path} (+wikilinks)")
+        status = "applied"
+    elif not write_phase_done and enrich_enabled:
+        status = "no-candidates"
+
+    mark_stage_done(config, source_hash, "enrichment_done", payload={
+        "status": status,
+        "candidates": candidates,
+        "pages_enriched": changed,
+    })
+    return changed
+
+
 def _is_redundant_duplicate_write(full_path, content: str, written_this_run: dict) -> bool:
     """True when this exact (path, content) was already written earlier in THIS
     write loop — a duplicate FILE block (for example, repeated generation output).
@@ -676,21 +733,18 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         mark_stage_done(config, h, "write_loop_done",
                         payload={"files_written": files_written_paths})
 
-    if enrich_enabled and enrich_candidates and not write_phase_done:
-        # Enrich the ACTUAL written content (post-merge) so links target real
-        # pages. One batched call for the whole ingest — see
-        # _enrich_wikilinks.enrich_wikilinks_batch. Not wrapped in try/except:
-        # a malformed response or routing error now fails the ingest visibly,
-        # same as any other stage.
-        pages_for_enrichment = [
-            (rel_path, full_path.read_text(encoding="utf-8"))
-            for rel_path, full_path in enrich_candidates
-        ]
-        enriched_pages = enrich_wikilinks_batch(pages_for_enrichment, existing_slugs, config)
-        for rel_path, full_path in enrich_candidates:
-            if rel_path in enriched_pages:
-                atomic_write(full_path, enriched_pages[rel_path])
-                print(f"  [enrich] {rel_path} (+wikilinks)")
+    # Enrich the ACTUAL written content (post-merge) so links target real
+    # pages. The durable marker makes this a single projection per ingest,
+    # including the valid case where the model omits pages that have no safe
+    # exact match. ConversationPending is intentionally not caught here.
+    run_wikilink_enrichment_once(
+        config,
+        h,
+        enrich_enabled=enrich_enabled,
+        enrich_candidates=enrich_candidates,
+        existing_slugs=existing_slugs,
+        write_phase_done=write_phase_done,
+    )
 
     # Refresh the finer-grained marker after the generated source block has
     # been confirmed. This closes the small window where the pre-enrichment

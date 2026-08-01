@@ -112,6 +112,11 @@ def _seed_completion_state(
         payload={"files_written": ["wiki/sources/x.md"]},
     )
     _core.mark_stage_done(
+        cfg, source_hash, "enrichment_done",
+        payload={"status": "no-candidates", "candidates": 0,
+                 "pages_enriched": 0},
+    )
+    _core.mark_stage_done(
         cfg, source_hash, "write_phase",
         payload={
             "files_written": ["wiki/sources/x.md"],
