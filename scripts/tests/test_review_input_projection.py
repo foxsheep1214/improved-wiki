@@ -1,13 +1,13 @@
-"""Stage 3.1 must review what Stage 3.1 will actually write.
+"""Stage 3.1 must review what Stage 3.2 will actually write.
 
 NashSU 0.6.6 generates and validates review suggestions BEFORE ``writeFileBlocks``
-(improved-wiki: Stage 3.1, moved pre-write 2026-07-30). Feeding it the raw
+(improved-wiki: Stage 3.1, moved pre-write 2026-07-30; renumbered from 3.4a). Feeding it the raw
 in-memory FILE blocks makes the reviewer describe a draft the writer then
 changes deterministically, in two ways that both reach ``wiki/REVIEW/``:
 
   * ``strict_missing_targets`` de-links a ``[[prefixed/target]]`` that is
     outside the batch ∪ disk inventory, so a ``missing-page`` item raised on it
-    is already resolved by the time 3.4b persists it;
+    is already resolved by the time Stage 3.5 persists it;
   * ``_stage_3_2_schema_route`` moves a ``type: finding`` page emitted at
     ``concepts/x.md`` to ``findings/x.md``, so the item's ``affected_pages``
     renders a broken ``[[concepts/x]]`` link.

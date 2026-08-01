@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import _core  # noqa: E402
 import _stage_2_4_generation as gen  # noqa: E402
-import _stage_2_6_source_page as s26  # noqa: E402
+import _source_page as s26  # noqa: E402
 
 
 def _make_config(tmp: Path) -> _core.Config:
@@ -127,60 +127,10 @@ class TestSourcePageLinkableRelevance(unittest.TestCase):
     """Stage 2.6: over the 1500 cap, relevant CJK slugs and the book's own
     generated slugs survive; irrelevant alphabetical tail is displaced."""
 
-    def test_cjk_slugs_survive_1500_cap(self):
-        cjk_relevant = [
-            "concepts/多目标跟踪算法", "concepts/多目标跟踪滤波",
-            "concepts/跟踪门", "concepts/目标跟踪基础",
-        ]
-        own = "concepts/多目标跟踪"
-        own_typed = "comparisons/多目标跟踪架构对比"
-        linkable = ([f"concepts/aaa-{i:04d}" for i in range(1550)]
-                    + cjk_relevant + [own, own_typed])
-        digest = {
-            "book_meta": {"title": "T"}, "outline": [], "key_claims": [],
-            "key_concepts": [{"name": "多目标跟踪"}], "key_entities": [],
-        }
-        prompts = []
-
-        def _spy(prompt, config, max_tokens=None, label=None):
-            prompts.append(prompt)
-            # A structurally valid book source page — the test only inspects
-            # the prompt, but Stage 2.6's required-sections validator is a hard
-            # gate (raises on missing H2s), so the mock response must satisfy
-            # all 7 book sections.
-            return (
-                "---FILE:wiki/sources/book.md---\n"
-                "---\ntype: source\ntitle: T\n---\n\n"
-                "## Book Summary\n\nA book.\n\n"
-                "## Table of Contents & Key Concepts\n\n- none\n\n"
-                "## Key Entities\n\n- none\n\n"
-                "## Main Arguments & Findings\n\n- none\n\n"
-                "## Connections to Existing Wiki\n\nNone identified.\n\n"
-                "## Contradictions & Tensions\n\nNone identified.\n\n"
-                "## Recommendations\n\nNone.\n"
-                "---END FILE---\n"
-            ), "end_turn"
-
-        orig = s26.call_anthropic_protocol
-        s26.call_anthropic_protocol = _spy
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                tmp = Path(d)
-                cfg = _make_config(tmp)
-                s26.stage_2_6_source_page(
-                    digest, cfg.raw_root / "book.pdf", cfg,
-                    linkable_slugs=linkable,
-                    generated_concepts=[own], generated_entities=[],
-                    generated_pages=[own, own_typed],
-                )
-        finally:
-            s26.call_anthropic_protocol = orig
-        self.assertEqual(len(prompts), 1)
-        for slug in cjk_relevant + [own, own_typed]:
-            self.assertIn(f"[[{slug}]]", prompts[0])
-        # Over 1500 candidates: the zero-score alphabetical tail goes.
-        self.assertNotIn("concepts/aaa-1549", prompts[0])
-
+    # test_cjk_slugs_survive_1500_cap was removed 2026-08-01: it exercised
+    # _rank_linkable_fill through the retired Stage 2.6 source-page prompt.
+    # The ranking contract itself (CJK-relevant slugs kept, zero-score
+    # alphabetical tail dropped) is covered directly by the unit tests above.
 
 if __name__ == "__main__":
     unittest.main()

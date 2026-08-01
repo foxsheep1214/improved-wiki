@@ -77,7 +77,8 @@ NashSU 0.6.6 的"纠正来源"替换语义（`replace_existing_body`）判据是
 不同类型候选被 schema 路由折叠到同一 dir+stem。已修：`_is_same_run_collision` 标出
 同轮碰撞并强制走三层 page-merge，同时打印一行 `same-slug collision`。
 
-### Stage 3.4a 提前到写盘前后曾产出"已自动解决"的 REVIEW 噪声（已修，2026-07-30）
+### 写盘前 review 曾产出"已自动解决"的 REVIEW 噪声（已修，2026-07-30）
+> 编号说明：本条记录发生时该阶段叫 3.4a，2026-08-01 Phase 3 重编号后即现在的 **3.1**（3.4b → 3.5）。
 同一天的两个改动互相打架：3.4a 移到 `writeFileBlocks` 之前（NashSU 顺序），而写循环
 对新生成块启用 `strict_missing_targets=True` 去链。结果 reviewer 审的是未规范化草稿，
 为随后被去链的 `[[...]]` 开 `missing-page`（落盘时已不存在），并把 schema 路由前的

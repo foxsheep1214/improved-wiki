@@ -33,8 +33,13 @@ from _stage_1_extract import (
 from _stage_1_3_caption import _stage_1_3_inline_captions
 from _stage_1_2_images import validate_stage_1_2_artifact
 from _stage_1_3_caption import validate_stage_1_3_artifact
-from _stage_2_4_generation import source_page_rel_stem
-from _stage_2_6_source_page import (
+from _stage_2_4_generation import (
+    _source_bibliographic_fields,
+    source_page_rel_stem,
+)
+from _source_page import (
+    _normalize_source_frontmatter,
+    _validate_source_file_block,
     build_fallback_source_summary,
     source_analysis_text,
 )
@@ -101,8 +106,32 @@ def _ensure_source_page(
         norm = path[len("wiki/"):] if path.startswith("wiki/") else path
         return norm == expected
 
-    if any(_is_source_block(p) and c.strip() for p, c in file_blocks):
-        return file_blocks, False
+    generated = [(p, c) for p, c in file_blocks
+                 if _is_source_block(p) and c.strip()]
+    if generated:
+        # Structural gate + frontmatter repair, inherited from the retired
+        # Stage 2.6. Without them the merge would have silently lost two
+        # behaviours: a malformed block reaching disk, and blank bibliographic
+        # fields staying blank (the Strauss/Witte source pages that shipped
+        # with no authors/year/venue).
+        path, content = generated[0]
+        stem = source_rel_stem
+        bib = _source_bibliographic_fields(
+            global_digest if isinstance(global_digest, dict) else {}, stem)
+        candidate = _normalize_source_frontmatter(
+            f"---FILE:wiki/{expected}---\n{content}\n---END FILE---",
+            bib["authors"], bib["year"], bib["url"], bib["venue"])
+        try:
+            _validate_source_file_block(candidate, stem)
+        except RuntimeError as exc:
+            print(f"  [stage 2.4] Generated source block rejected ({exc}) — "
+                  "using the deterministic fallback")
+        else:
+            repaired = parse_file_blocks(candidate)
+            if repaired:
+                others = [(p, c) for p, c in file_blocks
+                          if not _is_source_block(p)]
+                return repaired[:1] + others, False
 
     print(
         f"  [stage 2.4] Source page absent from generation — writing the "

@@ -54,7 +54,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **四状态决策**（`stage_4_1` marker 已于 2026-07-08 改名为 `ingested`，已消化书的 stages.json 已同步迁移）：
   1. `ingested` marker 在 + 源页存在 → **skip**（整本完成）。
   2. `ingested` marker 在 + 源页不存在 → **stale marker**（源页被外部删了）→ 清 marker、重新消化。
-  3. `ingested` marker 不在 + 源页存在 → **resume**（已写盘但 post-write stages 未跑完；`write_phase` marker 让 3.1 写盘不重跑，resume 便宜且不重复合并已写页）。
+  3. `ingested` marker 不在 + 源页存在 → **resume**（已写盘但 post-write stages 未跑完；`write_phase` marker 让 3.2 写盘不重跑，resume 便宜且不重复合并已写页）。
   4. `ingested` marker 不在 + 源页不存在 → **fresh ingest**。
 - **go/no-go**：状态 1 跳过；其余进入/续跑 Stage 1.1。
 - **历史**：曾设想"源页引用的 concepts/entities 丢失 >80% → 重消化"的 wikilink-completeness 校验，但该块代码写在一个无条件 `return False` 之后、**从未执行**，已于 2026-06-25 作为 dead code 删除（commit `1dfd4f9`）。当前**没有引用页完整性校验**；`ingested` marker 是唯一完整性信号。
@@ -121,7 +121,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **schema 语义与数量**：每类候选都必须满足项目 schema 的语义门（例如 finding 要证据锚点、methodology 要可复用条件/步骤、thesis 要可证伪、comparison 要真实多维对比）。按 NashSU bundled schema，当前来源可建立 speculative working thesis，也可建立区别于 source summary 的 cross-cutting synthesis；后续来源经同路径合并/更新。项目 schema 若声明更严格门槛则服从项目 schema。不设各类型条数目标、下限或上限，也不再截断 typed candidate 清单（旧 per-chunk 40 / all-chunks 120 展示上限已移除）。2.2 推荐只是候选，不预先承诺建页；但 synthesis/thesis 不得仅因仍是单来源初稿或 speculative 而在 2.4 被二次静默拒绝。某次 2.4 调用若没有任何候选达到该门槛，必须只返回精确哨兵 `NO_KEY_PAGES`；普通空白、解释性文字或损坏输出仍是硬失败。source 页不受该哨兵影响：它在同一次 2.4 调用中强制产出，模型遗漏时写确定性 fallback。
 - **整书上下文与预算**：`build_consolidated_stage_2_context` 在 `source_budget` 内确定性构建共享上下文，每个 chunk 在 analyses 与 raw 两段都必须有代表。**降级方式是按字段整体丢弃，不是切 JSON**（2026-07-30）：analyses 装不下时按固定优先级逐级丢整字段（`source_quotes` → `connections_to_existing_wiki` → `formulas`/`key_details` → `definition`/`significance`/`evidence`/`rationale` → `claims`），选第一个能**完整**渲染每个 chunk payload 的档位，使每份分析始终是可解析对象。若最终 digest 或最低明细档位仍超限，则用可解析的 JSON head/tail envelope 明示截断，绝不从字符串中部切断语法。旧实现按 chunk 均分后用 balanced excerpt 切，实测 20 chunk（`source_budget=104,000`）需 198,130 字符只给 ~60,000，等于把 20 份从 JSON 中间切断的碎片喂给生成模型。raw 证据改为**吃剩余预算**（不再按固定 0.28/0.68 份额预切）：短源保留全文，长源把预算让给跨 chunk analyses（实测 20 chunk raw 从 ~28K 升到 ~42K）。被丢弃的字段与档位写进上下文自身的 `## Context Budget` 段并打印一行——不静默截断。改档位表或份额必须同步 `STAGE_2_CONTEXT_POLICY_VERSION`（= `GENERATION_POLICY_VERSION`，尚未跨写盘边界的 2.3+ 缓存会失效重跑）。Stage 2.4 的 generation token ceiling 对齐 NashSU 0.6.6：64K/128K/256K/512K context 分别为 8K/16K/24K/32K。
 - **明确的 improved-wiki 扩展（不改变 NashSU 主顺序）**：生成前的 Stage 2.3 用 `stage_2_3_detect_incremental_associations` 将候选与真实页面匹配并保留 type-prefixed exact path；同类型命中是 **UPDATE EXISTING** 目标，跨类型命中只链接。`stage_2_3_resolve_proposed_connections` 另验证 2.2 自报连接。生成后的源内语义去重（原 Stage 2.5）使用 embedding 初筛（cosine ≥0.82）+ LLM 确认；embedding 不可用则暂停，不回退 Jaccard。两项都是 improved-wiki 扩展，但 Stage 2.4 仍只有一次整书 generation。
-- **子步骤（生成后）· 源页生成**：`stage_2_6_source_page` 复用与 Stage 2.4 **完全相同、确定性重建且不重复缓存**的整书上下文，生成一个简洁、自由结构的 source summary 并入 file_blocks。只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。它仍是独立的 resumable call，而不是重复使用原文前缀。若 source FILE 块未闭合，先 exact-path 定向修复；若仍缺失/不合规，使用 NashSU deterministic fallback，把完整 Stage 2 analysis 原样保留到最低限度 source 页（不截断、不另调 LLM）。go/no-go：最终恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END marker 完整且正文非空。
+- **强制源页（同一次调用产出，2026-08-01 起）**：源页不再是独立 LLM 调用，而是本次 generation 必须给出的一个 FILE 块（`_source_page_guidance_section` / `_source_page_output_section` 提供正文要求与 frontmatter 模板）。简洁、自由结构；只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。`NO_KEY_PAGES` 哨兵**不豁免**源页。写盘前由 `_ensure_source_page` 收口：对生成的源块跑结构门（`_validate_source_file_block`：恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END 完整、正文非空）与 frontmatter 修复（`_normalize_source_frontmatter` 用 digest 补齐留空的 authors/year/url/venue）；块缺失或不合规时改写 NashSU deterministic fallback（完整 Stage 2 analysis，不截断、**不另调 LLM**）。未闭合 FILE 块由 2.4 自身的 targeted repair 处理。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
 - **go/no-go**：2.4 可产生 0 个可选 key/schema-typed FILE block；`stages.file_blocks_generated ≥ 1`，且 source page FILE block 存在（`_verify_or_die` 硬门禁，源页由本次调用或确定性 fallback 保证）。概念页目录**不是**硬门禁：`_stage_validators.py` 只对路径异常打印告警，真正的归位由 Stage 3.2 的 schema 路由在写盘时自动纠正。
 - **失败处理**：0 个新/更新 key/schema-typed 页可以是合法结果（无候选、均由其他 chunk 覆盖、只有跨类型 link-only 关联，或模型以精确 `NO_KEY_PAGES` 判断候选均未达到独立建页/实质更新门槛）。同类型已有页本身不是跳过来源新贡献的理由，但边缘性提及也不强制制造更新。解析器丢弃未闭合的 FILE block，并把其安全路径交给一次 targeted repair handoff；repair 只接受请求路径，额外页面全部丢弃。若任一已经开始但未闭合的推荐路径仍未恢复则硬暂停；绝不运行“逐条目全量补齐”。
@@ -188,8 +188,8 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ```
 0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.2 → 2.3 → 2.4 → 2.6
-     → 3.4a(review generate/validate) → 3.1 → 3.5 → 3.2
-     → 3.4b(review persist) → cache → 3.7
+     → 3.1(review generate/validate) → 3.2(write) → 3.3(aggregate)
+     → 3.4(media) → 3.5(review persist) → 3.6(cache) → 3.7(embed)
 
 （1.2→1.3 是 image pipeline（1.3 依赖 1.2 输出，串行；1.3 内部 caption 派发 ×4 线程）。
    原先与 image pipeline 并行的 Stage 2.1 已于 2026-07-08 移除。
@@ -201,14 +201,14 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - 2.2 对所有源运行（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
 - 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.4 对整书只生成一次，随后收尾跑源内去重（原 2.5，单 chunk 跳过）；2.6 复用同一整书上下文并在 2.4 之后生成源页
 - Phase 2 全在内存（2.3→2.4→2.6 串行），产出统一由 3.1 写盘
-- 3.4a 在 3.1 前审查并校验 in-memory generation；`review_prepared` 让 resume 不重复调用 reviewer
+- 3.1 在 3.2 前审查并校验 in-memory generation；`review_prepared` 让 resume 不重复调用 reviewer
 - **3.1 写盘时同名 slug 走 page-merge**（NashSU parity）
-- 3.5 紧随 3.1；3.2 注图后由 3.4b 持久化已校验 review，再更新 cache
+- 3.3 紧随 3.2；3.4 注图后由 3.5 持久化已校验 review，再更新 cache
 - 3.7 强制（缺 stack 暂停），是**最后一个 stage**；之后 `_finalize_book` 置完成标记
 
 ## Resume marker 粒度 ≠ stage 编号
 
-上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点）、`stage_2_3_done`（覆盖 2.3+单次整书 2.4 generation）、`stage_2_9_done`（历史名称，仅覆盖 2.4 去重收尾 + 2.6 source page tail；为缓存兼容保留）、`review_prepared`（3.4a 已验证 items）、`write_loop_done`、`aggregate_done`、`write_phase`、`review_done`、`ingested`。`generation_policy_version` 与 `stage_2_3_done` 的 file_blocks 一起持久化：尚未跨过写盘边界的旧 per-chunk cache 只失效 2.3+、保留 2.2；已经写盘的旧任务安全续完，若要采用新策略必须显式 re-ingest。写盘后的 marker 都携带 page refs/count payload；`review_prepared` 携带规范化 review items。崩溃恢复逐段验证并恢复，不把“marker 存在”当作足够证据。
+上面的 2.1…3.7 编号是**叙事/可观测层**，不是崩溃恢复的实际单位。`<hash>.stages.json` 里真正的 done-marker 更粗：`stage_1_1/1_2/1_3_done`、`stage_2_2_done`（wiki-独立↔依赖的分界点）、`stage_2_3_done`（覆盖 2.3+单次整书 2.4 generation）、`stage_2_9_done`（历史名称，仅覆盖 2.4 去重收尾 + 源页保证；为缓存兼容保留）、`review_prepared`（3.1 已验证 items）、`write_loop_done`、`aggregate_done`、`write_phase`、`review_done`、`ingested`。`generation_policy_version` 与 `stage_2_3_done` 的 file_blocks 一起持久化：尚未跨过写盘边界的旧 per-chunk cache 只失效 2.3+、保留 2.2；已经写盘的旧任务安全续完，若要采用新策略必须显式 re-ingest。写盘后的 marker 都携带 page refs/count payload；`review_prepared` 携带规范化 review items。崩溃恢复逐段验证并恢复，不把“marker 存在”当作足够证据。
 
 **对未来"合并/拆分 stage"讨论的含义**：任何编号调整默认只是文档层 renumber-only，代码与 marker 不动；但有两条**载荷性边界**碰了就坏，不能移动：
 1. `stage_2_2_done | stage_2_3_done` —— wiki-独立/依赖分界；批量 prefetch 靠在这里精确停住（`raise PrepareStopAfter("1.5")`）才能让下一本书的 prefetch 并行跑。
@@ -225,11 +225,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 | 2.2 | chunk 分析结果齐全且无 error；滚动汇总 digest 含 5 必需 key 且类型正确（无 ≥1 concept 数量门槛；`_verify_stage_2_1_digest` 函数名是 2.1 时代遗留） |
 | 2.4 | 全部 chunk analysis 已完成；整书只执行一次 generation；可选 key/schema-typed 页可为 0（仅精确 `NO_KEY_PAGES` 可作为模型主动弃权）；与 2.6 source block 合并后 ≥1 FILE block、source page 存在且路径正确（`_verify_stage_2_4_file_blocks`，**写盘前** in-memory 检查） |
 | 2.6 | 首次响应先解析完整 FILE block；未闭合 exact path 做一次 targeted repair；仍缺失/错误则从完整 Stage 2 analysis 生成 deterministic fallback。最终必须恰好一个 exact-path、frontmatter/END 完整且正文非空的 source block；不检查固定 H2 或 claim 数 |
-| 3.4a | review YAML 严格 schema + wiki 内安全路径；整批校验后才写 `review_prepared`，不写 REVIEW artifacts |
+| 3.1 | review YAML 严格 schema + wiki 内安全路径；整批校验后才写 `review_prepared`，不写 REVIEW artifacts |
 | 3.1 | 写入无 hard failure；成功页先落盘再写 `write_loop_done` |
 | 3.5 | log source/hash 与 index source link 两个确定性 postcondition |
 | 3.2 | required media 全量注入后才写 `write_phase` |
-| 3.4b | 只持久化 `review_prepared` 的已验证 items；成功后绑定 REVIEW page refs |
+| 3.5 | 只持久化 `review_prepared` 的已验证 items；成功后绑定 REVIEW page refs |
 | finalize | media、markers、cache、task manifest、page refs 与磁盘页面交叉一致 |
 
 > `validate_stage_outputs` 仍是软质量校验（warning，不 raise）；上表新增的 3.x/finalize 检查是 artifact 完整性与安全门禁，不是恢复已移除的全量 post-ingest 内容质量 audit。

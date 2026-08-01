@@ -48,7 +48,7 @@ from _stage_3_review import (
     stage_3_1_prepare_review_suggestions,
     stage_3_5_persist_review_suggestions,
 )
-from _stage_2_6_source_page import (
+from _source_page import (
     build_fallback_source_summary_content,
     source_analysis_text,
 )

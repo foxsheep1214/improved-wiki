@@ -157,12 +157,81 @@ class RetiredStage26IsGone(unittest.TestCase):
     def test_deterministic_fallback_is_still_available(self):
         # NashSU keeps the fallback (ingest.ts:1287) even without the stage —
         # it is what guarantees a source page exists when the model omits it.
-        from _stage_2_6_source_page import build_fallback_source_summary
+        from _source_page import build_fallback_source_summary
         out = build_fallback_source_summary(
             "Book/X", "raw/Book/X.pdf", "ANALYSIS TEXT", "2026-08-01")
         self.assertIn("---FILE:wiki/sources/Book/X.md---", out)
         self.assertIn("---END FILE---", out)
 
+class GeneratedSourceBlockIsNormalizedAndGated(unittest.TestCase):
+    """The structural gate and frontmatter repair that Stage 2.6 used to run
+    must still run — now against the block Stage 2.4 produced.
+
+    Dropping them with the stage would have been a silent regression: the old
+    call repaired blank bibliographic fields from the digest (the fix for the
+    Strauss/Witte source pages that shipped without authors/year/venue), and it
+    refused a malformed/duplicated/empty source block outright.
+    """
+
+    def setUp(self):
+        import _ingest_prepare
+        self.prep = _ingest_prepare
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.cfg = _config(self.tmp)
+        self.raw = _raw(self.tmp)
+        self.digest = {"book_meta": {
+            "title": "Some Book", "authors": ["Author"], "year": 2020,
+            "publisher": "A Press",
+        }}
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _block(self, body="# Some Book\n\nA grounded summary.", fm=None):
+        fm = fm if fm is not None else (
+            "---\ntype: source\ntitle: \"Some Book\"\n"
+            "tags: [x]\nrelated: []\n"
+            "sources: [\"raw/Book/Some Book - 2020 - Author.pdf\"]\n"
+            "created: 2026-08-01\nupdated: 2026-08-01\n"
+            "authors: []\nyear: \"\"\nurl: \"\"\nvenue: \"\"\n---\n\n"
+        )
+        return ("sources/Book/Some Book - 2020 - Author.md", fm + body)
+
+    def test_blank_bibliographic_fields_are_filled_from_the_digest(self):
+        blocks, missing = self.prep._ensure_source_page(
+            self.digest, self.raw, self.cfg, [self._block()])
+        self.assertFalse(missing)
+        content = blocks[0][1]
+        self.assertIn('authors: ["Author"]', content)
+        self.assertIn("year: 2020", content)
+        self.assertIn('venue: "A Press"', content)
+
+    def test_source_block_without_frontmatter_is_rejected(self):
+        bad = ("sources/Book/Some Book - 2020 - Author.md",
+               "# Some Book\n\nNo frontmatter at all.\n")
+        blocks, missing = self.prep._ensure_source_page(
+            self.digest, self.raw, self.cfg, [bad])
+        # Falls back deterministically rather than writing a frontmatter-less page.
+        self.assertTrue(missing)
+        self.assertTrue(blocks[0][1].lstrip().startswith("---"))
+
+    def test_duplicate_source_blocks_are_collapsed_to_one(self):
+        blocks, _missing = self.prep._ensure_source_page(
+            self.digest, self.raw, self.cfg,
+            [self._block(), self._block("# Some Book\n\nA second one.")])
+        paths = [p for p, _ in blocks]
+        self.assertEqual(
+            paths.count("sources/Book/Some Book - 2020 - Author.md"), 1)
+
+    def test_absent_source_block_still_falls_back(self):
+        blocks, missing = self.prep._ensure_source_page(
+            self.digest, self.raw, self.cfg,
+            [("concepts/x.md", "---\ntype: concept\n---\n\n# X\n")])
+        self.assertTrue(missing)
+        self.assertTrue(any(
+            p.endswith("sources/Book/Some Book - 2020 - Author.md")
+            for p, _ in blocks))
 
 if __name__ == "__main__":
     unittest.main()
