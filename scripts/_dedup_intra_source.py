@@ -113,7 +113,7 @@ def _dedup_confirm_merges_with_llm(groups_concepts, config):
     any group whose verdict is missing/unparseable/not-yes → (False, "")."""
     prompt = _dedup_confirm_prompt(groups_concepts)
     try:
-        response, _ = call_anthropic_protocol(prompt, config, max_tokens=400, label="dedup-confirm")
+        response, _ = call_anthropic_protocol(prompt, config, max_tokens=400)
     except Exception as e:
         print("  [stage 2.4] LLM confirm failed: {} — keeping all candidates".format(e))
         return [(False, "")] * len(groups_concepts)
@@ -261,7 +261,7 @@ def _dedup_apply_merge_rules(file_blocks, merge_rules):
     return result
 
 
-def dedup_intra_source(file_blocks, chunk_analyses, config, *, verbose: bool = False) -> dict:
+def dedup_intra_source(file_blocks, chunk_analyses, config) -> dict:
     """In-source concept dedup & merge (2.4 closing sub-step, ex-Stage 2.5; multi-chunk books only).
 
     Runs before the source page so the index lists de-duplicated concepts.

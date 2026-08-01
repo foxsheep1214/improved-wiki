@@ -317,7 +317,7 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
                 try:
                     # Non-blocking attempt
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    print(f"[mineru] Lock acquired")
+                    print("[mineru] Lock acquired")
                     update_worker_phase("mineru")
                     acquired = True
                     return fd
@@ -348,7 +348,7 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
-        print(f"[mineru] Lock released")
+        print("[mineru] Lock released")
         update_worker_phase("post_mineru")
     except Exception as e:
         print(f"[mineru] Warning: Failed to release lock: {e}")
@@ -893,7 +893,7 @@ def _stage_1_1_scanned_process_chunk(
 
 
 def _stage_1_1_scanned_assemble_manifest(
-    out_dir: Path, stats: dict, file_path: Path, config, total_pages: int,
+    out_dir: Path, file_path: Path, config, total_pages: int,
 ) -> str:
     """Assemble per-page OCR text into full text and write _manifest.json."""
     page_nums = list(range(total_pages))
@@ -1063,7 +1063,7 @@ def _stage_1_1_extract_text_scanned_impl(
 
     if finalize_media:
         return _stage_1_1_scanned_assemble_manifest(
-            out_dir, stats, file_path, config, total_pages)
+            out_dir, file_path, config, total_pages)
     return _stage_1_1_assemble_ocr_text(
         out_dir, list(range(total_pages)))
 

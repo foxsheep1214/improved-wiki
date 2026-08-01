@@ -131,7 +131,6 @@ def _verify_stage_2_2_chunks(
 
 def _verify_stage_2_4_file_blocks(
     file_blocks: list[tuple[str, str]], raw_file: Path,
-    incremental_associations: dict | None = None,
     is_query_bridge: bool = False,
 ) -> None:
     """Verify synthesis produced valid FILE blocks with correct paths."""
@@ -139,7 +138,7 @@ def _verify_stage_2_4_file_blocks(
                    f"0 FILE blocks parsed from LLM response for {raw_file.name}. "
                    f"LLM did not generate any wiki pages.")
     # Verify source page block exists — skipped for deep-research query bridges,
-    # which deliberately have no Stage 2.6 source page (see is_query_bridge_source).
+    # which deliberately have no Stage 2.4 source page (see is_query_bridge_source).
     if not is_query_bridge:
         source_blocks = [p for p, _ in file_blocks if "sources/" in p]
         _verify_or_die(len(source_blocks) >= 1, "Stage 2",
@@ -170,7 +169,6 @@ def _verify_stage_2_4_file_blocks(
 def validate_stage_outputs(
     config: Config,
     raw_file: Path,
-    method: str,
     extracted_text: str,
     stage_1_2_result: dict,
     stage_1_3_result: dict,
@@ -202,7 +200,7 @@ def validate_stage_outputs(
         manifest = config.wiki_dir / "media" / media_slug(raw_file, config) / "_manifest.json"
         if not manifest.exists():
             warnings.append("Stage 1.2: images extracted but _manifest.json missing")
-            print(f"  ⚠️  Stage 1.2: _manifest.json missing")
+            print("  ⚠️  Stage 1.2: _manifest.json missing")
 
     # Stage 1.3: caption completeness — every image has .caption.txt >= 20 chars
     if img_count > 0:
@@ -225,7 +223,7 @@ def validate_stage_outputs(
                 and missing_captions > 0
                 and not stage_1_3_result.get("skipped")):
             warnings.append("Stage 1.3: no captions generated (API may have failed)")
-            print(f"  ⚠️  Stage 1.3: 0 captions generated")
+            print("  ⚠️  Stage 1.3: 0 captions generated")
 
     # Stage 2: FILE block validation
     if len(file_blocks) == 0:
@@ -236,7 +234,7 @@ def validate_stage_outputs(
     source_block_found = any("sources/" in p for p, _ in file_blocks)
     if not source_block_found:
         warnings.append("Stage 2: no source page FILE block emitted (placeholder will be written)")
-        print(f"  ⚠️  Stage 2: source page block missing")
+        print("  ⚠️  Stage 2: source page block missing")
 
     # Stage 3: file writing vs parsed blocks
     written_count = 0
@@ -254,12 +252,12 @@ def validate_stage_outputs(
         source_content = source_path.read_text(encoding="utf-8")
         if "## Embedded Images" not in source_content:
             warnings.append("Stage 3.2: source page missing '## Embedded Images' section")
-            print(f"  ⚠️  Stage 3.2: image injection not found in source page")
+            print("  ⚠️  Stage 3.2: image injection not found in source page")
 
     # Stage 3: source page on disk (post-write verify)
     if not source_path.exists():
         warnings.append("Stage 3: source page does not exist after ingest")
-        print(f"  ❌ Stage 3: source page missing")
+        print("  ❌ Stage 3: source page missing")
 
     # Stage 3.4: review pages in wiki/REVIEW/<type>/ (分子目录)
     reviews_dir = config.wiki_dir / "REVIEW"
@@ -278,6 +276,6 @@ def validate_stage_outputs(
     if warnings:
         print(f"\n[validate] {len(warnings)} go/no-go warning(s) — see details above")
     else:
-        print(f"[validate] All go/no-go checks passed ✅")
+        print("[validate] All go/no-go checks passed ✅")
 
     return warnings

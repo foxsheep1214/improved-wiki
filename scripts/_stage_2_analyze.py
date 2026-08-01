@@ -66,8 +66,8 @@ _DIGEST_PROMPT_CAP = 15_000
 # uncapped list grew with the wiki (6,253 pages → one 259KB prompt line,
 # repeated per chunk — observed live 2026-07-09, and it broke answering
 # subagents' Read tooling). NashSU trims its Current Wiki Index to 40K chars
-# (ingest.ts buildChunkAnalysisSystemPrompt); 2.4 (_LINKABLE_TOTAL_CAP) and
-# 2.6 ([:1500]) already rank-and-cap. 1000 slugs ≈ 40K chars — same budget.
+# (ingest.ts buildChunkAnalysisSystemPrompt); Stage 2.4's prompt sections
+# already rank-and-cap. 1000 slugs ≈ 40K chars — the same budget.
 _EXISTING_SLUGS_CAP = 1000
 
 
@@ -81,7 +81,7 @@ def _stage_2_2_cap_existing_slugs(existing_slugs: list, chunk_text: str) -> list
     the ranked prefix (and hence the conversation-handoff prompt hash) is
     stable across resumes. An alphabetical cut would systematically drop
     late-sorting CJK slugs — the same disease _rank_linkable_fill fixed for
-    2.4/2.6.
+    Stage 2.4.
     """
     if len(existing_slugs) <= _EXISTING_SLUGS_CAP:
         return existing_slugs
@@ -654,7 +654,7 @@ def _stage_2_2_build_prompt(
     # condenses rather than accumulates verbatim (see the updated_global_digest
     # template below). Detail is NOT lost by this: each chunk's full analysis is
     # persisted in chunk_analyses; Stage 2.4 selects eligible key page candidates
-    # and Stage 2.6 synthesizes core claims separately. The digest is only the
+    # and synthesizes core claims. The digest is only the
     # lightweight continuity channel. Earlier fixed caps (6K, 24K) and an
     # interim dynamic cap (target_chars) predate this parity decision.
     if len(digest_str) > _DIGEST_PROMPT_CAP:

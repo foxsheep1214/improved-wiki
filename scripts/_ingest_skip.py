@@ -13,7 +13,7 @@ from _progress import (
 )
 from _stage_3_write import _stage_3_2_wiki_path_for_source
 
-def _should_stop_after(config: Config, stage: str, result: dict) -> bool:
+def _should_stop_after(config: Config, stage: str) -> bool:
     """Check if we should stop after completing `stage`. Progress already saved before call."""
     if config.stop_after_stage == stage:
         print(f"\n[stop-after-stage] Stage {stage} complete — clean exit (--stop-after-stage={stage})")
@@ -54,13 +54,13 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
     """
     h = file_sha256(raw_file)
     # Deep-research pages (wiki/queries/*.md, or a pre-2026-07-16 raw/queries/
-    # bridge copy) deliberately have no Stage 2.6 source page — the `ingested`
+    # bridge copy) deliberately have no Stage 2.4 source page — the `ingested`
     # marker alone is authoritative for them, skipping the source-page-existence
     # staleness check below (which would otherwise see "no source page" on
     # every call and force an endless re-ingest).
     if is_query_bridge_source(raw_file, config):
         if is_stage_done(config, h, "ingested"):
-            print(f"  [skip] Ingest complete (ingested marker present)")
+            print("  [skip] Ingest complete (ingested marker present)")
             return True
         return False
 
@@ -88,7 +88,7 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
             assert_cached_media_complete(raw_file, config)
             mark_stage_done(config, h, "ingested")
             print("  [skip] Media repaired and re-verified")
-        print(f"  [skip] Ingest complete (ingested marker present)")
+        print("  [skip] Ingest complete (ingested marker present)")
         return True
 
     source_page = _stage_3_2_wiki_path_for_source(raw_file, config)
@@ -98,5 +98,5 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
     # Source page exists but ingested not done → mid-flight resume.  Do NOT
     # skip: post-write stages may still be pending.  The write_phase marker
     # inside _do_write handles skipping the non-idempotent 3.1 loop.
-    print(f"  [skip:resume] Source page exists, ingested not done — resuming")
+    print("  [skip:resume] Source page exists, ingested not done — resuming")
     return False

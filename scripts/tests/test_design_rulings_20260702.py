@@ -1,7 +1,7 @@
 """Audit 2026-07-02 section D design rulings (user-decided).
 
-  D1 — slug language = source-text language: rule injected into BOTH Stage 2.4
-       generation prompts. (The Stage 2.7 query-constraint case was removed
+  D1 — slug language = source-text language: rule injected into the Stage 2.4
+       generation prompt. (The Stage 2.7 query-constraint case was removed
        2026-07-12 with Stage 2.7 itself — NashSU parity.)
   D2 — book-level granularity switch: Stage 2.2 injects a COARSE directive
        ONLY when Stage 2.1 classified book_meta.granularity == "manual".
@@ -39,7 +39,7 @@ def _make_config(tmp: Path) -> _core.Config:
 
 
 class TestD1D4GenerationRules(unittest.TestCase):
-    def _build_prompts(self, tmp: Path) -> tuple[str, str]:
+    def _build_prompt(self, tmp: Path) -> str:
         cfg = _make_config(tmp)
         (cfg.raw_root / "Book").mkdir(parents=True, exist_ok=True)
         file_path = cfg.raw_root / "Book" / "雷达手册.pdf"
@@ -48,26 +48,23 @@ class TestD1D4GenerationRules(unittest.TestCase):
                                 "definition": "d", "key_details": []}],
             "entities_found": [],
         }
-        per_chunk = gen._stage_2_4_build_prompt(analysis, "some text", 0, file_path, cfg)
-        single_shot = gen._stage_2_4_build_all_prompt([analysis], file_path, cfg)
-        return per_chunk, single_shot
+        return gen._stage_2_4_build_all_prompt(
+            [analysis], file_path, cfg, source_context="some text")
 
-    def test_slug_language_rule_in_both_prompts(self):
+    def test_slug_language_rule_in_prompt(self):
         with tempfile.TemporaryDirectory() as d:
-            per_chunk, single_shot = self._build_prompts(Path(d))
+            prompt = self._build_prompt(Path(d))
 
-            for prompt in (per_chunk, single_shot):
-                self.assertIn("slug uses the SOURCE language", prompt)
-                self.assertIn("中英双拼", prompt)
-                self.assertIn("mti, cfar, dds", prompt)
+            self.assertIn("slug uses the SOURCE language", prompt)
+            self.assertIn("中英双拼", prompt)
+            self.assertIn("mti, cfar, dds", prompt)
 
     def test_figure_reference_rule_links_source_page(self):
         with tempfile.TemporaryDirectory() as d:
-            per_chunk, single_shot = self._build_prompts(Path(d))
+            prompt = self._build_prompt(Path(d))
 
-            for prompt in (per_chunk, single_shot):
-                self.assertIn("[[sources/Book/雷达手册|据图2.6]]", prompt)
-                self.assertIn("do NOT embed images", prompt)
+            self.assertIn("[[sources/Book/雷达手册|据图2.6]]", prompt)
+            self.assertIn("do NOT embed images", prompt)
 
     def test_source_page_slug_outside_raw_falls_back_to_stem(self):
         with tempfile.TemporaryDirectory() as d:

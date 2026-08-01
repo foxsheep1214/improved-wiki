@@ -33,22 +33,12 @@ from _language import build_language_directive
 from _frontmatter_array import parse_frontmatter_array
 from _paths import iter_wiki_pages
 
-# The accumulating "already generated" context fed into each chunk's prompt is
-# bounded, mirroring NashSU's trimLongText(globalDigest). The full
-# generated_slugs list still drives SKIP membership and the independently capped
-# Linkable list; only the displayed context is windowed.
-GENERATED_DISPLAY_MAX = 50
-
-# Soft cap on the displayed Linkable-pages list. Must-link targets (this chunk's
-# slugs, prior-chunk pages, Stage 2.3 existing_refs, related pages) are always
-# kept; only the background fill of other existing wiki pages is bounded by this.
+# Soft cap on the displayed Linkable-pages list. Must-link candidate and
+# association targets are always kept; only the background fill is bounded.
 _LINKABLE_TOTAL_CAP = 400
 
-# Stage 2.4 emits only optional key/typed pages; the mandatory source page is
-# generated separately in Stage 2.6. This exact sentinel lets the model abstain
-# when analysis candidates are real but none is important and substantively
-# developed enough to deserve a standalone page or material update. Exact
-# matching preserves the hard failure for empty/truncated/malformed responses.
+# Stage 2.4 always emits the source page; this sentinel lets the model state
+# that no optional key/typed page qualifies after that mandatory FILE block.
 _NO_KEY_PAGES_SENTINEL = "NO_KEY_PAGES"
 
 
@@ -76,11 +66,6 @@ def _is_key_concept_candidate(item: dict) -> bool:
     Missing importance defaults to eligible for backward-compatible checkpoints.
     """
     return str(item.get("importance", "core")).strip().lower() != "mentioned"
-
-
-def _is_no_key_pages_response(response: str) -> bool:
-    """Whether Stage 2.4 explicitly and cleanly selected zero optional pages."""
-    return response.strip() == _NO_KEY_PAGES_SENTINEL
 
 
 def _linkable_relevance_tokens(text: str) -> set:
@@ -124,8 +109,7 @@ def _rank_linkable_fill(candidates: list[str], reference_texts: list[str]) -> li
 
     return sorted(candidates, key=lambda s: (-_score(s), s))
 
-# ── Audit 2026-07-02 三/B prompt-text additions (injected into BOTH the
-# per-chunk and single-shot generation prompts) ─────────────────────────────
+# ── Audit 2026-07-02 三/B additions to the consolidated generation prompt ──
 
 # B1 (H4): the Stage 2.2 entity tie-breaker was never restated at generation
 # time, so drifted candidates (named methods, multi-author strings, ISBNs)
@@ -398,7 +382,7 @@ def _source_bibliographic_fields(global_digest: dict, stem: str) -> dict:
     }
 
 
-def _source_page_guidance_section(stem: str, global_digest: dict) -> str:
+def _source_page_guidance_section(stem: str) -> str:
     """What the source summary should contain (ported from Stage 2.6)."""
     return f"""# MANDATORY Source Page — wiki/sources/{stem}.md
 Exactly one source summary page is REQUIRED in this response, at that exact
@@ -669,415 +653,6 @@ def _schema_candidate_inventory(
     return lines, slugs
 
 
-def _stage_2_4_build_prompt(
-    chunk_analysis: dict,
-    chunk_text: str,
-    chunk_index: int,
-    file_path: Path,
-    config: Config,
-    template: str = "",
-    generated_slugs: list[str] | None = None,
-    existing_refs: dict | None = None,
-    related_pages: list[dict] | None = None,
-) -> str:
-    """Build prompt to generate key and schema-typed pages from one chunk.
-
-    Accepts generated_slugs from previously-processed chunks so the LLM can:
-      - Skip concepts already covered by earlier chunks
-      - Use [[wikilinks]] to reference existing pages
-      - Avoid duplicate slug generation
-    (NashSU parity: sequential, accumulating context.)
-    """
-    concepts = chunk_analysis.get("concepts_found", [])
-    entities = chunk_analysis.get("entities_found", [])
-    existing_slugs = list_existing_slugs(config)
-    if generated_slugs is None:
-        generated_slugs = []
-    existing_refs = existing_refs or {}
-
-    # Resolve specific schema types before rendering generic concepts/entities.
-    # A same-name comparison/synthesis/finding/methodology/thesis is one typed
-    # page, not a second generic page with the same stem.
-    schema_candidate_lines, schema_candidate_slugs = _schema_candidate_inventory(
-        [chunk_analysis], config, existing_refs, generated_slugs
-    )
-    schema_candidate_targets = _schema_candidate_targets_by_name(
-        [chunk_analysis], config)
-    schema_candidates_str = (
-        "\n".join(schema_candidate_lines) if schema_candidate_lines else "(none)"
-    )
-
-    concept_lines = []
-    concept_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
-    concept_slug_stems: set[str] = set()  # for entity-dedup (Issue 4)
-    for c in concepts:
-        if isinstance(c, dict):
-            if not _is_key_concept_candidate(c):
-                continue
-            name = c.get("name", "")
-            imp = c.get("importance", "core")
-            defn = c.get("definition", "")
-            details = c.get("key_details", [])
-            slug = slugify(name)
-            if name in schema_candidate_targets:
-                concept_lines.append(
-                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} "
-                    f"[ROUTED AS {schema_candidate_targets[name]} BY SCHEMA — "
-                    "SKIP GENERIC CONCEPT]"
-                )
-            elif _candidate_was_generated(
-                    f"concepts/{slug}", generated_slugs):
-                concept_lines.append(
-                    f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn} "
-                    "[ALREADY COVERED — SKIP]"
-                )
-            else:
-                existing_slug = _same_route_existing_target(
-                    name, "concepts", existing_refs)
-                refs = _existing_targets(name, existing_refs)
-                if existing_slug:
-                    concept_lines.append(
-                        f"  - {name} (slug: {existing_slug}) [{imp}; "
-                        f"UPDATE EXISTING PAGE]: {defn}"
-                    )
-                    concept_slugs.append((name, existing_slug))
-                    concept_slug_stems.add(slug)
-                    for d in details[:3]:
-                        concept_lines.append(f"      • {d}")
-                elif refs:
-                    existing_slug = refs[0]
-                    concept_lines.append(
-                        f"  - {name} → CROSS-TYPE ASSOCIATION "
-                        f"[[{existing_slug}]]: do NOT create a duplicate page; "
-                        f"wikilink ONLY as [[{existing_slug}]] "
-                        f"(never [[concepts/{slug}]])"
-                    )
-                else:
-                    concept_lines.append(
-                        f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}"
-                    )
-                    concept_slugs.append((name, f"concepts/{slug}"))
-                    concept_slug_stems.add(slug)
-                    for d in details[:3]:
-                        concept_lines.append(f"      • {d}")
-
-    # Issue 4: collect prior-chunk concept slug stems too, so an entity sharing
-    # a concept's slug is deduped (concept page takes precedence over entity).
-    for s in generated_slugs:
-        normalized = _normalize_existing_ref(s)
-        if normalized.startswith("concepts/"):
-            concept_slug_stems.add(normalized.split("/", 1)[1])
-
-    entity_lines = []
-    entity_slugs: list[tuple[str, str]] = []  # (name, slug) for wikilink reference
-    for e in entities:
-        if isinstance(e, dict):
-            name = e.get("name", "")
-            sig = e.get("significance", "")
-            slug = slugify(name)
-            if name in schema_candidate_targets:
-                entity_lines.append(
-                    f"  - {name} (slug: entities/{slug}): {sig} "
-                    f"[ROUTED AS {schema_candidate_targets[name]} BY SCHEMA — "
-                    "SKIP GENERIC ENTITY]"
-                )
-            elif (_candidate_was_generated(
-                    f"entities/{slug}", generated_slugs)
-                    or slug in concept_slug_stems):
-                # Issue 4: a concept page for this slug already exists (this chunk
-                # or a prior one) — skip the duplicate entity page; wikilink to
-                # the concept page instead.
-                entity_lines.append(
-                    f"  - {name} (slug: entities/{slug}): {sig} "
-                    f"[DUPLICATE OF CONCEPT concepts/{slug} — SKIP]"
-                )
-            else:
-                existing_slug = _same_route_existing_target(
-                    name, "entities", existing_refs)
-                refs = _existing_targets(name, existing_refs)
-                if existing_slug:
-                    entity_lines.append(
-                        f"  - {name} (slug: {existing_slug}) "
-                        f"[UPDATE EXISTING PAGE]: {sig}"
-                    )
-                    entity_slugs.append((name, existing_slug))
-                elif refs:
-                    existing_slug = refs[0]
-                    entity_lines.append(
-                        f"  - {name} → CROSS-TYPE ASSOCIATION "
-                        f"[[{existing_slug}]]: do NOT create a duplicate page; "
-                        f"wikilink ONLY as [[{existing_slug}]]"
-                    )
-                else:
-                    entity_lines.append(
-                        f"  - {name} (slug: entities/{slug}): {sig}"
-                    )
-                    entity_slugs.append((name, f"entities/{slug}"))
-
-    # Stage 2.2 has already curated key candidates. Do not impose a second,
-    # arbitrary line/count cap here: pass every recommended candidate while
-    # excluding `mentioned` concepts above.
-    concept_str = "\n".join(concept_lines) if concept_lines else "(none)"
-    entity_str = "\n".join(entity_lines) if entity_lines else "(none)"
-
-    # Display only the most-recent window (NashSU-bounded); the full list is still
-    # used for SKIP membership (above) and the Linkable list (below), so older
-    # pages remain linkable and are never regenerated.
-    if not generated_slugs:
-        generated_str = "(none yet — you are the first chunk)"
-    else:
-        shown = generated_slugs[-GENERATED_DISPLAY_MAX:]
-        generated_lines = [f"  - {s}" for s in shown]
-        omitted = len(generated_slugs) - len(shown)
-        if omitted > 0:
-            generated_lines.insert(
-                0,
-                f"  (… {omitted} earlier page(s) omitted — they remain in the "
-                f"Linkable pages list below and must NOT be regenerated)",
-            )
-        generated_str = "\n".join(generated_lines)
-
-    # Build the linkable-slugs list in two tiers. MUST-LINK targets are slugs the
-    # prompt EXPLICITLY instructs the LLM to wikilink to — this chunk's own
-    # concepts/entities, prior-chunk pages, Stage 2.3 existing_refs (ALREADY
-    # COVERED targets), and related pages. These must NEVER be dropped: the old
-    # code merged everything into one set, sorted, then truncated to 300, so an
-    # ALREADY-COVERED target that sorted late vanished from the list while the
-    # ALREADY-COVERED instruction still referenced it (book-2 re-ingest bug).
-    # The background FILL (other existing wiki pages) is what the cap bounds.
-    must_link = set()
-    for _, s in concept_slugs:
-        must_link.add(s)
-    for _, s in entity_slugs:
-        must_link.add(s)
-    for _, s in schema_candidate_slugs:
-        must_link.add(s)
-    for s in generated_slugs:
-        if "/" in s:
-            must_link.add(s)
-        else:
-            must_link.add(f"concepts/{s}")
-            must_link.add(f"entities/{s}")
-    for name in existing_refs:
-        must_link.update(_existing_targets(name, existing_refs))
-    for rp in (related_pages or []):
-        slug = rp.get("slug") if isinstance(rp, dict) else None
-        if slug:
-            must_link.add(slug)
-    # Background fill: other existing wiki pages, bounded so the prompt stays a
-    # reasonable size. Never displaces a must-link target. When candidates
-    # exceed the room, keep the most RELEVANT to this source (token/CJK-bigram
-    # overlap with this chunk's names + prior generated slugs) instead of an
-    # alphabetical prefix, which systematically dropped late-sorting (CJK)
-    # slugs — see _rank_linkable_fill (deterministic, prompt-hash stable).
-    fill = sorted(s for s in set(existing_slugs) if s not in must_link)
-    room = max(0, _LINKABLE_TOTAL_CAP - len(must_link))
-    if len(fill) > room:
-        refs = ([n for n, _s in concept_slugs] + [n for n, _s in entity_slugs]
-                + [n for n, _s in schema_candidate_slugs] + list(generated_slugs))
-        fill = sorted(_rank_linkable_fill(fill, refs)[:room])
-    linkable_list = sorted(must_link) + fill
-    linkable_str = "\n".join(f"  - {s}" for s in linkable_list) if linkable_list else "(none)"
-
-    template_section = ""
-    if template:
-        template_section = f"\n# Document Type\n<template>\n{template[:1500]}\n</template>\n"
-
-    # Stage 2.3 feedback: same-type pages are update targets; cross-type pages
-    # are link-only associations. The per-candidate lines carry that distinction.
-    if existing_refs:
-        ref_lines = []
-        # Sort for deterministic prompt text → stable conversation-handoff cache
-        # key. Without sorting, set/dict iteration order (Python hash randomization)
-        # varies across runs, changing the prompt hash and re-prompting Stage 2.4
-        # forever (cache never hits on resume).
-        for name in sorted(existing_refs):
-            links = ", ".join(
-                "[[{}]]".format(s)
-                for s in _existing_targets(name, existing_refs)
-            )
-            ref_lines.append("  - {} → already exists as: {}".format(name, links))
-        existing_refs_str = "\n".join(ref_lines)
-    else:
-        existing_refs_str = "(none — this source has no overlap with existing wiki)"
-
-    # Stage 2.2's self-reported connections_to_existing_wiki, resolved against
-    # real pages by Stage 2.3 (stage_2_3_resolve_proposed_connections). These
-    # are RELATED pages, not duplicates of the new concepts — still generate
-    # full new pages, just wikilink to these where relevant in the body.
-    if related_pages:
-        rel_lines = [
-            "  - [[{}]] (relationship: {})".format(rp["slug"], rp.get("relationship", "related"))
-            for rp in related_pages
-        ]
-        related_pages_str = "\n".join(rel_lines)
-    else:
-        related_pages_str = "(none)"
-
-    # P1 (2026-06-27): ground every page in THIS chunk's raw source text. This is
-    # what gives full-concept fidelity for sources of ANY size — each chunk's
-    # concepts are generated with their exact source passage present, so the model
-    # uses the source's own formulas/notation/examples, not training-memory.
-    if chunk_text.strip():
-        chunk_source_section = (
-            "# Source Text for THIS chunk (GROUND EVERY PAGE IN THIS — do not write from memory)\n"
-            "Use the source's OWN definitions, formulas, notation, variable names, and\n"
-            "worked examples — never substitute a generic/popular version from memory.\n"
-            "<source>\n"
-            f"{chunk_text}\n"
-            "</source>\n\n"
-        )
-    else:
-        chunk_source_section = ""
-
-    formulas_section = _collect_formulas_block([chunk_analysis])
-    schema_section = _schema_routing_block(config)
-    tags_section = _tags_reuse_section(config)
-    extra_rules = _extra_rules(_source_page_slug(file_path, config))
-    raw_rel = canonical_source_path(file_path, config)
-    schema_context_section = (
-        _schema_typed_context_section([chunk_analysis])
-        if schema_candidate_slugs else ""
-    )
-    schema_output_section = (
-        _schema_typed_output_section(raw_rel)
-        if schema_candidate_slugs else ""
-    )
-
-    language_directive = build_language_directive(chunk_text)
-    return f"""{language_directive}
-
-# Role
-You are generating wiki pages for ONE chunk of a source. Previous chunks have
-already been processed — their pages are listed below. Do NOT regenerate them.
-
-# Source
-Source: {file_path.stem}
-Chunk: {chunk_index + 1}
-
-{template_section}
-{chunk_source_section}{schema_context_section}{formulas_section}{schema_section}# Pages already generated by previous chunks (SKIP these):
-{generated_str}
-
-# Existing wiki associations (Stage 2.3):
-# - same-type target → generate its exact FILE path as an UPDATE
-# - cross-type target → do not duplicate; wikilink only
-{existing_refs_str}
-
-# Related (not duplicate) existing pages — wikilink to these where relevant, but still generate the recommended new pages below:
-{related_pages_str}
-
-# Key concept page candidates recommended by the analysis:
-{concept_str}
-
-# Key entity page candidates recommended by the analysis:
-{entity_str}
-{_ENTITY_RULES_SECTION}
-# Key schema-typed page candidates recommended by the analysis:
-{schema_candidates_str}
-
-# NashSU generation policy
-- Generate FILE blocks for genuinely important recommended candidates that are
-  new OR marked UPDATE EXISTING PAGE. The writer will merge update blocks into
-  their exact existing paths.
-- Do not generate candidates marked ALREADY COVERED/SKIP or CROSS-TYPE.
-- A recommended synthesis/thesis candidate has already passed Stage 2.2's
-  evidence-selection gate. Generate it unless it is marked SKIP/CROSS-TYPE or
-  the authoritative project schema itself rejects it; do not silently drop it
-  merely because it starts from one source or remains speculative.
-- Do not create pages for passing mentions, background prerequisites, or extra
-  "foundational" terms that were not recommended.
-- There is no page-count target. Do not pad or split one coherent topic merely
-  to increase the number of FILE blocks.
-- Every candidate remains optional at generation time. If NONE is genuinely
-  important and substantively developed enough for a standalone page or
-  material update, output exactly `{_NO_KEY_PAGES_SENTINEL}` and nothing else.
-  Stage 2.6 generates the mandatory source page separately.
-
-# ⚠️ CRITICAL — START IMMEDIATELY WITH THE RESULT
-- If at least one candidate qualifies, your FIRST line MUST start with
-  `---FILE:wiki/`.
-- Otherwise output exactly `{_NO_KEY_PAGES_SENTINEL}`.
-- Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
-
-# [[wikilink]] Rules — STRICT
-Each candidate above includes an exact slug like (slug: concepts/foo-bar) or
-(slug: comparisons/foo-vs-bar).
-This is the EXACT [[wikilink]] you must use — kebab-case with type prefix.
-
-Correct format:
-  [[concepts/natural-convection-heat-sink]]  ← kebab-case + concepts/ prefix
-  [[entities/bell-labs]]                      ← kebab-case + entities/ prefix
-  [[comparisons/mti-vs-pulse-doppler]]        ← schema-typed exact path
-
-WRONG formats (DO NOT use — these create broken links):
-  [[Natural Convection Heat Sink]]  ← Title Case, no prefix = BROKEN
-  [[convection]]                    ← missing prefix = BROKEN
-  [[concepts/litz-wire.md]]         ← includes .md = BROKEN
-  [[cooling technique]]             ← not in linkable list = BROKEN
-
-# Linkable pages (ONLY these [[wikilinks]] are valid):
-{linkable_str}
-
-Rules:
-1. ONLY use [[wikilinks]] from the "Linkable pages" list above.
-2. Use the EXACT slug shown. Do not change case, add words, or invent new ones.
-3. For candidates IN THIS CHUNK: use the slug from its "(slug: ...)" label.
-4. If no matching slug exists, write the term as PLAIN TEXT with NO [[]].
-5. In a Markdown table cell, escape an alias separator as
-   `[[target\\|display]]`; an unescaped `|` creates a false cell boundary.
-6. NEVER use `/` in filenames (macOS rejects it). Use "-" instead.
-7. Math: ALWAYS write formulas in LaTeX — inline $...$, display $$...$$. Transcribe
-   each formula from the source / Formulas list verbatim (same variables, same form);
-   never paraphrase a formula into prose or swap in a generic textbook version.
-8. Result-file integrity: every LaTeX command must retain a literal reverse-solidus
-   (U+005C) before its command name in the final .txt file. Never emit C0 control
-   characters in math (especially form-feed, carriage-return, or tab).
-{extra_rules}
-{_CONCEPT_SKELETON_SECTION}{tags_section}
-# Output Format — EXACT
----FILE:wiki/concepts/<slug>.md---
----
-type: concept
-title: "..."
-tags: [...]
-related: [...]
-sources: ["{raw_rel}"]
-created: {time.strftime('%Y-%m-%d')}
-updated: {time.strftime('%Y-%m-%d')}
----
-
-# Title
-
-(content)
-
----END FILE---
----FILE:wiki/entities/<slug>.md---
----
-type: entity
-title: "<entity name>"
-tags: [...]
-related: [...]
-sources: ["{raw_rel}"]
-created: {time.strftime('%Y-%m-%d')}
-updated: {time.strftime('%Y-%m-%d')}
----
-
-# <entity name>
-
-(content)
-
----END FILE---
-{schema_output_section}
-
-Generate only qualifying new and UPDATE EXISTING key pages that are not marked
-[ALREADY COVERED]/[SKIP]/CROSS-TYPE. Start with the first FILE block, or output
-exactly `{_NO_KEY_PAGES_SENTINEL}` if none qualifies.
-
-{language_directive}
-"""
-
-
 def _stage_2_4_build_all_prompt(
     chunk_analyses: list[dict],
     file_path: Path,
@@ -1320,8 +895,7 @@ def _stage_2_4_build_all_prompt(
     # chars duplicated per book).
     source_rel_stem = source_page_rel_stem(file_path, config)
     _source_digest = _final_digest_from_analyses(chunk_analyses)
-    source_page_section = _source_page_guidance_section(
-        source_rel_stem, _source_digest)
+    source_page_section = _source_page_guidance_section(source_rel_stem)
     source_page_output_section = _source_page_output_section(
         source_rel_stem, file_path.suffix, _source_digest)
 
@@ -1530,7 +1104,7 @@ def stage_2_4_generate_all(
             if attempt == 0:
                 print("  [generate-all] single-shot generating (all chunks)...", flush=True)
             response, stop_reason = call_anthropic_protocol(
-                prompt, config, max_tokens=gen_tokens, label="single-shot generation")
+                prompt, config, max_tokens=gen_tokens)
             repair = repair_truncated_file_blocks(
                 response,
                 original_prompt=prompt,
@@ -1556,15 +1130,9 @@ def stage_2_4_generate_all(
             print(f"  [generate-all] OK{tag} — {len(blocks)} blocks "
                   f"({len(response):,} chars, {stop_reason}) {dt:.0f}s")
             if not blocks:
-                if _is_no_key_pages_response(response):
-                    print(
-                        "  [generate-all] model selected 0 optional key pages; "
-                        "the mandatory source page remains Stage 2.6"
-                    )
-                    return [], [], stop_reason
                 raise RuntimeError(
-                    "Stage 2.4 produced 0 FILE blocks without the exact "
-                    f"{_NO_KEY_PAGES_SENTINEL} sentinel.")
+                    "Stage 2.4 produced 0 FILE blocks; the mandatory source "
+                    "page cannot be omitted.")
             if verbose:
                 print(f"    response: {response[:500]}...")
             return blocks, generated_slugs, stop_reason
@@ -1580,136 +1148,6 @@ def stage_2_4_generate_all(
                 f"{attempt + 1} attempt(s): {type(e).__name__}: {e}"
             ) from e
     raise RuntimeError("Stage 2.4 single-shot generation exhausted retries")
-
-
-def stage_2_4_generate_chunk(
-    analysis: dict,
-    chunk_idx: int,
-    generated_slugs: list[str],
-    file_path: Path,
-    config: Config,
-    template: str = "",
-    verbose: bool = False,
-    chunk_text: str = "",
-    existing_refs: dict | None = None,
-    related_pages: list[dict] | None = None,
-) -> list[tuple[str, str]]:
-    """Legacy direct helper for one-chunk generation.
-
-    The active ingest pipeline no longer calls this helper: NashSU-aligned
-    Stage 2.4 uses ``stage_2_4_generate_all`` once after every Stage 2.2 chunk
-    has been analyzed. It remains importable for compatibility and targeted
-    diagnostics. ``existing_refs``
-    (Stage 2.3 output: {candidate_name: [type-prefixed wiki slugs]}) is
-    forwarded so the LLM updates same-type targets and only links cross-type
-    associations.
-    ``related_pages`` (Stage 2.3's stage_2_3_resolve_proposed_connections
-    output: [{"slug": ..., "relationship": ...}]) is forwarded so the LLM
-    wikilinks new pages to genuinely *related* (not duplicate) existing pages.
-
-    Returns list of (path, content) tuples.  Caller should append slugs to
-    generated_slugs from the returned paths.
-    """
-    existing_refs = existing_refs or {}
-    schema_targets = _schema_candidate_targets_by_name([analysis], config)
-    concepts_n = sum(
-        1 for c in (analysis.get("concepts_found", []) or [])
-        if isinstance(c, dict)
-        and _is_key_concept_candidate(c)
-        and bool(name := str(c.get("name", "")).strip())
-        and name not in schema_targets
-        and _candidate_requires_file(
-            name, "concepts", existing_refs, generated_slugs)
-    )
-    entities_n = sum(
-        1 for e in (analysis.get("entities_found", []) or [])
-        if isinstance(e, dict)
-        and bool(name := str(e.get("name", "")).strip())
-        and name not in schema_targets
-        and _candidate_requires_file(
-            name, "entities", existing_refs, generated_slugs)
-    )
-    candidate_routes = schema_candidate_routes(load_schema_md(config))
-    schema_candidates_n = sum(
-        1 for cand in (analysis.get("schema_typed_candidates", []) or [])
-        if isinstance(cand, dict)
-        and bool(folder := candidate_routes.get(
-            str(cand.get("type", "")).strip()))
-        and bool(name := str(cand.get("name", "")).strip())
-        and _candidate_requires_file(
-            name, folder, existing_refs, generated_slugs)
-    )
-    if concepts_n == 0 and entities_n == 0 and schema_candidates_n == 0:
-        print(f"  [chunk {chunk_idx+1}] (no concepts, entities, or schema candidates — skipped)")
-        return []
-
-    prompt = _stage_2_4_build_prompt(
-        analysis, chunk_text, chunk_idx, file_path, config, template,
-        generated_slugs=generated_slugs, existing_refs=existing_refs,
-        related_pages=related_pages,
-    )
-    gen_tokens = config.compute_max_tokens(16384)
-
-    for attempt in range(4):
-        try:
-            t0 = time.time()
-            if attempt == 0:
-                print(f"  [chunk {chunk_idx+1}] generating "
-                      f"({concepts_n}c/{entities_n}e/{schema_candidates_n}s)...",
-                      flush=True)
-            response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=gen_tokens, label=f"chunk {chunk_idx+1} generation")
-            repair = repair_truncated_file_blocks(
-                response,
-                original_prompt=prompt,
-                source_identity=canonical_source_path(file_path, config),
-                config=config,
-                max_tokens=config.compute_max_tokens(8192),
-                label=f"stage 2.4 chunk {chunk_idx + 1}",
-                llm_call=call_anthropic_protocol,
-            )
-            blocks = repair.blocks
-            if repair.unrecovered_paths:
-                raise RuntimeError(
-                    f"Stage 2.4 chunk {chunk_idx + 1} targeted FILE repair "
-                    "did not recover: "
-                    + ", ".join(repair.unrecovered_paths)
-                )
-            dt = time.time() - t0
-            if not blocks:
-                if _is_no_key_pages_response(response):
-                    print(
-                        f"  [chunk {chunk_idx+1}] generate OK — 0 optional "
-                        "key pages selected; source page remains Stage 2.6"
-                    )
-                    return []
-                raise RuntimeError(
-                    f"Stage 2.4 chunk {chunk_idx + 1} produced 0 FILE blocks "
-                    f"without the exact {_NO_KEY_PAGES_SENTINEL} sentinel.")
-            tag = f" (retry #{attempt})" if attempt > 0 else ""
-            print(f"  [chunk {chunk_idx+1}] generate OK{tag} — "
-                      f"{concepts_n}c/{entities_n}e/{schema_candidates_n}s → "
-                      f"{len(blocks)} blocks "
-                  f"({len(response):,} chars, {stop_reason}) {dt:.0f}s")
-            if verbose:
-                print(f"    response: {response[:500]}...")
-            return blocks
-
-        except Exception as e:
-            if attempt < 3 and _is_retryable_exception(e):
-                wait = _retry_jitter(2.0, attempt)
-                err_label = type(e).__name__
-                print(f"  [chunk {chunk_idx+1}] generate {err_label} retry {attempt+1}/4"
-                      f" — {wait:.1f}s...")
-                time.sleep(wait)
-                continue
-            print(f"  [chunk {chunk_idx+1}] generate FAILED: {e}")
-            # No []-sentinel: returning [] let the gap be cached as "done"
-            # downstream. Raise so the ingest pauses; cached chunks make the
-            # resume cheap (no-silent-fallback).
-            raise RuntimeError(
-                f"Stage 2.4 chunk {chunk_idx+1} generation failed after "
-                f"{attempt+1} attempt(s): {type(e).__name__}: {e}") from e
-
 
 
 def _stage_2_4_extract_names(chunk_analyses: list[dict]) -> tuple[list[str], list[str]]:

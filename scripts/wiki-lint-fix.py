@@ -374,7 +374,6 @@ def cascade_delete_orphans(
 
 
 def _emit_review_for_broken(
-    project_root: Path,
     wiki_dir: Path,
     stub_actions: list[dict],
     *,
@@ -792,7 +791,8 @@ def main() -> int:
                   f"(pass --stub to bulk-create stubs instead)")
             # Generate review items for unsuggestable broken links (NashSU parity:
             # handleFix falls back to Review store when no suggestion exists).
-            _emit_review_for_broken(project_root, wiki_dir, stub_actions, dry_run=not args.apply)
+            _emit_review_for_broken(
+                wiki_dir, stub_actions, dry_run=not args.apply)
             # Orphan / no-outlinks findings with no suggestion are dropped by
             # plan_fixes (no stub/append action possible). Route them to review
             # too (audit M4) — fires on the default path.

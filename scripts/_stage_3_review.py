@@ -525,21 +525,3 @@ def stage_3_5_persist_review_suggestions(
         "stop_reason": stop_reason,
         "page_refs": page_refs,
     }
-
-
-def stage_3_review_suggestions(
-    file_blocks: list[tuple[str, str]],
-    raw_file: Path,
-    config: Config,
-    *,
-    verbose: bool = False,
-) -> dict:
-    """Compatibility wrapper: prepare review items, then persist them.
-
-    The ingest orchestrator calls the two functions separately to match
-    NashSU's pre-write review generation and post-write persistence order.
-    Direct callers retain the historical one-call behavior.
-    """
-    prepared = stage_3_1_prepare_review_suggestions(
-        file_blocks, raw_file, config, verbose=verbose)
-    return stage_3_5_persist_review_suggestions(prepared, raw_file, config)

@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import json
 import re
-import time
-from pathlib import Path
-
-from _core import canonical_source_path
 
 
 def _normalize_source_frontmatter(
     response: str, authors_yaml: str, year_yaml: str, url_yaml: str, venue_yaml: str,
 ) -> str:
     """Normalize the source-page FILE block's frontmatter when the agent's
-    Stage 2.6 response ignored the pre-filled template:
+    Stage 2.4 response ignored the pre-filled template:
 
     Inject any missing NashSU-parity bibliographic fields
        (authors/year/url/venue) using the values already computed from the
@@ -94,7 +90,7 @@ def _validate_source_file_block(
     normalized = [path.strip() for path in headers]
     if normalized != [expected]:
         raise RuntimeError(
-            "Stage 2.6 must emit exactly one source FILE block at "
+            "Stage 2.4 must emit exactly one source FILE block at "
             f"{expected}; got {normalized or 'none'}."
         )
     if len(re.findall(
@@ -103,7 +99,7 @@ def _validate_source_file_block(
             re.MULTILINE | re.IGNORECASE,
     )) != 1:
         raise RuntimeError(
-            "Stage 2.6 source FILE block must have exactly one END FILE marker."
+            "Stage 2.4 source FILE block must have exactly one END FILE marker."
         )
 
     start = header_matches[0].end()
@@ -116,12 +112,12 @@ def _validate_source_file_block(
         re.MULTILINE | re.IGNORECASE,
     )
     if not end_match:
-        raise RuntimeError("Stage 2.6 source FILE block is not closed.")
+        raise RuntimeError("Stage 2.4 source FILE block is not closed.")
     file_content = content[:end_match.start()]
     lines = file_content.splitlines()
     if not lines or lines[0].strip() != "---":
         raise RuntimeError(
-            "Stage 2.6 source FILE block must start with YAML frontmatter."
+            "Stage 2.4 source FILE block must start with YAML frontmatter."
         )
     fm_close = next(
         (i for i, line in enumerate(lines[1:], 1) if line.strip() == "---"),
@@ -129,28 +125,23 @@ def _validate_source_file_block(
     )
     if fm_close is None or not "\n".join(lines[fm_close + 1:]).strip():
         raise RuntimeError(
-            "Stage 2.6 source FILE block must contain a non-empty body."
+            "Stage 2.4 source FILE block must contain a non-empty body."
         )
 
 
 def source_analysis_text(
     global_digest: dict,
     chunk_analyses: list[dict] | None = None,
-    chunk_claims: list | None = None,
 ) -> str:
     """Serialize the complete Stage 2 analysis for deterministic recovery.
 
     NashSU's fallback source page preserves its full analysis rather than
     cutting it to a summary-sized prefix.  improved-wiki's equivalent analysis
-    is the rolled-up digest plus every per-chunk analysis.  ``chunk_claims`` is
-    retained as a compatibility fallback for older callers that do not carry
-    the full chunk list.
+    is the rolled-up digest plus every per-chunk analysis.
     """
     payload: dict = {"global_digest": global_digest}
     if chunk_analyses is not None:
         payload["chunk_analyses"] = chunk_analyses
-    elif chunk_claims is not None:
-        payload["chunk_claims"] = chunk_claims
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
 
 

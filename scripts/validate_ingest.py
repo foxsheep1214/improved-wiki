@@ -221,7 +221,7 @@ def main(argv: Optional[list[str]] = None):
         print(f"  ⚪ {label}: {detail}")
 
     print("=" * 60)
-    print(f"13-stage ingest validation")
+    print("13-stage ingest validation")
     print(f"Project: {PROJECT_ROOT}")
     print(f"Source:  {SOURCE_SLUG}")
     print("=" * 60)
@@ -298,7 +298,7 @@ def main(argv: Optional[list[str]] = None):
     print("\n[Stage 2.2] Global Digest (roll-up)")
     if entry:
         dk = stages.get("global_digest_keys", 0)
-        check(f"global digest complete", dk >= 1,
+        check("global digest complete", dk >= 1,
               f"{dk} top-level keys (ingest.py schema: book_meta/outline/key_entities/key_concepts/key_claims)")
     else:
         check("cache entry found", False)
@@ -310,7 +310,7 @@ def main(argv: Optional[list[str]] = None):
     if entry:
         chunks = stages.get("chunks_analyzed", 0)
         check(f"{chunks} chunk(s) analyzed", chunks >= 1,
-              f"ingest.py schema: entities_found + concepts_found + claims per chunk (NOT chunk_meta/local_*/etc.)")
+              "ingest.py schema: entities_found + concepts_found + claims per chunk (NOT chunk_meta/local_*/etc.)")
     else:
         check("cache entry found", False)
 
@@ -328,7 +328,7 @@ def main(argv: Optional[list[str]] = None):
         check(f"{fb} FILE blocks, {generated} concepts (core:{cov_core:.0%} supp:{cov_supp:.0%} "
               f"of {core}+{supp} targeted)",
               fb >= 1,
-              f"format: ---FILE:wiki/<path>---...---END FILE---")
+              "format: ---FILE:wiki/<path>---...---END FILE---")
     else:
         check("cache entry found", False)
 
@@ -448,7 +448,7 @@ def main(argv: Optional[list[str]] = None):
     review_files = list(reviews_dir.rglob("*.md")) if reviews_dir.is_dir() else []
     review_json = RUNTIME / "review.json"
     if review_files:
-        check(f"wiki/REVIEW/ has per-item .md files",
+        check("wiki/REVIEW/ has per-item .md files",
               len(review_files) >= 1,
               f"{len(review_files)} files")
     elif review_json.exists():

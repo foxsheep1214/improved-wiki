@@ -17,7 +17,7 @@ from _page_ref import PageRef
 from _config import Config
 from _core import canonical_source_path
 from _schema import (
-    is_safe_ingest_path, _ILLEGAL_CHARS_RE,
+    is_safe_ingest_path,
     source_slug_from_raw_path, schema_route_dir,
 )
 from _llm_api import call_anthropic_protocol
@@ -95,8 +95,9 @@ def _stage_3_2_make_cjk_slug(title: str) -> str:
     return slug if slug else ""
 
 
-def _stage_3_2_auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None,
-                                      quiet: bool = False) -> str | None:
+def _stage_3_2_auto_correct_wiki_path(
+    rel_path: str, content: str, quiet: bool = False,
+) -> str | None:
     """Auto-correct malformed wiki paths from LLM output.
 
     LLM sometimes outputs:
@@ -303,7 +304,6 @@ from _frontmatter import (
     parse_frontmatter,
     write_frontmatter,
     merge_page_content as _fm_merge_page_content,
-    lock_fields,
     strip_embedded_images_section,
 )
 
@@ -324,7 +324,7 @@ def _stage_3_2_merge_page_content(
     Fallback: if bodies don't need merging or LLM fails, returns array-merged result.
     """
 
-    def llm_merger(prev_content: str, merged_content: str, source_file: str) -> str:
+    def llm_merger(prev_content: str, merged_content: str, _source_file: str) -> str:
         """LLM merge callback — called by _frontmatter when bodies differ."""
         # Strip the auto-injected ## Embedded Images section before truncating
         # for the prompt: it can be 50K+ chars (457 images) and is re-injected
@@ -657,7 +657,6 @@ def _stage_3_2_scan_wiki_slug_dirs(config: Config) -> dict[str, set[str]]:
 def resolve_ingest_write_path(
     rel_path: str,
     content: str,
-    config: Config | None,
     valid_subdirs: set[str],
     routing: dict[str, str],
     *,
@@ -692,7 +691,7 @@ def resolve_ingest_write_path(
     top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
     if top_dir not in valid_subdirs:
         corrected = _stage_3_2_auto_correct_wiki_path(
-            rel_path, content, config, quiet=quiet)
+            rel_path, content, quiet=quiet)
         if not corrected:
             if not quiet:
                 print(f"  [write] Dropped — cannot correct path: {rel_path}")
@@ -726,7 +725,7 @@ def stage_3_2_build_slug_dirs(
     slug_dirs = _stage_3_2_scan_wiki_slug_dirs(config)
     for rel_path, content in file_blocks:
         resolved = resolve_ingest_write_path(
-            rel_path, content, config, valid_subdirs, routing, quiet=True)
+            rel_path, content, valid_subdirs, routing, quiet=True)
         if not resolved or "/" not in resolved:
             continue
         rel_dir, name = resolved.rsplit("/", 1)
@@ -736,7 +735,6 @@ def stage_3_2_build_slug_dirs(
 
 def project_write_result_blocks(
     file_blocks: list[tuple[str, str]],
-    config: Config,
     valid_subdirs: set[str],
     routing: dict[str, str],
     slug_dirs: dict[str, set[str]],
@@ -764,7 +762,7 @@ def project_write_result_blocks(
     projected: list[tuple[str, str]] = []
     for rel_path, content in file_blocks:
         resolved = resolve_ingest_write_path(
-            rel_path, content, config, valid_subdirs, routing, quiet=True)
+            rel_path, content, valid_subdirs, routing, quiet=True)
         if not resolved:
             continue
         content = _stage_3_2_sanitize_ingested_content(content)
@@ -810,7 +808,7 @@ def stage_3_2_normalize_page_links(
          and refs already inside any ``[[..]]``; the source page itself
          (own slug == source_page_slug) is excluded. Idempotent.
       6. Wikilink alias separators inside Markdown-table cells are escaped as
-         ``[[target\|alias]]`` so they do not become extra cell boundaries.
+         ``[[target\\|alias]]`` so they do not become extra cell boundaries.
 
     Ambiguous related stems (≥2 dirs, claimed prefix wrong or absent) are kept
     as the BARE stem + warned — usually a dedup failure (H1) where guessing a
@@ -1248,7 +1246,6 @@ def _assert_aggregate_outputs(
 def stage_3_3_aggregate_repair(
     source_path: Path,
     raw_file: Path,
-    analysis: dict,
     source_hash: str,
     extract_method: str,
     config: Config,

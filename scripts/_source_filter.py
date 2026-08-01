@@ -13,16 +13,8 @@ accidentally passing a config file.
 """
 from __future__ import annotations
 
-from urllib.parse import unquote  # noqa: F401  (reserved for future file:// paths)
-
-HIDDEN_SOURCE_ENTRY_NAMES = frozenset({".cache", ".DS_Store"})
 SENSITIVE_CONFIG_EXTENSIONS = frozenset({"env", "json", "toml", "yaml", "yml", "xml"})
 SENSITIVE_CONFIG_DIR_NAMES = frozenset({".claude", ".codex", ".cursor", ".gemini", ".mcp"})
-
-
-def is_hidden_source_entry(name: str) -> bool:
-    """True for noise entries that should never be ingested (``.DS_Store``, ``.cache``)."""
-    return name in HIDDEN_SOURCE_ENTRY_NAMES
 
 
 def is_sensitive_config_source_file(path) -> bool:

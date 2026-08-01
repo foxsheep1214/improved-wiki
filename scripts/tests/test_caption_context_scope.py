@@ -149,7 +149,7 @@ class TestManifestAccounting(unittest.TestCase):
                 redirect_stdout(output),
             ):
                 scanned._stage_1_1_scanned_assemble_manifest(
-                    root / "out", {}, raw_file, config, 1,
+                    root / "out", raw_file, config, 1,
                 )
 
             manifest = json.loads((media_dir / "_manifest.json").read_text())

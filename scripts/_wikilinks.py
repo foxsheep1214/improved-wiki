@@ -2,7 +2,7 @@
 
 Obsidian-style aliases use ``[[target|display]]`` in prose, but Markdown
 tables also treat ``|`` as a cell delimiter.  Inside a table cell the alias
-separator must therefore be escaped as ``[[target\|display]]``.  Readers must
+separator must therefore be escaped as ``[[target\\|display]]``.  Readers must
 accept both spellings while writers must make table rows safe and idempotent.
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ _UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
 def split_wikilink_inner(inner: str) -> tuple[str, str | None, str]:
     """Split the text inside ``[[...]]`` into target, alias, and separator.
 
-    ``separator`` is ``"|"``, ``r"\|"``, or ``""``.  An odd run of
+    ``separator`` is ``"|"``, ``r"\\|"``, or ``""``.  An odd run of
     backslashes immediately before the first pipe means that the final
     backslash is Markdown's table escape and is not part of the target.
     """

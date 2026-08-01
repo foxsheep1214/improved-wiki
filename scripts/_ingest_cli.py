@@ -514,12 +514,12 @@ def main() -> int:
                 print(
                     "  Estimated text-generation calls: "
                     f"{chunks_est} (Stage 2.2 chunks) + up to 1 "
-                    "(Stage 2.4 consolidated) + 1 (Stage 2.6 source page), "
+                    "(Stage 2.4 consolidated generation + source page), "
                     "plus optional dedup/review/merge handoffs"
                 )
             except Exception:
                 pass
-        print(f"  Stages: text-extract -> image-extract+caption -> chunk+analyze -> generate -> review -> inject -> write -> cache")
+        print("  Stages: text-extract -> image-extract+caption -> chunk+analyze -> generate -> review -> inject -> write -> cache")
         return OK
 
     h = file_sha256(raw_file)

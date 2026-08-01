@@ -263,7 +263,7 @@ class TestCorruptImageRoundClassification(unittest.TestCase):
             cfg = _make_config(media_dir / "cfg")
             pending = [{"filename": f"p{i}.jpg"} for i in range(n)]
             captioned = cap._stage_1_3_caption_one_round(
-                pending, cfg, media_dir, {}, "")  # must NOT raise
+                pending, cfg, media_dir, {})  # must NOT raise
             self.assertEqual(captioned, 0)
             for img in pending:
                 marker = (media_dir / (img["filename"] + ".caption.txt")).read_text(
@@ -301,7 +301,7 @@ class TestInvalidCaptionRoundClassification(unittest.TestCase):
             stdout = io.StringIO()
             with redirect_stdout(stdout):
                 captioned = cap._stage_1_3_caption_one_round(
-                    images, cfg, media_dir, {}, "", max_workers=1)
+                    images, cfg, media_dir, {}, max_workers=1)
 
             marker = (media_dir / "p1.jpg.caption.txt").read_text(
                 encoding="utf-8")

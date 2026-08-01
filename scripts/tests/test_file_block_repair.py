@@ -39,7 +39,6 @@ class TestTargetedFileRepair(unittest.TestCase):
             llm_call=llm_call,
         )
         self.assertEqual([p for p, _ in result.blocks], ["concepts/a.md"])
-        self.assertEqual(result.requested_paths, [])
         self.assertEqual(calls, [])
 
     def test_repairs_only_the_unclosed_path(self):
@@ -66,8 +65,6 @@ class TestTargetedFileRepair(unittest.TestCase):
             [p for p, _ in result.blocks],
             ["concepts/a.md", "concepts/b.md"],
         )
-        self.assertEqual(result.requested_paths, ["concepts/b.md"])
-        self.assertEqual(result.recovered_paths, ["concepts/b.md"])
         self.assertEqual(result.unrecovered_paths, [])
         self.assertEqual(len(calls), 1)
         self.assertIn("- wiki/concepts/b.md", calls[0])

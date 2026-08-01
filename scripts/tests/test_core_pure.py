@@ -67,18 +67,18 @@ class TestComputeChunkTargetsHardCeil(unittest.TestCase):
     request a different ceiling without touching the ingest-tuned constant."""
 
     def test_default_hard_ceil_matches_ingest_constant(self):
-        target_tokens, _ = _core._compute_chunk_targets(0, 1_000_000)
+        target_tokens, _ = _core._compute_chunk_targets(1_000_000)
         self.assertEqual(target_tokens, _core._TARGET_TOKENS_HARD_CEIL)
 
     def test_custom_hard_ceil_overrides_default(self):
         target_tokens, target_chars = _core._compute_chunk_targets(
-            0, 1_000_000, hard_ceil=256_000)
+            1_000_000, hard_ceil=256_000)
         self.assertEqual(target_tokens, 256_000)
         self.assertEqual(target_chars, _core._TARGET_CHARS_HARD_CEIL)
 
     def test_small_context_still_respects_floor_under_custom_ceil(self):
         target_tokens, _ = _core._compute_chunk_targets(
-            0, 20_000, hard_ceil=256_000)
+            20_000, hard_ceil=256_000)
         self.assertEqual(target_tokens, _core._TARGET_TOKENS_MIN)
 
 

@@ -95,7 +95,6 @@ class ProjectWriteResultBlocks(unittest.TestCase):
     def _project(self, blocks, slug_dirs):
         return sw.project_write_result_blocks(
             blocks,
-            self.cfg,
             VALID_SUBDIRS,
             ROUTING,
             slug_dirs,
@@ -183,7 +182,7 @@ class ResolveIngestWritePath(unittest.TestCase):
 
     def _resolve(self, rel_path, content):
         return sw.resolve_ingest_write_path(
-            rel_path, content, self.cfg, VALID_SUBDIRS, ROUTING, quiet=True)
+            rel_path, content, VALID_SUBDIRS, ROUTING, quiet=True)
 
     def test_traversal_and_unsafe_paths_are_rejected(self):
         body = _block("concept", "X", "b")

@@ -30,8 +30,6 @@ class MarkdownChunk:
     index: int
     text: str
     heading_path: str
-    char_start: int
-    char_end: int
     oversized: bool
 
 
@@ -116,8 +114,6 @@ def chunk_markdown(
                     index=len(out),
                     text=piece.text,
                     heading_path=section.heading_path,
-                    char_start=section.body_start + piece.offset,
-                    char_end=section.body_start + piece.offset + len(piece.text),
                     oversized=len(piece.text) > opts.max_chars,
                 )
             )

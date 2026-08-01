@@ -50,13 +50,6 @@ def stage_begin(name: str) -> None:
     print(f"\n{'─'*40}\n{tag}[{name}] Starting...\n{'─'*40}", flush=True)
 
 
-def heartbeat(msg: str = "") -> None:
-    ts = time.strftime("%H:%M:%S")
-    tag = file_tag()
-    suffix = f" — {msg}" if msg else ""
-    print(f"  {ts}  {tag}… {suffix}", flush=True)
-
-
 # Rate-limit tracking (shared across workers)
 _RATE_LIMIT_HIT_AT = 0.0
 _RLOCK = threading.Lock()
@@ -185,7 +178,7 @@ def is_query_bridge_source(raw_file: Path, config: "Config") -> bool:
 
     These are not real source documents — the ``wiki/queries/<slug>.md``
     page is the canonical human-readable artifact, so it should not get its
-    own ``wiki/sources/queries/`` digest page (Stage 2.6).
+    own ``wiki/sources/queries/`` digest page from Stage 2.4.
     """
     for base in (config.wiki_dir, config.raw_root):
         try:
@@ -208,7 +201,7 @@ def canonical_source_path(raw_file: Path, config: "Config") -> str:
 
     Single source of truth: every place that writes a ``sources:`` field
     (canonical write in ``_ingest_write.py``, the per-page prompt hints in
-    Stage 2.4/2.6, the log.md line in Stage 3.5) must call this — not
+    Stage 2.4, the log.md line in Stage 3.5) must call this — not
     hand-roll an ``f"raw/{rel}"`` string — so they can never drift out of
     sync with each other. A drift would silently defeat
     ``_stage_3_2_canonicalize_sources_field``'s basename-based "already
@@ -367,15 +360,3 @@ def slugify(text: str) -> str:
 
 
 # (atomic_write lives in _paths.py; re-exported near the top of this module.)
-
-
-def call_with_retry(fn, max_retries: int = 3, base_wait: float = 1.0, label: str = ""):
-    """Compatibility export; new call sites import :mod:`_retry` directly."""
-    from _retry import call_with_retry as _call_with_retry
-
-    return _call_with_retry(
-        fn,
-        max_retries=max_retries,
-        base_wait=base_wait,
-        label=label,
-    )

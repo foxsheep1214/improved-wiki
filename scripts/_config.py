@@ -135,12 +135,10 @@ _TARGET_CHARS_HARD_CEIL = 768_000
 
 
 def _compute_chunk_targets(
-    source_budget: int,
     context_size: int,
     hard_ceil: int = _TARGET_TOKENS_HARD_CEIL,
 ) -> tuple[int, int]:
     """Return the token budget and conservative character ceiling per chunk."""
-    del source_budget  # retained in the API for compatibility
     ceiling_env = os.environ.get(
         "IMPROVED_WIKI_TARGET_TOKENS_CEIL",
         "",
@@ -201,7 +199,6 @@ class Config:
         runtime_dir = detect_runtime_dir(wiki_root)
         source_budget = _CONTEXT_SIZE_DEFAULT
         target_tokens, target_chars = _compute_chunk_targets(
-            source_budget,
             _CONTEXT_SIZE_DEFAULT,
         )
         media_policy = os.environ.get(
@@ -274,7 +271,6 @@ class Config:
             min(available, upper),
         )
         self.target_tokens, self.target_chars = _compute_chunk_targets(
-            self.source_budget,
             context_size,
         )
         print(

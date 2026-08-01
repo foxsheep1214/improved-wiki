@@ -601,8 +601,9 @@ def is_structural_graph_node(page: Page) -> bool:
     )
 
 
-def apply_graph_filters(g: nx.Graph, pages: dict[str, Page], lg: LinkGraph,
-                        hide_structural: bool = True) -> nx.Graph:
+def apply_graph_filters(
+    g: nx.Graph, pages: dict[str, Page], hide_structural: bool = True,
+) -> nx.Graph:
     """Port of NashSU applyGraphFilters with DEFAULT_GRAPH_FILTERS.
 
     Defaults: hideStructural=True, hideIsolated=False, no hiddenTypes/maxLinks.
@@ -660,8 +661,10 @@ def write_graph_json(out: Path, g: nx.Graph, pages: dict[str, Page], lg: LinkGra
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def write_graph_html(out: Path, g: nx.Graph, pages: dict[str, Page], lg: LinkGraph,
-                     communities: list[Community], gaps: list[KnowledgeGap]) -> None:
+def write_graph_html(
+    out: Path, g: nx.Graph, pages: dict[str, Page],
+    communities: list[Community], gaps: list[KnowledgeGap],
+) -> None:
     """Write a self-contained D3.js + ForceAtlas2 force-directed HTML graph."""
     assign = community_assignments(communities)
 
@@ -1114,14 +1117,15 @@ def run_build(wiki_root: Path, output: Optional[Path], dry_run: bool,
         return 0
 
     # Rendered graph uses NashSU default filters unless --include-all.
-    rendered = g if include_all else apply_graph_filters(g, pages, lg, hide_structural=True)
+    rendered = g if include_all else apply_graph_filters(
+        g, pages, hide_structural=True)
 
     runtime = detect_runtime_dir(wiki_root)
     graph_json = output or (runtime / "graph.json")
     write_graph_json(graph_json, rendered, pages, lg, communities, gaps, surprising, stats)
     print(f"📁 Wrote {graph_json}")
     graph_html = graph_json.with_suffix(".html")
-    write_graph_html(graph_html, rendered, pages, lg, communities, gaps)
+    write_graph_html(graph_html, rendered, pages, communities, gaps)
     print(f"🌐 Wrote {graph_html}")
     wiki_dir = wiki_root / "wiki"
     gaps_md = wiki_dir / "REVIEW" / "knowledge-gaps.md"

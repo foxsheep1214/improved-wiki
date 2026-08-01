@@ -455,7 +455,9 @@ class TestResolveBatchTargetChars(unittest.TestCase):
             target_chars = wls.resolve_batch_target_chars(runtime)
             from _core import _CONTEXT_SIZE_DEFAULT, _compute_chunk_targets
             _, expected = _compute_chunk_targets(
-                0, _CONTEXT_SIZE_DEFAULT, hard_ceil=wls._LINT_TARGET_TOKENS_HARD_CEIL)
+                _CONTEXT_SIZE_DEFAULT,
+                hard_ceil=wls._LINT_TARGET_TOKENS_HARD_CEIL,
+            )
             self.assertEqual(target_chars, expected)
 
     def test_env_override_changes_ceiling(self):
@@ -557,7 +559,7 @@ class TestCollectSummariesDirExclusion(unittest.TestCase):
             (wiki / "lint" / "l1.md").write_text(
                 _page("type: lint", "# lint finding"), encoding="utf-8")
 
-            summaries = wls.collect_summaries(wiki)
+            summaries, _ = wls.collect_summary_bundle(wiki)
             paths = {p for p, _ in summaries}
             self.assertEqual(paths, {"concepts/a.md"})
 

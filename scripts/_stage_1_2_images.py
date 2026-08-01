@@ -805,8 +805,9 @@ def _stage_1_2_extract_from_mineru(
     }
 
 
-def _stage_1_2_extract_markdown_images(raw_file: Path, media_dir: Path, manifest_path: Path,
-                                        config: Config, min_size: int = 100) -> dict:
+def _stage_1_2_extract_markdown_images(
+    raw_file: Path, media_dir: Path, manifest_path: Path, config: Config,
+) -> dict:
     """Extract local images referenced by a Markdown source into wiki/media/<slug>/.
 
     NashSU parity: extractAndSaveMarkdownImages + findLocalMarkdownImageRefs
@@ -917,5 +918,6 @@ def stage_1_2_extract_images(raw_file: Path, config: Config, min_size: int = 100
 
     media_dir.mkdir(parents=True, exist_ok=True)
     if raw_file.suffix.lower() in (".md", ".markdown"):
-        return _stage_1_2_extract_markdown_images(raw_file, media_dir, manifest_path, config, min_size)
+        return _stage_1_2_extract_markdown_images(
+            raw_file, media_dir, manifest_path, config)
     return _stage_1_2_extract_images_office(raw_file, media_dir, manifest_path, min_size)

@@ -16,19 +16,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _source_filter import (  # noqa: E402
-    is_hidden_source_entry,
     is_sensitive_config_source_file,
 )
-
-
-class TestHiddenSourceEntry(unittest.TestCase):
-    def test_ds_store_and_cache_are_hidden(self):
-        self.assertTrue(is_hidden_source_entry(".DS_Store"))
-        self.assertTrue(is_hidden_source_entry(".cache"))
-
-    def test_normal_names_not_hidden(self):
-        self.assertFalse(is_hidden_source_entry("chapter1.pdf"))
-        self.assertFalse(is_hidden_source_entry(".gitignore"))
 
 
 class TestSensitiveConfigSourceFile(unittest.TestCase):

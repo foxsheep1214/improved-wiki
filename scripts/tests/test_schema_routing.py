@@ -41,6 +41,29 @@ def _make_config(tmp: Path) -> _core.Config:
     )
 
 
+def _build_prompt(
+    analysis: dict,
+    source_text: str,
+    _chunk_index: int,
+    file_path: Path,
+    config: _core.Config,
+    template: str = "",
+    *,
+    existing_refs: dict | None = None,
+    related_pages: list[dict] | None = None,
+) -> str:
+    """Build the active single whole-source Stage 2.4 prompt."""
+    return gen._stage_2_4_build_all_prompt(
+        [analysis],
+        file_path,
+        config,
+        template=template,
+        existing_refs=existing_refs,
+        related_pages=related_pages,
+        source_context=source_text,
+    )
+
+
 _SCHEMA_WITH_EXTRAS = """# Schema
 
 ## Page Types
@@ -250,11 +273,11 @@ class TestSchemaTypedCandidates(unittest.TestCase):
                      "folder": "wrong-folder", "rationale": "biography in this chunk"},
                 ],
             }
-            prompt = gen._stage_2_4_build_prompt(
+            prompt = _build_prompt(
                 chunk_analysis, "chunk text", 0, cfg.raw_root / "book.pdf", cfg,
             )
             self.assertIn(
-                "Key schema-typed page candidates recommended by the analysis",
+                "Key schema-typed page candidates recommended across all chunks",
                 prompt,
             )
             self.assertIn("people/ada-lovelace", prompt)
@@ -291,12 +314,12 @@ class TestSchemaTypedCandidates(unittest.TestCase):
             cfg = _make_config(tmp)
             (cfg.wiki_dir).mkdir(parents=True, exist_ok=True)
             (cfg.raw_root).mkdir(parents=True, exist_ok=True)
-            prompt = gen._stage_2_4_build_prompt(
+            prompt = _build_prompt(
                 {"concepts_found": [], "entities_found": []},
                 "chunk text", 0, cfg.raw_root / "book.pdf", cfg,
             )
             self.assertIn(
-                "Key schema-typed page candidates recommended by the analysis",
+                "Key schema-typed page candidates recommended across all chunks",
                 prompt,
             )
             self.assertIn("(none)", prompt)
@@ -388,7 +411,7 @@ class TestSchemaTypedCandidates(unittest.TestCase):
             cfg = _make_config(tmp)
             cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
             cfg.raw_root.mkdir(parents=True, exist_ok=True)
-            prompt = gen._stage_2_4_build_prompt(
+            prompt = _build_prompt(
                 {
                     "concepts_found": [{
                         "name": "Thermal Resistance",
@@ -443,7 +466,7 @@ class TestSchemaTypedCandidates(unittest.TestCase):
                     "rationale": "Reusable protocol",
                 }],
             }
-            prompt = gen._stage_2_4_build_prompt(
+            prompt = _build_prompt(
                 analysis,
                 "chunk text",
                 0,
@@ -519,7 +542,7 @@ class TestSchemaTypedCandidates(unittest.TestCase):
                     }],
                 },
             }
-            prompt = gen._stage_2_4_build_prompt(
+            prompt = _build_prompt(
                 analysis,
                 "Architecture B favors throughput in §7.3.",
                 1,
@@ -556,21 +579,13 @@ class TestSchemaTypedCandidates(unittest.TestCase):
                 "entities_found": [],
                 "schema_typed_candidates": candidates,
             }
-            per_chunk = gen._stage_2_4_build_prompt(
-                analysis,
-                "chunk text",
-                0,
-                cfg.raw_root / "book.pdf",
-                cfg,
-            )
             all_chunks = gen._stage_2_4_build_all_prompt(
                 [analysis],
                 cfg.raw_root / "book.pdf",
                 cfg,
             )
-            for prompt in (per_chunk, all_chunks):
-                self.assertIn("methodology/method-000", prompt)
-                self.assertIn("methodology/method-129", prompt)
+            self.assertIn("methodology/method-000", all_chunks)
+            self.assertIn("methodology/method-129", all_chunks)
 
 
 class TestParseWikiSchemaRouting(unittest.TestCase):

@@ -64,9 +64,9 @@ class TestAggregateCompletionGate(unittest.TestCase):
             stage3.call_anthropic_protocol = _llm
             source_hash = _core.file_sha256(raw)
             first = stage3.stage_3_3_aggregate_repair(
-                source, raw, {}, source_hash, "mineru-api", cfg)
+                source, raw, source_hash, "mineru-api", cfg)
             second = stage3.stage_3_3_aggregate_repair(
-                source, raw, {}, source_hash, "mineru-api", cfg)
+                source, raw, source_hash, "mineru-api", cfg)
 
             log_text = (cfg.wiki_dir / "log.md").read_text(encoding="utf-8")
             self.assertEqual(

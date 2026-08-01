@@ -580,52 +580,6 @@ def enrich_for_embedding(title: str, heading_path: str, chunk_text: str) -> str:
     return "\n\n".join(parts)
 
 
-def chunk_spans(text: str, max_chars: int = 1000, overlap: int = 200):
-    """Compatibility wrapper returning spans from the NashSU chunker."""
-    return [
-        (chunk.char_start, chunk.char_end)
-        for chunk in chunk_markdown(
-            text,
-            target_chars=max_chars,
-            max_chars=max(DEFAULT_MAX_CHARS, max_chars),
-            overlap_chars=overlap,
-        )
-    ]
-
-
-def heading_path_at(text: str, pos: int) -> str:
-    """Compatibility helper using NashSU's ``# Heading`` breadcrumb form."""
-    headings: dict[int, str] = {}
-    in_fence = False
-    marker = ""
-    cursor = 0
-    for line in text.splitlines(keepends=True):
-        if cursor > pos:
-            break
-        raw = line.rstrip("\r\n")
-        fence = re.match(r"^(`{3,}|~{3,})", raw)
-        if fence:
-            found = fence.group(1)
-            if not in_fence:
-                in_fence = True
-                marker = found[0] * len(found)
-            elif raw.startswith(marker) and raw.strip() == marker:
-                in_fence = False
-        elif not in_fence:
-            heading = re.match(r"^(#{1,6})\s+(.+?)\s*$", raw)
-            if heading:
-                level = len(heading.group(1))
-                headings[level] = heading.group(2).strip()
-                for deeper in range(level + 1, 7):
-                    headings.pop(deeper, None)
-        cursor += len(line)
-    return " > ".join(
-        f"{'#' * level} {headings[level]}"
-        for level in range(1, 7)
-        if level in headings
-    )
-
-
 def _safe_page_path(raw_path: str) -> Path:
     raw = Path(raw_path).expanduser()
     if raw.is_absolute():

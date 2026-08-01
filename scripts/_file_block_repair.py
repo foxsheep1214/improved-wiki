@@ -13,8 +13,6 @@ class FileBlockRepairResult:
 
     blocks: list[tuple[str, str]]
     warnings: list[str]
-    requested_paths: list[str]
-    recovered_paths: list[str]
     unrecovered_paths: list[str]
 
 
@@ -96,8 +94,6 @@ def repair_truncated_file_blocks(
         return FileBlockRepairResult(
             blocks=list(parsed.blocks),
             warnings=warnings,
-            requested_paths=[],
-            recovered_paths=[],
             unrecovered_paths=[],
         )
 
@@ -116,7 +112,6 @@ def repair_truncated_file_blocks(
             repair_prompt,
             config,
             max_tokens=max_tokens,
-            label=f"{label} truncated FILE repair",
         )
     except Exception as exc:
         warning = (
@@ -128,8 +123,6 @@ def repair_truncated_file_blocks(
         return FileBlockRepairResult(
             blocks=list(parsed.blocks),
             warnings=warnings,
-            requested_paths=requested,
-            recovered_paths=[],
             unrecovered_paths=requested,
         )
 
@@ -174,7 +167,5 @@ def repair_truncated_file_blocks(
     return FileBlockRepairResult(
         blocks=blocks,
         warnings=warnings,
-        requested_paths=requested,
-        recovered_paths=recovered,
         unrecovered_paths=unrecovered,
     )

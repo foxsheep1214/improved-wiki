@@ -141,13 +141,8 @@ class TestSingleGenerationCall(unittest.TestCase):
                 "concepts/cross-chunk"
             ], "end_turn"
 
-        def _forbidden_chunk(*_args, **_kwargs):
-            raise AssertionError("per-chunk Stage 2.4 generation was called")
-
         original_all = chunks.stage_2_4_generate_all
-        original_chunk = chunks.stage_2_4_generate_chunk
         chunks.stage_2_4_generate_all = _fake_all
-        chunks.stage_2_4_generate_chunk = _forbidden_chunk
         try:
             with tempfile.TemporaryDirectory() as directory:
                 cfg = _config(Path(directory))
@@ -168,7 +163,6 @@ class TestSingleGenerationCall(unittest.TestCase):
                 )
         finally:
             chunks.stage_2_4_generate_all = original_all
-            chunks.stage_2_4_generate_chunk = original_chunk
 
         self.assertEqual(len(seen), 1)
         self.assertEqual(len(seen[0]["analyses"]), 3)
@@ -177,22 +171,16 @@ class TestSingleGenerationCall(unittest.TestCase):
         self.assertEqual(result[0][0][0], "concepts/cross-chunk.md")
 
     def test_parallel_environment_flag_cannot_restore_chunk_waves(self):
-        calls = {"all": 0, "chunk": 0}
+        calls = {"all": 0}
 
         def _fake_all(*_args, **_kwargs):
             calls["all"] += 1
             return [], [], None
 
-        def _fake_chunk(*_args, **_kwargs):
-            calls["chunk"] += 1
-            return []
-
         previous = os.environ.get("IMPROVED_WIKI_PARALLEL_GEN")
         original_all = chunks.stage_2_4_generate_all
-        original_chunk = chunks.stage_2_4_generate_chunk
         os.environ["IMPROVED_WIKI_PARALLEL_GEN"] = "1"
         chunks.stage_2_4_generate_all = _fake_all
-        chunks.stage_2_4_generate_chunk = _fake_chunk
         try:
             with tempfile.TemporaryDirectory() as directory:
                 cfg = _config(Path(directory))
@@ -210,13 +198,12 @@ class TestSingleGenerationCall(unittest.TestCase):
                 )
         finally:
             chunks.stage_2_4_generate_all = original_all
-            chunks.stage_2_4_generate_chunk = original_chunk
             if previous is None:
                 os.environ.pop("IMPROVED_WIKI_PARALLEL_GEN", None)
             else:
                 os.environ["IMPROVED_WIKI_PARALLEL_GEN"] = previous
 
-        self.assertEqual(calls, {"all": 1, "chunk": 0})
+        self.assertEqual(calls, {"all": 1})
 
     def test_generation_prompt_receives_shared_context_verbatim(self):
         context = (

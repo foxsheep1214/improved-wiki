@@ -192,12 +192,12 @@ def main() -> int:
             status = "✓" if ok else "✗"
             print(f"  chunk {n}: {status} {msg}")
             if not ok:
-                bad.append((conv_dir.name, f, msg))
+                bad.append(f)
 
     print(f"\n{total} responses, {len(bad)} bad")
     if bad:
         print("Bad chunks (delete to force redo):")
-        for conv_name, f, msg in bad:
+        for f in bad:
             print(f"  rm {f}")
     return 0 if not bad else 1
 

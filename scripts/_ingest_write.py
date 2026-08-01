@@ -136,8 +136,8 @@ def reconstruct_enrich_candidates(
 
 def _is_redundant_duplicate_write(full_path, content: str, written_this_run: dict) -> bool:
     """True when this exact (path, content) was already written earlier in THIS
-    write loop — a duplicate FILE block (e.g. the source page emitted by both
-    2.6 and a later step). Re-merging a page against our own byte-identical
+    write loop — a duplicate FILE block (for example, repeated generation output).
+    Re-merging a page against our own byte-identical
     just-written output wastes one LLM merge handoff per duplicate —
     delegate-mode.md documented "2-3 redundant source-page merge prompts per
     ingest" and told the operator to reuse the first merge result by hand; now
@@ -155,8 +155,7 @@ def _is_same_run_collision(full_path, content: str, written_this_run: dict) -> b
     must not be mistaken for NashSU's corrected-source replacement: a page this
     loop just wrote always passes the "every ``sources`` entry is the current
     source" owner test, so replacing its body would silently drop the earlier
-    block. Observed shapes: a stray Stage 2.4 ``wiki/sources/<stem>.md`` block
-    arriving after Stage 2.6's real source page, two candidate names that
+    block. Observed shapes include two candidate names that
     slugify identically, and two typed candidates that schema routing collapses
     onto the same directory + stem.
     """
@@ -456,7 +455,6 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             # chain — no page merge, so this is still a review of the generation.
             prewrite_review_blocks = project_write_result_blocks(
                 _write_blocks,
-                config,
                 _VALID_SUBDIRS,
                 _routing,
                 _slug_dirs,
@@ -501,7 +499,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # same resolver builds _slug_dirs and the Stage 3.1 review projection,
         # so all three agree on where this block lands.
         resolved = resolve_ingest_write_path(
-            rel_path, content, config, _VALID_SUBDIRS, _routing)
+            rel_path, content, _VALID_SUBDIRS, _routing)
         if not resolved:
             continue
         rel_path = resolved
@@ -604,7 +602,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     if not source_block and not query_bridge:
         # Current NashSU guarantees a source summary even when the generation
         # omitted or malformed its source FILE block. Mirror that final write
-        # guard here as well as in Stage 2.6, using the COMPLETE Stage 2
+        # guard here as well as at the Stage 2.4 source-page gate, using the COMPLETE Stage 2
         # analysis (never a shortened digest stub and never a per-concept
         # fallback). This also repairs older cached prepared artifacts.
         fallback_progress = load_progress(config, h) or {}
@@ -723,7 +721,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             f"{len(index_log_files)} aggregate page(s)")
     else:
         index_log_files = stage_3_3_aggregate_repair(
-            source_path, raw_file, analysis, h, method, config)
+            source_path, raw_file, h, method, config)
         index_log_files = canonical_page_refs(
             index_log_files, config.wiki_root, config.wiki_dir)
         required_aggregate = {"wiki/log.md", "wiki/index.md"}
@@ -743,7 +741,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     if not write_phase_done:
         stage_3_2_result: dict = {"injected": 0}
         if source_path.exists():
-            stage_3_2_result = stage_3_4_inject_images(config, raw_file, source_path, method)
+            stage_3_2_result = stage_3_4_inject_images(
+                config, raw_file, source_path)
 
         try:
             expected_images = int(stage_1_2_result.get("count", 0) or 0)
@@ -841,7 +840,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
     # Go/no-go validation
     go_nogo_warnings = validate_stage_outputs(
-        config, raw_file, method, extracted_text,
+        config, raw_file, extracted_text,
         stage_1_2_result, stage_1_3_result,
         review_blocks, source_path,
     )
@@ -940,7 +939,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         save_cache(config, cache)
         clear_progress(config, h)
         _clear_write_ledger(config, h)
-        print(f"  [cache] saved")
+        print("  [cache] saved")
     except OSError as e:
         return {"status": "hard-error", "error": str(e),
                 "files_written": all_written_refs}

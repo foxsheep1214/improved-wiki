@@ -317,7 +317,7 @@ def test_structural_pages_hidden_by_default_filter(wiki):
     _write_page(wiki_dir, "a", body_links=["index"])
     _write_page(wiki_dir, "schema", type_="other", body_links=["a"])
     pages, lg, g = _build(root)
-    filtered = graph.apply_graph_filters(g, pages, lg, hide_structural=True)
+    filtered = graph.apply_graph_filters(g, pages, hide_structural=True)
     assert "wiki/index" not in filtered.nodes
     assert "wiki/schema" not in filtered.nodes
     assert "wiki/a" in filtered.nodes

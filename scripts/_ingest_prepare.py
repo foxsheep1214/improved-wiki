@@ -23,11 +23,9 @@ from _progress import (
     unmark_stage_done,
 )
 from _parse import parse_file_blocks
-from _schema import list_existing_slugs
 from _stage_1_extract import (
     stage_1_1_extract_text,
     stage_1_2_extract_images,
-    _stage_1_2_extract_from_mineru,
     stage_1_3_caption_images,
 )
 from _stage_1_3_caption import _stage_1_3_inline_captions
@@ -78,7 +76,6 @@ def _count_comparison_blocks(file_blocks: list[tuple[str, str]]) -> int:
 def _ensure_source_page(
     global_digest: dict, raw_file: Path, config: Config,
     file_blocks: list,
-    chunk_claims: list | None = None,
     chunk_analyses: list[dict] | None = None,
 ) -> tuple[list, bool]:
     """Guarantee the source page exists in ``file_blocks`` — no second LLM call.
@@ -110,7 +107,7 @@ def _ensure_source_page(
                  if _is_source_block(p) and c.strip()]
     if generated:
         # Structural gate + frontmatter repair, inherited from the retired
-        # Stage 2.6. Without them the merge would have silently lost two
+        # Stage 2.6 implementation. Without them the merge would lose two
         # behaviours: a malformed block reaching disk, and blank bibliographic
         # fields staying blank (the Strauss/Witte source pages that shipped
         # with no authors/year/venue).
@@ -143,7 +140,6 @@ def _ensure_source_page(
         source_analysis_text(
             global_digest,
             chunk_analyses=chunk_analyses,
-            chunk_claims=chunk_claims,
         ),
         time.strftime("%Y-%m-%d"),
     )
@@ -172,8 +168,8 @@ def _do_prepare(
         snapshot and writes no wiki/ state. Safe to run for several books in
         parallel ("prefetch"). ``prefetch_only=True`` runs exactly this segment
         then raises ``PrepareStopAfter("1.5")`` at the Stage 2.2/2.3 boundary.
-      - **Wiki-dependent (2.3–2.6)** — Stage 2.3 reads ``config.wiki_dir`` to
-        link/dedup against existing pages; 2.4–2.6 build on that. MUST run in the
+      - **Wiki-dependent (2.3–2.4)** — Stage 2.3 reads ``config.wiki_dir`` to
+        link/dedup against existing pages; Stage 2.4 builds on that. MUST run in the
         serial spine (one book at a time) so each book sees prior books' written
         pages. ``prefetch_only=False`` (default) runs the full segment, reusing
         cached 2.2.
@@ -275,7 +271,7 @@ def _do_prepare(
 
             # Stage 0 Validation (Phase 2: per-stage verification)
             if not verify_stage_0(extracted_text):
-                print(f"  [validate] ❌ Stage 0 failed: text extraction insufficient")
+                print("  [validate] ❌ Stage 0 failed: text extraction insufficient")
                 raise StageValidationError("Stage 0: text extraction failed")
 
             save_progress(config, h, {
@@ -450,12 +446,12 @@ def _do_prepare(
         mark_stage_done(config, h, "stage_1_3_done")
 
         if stop_after_0:
-            print(f"\n[stop-after-stage] Stage 0 complete — "
-                  f"clean exit (--stop-after-stage=0)")
+            print("\n[stop-after-stage] Stage 0 complete — "
+                  "clean exit (--stop-after-stage=0)")
             raise PrepareStopAfter("0")
 
         # 2.1 removed: global_digest starts empty; Stage 2.2 rolls it up and
-        # returns the final rolled-up dict (consumed by 2.4/2.6).
+        # returns the final rolled-up dict consumed by Stage 2.4.
         global_digest = {}
 
         # Stage 1.3 → 2 inline (NashSU ingest.ts Step 0.6 parity): rewrite
@@ -509,11 +505,11 @@ def _do_prepare(
         # re-run caches the chunk pipeline and resumes at the tail. ("2.0" is
         # the same boundary.)
         if _stop_after_stage(config, "2") or _stop_after_stage(config, "2.0"):
-            print(f"\n[stop-after-stage] Stage 2 complete — "
-                  f"clean exit (--stop-after-stage=2)")
+            print("\n[stop-after-stage] Stage 2 complete — "
+                  "clean exit (--stop-after-stage=2)")
             raise PrepareStopAfter("2")
 
-        # ── Generation tail: Stage 2.4 closing dedup → Stage 2.6 source page ──
+        # ── Generation tail: Stage 2.4 closing dedup + source-page gate ──
         # Cached as ONE segment under legacy marker name ``stage_2_9_done`` for
         # resume compatibility. NashSU 0.6.6 has no dedicated comparison stage:
         # comparison and synthesis pages are schema-typed Stage 2.4 FILE blocks.
@@ -552,7 +548,7 @@ def _do_prepare(
             # lists de-duplicated concepts. (Former standalone Stage 2.5; folded
             # into 2.4 — embedding prefilter + LLM confirm, no-fallback raise.)
             from _dedup_intra_source import dedup_intra_source
-            _stage_2_5 = dedup_intra_source(file_blocks, chunk_analyses, config, verbose=verbose)
+            _stage_2_5 = dedup_intra_source(file_blocks, chunk_analyses, config)
             file_blocks = _stage_2_5["file_blocks"]
             dedup_was_run = _stage_2_5["dedup_was_run"]
             concept_count_before = _stage_2_5["concept_count_before"]
@@ -573,7 +569,7 @@ def _do_prepare(
                 config.source_budget,
             )
 
-            # Stage 2.6: Source page generation + merge — skipped for deep-research
+            # Stage 2.4 source-page gate — skipped for deep-research
             # pages (wiki/queries/*.md): the page itself is already the
             # canonical human-readable artifact, so no separate digest page
             # (see is_query_bridge_source / deep-research.md).
@@ -585,13 +581,9 @@ def _do_prepare(
             else:
                 file_blocks, _source_page_truncated = _ensure_source_page(
                     global_digest, raw_file, config, file_blocks,
-                    # Source-wide claim candidates, used only by the
-                    # deterministic fallback when generation omitted the page.
-                    chunk_claims=[c for ca in (chunk_analyses or [])
-                                  for c in (ca.get("claims") or [])],
                     chunk_analyses=chunk_analyses,
                 )
-            _verify_stage_2_4_file_blocks(file_blocks, raw_file, incremental_associations,
+            _verify_stage_2_4_file_blocks(file_blocks, raw_file,
                                           is_query_bridge=_is_query_bridge)
 
             # (Stage 2.7 query generation + cross-source query resolution

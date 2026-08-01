@@ -324,7 +324,7 @@ def build_consolidated_stage_2_context(
     chunk_meta: list,
     source_budget: int,
 ) -> str:
-    """Build the shared Stage 2.4/2.6 whole-source context.
+    """Build the Stage 2.4 whole-source context.
 
     Layout:
       1. what the budget forced out (never a silent cap);

@@ -282,8 +282,7 @@ def probe_context(config) -> int:
     config.conversation_prefix = _probe_prefix(config.llm_model)
     try:
         resp, _stop = call_anthropic_protocol(
-            _PROBE_PROMPT, config, max_tokens=64, label="context-probe"
-        )
+            _PROBE_PROMPT, config, max_tokens=64)
     finally:
         config.conversation_prefix = saved_prefix
 

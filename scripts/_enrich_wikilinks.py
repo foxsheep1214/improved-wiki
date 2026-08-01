@@ -91,38 +91,6 @@ def _enrichment_link(target: str, term: str) -> str:
     return f"[[{target}|{term}]]"
 
 
-def repair_legacy_bare_enrichment_links(
-    content: str,
-    suggestions: list[dict],
-) -> tuple[str, int]:
-    """Upgrade bare links written by the pre-alias enrichment implementation.
-
-    This migration is intentionally narrow: callers must use it only for pages
-    known to have had zero outlinks before enrichment.  Under that precondition,
-    a matching bare ``[[target]]`` was inserted by this module and can safely be
-    rewritten as ``[[target|term]]``.  Suggestions are processed in order so
-    two distinct terms targeting the same page repair two corresponding links.
-    """
-    content = normalize_block_arrays(content)
-    fm, body = parse_frontmatter(content)
-    repaired = 0
-    for suggestion in suggestions:
-        term = suggestion.get("term", "")
-        target = suggestion.get("target", "")
-        if not term or not target:
-            continue
-        aliased = _enrichment_link(target, term)
-        if aliased in body:
-            continue
-        bare = f"[[{target}]]"
-        if bare in body:
-            body = body.replace(bare, aliased, 1)
-            repaired += 1
-    result = write_frontmatter(fm, body)
-    result, _ = escape_markdown_table_wikilink_aliases(result)
-    return result, repaired
-
-
 def enrich_wikilinks_batch(
     pages: list[tuple[str, str]],
     existing_slugs: list[str],
@@ -201,8 +169,7 @@ Pages with no suggestions may be omitted from the object.
 # Pages To Enrich
 {pages_str}"""
 
-    response, _ = call_anthropic_protocol(
-        prompt, config, max_tokens=4096, label="wikilink enrichment (batch)")
+    response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
     text = response.strip()
     if text.startswith("```"):
         text = text.split("```", 2)[1]

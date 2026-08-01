@@ -238,9 +238,9 @@ def _caption_no_key_pause(config, source_label: str, media_dir: Path,
     print(f"\n⚠️  [caption] VLM SKIPPED — no API key for caption provider. "
           f"{already_captioned}/{total_images} images have prior captions, "
           f"{pending} will get NO VLM description.")
-    print(f"⚠️  [caption] PAUSING ingest — no silent fallback. Configure "
-          f"~/.agents/config.json (caption_provider + providers.<name>.api_key), "
-          f"then re-run (cached, resumes here).\n")
+    print("⚠️  [caption] PAUSING ingest — no silent fallback. Configure "
+          "~/.agents/config.json (caption_provider + providers.<name>.api_key), "
+          "then re-run (cached, resumes here).\n")
     _emit_caption_skip_review(config, source_label, media_dir, total_images, already_captioned)
     raise RuntimeError(
         "Caption provider API key missing — VLM captioning (Stage 1.3) cannot run. "
@@ -979,7 +979,6 @@ def _stage_1_3_caption_one_round(
     config: Config,
     media_dir: Path,
     ctx_map: dict,
-    label: str,
     max_workers: int = CAPTION_MAX_WORKERS,
 ) -> int:
     """One parallel pass over `pending`. Returns captioned count.
@@ -1124,7 +1123,6 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
                 config,
                 media_dir,
                 ctx_map,
-                label,
                 max_workers=max_workers,
             )
         pending = _stage_1_3_pending_images(images, media_dir)

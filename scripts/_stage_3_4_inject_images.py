@@ -87,8 +87,9 @@ def _stage_3_2_count_line(
     return f"{subject} contains {count} extracted {noun}."
 
 
-def stage_3_4_inject_images(config: Config, raw_file: Path, source_path: Path,
-                            method: str = "") -> dict:
+def stage_3_4_inject_images(
+    config: Config, raw_file: Path, source_path: Path,
+) -> dict:
     """Append '## Embedded Images' section to the source page.
 
     Two paths:
@@ -137,7 +138,7 @@ def stage_3_4_inject_images(config: Config, raw_file: Path, source_path: Path,
                     f"missing 'page'/'filename' — entry: {img}")
         if images:
             is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
-            section = f"## Embedded Images\n\n"
+            section = "## Embedded Images\n\n"
             section += _stage_3_2_count_line(
                 is_zh=is_zh,
                 source_kind=source_kind,
@@ -196,7 +197,7 @@ def stage_3_4_inject_images(config: Config, raw_file: Path, source_path: Path,
                     images_in_media.append((f"p{pn} (cloud OCR)", line.strip()[:80]))
 
     if images_in_media:
-        section = f"## Embedded Images\n\n"
+        section = "## Embedded Images\n\n"
         section += _stage_3_2_count_line(
             is_zh=is_zh,
             source_kind=source_kind,

@@ -20,7 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import _core  # noqa: E402
 import _stage_2_4_generation as gen  # noqa: E402
-import _source_page as s26  # noqa: E402
 
 
 def _make_config(tmp: Path) -> _core.Config:
@@ -59,41 +58,6 @@ class TestRankLinkableFill(unittest.TestCase):
             ["a-slug", "b-slug"])
 
 
-class TestBuildPromptRelevanceFill(unittest.TestCase):
-    """Per-chunk builder: fill over room keeps book-relevant CJK slugs."""
-
-    def _build(self, tmp: Path) -> str:
-        cfg = _make_config(tmp)
-        cfg.wiki_dir.mkdir(parents=True, exist_ok=True)
-        cfg.raw_root.mkdir(parents=True, exist_ok=True)
-        return gen._stage_2_4_build_prompt(
-            {"concepts_found": [{"name": "多目标跟踪", "definition": "x",
-                                 "importance": "core"}],
-             "entities_found": []},
-            "chunk text", 1, cfg.raw_root / "book.pdf", cfg,
-            generated_slugs=[],
-        )
-
-    def test_relevant_cjk_fill_survives_cap(self):
-        # 451 fill candidates > room (400 - 1 must-link): the CJK slug sorts
-        # last, so the old alphabetical cut dropped it. Relevance keeps it.
-        bg = [f"concepts/aaa-{i:04d}" for i in range(450)]
-        orig = gen.list_existing_slugs
-        gen.list_existing_slugs = lambda config: bg + ["concepts/多目标跟踪算法"]
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                prompt = self._build(Path(d))
-                prompt2 = self._build(Path(d))
-        finally:
-            gen.list_existing_slugs = orig
-        linkable = prompt[prompt.index("# Linkable pages"):]
-        self.assertIn("concepts/多目标跟踪算法", linkable)
-        # A zero-score tail candidate was displaced to make room.
-        self.assertNotIn("concepts/aaa-0449", linkable)
-        # Deterministic: identical prompt across rebuilds (cache-key stable).
-        self.assertEqual(prompt, prompt2)
-
-
 class TestBuildAllPromptRelevanceFill(unittest.TestCase):
     """Single-shot builder: same relevance fill; must-link never dropped."""
 
@@ -122,15 +86,6 @@ class TestBuildAllPromptRelevanceFill(unittest.TestCase):
         # Must-link target (Stage 2.3 existing_refs) never displaced by fill.
         self.assertIn("concepts/zzz-target", linkable)
 
-
-class TestSourcePageLinkableRelevance(unittest.TestCase):
-    """Stage 2.6: over the 1500 cap, relevant CJK slugs and the book's own
-    generated slugs survive; irrelevant alphabetical tail is displaced."""
-
-    # test_cjk_slugs_survive_1500_cap was removed 2026-08-01: it exercised
-    # _rank_linkable_fill through the retired Stage 2.6 source-page prompt.
-    # The ranking contract itself (CJK-relevant slugs kept, zero-score
-    # alphabetical tail dropped) is covered directly by the unit tests above.
 
 if __name__ == "__main__":
     unittest.main()

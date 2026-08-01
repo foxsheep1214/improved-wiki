@@ -49,7 +49,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from _frontmatter import WIKILINK_RE as _WIKILINK_RE  # noqa: E402
 from _frontmatter_array import parse_frontmatter_array  # noqa: E402
-from _paths import iter_wiki_pages, WIKI_ARTIFACT_DIRS, atomic_write  # noqa: E402
+from _paths import iter_wiki_pages, atomic_write  # noqa: E402
 from _lint_suggest import BROKEN_LINK_AUTO_REWRITE_MIN_SCORE  # noqa: E402
 from pathlib import PurePosixPath  # noqa: E402
 

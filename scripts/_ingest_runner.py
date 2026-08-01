@@ -121,7 +121,7 @@ def ingest_one(
 
     # Check stop-after-stage (best-effort; _do_prepare runs all of Stage 0-2)
     for stage_check in ("0", "1.5", "2.0", "2"):
-        if _should_stop_after(config, stage_check, {"status": "ok"}):
+        if _should_stop_after(config, stage_check):
             return {"status": "ok", "stopped_after": stage_check}
 
     # Stage 3+: Delegate to _do_write (shared with batch path)

@@ -11,7 +11,6 @@ truncation repair is Stage 2.4's, covered in test_file_block_repair.py.
 from __future__ import annotations
 
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 

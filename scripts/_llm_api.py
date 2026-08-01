@@ -156,26 +156,24 @@ def conversation_handoff(
     print(f"  CONVERSATION → {tag}", flush=True)
     print(f"  Prompt:  {prompt_file}", flush=True)
     print(f"  Result:  {result_file}", flush=True)
-    print(f"  Answer via a FRESH subagent (1 handoff, then exit) — the main", flush=True)
-    print(f"  conversation only orchestrates; sole exception: the context probe.", flush=True)
-    print(f"  Write <slug>.txt.tmp, validate it, then atomically rename to .txt;", flush=True)
-    print(f"  never stream a partial answer directly into the final result path.", flush=True)
-    print(f"  (NashSU per-call statelessness — see delegate-mode.md L4.)", flush=True)
+    print("  Answer via a FRESH subagent (1 handoff, then exit) — the main", flush=True)
+    print("  conversation only orchestrates; sole exception: the context probe.", flush=True)
+    print("  Write <slug>.txt.tmp, validate it, then atomically rename to .txt;", flush=True)
+    print("  never stream a partial answer directly into the final result path.", flush=True)
+    print("  (NashSU per-call statelessness — see delegate-mode.md L4.)", flush=True)
     print(f"{'=' * 60}\n", flush=True)
     raise ConversationPending()
 
 
-def call_anthropic_protocol(prompt: str, config, max_tokens: int | None = None,
-                            label: str = "") -> tuple[str, str]:
+def call_anthropic_protocol(
+    prompt: str, config, max_tokens: int | None = None,
+) -> tuple[str, str]:
     """Route a text-generation LLM call to the conversation router.
 
     Always delegates to the conversation router registered by ingest.py
     (prompt-file handoff, raises ``ConversationPending``). There is no
     direct-API fallback for text generation; orchestration may answer
     independent prompt files in parallel.
-
-    ``label`` is accepted for call-site compatibility (progress lines that
-    pass it) but is not otherwise used.
 
     Returns (text_content, stop_reason).
     """

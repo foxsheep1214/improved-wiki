@@ -296,7 +296,7 @@ def repair_completed_media(raw_file: Path, config: Config) -> dict:
     stage_1_3.update(actual_captions)
 
     injected = stage_3_4_inject_images(
-        config, raw_file, source_path, method).get("injected", 0)
+        config, raw_file, source_path).get("injected", 0)
     if (getattr(config, "media_policy", "required") == "required"
             and injected != stage_1_2["count"]):
         raise RuntimeError(

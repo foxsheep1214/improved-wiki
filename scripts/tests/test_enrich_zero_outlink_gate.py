@@ -140,25 +140,5 @@ class ZeroOutlinkGate(unittest.TestCase):
             result["comparisons/motors.md"],
         )
 
-    def test_legacy_repair_handles_two_terms_with_same_target(self):
-        content = _page(
-            "A [[wlcsp-fan-in-redistribution]] architecture mounts balls on "
-            "the [[wlcsp-fan-in-redistribution]]."
-        )
-        suggestions = [
-            {"term": "fan-in WLCSP architecture",
-             "target": "wlcsp-fan-in-redistribution"},
-            {"term": "Cu RDL", "target": "wlcsp-fan-in-redistribution"},
-        ]
-        repaired, count = ew.repair_legacy_bare_enrichment_links(
-            content, suggestions)
-        self.assertEqual(count, 2)
-        self.assertIn(
-            "[[wlcsp-fan-in-redistribution|fan-in WLCSP architecture]]",
-            repaired,
-        )
-        self.assertIn("[[wlcsp-fan-in-redistribution|Cu RDL]]", repaired)
-
-
 if __name__ == "__main__":
     unittest.main()
