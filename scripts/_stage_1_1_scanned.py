@@ -293,14 +293,18 @@ def _collapse_degenerate_table_rows(text: str) -> str:
 # minerU file lock
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
+def _stage_1_1_acquire_mineru_lock(timeout: float | None = None) -> int:
     """Acquire exclusive file lock for minerU execution (race-condition prevention).
 
-    Returns file descriptor (lock holder). Blocks until available or timeout.
+    Returns file descriptor (lock holder). Blocks until available by default;
+    an explicit ``timeout`` is reserved for controlled callers/tests.
     Call _stage_1_1_release_mineru_lock(fd) when done.
 
     Rationale: pgrep-based counting is unreliable under concurrent stress (multiple
-    conversations/cron jobs). File lock is atomic and system-wide.
+    conversations/cron jobs). File lock is atomic and system-wide. A queued batch
+    worker may legitimately wait longer than one hour while a large preceding book
+    is still using minerU, so the default must not manufacture a timeout/relaunch
+    loop while the lock holder remains healthy.
     """
     update_worker_phase("waiting_mineru")
     try:
@@ -324,7 +328,7 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
                 except OSError:
                     # Lock busy, wait and retry
                     elapsed = time.time() - start
-                    if elapsed > timeout:
+                    if timeout is not None and elapsed > timeout:
                         raise RuntimeError(f"minerU lock timeout after {elapsed:.0f}s")
                     # Print once per minute boundary crossed — `% 60 == 0` drifts
                     # past exact multiples due to the 5s sleep + work-time jitter

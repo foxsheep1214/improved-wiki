@@ -67,7 +67,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **作用**：所有 PDF（文本版/扫描版/混合版）统一走本地持久化 minerU API 服务器（`mineru.cli.fast_api`，端口 19999），按 32 页/chunk（`MINERU_CHUNK_SIZE`）调 `/file_parse`，`backend=hybrid-engine`、`parse_method=auto`（按页自动判 txt vs VLM OCR），保留表格/公式/图片。method 标签恒为 `mineru-api`。fitz 仅用于 `--dry-run` 的 PDF 类型诊断（text/mixed/scanned），不参与提取决策。
 - **NashSU 对齐**：NashSU 用 minerU **云** API（mineru.net，需 token，pipeline/vlm，200 页上限）；improved-wiki 用**本地**免费服务器（hybrid-engine/auto，无 token，无页数上限）——有意偏离。garbled-font 预检测与提取质量门已于 2026-07-08 移除（NashSU 二者皆无；minerU 3.4.0 上 OCR 影响有限）。`verify_stage_0` 的 ≥100 字符基本非空校验是唯一提取门。
 - **为什么不用 PyMuPDF 直抽**：在数据手册/图表密集型 PDF 上漏检表格/公式/图（实测 73 表格/7 公式/157 图 vs 0/0/2）。
-- **并发限制**：系统级最多 1 个 minerU 任务，`fcntl.flock` 文件锁（超时 3600s），等待时打印 `[mineru] Waiting for lock...`。免费、无需 API key。详见 `scanned-pdf-ocr-pipeline.md`。
+- **并发限制**：系统级最多 1 个 minerU 任务，`fcntl.flock` 文件锁（默认持续等待；不得因大型前序书超过一小时而重启等待 worker），等待时打印 `[mineru] Waiting for lock...`。免费、无需 API key。详见 `scanned-pdf-ocr-pipeline.md`。
 - **chunk 粒度**：`MINERU_CHUNK_SIZE=32` 页/次。本地 /file_parse 同步端点无硬超时，chunk 化只为崩溃恢复粒度（每 chunk 完成缓存 stats.json）+ 控制单次等待。总提取时间由 minerU 处理瓶颈决定、与 chunk 数无关，故选较小 chunk：单次等待短（~32 页）、崩溃恢复粒度细（丢 ≤32 页），代价仅是 fitz 切分+HTTP overhead 略增（每 chunk 几秒，相对总时间微小）。
 - **产物**：每页一个 `p<NNN>.txt`（页号 1:1）。
 - **go/no-go**：`verify_stage_0` ≥100 字符（基本非空，防空提取浪费下游 LLM）。
