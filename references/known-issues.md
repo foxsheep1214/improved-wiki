@@ -119,7 +119,7 @@ Chunk 窗口末端落在受保护 block（表格/代码块）内部时曾无条�
 ### Stage 2.4 生成概念数上限按行数算，曾静默丢尾部概念（已修，2026-06-30）
 `_stage_2_4_generation.py` 原按**行数**截断 GENERATE 列表（每概念约 4 行，实际只放得下约 25-34 个），而可链接 slug 列表本身不受限。chunk 分析密度提升后，密集 chunk 的尾部概念被静默从生成列表剔除、但仍留在可链接列表里——产生指向"从未生成"页面的死链。已修：上限大幅提高（分chunk 480/160，单发 800/200）。**教训**：这类上限必须按概念数算（或留出 ≫ 密度×4 的余量），绝不能是纯行数截断。
 
-### Stage 2.6 源页偶发缺失 authors/year/url/venue（已缓解，非彻底修复）
+### 原 Stage 2.6 源页偶发缺失 authors/year/url/venue（已并入 2.4，已缓解）
 生成 agent 有时漏掉 source frontmatter 的 bibliographic 字段。缓解：`_normalize_source_frontmatter()` 在 agent 响应之后，从已算出的 `*_meta` YAML 回填缺失的 authors/year/url/venue；`related: []` 按 NashSU 契约是合法值，不再为凑数量自动回填 concept/entity slug。**排查手法**：对比归档的 `Stage-2-6-SourcePage-*.md`（提示词）与对应 `.txt`（响应），区分提示词字段缺失和 agent 未遵循。
 
 ### `_stage_1_2_extract_from_mineru()` 两处硬编码 width/height=0（已修，2026-07-06）

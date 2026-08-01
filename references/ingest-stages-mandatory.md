@@ -95,7 +95,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.1 · Global Digest（已移除，对齐 NashSU，2026-07-08）
 - **原作用**：整本单次 LLM → 6 块结构化 YAML digest，作 2.2 逐 chunk 分析的整本先验。
 - **为什么去掉**：NashSU 的 globalDigest 是逐 chunk **过程中滚动产生**（初始空，每 chunk 产出 "Updated Global Digest" 合并），**无独立整本 digest 先验**。improved-wiki 2.2 已有滚动机制（`updated_global_digest` → `accumulated_digest`），原 2.1 只给 accumulated 种子。去掉 2.1 后 2.2 纯滚动（初始空），对齐 NashSU。
-- **影响**：2.4/2.6 的 `global_digest` 数据源从 2.1 改为 2.2 滚动最终值（`_run_chunk_pipeline` 返回 5 元组含 `global_digest`）。`stage_2_1_done` marker 去掉（已消化书 stages.json 残留无害，代码不再读）。`_verify_stage_2_1_digest` 迁移到 2.2 完成后校验滚动最终 digest。`_stage_2_1_global_digest` / `_stage_2_1_build_prompt` 已作为 dead code 清理；`_stage_2_1_chunk_text`（切块函数）保留供 2.2 用。
+- **影响**：Stage 2.4 的 `global_digest` 数据源从 2.1 改为 2.2 滚动最终值（`_run_chunk_pipeline` 返回 5 元组含 `global_digest`）。`stage_2_1_done` marker 去掉（已消化书 stages.json 残留无害，代码不再读）。`_verify_stage_2_1_digest` 迁移到 2.2 完成后校验滚动最终 digest。`_stage_2_1_global_digest` / `_stage_2_1_build_prompt` 已作为 dead code 清理；`_stage_2_1_chunk_text`（切块函数）保留供 2.2 用。
 
 ### Stage 2.2 · Chunk Analysis
 - **作用**：对源文本切块分析。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`source_quotes`/`formulas`/`connections_to_existing_wiki`/`schema_typed_candidates`/`updated_global_digest`。
@@ -109,11 +109,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
   `type→dir` 表；仅排除 ingest 自管的 source/entity/concept、用户发起的
   query 与应用维护的 overview。comparison、synthesis、finding、thesis、
   methodology 和自定义 schema 类型都可作为 typed candidate。
-- **NashSU 对齐（2026-07-08；0.6.6 typed 扩展于 2026-07-28）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 2.4/2.6。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），可选第六字段 `schema_typed_candidates` 只保留后续 chunk 需要的真正重要候选；首 chunk 建立 book_meta+outline。
+- **NashSU 对齐（2026-07-08；0.6.6 typed 扩展于 2026-07-28）**：`accumulated_digest` 初始空（不再种子自 2.1），每 chunk 产出 `updated_global_digest` 滚动合并（NashSU `Updated Global Digest` parity）。2.2 完成后，最终 `accumulated_digest` 解析回 dict 作 `global_digest` 给 Stage 2.4。短源（1 chunk）= 整本 digest（对齐 NashSU 短源 Step 1）。`updated_global_digest` 必含 5 字段（book_meta/outline/key_entities/key_concepts/key_claims），可选第六字段 `schema_typed_candidates` 只保留后续 chunk 需要的真正重要候选；首 chunk 建立 book_meta+outline。
 - **NashSU 对齐 · digest 传递量与颗粒度**：chunk→chunk 传递的是**紧凑 document-level digest，不是档案**——对齐 NashSU `LONG_SOURCE_DIGEST_MAX = 15_000` 固定上限 + “incorporates this chunk and preserves prior cross-chunk context”。稳定名称只为仍重要且后文需要的 concept/entity 保留；外围细节可压缩或丢弃，不再强制“所有历史名字必须存活”。每 chunk 的完整分析单独持久化，供后续从全书上下文中选择 key pages/core claims；digest 不承担全量清单职责。
 - **NashSU 对齐 · 条目策略/数量**：2.2 只识别 new/materially updated 的 key entities、key concepts、genuinely supported schema-typed candidates 与 core claims；`mentioned` 仅作分析上下文，不生成页面。无各类型 page 数、每 chunk claim 数、source quote 数或响应字节数下限；QC 检查所有候选列表的 placeholder、结构和已输出 claim 的 evidence。
 - **per-handoff subagent 隔离**：每 chunk fresh subagent 答单 chunk（7/8 事故政策；当晚扩展为**所有** LLM handoff 均派 fresh subagent、主对话只编排，见 `delegate-mode.md` L4）。
-- **existing-slugs 相关性 cap（2026-07-09）**：chunk prompt 里的已有 wiki 页清单不再全量嵌入（6253 页曾产生单行 259KB×每 chunk，撑爆答题 subagent 的 Read），按"slug token 在本 chunk 文本中的包含率"排序取前 `_EXISTING_SLUGS_CAP=1000`（≈40K 字符，对齐 NashSU index 40K trim；2.4/2.6 早有同类 cap）。确定性排序，prompt 哈希跨 resume 稳定。
+- **existing-slugs 相关性 cap（2026-07-09）**：chunk prompt 里的已有 wiki 页清单不再全量嵌入（6253 页曾产生单行 259KB×每 chunk，撑爆答题 subagent 的 Read），按"slug token 在本 chunk 文本中的包含率"排序取前 `_EXISTING_SLUGS_CAP=1000`（≈40K 字符，对齐 NashSU index 40K trim；Stage 2.4 也有同类 cap）。确定性排序，prompt 哈希跨 resume 稳定。
 - **go/no-go**：`stages.chunks_analyzed ≥ 1`；2.2 完成后 `_verify_stage_2_1_digest` 始终校验滚动最终 digest 5 字段及类型，包含 fresh prefetch 与 cached prefetch resume，验证通过后才允许写 `stage_2_2_done`。
 
 ### Stage 2.4 · Generation（single whole-source pass）
@@ -187,7 +187,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## 强制顺序与依赖
 
 ```
-0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.2 → 2.3 → 2.4 → 2.6
+0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.2 → 2.3 → 2.4
      → 3.1(review generate/validate) → 3.2(write) → 3.3(aggregate)
      → 3.4(media) → 3.5(review persist) → 3.6(cache) → 3.7(embed)
 
@@ -199,8 +199,8 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 关键依赖：
 - 1.2 先于 1.3（先有图才能 caption）；1.2/1.3 先于 3.2（注入图引用）
 - 2.2 对所有源运行（短源 1 chunk / 长源 N chunk）；2.2 必须全部 chunk 分析完才进 2.3
-- 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.4 对整书只生成一次，随后收尾跑源内去重（原 2.5，单 chunk 跳过）；2.6 复用同一整书上下文并在 2.4 之后生成源页
-- Phase 2 全在内存（2.3→2.4→2.6 串行），产出统一由 3.1 写盘
+- 2.3 在 2.2 与 2.4 之间检测已存在 wiki 关联（wiki 为空跳过）；2.4 对整书只生成一次，同一次调用产出强制源页，随后收尾跑源内去重（原 2.5，单 chunk 跳过）
+- Phase 2 全在内存（2.3→2.4 串行），产出统一由 3.1 写盘
 - 3.1 在 3.2 前审查并校验 in-memory generation；`review_prepared` 让 resume 不重复调用 reviewer
 - **3.1 写盘时同名 slug 走 page-merge**（NashSU parity）
 - 3.3 紧随 3.2；3.4 注图后由 3.5 持久化已校验 review，再更新 cache
@@ -223,8 +223,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 | Stage | 门禁检查 |
 |-------|---------|
 | 2.2 | chunk 分析结果齐全且无 error；滚动汇总 digest 含 5 必需 key 且类型正确（无 ≥1 concept 数量门槛；`_verify_stage_2_1_digest` 函数名是 2.1 时代遗留） |
-| 2.4 | 全部 chunk analysis 已完成；整书只执行一次 generation；可选 key/schema-typed 页可为 0（仅精确 `NO_KEY_PAGES` 可作为模型主动弃权）；与 2.6 source block 合并后 ≥1 FILE block、source page 存在且路径正确（`_verify_stage_2_4_file_blocks`，**写盘前** in-memory 检查） |
-| 2.6 | 首次响应先解析完整 FILE block；未闭合 exact path 做一次 targeted repair；仍缺失/错误则从完整 Stage 2 analysis 生成 deterministic fallback。最终必须恰好一个 exact-path、frontmatter/END 完整且正文非空的 source block；不检查固定 H2 或 claim 数 |
+| 2.4 | 全部 chunk analysis 已完成；整书只执行一次 generation；可选 key/schema-typed 页可为 0（仅精确 `NO_KEY_PAGES` 可作为模型主动弃权）；同一响应中的 source block 必须存在且路径正确。未闭合 exact path 做一次 targeted repair；仍缺失/错误则从完整 Stage 2 analysis 生成 deterministic fallback。最终至少 1 个 FILE block，且恰好一个 exact-path、frontmatter/END 完整、正文非空的 source block（`_verify_stage_2_4_file_blocks`，**写盘前** in-memory 检查） |
 | 3.1 | review YAML 严格 schema + wiki 内安全路径；整批校验后才写 `review_prepared`，不写 REVIEW artifacts |
 | 3.1 | 写入无 hard failure；成功页先落盘再写 `write_loop_done` |
 | 3.5 | log source/hash 与 index source link 两个确定性 postcondition |

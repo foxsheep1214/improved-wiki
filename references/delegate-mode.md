@@ -34,7 +34,7 @@ Except for the tiny context-window probe:
 3. Require one complete response, then terminate that worker.
 4. Keep the main conversation as orchestrator; it must not answer prompts.
 
-This applies to chunked and single-shot stages: 2.2, 2.4, 2.6, 3.4,
+This applies to chunked and single-shot stages: 2.2, 2.4, 3.1,
 dedup confirmation, page merge, and wikilink enrichment. Rationale and incident
 history are recorded in `architecture-decisions.md` ADR-001.
 
