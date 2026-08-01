@@ -1,14 +1,14 @@
-"""Stage 3.4a must review what Stage 3.1 will actually write.
+"""Stage 3.1 must review what Stage 3.1 will actually write.
 
 NashSU 0.6.6 generates and validates review suggestions BEFORE ``writeFileBlocks``
-(improved-wiki: Stage 3.4a, moved pre-write 2026-07-30). Feeding it the raw
+(improved-wiki: Stage 3.1, moved pre-write 2026-07-30). Feeding it the raw
 in-memory FILE blocks makes the reviewer describe a draft the writer then
 changes deterministically, in two ways that both reach ``wiki/REVIEW/``:
 
   * ``strict_missing_targets`` de-links a ``[[prefixed/target]]`` that is
     outside the batch ∪ disk inventory, so a ``missing-page`` item raised on it
     is already resolved by the time 3.4b persists it;
-  * ``_stage_3_1_schema_route`` moves a ``type: finding`` page emitted at
+  * ``_stage_3_2_schema_route`` moves a ``type: finding`` page emitted at
     ``concepts/x.md`` to ``findings/x.md``, so the item's ``affected_pages``
     renders a broken ``[[concepts/x]]`` link.
 
@@ -155,7 +155,7 @@ class WriteLoopSharesOneResolutionChain(unittest.TestCase):
     def test_resolver_is_shared_by_loop_slug_dirs_and_projection(self):
         for func in (
             iw._do_write,
-            sw.stage_3_1_build_slug_dirs,
+            sw.stage_3_2_build_slug_dirs,
             sw.project_write_result_blocks,
         ):
             self.assertIn(
@@ -168,8 +168,8 @@ class WriteLoopSharesOneResolutionChain(unittest.TestCase):
         source = inspect.getsource(iw._do_write)
         self.assertLess(
             source.index("project_write_result_blocks("),
-            source.index("stage_3_4_prepare_review_suggestions("),
-            "Stage 3.4a must receive the projected blocks",
+            source.index("stage_3_1_prepare_review_suggestions("),
+            "Stage 3.1 must receive the projected blocks",
         )
 
 

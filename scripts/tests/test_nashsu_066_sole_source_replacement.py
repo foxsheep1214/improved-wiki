@@ -72,7 +72,7 @@ class TestSoleSourceReplacement(unittest.TestCase):
                 title="Generated Title Must Not Replace Existing",
             )
 
-            write_stage.stage_3_1_write_wiki_file(
+            write_stage.stage_3_2_write_wiki_file(
                 path,
                 incoming,
                 cfg,
@@ -97,19 +97,19 @@ class TestSoleSourceReplacement(unittest.TestCase):
         )
         other_path = _page("body", ["raw/Book/B/Radar.pdf"])
         self.assertFalse(
-            write_stage._stage_3_1_is_owned_only_by_source(
+            write_stage._stage_3_2_is_owned_only_by_source(
                 multi,
                 "raw/Book/A/Radar.pdf",
             )
         )
         self.assertFalse(
-            write_stage._stage_3_1_is_owned_only_by_source(
+            write_stage._stage_3_2_is_owned_only_by_source(
                 other_path,
                 "raw/Book/A/Radar.pdf",
             )
         )
         self.assertTrue(
-            write_stage._stage_3_1_is_owned_only_by_source(
+            write_stage._stage_3_2_is_owned_only_by_source(
                 other_path,
                 "raw/Book/B/Radar.pdf",
             )

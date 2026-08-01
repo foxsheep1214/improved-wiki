@@ -37,7 +37,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import _core  # noqa: E402
 import ingest  # noqa: E402
 from _ingest_skip import _stage_0_2_should_skip  # noqa: E402
-from _stage_3_write import _stage_3_1_wiki_path_for_source  # noqa: E402
+from _stage_3_write import _stage_3_2_wiki_path_for_source  # noqa: E402
 from _task_manifest import (  # noqa: E402
     TaskManifestError,
     bind_page_refs,
@@ -93,7 +93,7 @@ def _seed_completion_state(
     source_hash = _core.file_sha256(raw)
     ensure_task_manifest(raw, cfg)
 
-    source = _stage_3_1_wiki_path_for_source(raw, cfg)
+    source = _stage_3_2_wiki_path_for_source(raw, cfg)
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("# x\n", encoding="utf-8")
     log = cfg.wiki_dir / "log.md"
@@ -243,7 +243,7 @@ class TestStage02ShouldSkip(unittest.TestCase):
         return cfg, raw, h
 
     def _write_source_page(self, cfg, raw):
-        sp = _stage_3_1_wiki_path_for_source(raw, cfg)
+        sp = _stage_3_2_wiki_path_for_source(raw, cfg)
         sp.parent.mkdir(parents=True, exist_ok=True)
         sp.write_text("---\ntype: source\n---\n# x\n", encoding="utf-8")
         return sp
@@ -295,7 +295,7 @@ class TestStage02ShouldSkipQueryBridge(unittest.TestCase):
 
             # Sanity: this is exactly the state that used to be misread as a
             # stale marker for a normal source (page never existed here).
-            self.assertFalse(_stage_3_1_wiki_path_for_source(raw, cfg).exists())
+            self.assertFalse(_stage_3_2_wiki_path_for_source(raw, cfg).exists())
             self.assertTrue(_stage_0_2_should_skip(raw, cfg))
             # And the marker must survive — no false "stale marker" clear.
             self.assertTrue(_core.is_stage_done(cfg, h, "ingested"))

@@ -588,10 +588,10 @@ def assert_task_ready_for_completion(
             "wiki/index.md")
 
     if not is_query_bridge_source(raw_file, config):
-        from _stage_3_write import _stage_3_1_wiki_path_for_source
+        from _stage_3_write import _stage_3_2_wiki_path_for_source
 
         source_page = PageRef.parse(
-            _stage_3_1_wiki_path_for_source(raw_file, config),
+            _stage_3_2_wiki_path_for_source(raw_file, config),
             config.wiki_root,
             config.wiki_dir,
         )

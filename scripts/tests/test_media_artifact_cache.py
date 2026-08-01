@@ -24,7 +24,7 @@ from _stage_1_2_images import (  # noqa: E402
 )
 from _stage_1_3_caption import validate_stage_1_3_artifact  # noqa: E402
 import _stage_1_1_scanned  # noqa: E402
-from _stage_3_write import _stage_3_1_wiki_path_for_source  # noqa: E402
+from _stage_3_write import _stage_3_2_wiki_path_for_source  # noqa: E402
 
 
 def _config(tmp: Path) -> _core.Config:
@@ -441,7 +441,7 @@ class TestCompletedMediaRepair(unittest.TestCase):
             )
             ocr_out = cfg.extract_tmp_dir / raw.stem
             ocr_out.mkdir(parents=True, exist_ok=True)
-            source_path = _stage_3_1_wiki_path_for_source(raw, cfg)
+            source_path = _stage_3_2_wiki_path_for_source(raw, cfg)
             source_path.parent.mkdir(parents=True, exist_ok=True)
             source_path.write_text("# Repaired source\n", encoding="utf-8")
 

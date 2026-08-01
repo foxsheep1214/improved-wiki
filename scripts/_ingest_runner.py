@@ -33,7 +33,7 @@ def _finalize_book(raw_file: Path, config: Config,
     post-ingest verification stage. NashSU's only ingest-time check is schema
     routing (``validateWikiPageRouting``), which improved-wiki already performs
     where NashSU does — at WRITE time in Stage 3.1
-    (``_stage_3_1_auto_correct_wiki_path``) — so it is preserved automatically.
+    (``_stage_3_2_auto_correct_wiki_path``) — so it is preserved automatically.
     The completion marker is named ``ingested`` (renamed from the legacy
     ``stage_4_1`` key on 2026-07-08: the old name implied a Stage 4.1 that no
     longer exists; existing stages.json files were migrated in lockstep so

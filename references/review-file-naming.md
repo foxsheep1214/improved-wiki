@@ -104,7 +104,7 @@ Helpers behind it: `derive_review_topic(title, rtype)` and
 
 | Source | File | Type(s) |
 |--------|------|---------|
-| Ingest Stage 3.4 review | `scripts/_stage_3_4_review.py` | all 5 |
+| Ingest Stage 3.4 review | `scripts/_stage_3_review.py` | all 5 |
 | Structural lint `--fix-links` (missing target) | `scripts/wiki-lint-fix.py` | missing-page |
 | Structural lint (unsuggestable orphan/no-outlinks) | `scripts/wiki-lint-fix.py` | suggestion |
 | Structural lint (uncertain rewrite, score-gated) | `scripts/wiki-lint-fix.py` | suggestion |

@@ -69,12 +69,11 @@ Active order:
 1.1 text/OCR → 1.2 images → 1.3 captions
 2.2 serial chunk analysis + rolling digest
 → 2.3 existing-wiki association
-→ 2.4 one consolidated whole-source key/schema-typed generation
-  + in-source dedup
-→ 2.6 source page
-→ 3.4a pre-write review generation
-→ 3.1 write/merge → 3.5 aggregate repair → 3.2 media injection
-→ 3.4b review persistence → cache
+→ 2.4 one consolidated whole-source generation: mandatory source page
+  + key/schema-typed pages, then in-source dedup
+→ 3.1 pre-write review generation
+→ 3.2 write/merge → 3.3 aggregate repair → 3.4 media injection
+→ 3.5 review persistence → 3.6 cache
 → 3.7 touched-page embedding upsert → ingested marker
 ```
 
@@ -88,7 +87,7 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 
 - Require `<project>/schema.md`; its scoped `## Page Types` table is the
   authoritative `frontmatter type → wiki directory` map.
-- Inject the semantic schema into Stage 2.2, 2.4, 2.6, and 3.4 prompts,
+- Inject the semantic schema into Stage 2.2, 2.4, and 3.1 prompts,
   matching NashSU. Exclude improved-wiki's machine-only raw naming YAML from
   LLM context while still enforcing it at Stage 0.1.
 - Load optional `<project>/purpose.md` into the same prompts: schema defines
@@ -116,17 +115,20 @@ stage gates are in `references/ingest-stages-mandatory.md`.
   confidence/status. A project schema may impose a stricter evidence gate.
 - A Stage 2.3 match in the candidate's own schema route is an exact **update
   target**, not a reason to skip the candidate: Stage 2.4 emits that existing
-  FILE path and Stage 3.1 merges it. A cross-type association remains link-only
+  FILE path and Stage 3.2 merges it. A cross-type association remains link-only
   so one subject is not duplicated into a second generic/type-specific page.
-- On corrected-source re-ingest, Stage 3.1 replaces the stale body of a page
+- On corrected-source re-ingest, Stage 3.2 replaces the stale body of a page
   owned solely by that source while preserving locked fields and array unions.
   Multi-source pages still use the semantic merger so other sources survive.
 - There is no per-type page quota or separate comparison cap. Stage 2.4 never
   invents supplementary foundational pages or automatically backfills every
   analyzed term.
-- Stage 2.6 writes one concise, free-form source summary. It links only
+- Stage 2.4 also emits the mandatory source page — one concise, free-form
+  summary in the SAME call (NashSU parity, merged 2026-08-01). It links only
   materially relevant pages and selects core claims; it does not dump all
-  generated pages/chunk claims or require a fixed H2 set.
+  generated pages/chunk claims or require a fixed H2 set. When the model
+  omits it, a deterministic fallback is written from the complete Stage 2
+  analysis — never a second LLM call.
 - An unclosed `FILE` block is dropped and gets one exact-path targeted repair
   call. Unrequested repair pages are rejected; an unrecovered recommended
   key/schema-typed page pauses instead of publishing partial content.
@@ -173,7 +175,7 @@ Continue until all confirmed sources exit `0`, the user explicitly pauses, or
 a real external blocker is reported. A pending prompt, cached answer, or
 source waiting behind the spine is not a terminal result.
 
-Stage 2.4 exposes at most one whole-source generation prompt. Answer it with
+Stage 2.4 exposes exactly one whole-source generation prompt (source page included). Answer it with
 one fresh worker, validate and atomically publish the result, then re-invoke.
 
 Policy and rationale: `references/delegate-mode.md`. Per-stage result formats:

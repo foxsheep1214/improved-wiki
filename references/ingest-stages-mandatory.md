@@ -7,7 +7,7 @@ related: [SKILL.md, known-issues, scanned-pdf-ocr-pipeline, image-caption-strate
 
 # 强制 Ingest Stage 清单
 
-improved-wiki 流水线 = **14 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾；Stage 2.7 query 生成已移除；Stage 2.9 comparison 独立生成已按 NashSU 0.6.6 退休，comparison 与其他 schema typed 页统一走 2.2→2.4）。编号与 `ingest.py` 的历史函数标签一致；Phase 0–2 按编号执行，Phase 3 为对齐 NashSU 0.6.6 按 **3.4a→3.1→3.5→3.2→3.4b→cache→3.7** 执行。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
+improved-wiki 流水线 = **14 个 active Stage（含 Phase 0 前置门，跨 4 个 Phase: 0-3）+ Lint + Graph**（源内去重原 2.5 并入 2.4 收尾；Stage 2.7 query 生成已移除；Stage 2.9 comparison 独立生成已按 NashSU 0.6.6 退休，comparison 与其他 schema typed 页统一走 2.2→2.4）。编号即执行顺序：Phase 0–2、Phase 3 全部按编号从小到大执行（Phase 3 于 2026-08-01 重新编号，此前为对齐 NashSU 而形成的 3.4a→3.1→3.5→3.2→3.4b 乱序已消除；执行顺序未变，只改编号）。Graph 是独立命令（与 Ingest/Lint 并列，不属于 ingest 管线）。
 
 **执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 调度，agent 只答 prompt、无法跳过任何 active stage。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。唯一仍靠 agent 自觉的规则：不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。（Stage 0.1 命名检查已于 2026-07-08 接入 `_do_prepare`——每个候选文件在 0.2 去重前自动过 `stage_0_1_check_file`，违规或项目无命名规则即 raise。）
 
@@ -25,20 +25,20 @@ improved-wiki 流水线 = **14 个 active Stage（含 Phase 0 前置门，跨 4 
 | 2.1 | _(已移除，对齐 NashSU)_ | 原 Global Digest（并入 2.2 滚动） |
 | 2.2 | `_stage_2_2_analyze_chunk` | 逐 chunk 分析（**全部 chunk 分析完**再进入 2.3） |
 | 2.3 | `stage_2_3_*`（`_stage_2_3_incremental.py`） | 已存在 wiki 关联检测（在 2.2 与 2.4 之间，读 wiki） |
-| 2.4 | `stage_2_4_generate_all` + `_dedup_intra_source.py` | 全部分析完成后一次整书生成 key 概念/实体 + schema-typed 页（含 comparison/synthesis/finding/thesis/methodology；整书上下文与源锚定）+ 源内概念去重收尾 |
-| 2.6 | `stage_2_6_source_page` | 源页生成（源索引；2.4 之后） |
+| 2.4 | `stage_2_4_generate_all` + `_dedup_intra_source.py` | 全部分析完成后一次整书生成：**强制源页** + key 概念/实体 + schema-typed 页（含 comparison/synthesis/finding/thesis/methodology；整书上下文与源锚定）+ 源内概念去重收尾 |
+| 2.6 | _(已并入 2.4，对齐 NashSU 0.6.6，2026-08-01)_ | 原独立源页调用；源页现由 2.4 同一次调用产出，缺失时写确定性 fallback（`_ensure_source_page`） |
 | 2.7 | _(已移除，对齐 NashSU，2026-07-12)_ | 原问题生成 + 跨源 query 解析（信号改走 3.4 REVIEW suggestion → process-reviews） |
 | 2.9 | _(已移除，对齐 NashSU 0.6.6，2026-07-28)_ | comparison 并入 2.2→2.4 schema-typed 生命周期 |
-| 3.4a | `stage_3_4_prepare_review_suggestions` | 写盘前对 in-memory FILE generation 运行内容质量审查并严格校验；只保存 checkpoint，不写 REVIEW 页 |
-| 3.1 | `stage_3_1_write_wiki_file` | 文件写盘（含同名 slug 三层 page-merge，NashSU parity） |
-| 3.5 | `stage_3_5_aggregate_repair` | 聚合修复（index/log/overview） |
-| 3.2 | `stage_3_2_inject_images` | 图片注入 source 页 |
-| 3.4b | `stage_3_4_persist_review_suggestions` | 将 3.4a 已校验结果写入 REVIEW 页与 runtime JSON |
-| cache | `save_cache` | 在页面、聚合、媒体、review 均完成后更新 ingest cache |
+| 3.1 | `stage_3_1_prepare_review_suggestions` | 写盘前对 in-memory FILE generation 运行内容质量审查并严格校验；只保存 checkpoint，不写 REVIEW 页（原 3.4a） |
+| 3.2 | `stage_3_2_write_wiki_file` | 文件写盘（含同名 slug 三层 page-merge，NashSU parity）（原 3.1） |
+| 3.3 | `stage_3_3_aggregate_repair` | 聚合修复（index/log/overview）（原 3.5） |
+| 3.4 | `stage_3_4_inject_images` | 图片注入 source 页（原 3.2） |
+| 3.5 | `stage_3_5_persist_review_suggestions` | 将 3.1 已校验结果写入 REVIEW 页与 runtime JSON（原 3.4b） |
+| 3.6 | `save_cache` | 在页面、聚合、媒体、review 均完成后更新 ingest cache |
 | 3.7 | `stage_3_7_embed_new_pages` | 嵌入向量化（配置 provider；默认本地 Ollama bge-m3）— **最后一个 stage**，之后 `_finalize_book` 置完成标记 |
 
 Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
-（无 Phase 4：post-ingest 验证体检已为对齐 NashSU 移除——NashSU 无此 stage。NashSU 唯一的 ingest 期检查"schema 路由"在写盘期的 Stage 3.1 做；`validate_ingest.py` 保留为独立手动工具。）
+（无 Phase 4：post-ingest 验证体检已为对齐 NashSU 移除——NashSU 无此 stage。NashSU 唯一的 ingest 期检查"schema 路由"在写盘期的 Stage 3.2 做；`validate_ingest.py` 保留为独立手动工具。）
 
 ---
 
@@ -118,12 +118,12 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 2.4 · Generation（single whole-source pass）
 - **作用**：2.2 **分析完所有 chunk** 后，2.3 验证已存在 wiki 关联，再对整本来源执行**一次**统一 generation，生成分析推荐的 key 概念/实体与项目 schema-typed 页。prompt 使用与 NashSU 0.6.6 同序的最终滚动 digest + 全部 chunk analyses，并额外保留每个 chunk 的有界原文证据；不能回退为按 chunk 分波/串行生成。comparison、synthesis、finding、thesis、methodology 不再有旁路或专门 stage。完整语义 schema 以 AUTHORITATIVE 形式注入；每个 genuinely supported 的 `schema_typed_candidate` 在生成前按结构化 `type→dir` 重新解析，忽略 LLM 自报的 folder。`mentioned`、passing/background 项不允许生成“补充基础页”。
-- **schema 语义与数量**：每类候选都必须满足项目 schema 的语义门（例如 finding 要证据锚点、methodology 要可复用条件/步骤、thesis 要可证伪、comparison 要真实多维对比）。按 NashSU bundled schema，当前来源可建立 speculative working thesis，也可建立区别于 source summary 的 cross-cutting synthesis；后续来源经同路径合并/更新。项目 schema 若声明更严格门槛则服从项目 schema。不设各类型条数目标、下限或上限，也不再截断 typed candidate 清单（旧 per-chunk 40 / all-chunks 120 展示上限已移除）。2.2 推荐只是候选，不预先承诺建页；但 synthesis/thesis 不得仅因仍是单来源初稿或 speculative 而在 2.4 被二次静默拒绝。某次 2.4 调用若没有任何候选达到该门槛，必须只返回精确哨兵 `NO_KEY_PAGES`；普通空白、解释性文字或损坏输出仍是硬失败。source 页不受该哨兵影响，由 2.6 单独强制生成。
+- **schema 语义与数量**：每类候选都必须满足项目 schema 的语义门（例如 finding 要证据锚点、methodology 要可复用条件/步骤、thesis 要可证伪、comparison 要真实多维对比）。按 NashSU bundled schema，当前来源可建立 speculative working thesis，也可建立区别于 source summary 的 cross-cutting synthesis；后续来源经同路径合并/更新。项目 schema 若声明更严格门槛则服从项目 schema。不设各类型条数目标、下限或上限，也不再截断 typed candidate 清单（旧 per-chunk 40 / all-chunks 120 展示上限已移除）。2.2 推荐只是候选，不预先承诺建页；但 synthesis/thesis 不得仅因仍是单来源初稿或 speculative 而在 2.4 被二次静默拒绝。某次 2.4 调用若没有任何候选达到该门槛，必须只返回精确哨兵 `NO_KEY_PAGES`；普通空白、解释性文字或损坏输出仍是硬失败。source 页不受该哨兵影响：它在同一次 2.4 调用中强制产出，模型遗漏时写确定性 fallback。
 - **整书上下文与预算**：`build_consolidated_stage_2_context` 在 `source_budget` 内确定性构建共享上下文，每个 chunk 在 analyses 与 raw 两段都必须有代表。**降级方式是按字段整体丢弃，不是切 JSON**（2026-07-30）：analyses 装不下时按固定优先级逐级丢整字段（`source_quotes` → `connections_to_existing_wiki` → `formulas`/`key_details` → `definition`/`significance`/`evidence`/`rationale` → `claims`），选第一个能**完整**渲染每个 chunk payload 的档位，使每份分析始终是可解析对象。若最终 digest 或最低明细档位仍超限，则用可解析的 JSON head/tail envelope 明示截断，绝不从字符串中部切断语法。旧实现按 chunk 均分后用 balanced excerpt 切，实测 20 chunk（`source_budget=104,000`）需 198,130 字符只给 ~60,000，等于把 20 份从 JSON 中间切断的碎片喂给生成模型。raw 证据改为**吃剩余预算**（不再按固定 0.28/0.68 份额预切）：短源保留全文，长源把预算让给跨 chunk analyses（实测 20 chunk raw 从 ~28K 升到 ~42K）。被丢弃的字段与档位写进上下文自身的 `## Context Budget` 段并打印一行——不静默截断。改档位表或份额必须同步 `STAGE_2_CONTEXT_POLICY_VERSION`（= `GENERATION_POLICY_VERSION`，尚未跨写盘边界的 2.3+ 缓存会失效重跑）。Stage 2.4 的 generation token ceiling 对齐 NashSU 0.6.6：64K/128K/256K/512K context 分别为 8K/16K/24K/32K。
 - **明确的 improved-wiki 扩展（不改变 NashSU 主顺序）**：生成前的 Stage 2.3 用 `stage_2_3_detect_incremental_associations` 将候选与真实页面匹配并保留 type-prefixed exact path；同类型命中是 **UPDATE EXISTING** 目标，跨类型命中只链接。`stage_2_3_resolve_proposed_connections` 另验证 2.2 自报连接。生成后的源内语义去重（原 Stage 2.5）使用 embedding 初筛（cosine ≥0.82）+ LLM 确认；embedding 不可用则暂停，不回退 Jaccard。两项都是 improved-wiki 扩展，但 Stage 2.4 仍只有一次整书 generation。
 - **子步骤（生成后）· 源页生成**：`stage_2_6_source_page` 复用与 Stage 2.4 **完全相同、确定性重建且不重复缓存**的整书上下文，生成一个简洁、自由结构的 source summary 并入 file_blocks。只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。它仍是独立的 resumable call，而不是重复使用原文前缀。若 source FILE 块未闭合，先 exact-path 定向修复；若仍缺失/不合规，使用 NashSU deterministic fallback，把完整 Stage 2 analysis 原样保留到最低限度 source 页（不截断、不另调 LLM）。go/no-go：最终恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END marker 完整且正文非空。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
-- **go/no-go**：2.4 可产生 0 个可选 key/schema-typed FILE block；2.6 合并后 `stages.file_blocks_generated ≥ 1`，且 source page FILE block 存在（`_verify_or_die` 硬门禁）。概念页目录**不是**硬门禁：`_stage_validators.py` 只对路径异常打印告警，真正的归位由 Stage 3.1 的 schema 路由在写盘时自动纠正。
+- **go/no-go**：2.4 可产生 0 个可选 key/schema-typed FILE block；`stages.file_blocks_generated ≥ 1`，且 source page FILE block 存在（`_verify_or_die` 硬门禁，源页由本次调用或确定性 fallback 保证）。概念页目录**不是**硬门禁：`_stage_validators.py` 只对路径异常打印告警，真正的归位由 Stage 3.2 的 schema 路由在写盘时自动纠正。
 - **失败处理**：0 个新/更新 key/schema-typed 页可以是合法结果（无候选、均由其他 chunk 覆盖、只有跨类型 link-only 关联，或模型以精确 `NO_KEY_PAGES` 判断候选均未达到独立建页/实质更新门槛）。同类型已有页本身不是跳过来源新贡献的理由，但边缘性提及也不强制制造更新。解析器丢弃未闭合的 FILE block，并把其安全路径交给一次 targeted repair handoff；repair 只接受请求路径，额外页面全部丢弃。若任一已经开始但未闭合的推荐路径仍未恢复则硬暂停；绝不运行“逐条目全量补齐”。
 
 ### Stage 2.7 · Query Auto-Generation（已移除，对齐 NashSU，2026-07-12）
@@ -135,33 +135,33 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.9 · Comparison Auto-Generation（已移除，对齐 NashSU 0.6.6，2026-07-28）
 - **为什么去掉**：NashSU 0.6.6 把 comparison 当普通 schema-declared page type，由 analysis 的 typed recommendation 与统一 FILE generation 处理；没有独立 comparison LLM call、固定正文模板、zero sentinel 或数字 cap。
 - **当前路径**：comparison 与 synthesis/finding/thesis/methodology 一样走 2.2 `schema_typed_candidates` → 2.3 association/dedup → 2.4 unified FILE blocks。现有 comparison 页保留。
-- **兼容性**：`stage_2_9_done` 仅作为旧 checkpoint 的 marker 名称保留，现覆盖 2.4 去重收尾 + 2.6 source page tail；详见 `comparison-generation.md`。
+- **兼容性**：`stage_2_9_done` 仅作为旧 checkpoint 的 marker 名称保留，现覆盖 2.4 去重收尾 + 源页保证（`_ensure_source_page`）；详见 `comparison-generation.md`。
 
 ---
 
 ## Phase 3：Write & Enrich
 
-### Stage 3.1 · Write files（含 source page gate）
-- **作用**：Phase 3 唯一磁盘写入入口。先 source page gate；若 LLM/旧缓存仍未提供 source 页，按 NashSU 从**完整 Stage 2 analysis**（滚动 digest + 全部 chunk analyses，不截断）生成确定性最低限度 source summary，再原子写盘（.tmp → rename）。
-- **NashSU 0.6.6 更新语义**：同路径已有页若 `sources` 全部解析为当前来源，说明它只由该来源拥有；纠正来源重摄取时用新正文替换旧正文，同时 union `sources/tags/related`、锁定 `type/title/created` 并更新时间，避免被撤回的旧表述经 merge 永久残留。只要存在其他来源，仍走三层 page-merge，保留其他来源贡献。两条路径都先备份旧页。
-- **同轮 slug 碰撞例外（2026-07-30）**：上面的替换语义只针对**上一次消化**留下的页。本轮写循环已写过的同路径页必须走真合并——`_is_same_run_collision` 把它标出来并强制 `replace_existing_body=False`。否则"只被本源拥有"这条判据由构造恒成立（3.1 刚把 `sources` 规范化成当前源），第二个 FILE 块会静默丢掉第一个块的正文：典型是 2.4 多吐一个 `wiki/sources/<stem>.md` 块覆盖 2.6 的真源页，或两个候选名 slugify 撞车。碰撞时打印一行 `same-slug collision`，不静默。
-- **合并后规范化**：入站 FILE block 在 merge 前规范化一次；多来源 LLM merge 完成后必须对**实际合并结果**再规范化一次，清掉旧页带入的畸形 `related`，并在同 stem 只有一个真实目标时纠正 body wikilink 的错误/大小写不匹配目录前缀。不能只规范化 merge 输入，否则 merger 会重新引入坏链接。
-- **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
-
-### Stage 3.2 · 图片注入
-- **作用**：在 source 页末尾追加 `## Embedded Images` 段，列出所有图 + caption。
-- **执行位置**：在 3.5 aggregate repair 之后、3.4b review persistence 之前，复现 NashSU 0.6.6 的 image injection 时机。
-- **go/no-go**：`media_policy=required` 时 `images_injected == images_extracted`，否则不写 `write_phase` marker。
-
-### Stage 3.4 · Review
-- **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate）。3.4a 在 3.1 之前审查 in-memory FILE generation、严格解析校验并把规范化 items 写入 `review_prepared` checkpoint；3.4b 在 3.1→3.5→3.2 后把同一批 items 持久化为 `wiki/REVIEW/<type>/<date>-<source>-<slug>.md` + `review-suggestions.json`。两段之间不做第二次 LLM 调用。
-- **审查输入 = 写盘投影（2026-07-30）**：3.4a 拿到的不是原始生成块，而是 `project_write_result_blocks` 的**确定性投影**——与写循环共用 `resolve_ingest_write_path`（路径安全/聚合页丢弃/auto-correct/`.md`/schema 路由），再跑同一条 sanitize → canonicalize sources → stamp dates → `stage_3_1_normalize_page_links(strict_missing_targets=True)`。原因：这两步都是确定性的，审原始草稿会让 reviewer 为**随后会被写时去链的链接**开 `missing-page`（落盘即已解决），并让 `affected_pages` 指向 schema 路由前的旧路径（REVIEW 页里渲染成断链）。投影**不做** page merge——合并进已有页的部分仍以本源贡献呈现，这与 NashSU pre-write reviewer 看到的内容一致。三处（写循环 / `slug_dirs` / 投影）共用同一个 resolver，禁止再出现第四份副本。
+### Stage 3.1（生成）+ 3.5（持久化）· Review
+- **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate）。3.1 在 3.2 之前审查 in-memory FILE generation、严格解析校验并把规范化 items 写入 `review_prepared` checkpoint；3.5 在 3.2→3.3→3.4 后把同一批 items 持久化为 `wiki/REVIEW/<type>/<date>-<source>-<slug>.md` + `review-suggestions.json`。两段之间不做第二次 LLM 调用。
+- **审查输入 = 写盘投影（2026-07-30）**：3.1 拿到的不是原始生成块，而是 `project_write_result_blocks` 的**确定性投影**——与写循环共用 `resolve_ingest_write_path`（路径安全/聚合页丢弃/auto-correct/`.md`/schema 路由），再跑同一条 sanitize → canonicalize sources → stamp dates → `stage_3_2_normalize_page_links(strict_missing_targets=True)`。原因：这两步都是确定性的，审原始草稿会让 reviewer 为**随后会被写时去链的链接**开 `missing-page`（落盘即已解决），并让 `affected_pages` 指向 schema 路由前的旧路径（REVIEW 页里渲染成断链）。投影**不做** page merge——合并进已有页的部分仍以本源贡献呈现，这与 NashSU pre-write reviewer 看到的内容一致。三处（写循环 / `slug_dirs` / 投影）共用同一个 resolver，禁止再出现第四份副本。
 - **go/no-go**：review items 数量 ≥0（空数组 `[]` 合法）；非空 item 必须完整通过严格 schema：`type`/`severity` 枚举合法，title/description 非空，`affected_pages` 是 wiki 内安全 `.md` 路径，suggestion/missing-page 恰有 2–3 条搜索 query，其余类型 query 为空。整批先校验后写盘，任何非法 item 都 hard-fail，禁止静默跳过和路径穿越。成功后以 `review_done` 绑定 review page refs。
 - **NashSU 顺序对齐**：review generation 与 validation 已移到 `writeFileBlocks` 之前；review artifact persistence 保持在 aggregate/media 之后，与 NashSU 的 parse/store 顺序一致。`review_prepared` marker 保存已验证 items，因此写盘或后续 handoff 失败后恢复不会重复调用 reviewer。
 
-### Stage 3.5 · Aggregate Repair
-- **作用**：紧接 3.1 写盘后执行：log.md 程序化 append（同一 source identity + hash 幂等，不重复追加）+ index.md LLM 整页重写（失败/超容量/>250 页时 Sources 单行 append）+ overview.md 尽力重写。
-- **go/no-go**：log.md 必须含本 source/hash 的 INGEST block，index.md 必须含 source link；两页以 `aggregate_done` 绑定。overview 是可选修复，不作为完成硬门禁。`ingest-cache.json` 不在本 stage 内写；它在 3.2 与 3.4b 之后更新，并与 task manifest 的完整 page refs 一致。
+### Stage 3.2 · Write files（含 source page gate）
+- **作用**：Phase 3 唯一磁盘写入入口。先 source page gate；若 LLM/旧缓存仍未提供 source 页，按 NashSU 从**完整 Stage 2 analysis**（滚动 digest + 全部 chunk analyses，不截断）生成确定性最低限度 source summary，再原子写盘（.tmp → rename）。
+- **NashSU 0.6.6 更新语义**：同路径已有页若 `sources` 全部解析为当前来源，说明它只由该来源拥有；纠正来源重摄取时用新正文替换旧正文，同时 union `sources/tags/related`、锁定 `type/title/created` 并更新时间，避免被撤回的旧表述经 merge 永久残留。只要存在其他来源，仍走三层 page-merge，保留其他来源贡献。两条路径都先备份旧页。
+- **同轮 slug 碰撞例外（2026-07-30）**：上面的替换语义只针对**上一次消化**留下的页。本轮写循环已写过的同路径页必须走真合并——`_is_same_run_collision` 把它标出来并强制 `replace_existing_body=False`。否则"只被本源拥有"这条判据由构造恒成立（3.2 刚把 `sources` 规范化成当前源），第二个 FILE 块会静默丢掉第一个块的正文：典型是 2.4 多吐一个 `wiki/sources/<stem>.md` 块覆盖同一次生成里的真源页，或两个候选名 slugify 撞车。碰撞时打印一行 `same-slug collision`，不静默。
+- **合并后规范化**：入站 FILE block 在 merge 前规范化一次；多来源 LLM merge 完成后必须对**实际合并结果**再规范化一次，清掉旧页带入的畸形 `related`，并在同 stem 只有一个真实目标时纠正 body wikilink 的错误/大小写不匹配目录前缀。不能只规范化 merge 输入，否则 merger 会重新引入坏链接。
+- **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
+
+### Stage 3.3 · Aggregate Repair
+- **作用**：紧接 3.2 写盘后执行：log.md 程序化 append（同一 source identity + hash 幂等，不重复追加）+ index.md LLM 整页重写（失败/超容量/>250 页时 Sources 单行 append）+ overview.md 尽力重写。
+- **go/no-go**：log.md 必须含本 source/hash 的 INGEST block，index.md 必须含 source link；两页以 `aggregate_done` 绑定。overview 是可选修复，不作为完成硬门禁。`ingest-cache.json` 不在本 stage 内写；它在 3.4 与 3.5 之后更新，并与 task manifest 的完整 page refs 一致。
+
+### Stage 3.4 · 图片注入
+- **作用**：在 source 页末尾追加 `## Embedded Images` 段，列出所有图 + caption。
+- **执行位置**：在 3.3 aggregate repair 之后、3.5 review persistence 之前，复现 NashSU 0.6.6 的 image injection 时机。
+- **go/no-go**：`media_policy=required` 时 `images_injected == images_extracted`，否则不写 `write_phase` marker。
 
 ### Stage 3.7 · Embeddings
 - **作用**：按 NashSU 0.6.6 的 ingest 生命周期，只把本次实际写入/更新的 knowledge pages 重新 chunk，并以 page 为单位替换其 LanceDB rows；不再为每本书隐式全库重建。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -180,13 +181,22 @@ def _extra_rules(source_page_slug: str) -> str:
     entry supports that statement."""
 
 
+def source_page_rel_stem(file_path: Path, config: Config) -> str:
+    """Raw-relative stem of this source: ``Book/Some Book - 2020 - Author``.
+
+    The source page lives at ``wiki/sources/<stem>.md`` and its ``sources:``
+    entry is ``raw/<stem><ext>``, so both the write path and the frontmatter
+    are derived from this one value.
+    """
+    try:
+        return str(file_path.relative_to(config.raw_root).with_suffix(""))
+    except ValueError:
+        return file_path.stem
+
+
 def _source_page_slug(file_path: Path, config: Config) -> str:
     """Wikilink stem of this source's page: sources/<raw-rel-sans-ext>."""
-    try:
-        rel = file_path.relative_to(config.raw_root).with_suffix("")
-    except ValueError:
-        rel = Path(file_path.stem)
-    return f"sources/{rel}"
+    return f"sources/{source_page_rel_stem(file_path, config)}"
 
 
 def _top_wiki_tags(config: Config, top_n: int = 30) -> list[str]:
@@ -325,6 +335,121 @@ def _schema_routing_block(config: Config) -> str:
         "evidence or the schema routing contract.\n"
     ) if purpose_context else ""
     return schema_block + lifecycle_block + purpose_block
+
+
+def _final_digest_from_analyses(chunk_analyses: list[dict]) -> dict:
+    """Final rolling digest = the last chunk's ``updated_global_digest``.
+
+    Stage 2.2 rolls the digest forward chunk by chunk, so the last analysis
+    carries the whole-source view. Used only to pre-fill the source page's
+    bibliographic frontmatter; the full digest is already inside the
+    consolidated context.
+    """
+    for analysis in reversed(chunk_analyses or []):
+        if not isinstance(analysis, dict):
+            continue
+        digest = analysis.get("updated_global_digest")
+        if isinstance(digest, dict) and digest:
+            return digest
+    return {}
+
+
+def _source_bibliographic_fields(global_digest: dict, stem: str) -> dict:
+    """Pre-filled `authors/year/url/venue` YAML for the source page.
+
+    Ported verbatim from the retired Stage 2.6 so the merged call produces the
+    same frontmatter: a type-specific ``*_meta`` block (paper_meta, ...)
+    overrides ``book_meta``, a bare DOI becomes a URL, and a book's
+    ``publisher`` folds into ``venue`` (NashSU has no publisher field).
+    """
+    global_digest = global_digest if isinstance(global_digest, dict) else {}
+    book_meta = global_digest.get("book_meta") or {}
+    if not isinstance(book_meta, dict):
+        book_meta = {}
+    bib_meta = dict(book_meta)
+    specific_meta = next(
+        (
+            v for k, v in global_digest.items()
+            if k != "book_meta" and k.endswith("_meta") and isinstance(v, dict)
+        ),
+        {},
+    )
+    for key, value in specific_meta.items():
+        if value not in ("", None, [], {}):
+            bib_meta[key] = value
+
+    authors = bib_meta.get("authors", [])
+    if not isinstance(authors, list):
+        authors = [authors] if authors else []
+    year = bib_meta.get("year", "")
+    url = bib_meta.get("url", "")
+    doi = str(bib_meta.get("doi", "") or "").strip()
+    if not url and doi:
+        url = doi if doi.startswith(("http://", "https://")) else (
+            "https://doi.org/" + re.sub(r"^doi:\s*", "", doi, flags=re.I))
+    venue = bib_meta.get("venue", "") or bib_meta.get("publisher", "")
+
+    return {
+        "title": bib_meta.get("title") or book_meta.get("title") or stem,
+        "authors": "[" + ", ".join(f'"{a}"' for a in authors) + "]" if authors else "[]",
+        "year": str(year) if year not in ("", None) else '""',
+        "url": f'"{url}"' if url else '""',
+        "venue": f'"{venue}"' if venue else '""',
+    }
+
+
+def _source_page_guidance_section(stem: str, global_digest: dict) -> str:
+    """What the source summary should contain (ported from Stage 2.6)."""
+    return f"""# MANDATORY Source Page — wiki/sources/{stem}.md
+Exactly one source summary page is REQUIRED in this response, at that exact
+path. It is not a candidate and is never optional.
+
+Write a concise, grounded source summary in the source's
+language. Choose headings and structure that fit this source; no fixed H2 set is
+required. Emphasize only what is genuinely important:
+
+- the source's scope, approach, and intended audience;
+- key named things and key ideas that materially shape the source;
+- core arguments/findings and the evidence that supports them;
+- meaningful connections, contradictions, caveats, or open questions.
+
+Do not reproduce the analysis as an exhaustive inventory. Do not list every
+generated page, every chapter topic, every entity mention, or every per-chunk
+claim. Select and synthesize the core material, merge overlap, preserve exact
+subject attribution, and retain specific evidence anchors when useful. There is
+no heading-count, concept-count, or claim-count target. Link only the most
+relevant pages you are generating in this same response, or existing wiki pages
+from the linkable list above."""
+
+
+def _source_page_output_section(stem: str, suffix: str, global_digest: dict) -> str:
+    """Exact FILE block template for the mandatory source page."""
+    bib = _source_bibliographic_fields(global_digest, stem)
+    today = time.strftime("%Y-%m-%d")
+    return f"""---FILE:wiki/sources/{stem}.md---
+---
+type: source
+title: "{bib['title']}"
+created: {today}
+updated: {today}
+tags: [tag1, tag2, tag3]
+related: []
+sources: ["raw/{stem}{suffix}"]
+authors: {bib['authors']}
+year: {bib['year']}
+url: {bib['url']}
+venue: {bib['venue']}
+---
+
+(source summary body; choose the useful structure described above)
+
+---END FILE---
+Source-page frontmatter notes: authors is a list, year a number, url/venue
+strings. The values above are pre-filled from the digest where available —
+verify them and complete any left empty (`[]` for authors, `""` for url/venue
+when genuinely unknown). Evidence anchors cite chapter/section/equation/figure
+numbers (式(5-10), 图2.6, Table 8.1); a value read off a figure's curve is
+marked "据图X.X"."""
 
 
 def _schema_typed_output_section(raw_rel: str) -> str:
@@ -1189,6 +1314,16 @@ def _stage_2_4_build_all_prompt(
         _schema_typed_output_section(raw_rel)
         if schema_candidate_slugs else ""
     )
+    # NashSU 0.6.6 parity (merged 2026-08-01): the source summary is one more
+    # FILE block of THIS call, not a second LLM round-trip. The retired Stage
+    # 2.6 re-sent a byte-identical whole-source context (measured: 104,000
+    # chars duplicated per book).
+    source_rel_stem = source_page_rel_stem(file_path, config)
+    _source_digest = _final_digest_from_analyses(chunk_analyses)
+    source_page_section = _source_page_guidance_section(
+        source_rel_stem, _source_digest)
+    source_page_output_section = _source_page_output_section(
+        source_rel_stem, file_path.suffix, _source_digest)
 
     language_sample = context_text or json.dumps(chunk_analyses, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
@@ -1236,13 +1371,16 @@ Chunks: {len(chunk_analyses)}
   to increase the number of FILE blocks.
 - Every candidate remains optional at generation time. If NONE is genuinely
   important and substantively developed enough for a standalone page or
-  material update, output exactly `{_NO_KEY_PAGES_SENTINEL}` and nothing else.
-  Stage 2.6 generates the mandatory source page separately.
+  material update, emit ONLY the mandatory source page below, then the exact
+  line `{_NO_KEY_PAGES_SENTINEL}` and nothing else.
+
+{source_page_section}
 
 # ⚠️ CRITICAL — START IMMEDIATELY WITH THE RESULT
-- If at least one candidate qualifies, your FIRST line MUST start with
-  `---FILE:wiki/`.
-- Otherwise output exactly `{_NO_KEY_PAGES_SENTINEL}`.
+- Your FIRST line MUST start with `---FILE:wiki/`. The source page is mandatory,
+  so there is always at least one FILE block.
+- If no key/schema-typed candidate qualifies, emit the source page block and
+  then the exact line `{_NO_KEY_PAGES_SENTINEL}`.
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
 
 # [[wikilink]] Rules — STRICT
@@ -1307,10 +1445,12 @@ updated: {time.strftime('%Y-%m-%d')}
 
 ---END FILE---
 {schema_output_section}
+{source_page_output_section}
 
-Generate only qualifying new and UPDATE EXISTING key pages that are not marked
-[ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with the first FILE
-block, or output exactly `{_NO_KEY_PAGES_SENTINEL}` if none qualifies.
+Generate the MANDATORY source page plus every qualifying new/UPDATE EXISTING key
+page not marked [ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with
+the first FILE block. `{_NO_KEY_PAGES_SENTINEL}` means "no key/schema-typed page
+qualifies" — it NEVER excuses omitting the source page.
 
 {language_directive}
 """

@@ -32,21 +32,21 @@ from _schema import (
     schema_folders,
 )
 from _stage_3_write import (
-    _stage_3_1_wiki_path_for_source,
-    _stage_3_1_canonicalize_sources_field,
-    _stage_3_1_sanitize_ingested_content,
-    _stage_3_1_stamp_frontmatter_dates,
+    _stage_3_2_wiki_path_for_source,
+    _stage_3_2_canonicalize_sources_field,
+    _stage_3_2_sanitize_ingested_content,
+    _stage_3_2_stamp_frontmatter_dates,
     project_write_result_blocks,
     resolve_ingest_write_path,
-    stage_3_1_build_slug_dirs,
-    stage_3_1_normalize_page_links,
-    stage_3_1_write_wiki_file,
-    stage_3_5_aggregate_repair,
+    stage_3_2_build_slug_dirs,
+    stage_3_2_normalize_page_links,
+    stage_3_2_write_wiki_file,
+    stage_3_3_aggregate_repair,
 )
-from _stage_3_2_inject_images import stage_3_2_inject_images
-from _stage_3_4_review import (
-    stage_3_4_prepare_review_suggestions,
-    stage_3_4_persist_review_suggestions,
+from _stage_3_4_inject_images import stage_3_4_inject_images
+from _stage_3_review import (
+    stage_3_1_prepare_review_suggestions,
+    stage_3_5_persist_review_suggestions,
 )
 from _stage_2_6_source_page import (
     build_fallback_source_summary_content,
@@ -327,7 +327,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     print(f"\n=== [write] {raw_file.name} ===")
 
     # Write wiki files (same logic as ingest_one Stage 3+)
-    source_path = _stage_3_1_wiki_path_for_source(raw_file, config)
+    source_path = _stage_3_2_wiki_path_for_source(raw_file, config)
     files_written_paths: list[str] = []
     hard_failures: list[str] = []
     source_block: tuple[str, str] | None = None
@@ -424,7 +424,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     # A5 write-time link normalizer (audit 2026-07-02, M6): slug→dir universe
     # = this batch ∪ on-disk wiki, built once per book. Empty on resume passes
     # (the loop below is skipped, so the universe is unused).
-    _slug_dirs = (stage_3_1_build_slug_dirs(_write_blocks, config, _VALID_SUBDIRS, _routing)
+    _slug_dirs = (stage_3_2_build_slug_dirs(_write_blocks, config, _VALID_SUBDIRS, _routing)
                   if _write_blocks else {})
     # D4 figure-ref backstop: wiki-relative slug of this book's source page —
     # the normalizer wraps bare 图X.X/表X.X/Fig X-X/Table X-X body refs as
@@ -445,7 +445,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 raise RuntimeError(
                     "review_prepared marker has no validated items_data list")
             print(
-                "[stage 3.4a] review_prepared marker present — restored "
+                "[stage 3.1] review_prepared marker present — restored "
                 f"{len(prepared_review['items_data'])} item(s)")
         else:
             # Review the generation as Stage 3.1 will write it. Schema routing
@@ -469,7 +469,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                     _reconstruct_blocks_from_disk(config, files_written_paths)
                     or prewrite_review_blocks
                 )
-            prepared_review = stage_3_4_prepare_review_suggestions(
+            prepared_review = stage_3_1_prepare_review_suggestions(
                 prewrite_review_blocks,
                 raw_file,
                 config,
@@ -498,7 +498,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # Traversal/safety reject → application-managed aggregate reject →
         # top-dir accept-list or auto-correct → `.md` suffix → schema routing
         # (NashSU validateWikiPageRouting parity, applied at write time). The
-        # same resolver builds _slug_dirs and the Stage 3.4a review projection,
+        # same resolver builds _slug_dirs and the Stage 3.1 review projection,
         # so all three agree on where this block lands.
         resolved = resolve_ingest_write_path(
             rel_path, content, config, _VALID_SUBDIRS, _routing)
@@ -525,11 +525,11 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # helpers below bail out on content that does not start with `---`, so
         # running them ahead of the outer-code-fence strip silently skipped
         # sources canonicalization and the date stamps on exactly the pages
-        # that needed repair. Sanitizing is idempotent; stage_3_1_write_wiki_file
+        # that needed repair. Sanitizing is idempotent; stage_3_2_write_wiki_file
         # still calls it for the callers that reach it directly.
-        content = _stage_3_1_sanitize_ingested_content(content)
-        content = _stage_3_1_canonicalize_sources_field(content, canonical_source)
-        content = _stage_3_1_stamp_frontmatter_dates(content, today_str)
+        content = _stage_3_2_sanitize_ingested_content(content)
+        content = _stage_3_2_canonicalize_sources_field(content, canonical_source)
+        content = _stage_3_2_stamp_frontmatter_dates(content, today_str)
 
         # A5 (audit M6): single write-time normalization pass — related →
         # prefixed bare slugs (unresolvable dropped), bare body wikilinks
@@ -537,7 +537,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # self-links removed, bare figure/table refs wrapped as source-page
         # links (D4 backstop). Loud per-page prints, never silent.
         # (Listing pages never reach here — the resolver drops them.)
-        content = stage_3_1_normalize_page_links(
+        content = stage_3_2_normalize_page_links(
             rel_path,
             content,
             _slug_dirs,
@@ -571,7 +571,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                   "replacing (same-slug collision)")
 
         try:
-            stage_3_1_write_wiki_file(
+            stage_3_2_write_wiki_file(
                 full_path,
                 content,
                 config,
@@ -630,7 +630,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             # NashSU's fallback is a deterministic write, not another semantic
             # merge/generation turn. A source path belongs to this one source,
             # so replacement is the correct recovery behavior.
-            stage_3_1_write_wiki_file(
+            stage_3_2_write_wiki_file(
                 source_path,
                 fallback_content,
                 config,
@@ -719,10 +719,10 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 "aggregate_done marker does not bind wiki/log.md and "
                 "wiki/index.md")
         print(
-            f"[stage 3.5] aggregate_done marker present — restored "
+            f"[stage 3.3] aggregate_done marker present — restored "
             f"{len(index_log_files)} aggregate page(s)")
     else:
-        index_log_files = stage_3_5_aggregate_repair(
+        index_log_files = stage_3_3_aggregate_repair(
             source_path, raw_file, analysis, h, method, config)
         index_log_files = canonical_page_refs(
             index_log_files, config.wiki_root, config.wiki_dir)
@@ -743,7 +743,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     if not write_phase_done:
         stage_3_2_result: dict = {"injected": 0}
         if source_path.exists():
-            stage_3_2_result = stage_3_2_inject_images(config, raw_file, source_path, method)
+            stage_3_2_result = stage_3_4_inject_images(config, raw_file, source_path, method)
 
         try:
             expected_images = int(stage_1_2_result.get("count", 0) or 0)
@@ -759,7 +759,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             and injected_images != expected_images
         ):
             print(
-                f"  [stage 3.2] HARD ERROR: injected "
+                f"  [stage 3.4] HARD ERROR: injected "
                 f"{injected_images}/{expected_images} required images")
             return {
                 "status": "hard-error",
@@ -798,7 +798,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         except OSError:
             _total_captioned = 0
 
-    # Stage 3.4b: Persist the pre-write review result. Persist the exact
+    # Stage 3.5: Persist the pre-write review result. Persist the exact
     # review-page set so a later cache/embedding retry never calls the reviewer
     # twice or silently accepts deleted review output.
     if is_stage_done(config, h, "review_done"):
@@ -812,14 +812,14 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             "page_refs": review_page_refs,
         }
         print(
-            f"[stage 3.4] review_done marker present — restored "
+            f"[stage 3.5] review_done marker present — restored "
             f"{len(review_page_refs)} review page(s)")
     else:
         if prepared_review is None:
             raise RuntimeError(
                 "Stage 3.4 review persistence reached without a prepared "
                 "pre-write result")
-        stage_3_4_result = stage_3_4_persist_review_suggestions(
+        stage_3_4_result = stage_3_5_persist_review_suggestions(
             prepared_review, raw_file, config)
         review_page_refs = canonical_page_refs(
             list(stage_3_4_result.get("page_refs", [])),

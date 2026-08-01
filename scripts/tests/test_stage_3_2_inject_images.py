@@ -8,7 +8,7 @@ and a Chinese attribution line, even onto English-body source pages (e.g.
 otherwise all-English page.
 
 Run:
-    python3 -m unittest tests.test_stage_3_2_inject_images   # from scripts/
+    python3 -m unittest tests.test_stage_3_4_inject_images   # from scripts/
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _core  # noqa: E402
-from _stage_3_2_inject_images import stage_3_2_inject_images  # noqa: E402
+from _stage_3_4_inject_images import stage_3_4_inject_images  # noqa: E402
 
 _ENGLISH_BODY = (
     "---\ntitle: x\n"
@@ -82,7 +82,7 @@ def _run(tmp: Path, body: str, source_type: str = "Paper") -> str:
     }
     (media_dir / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    stage_3_2_inject_images(config, raw_file, source_path)
+    stage_3_4_inject_images(config, raw_file, source_path)
     return source_path.read_text(encoding="utf-8")
 
 

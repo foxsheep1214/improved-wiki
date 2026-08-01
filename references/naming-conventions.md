@@ -56,7 +56,7 @@ improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/2.6/3.4；可
 1. **Accept-list 门禁**：`schema_folders()` 只消费 `parse_wiki_schema_routing()`
    对 `## Page Types` 表的结构化结果，再与兼容基础目录合并。禁止全文正则扫描；
    `wiki/index.md`/`wiki/log.md` 等正文提及不能泄漏为 phantom folder。
-2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_1_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
+2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_2_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
 
 两层在同一次写盘中都跑：第 1 层管"这个目录能不能收"，第 2 层管"具体该放哪个目录"。**与 NashSU 的刻意分歧**：NashSU 路由不上就丢弃该页；improved-wiki 自动纠正、把页面挪到正确目录（不丢数据，符合 no-silent-fallback 策略）。
 
@@ -107,7 +107,7 @@ wiki/sources/<raw-rel-path>.md
 
 **规则**：`<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），**镜像 `raw/` 的目录结构**。
 
-**improved-wiki 实现**：`_stage_3_write.py:_stage_3_1_wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
+**improved-wiki 实现**：`_stage_3_write.py:_stage_3_2_wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
 
 ```
 # 示例
@@ -141,7 +141,7 @@ wiki/overview.md
 wiki/log.md
 ```
 
-**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件由 Stage 3.5 在每次 ingest 时维护（见 `_stage_3_write.py::stage_3_5_aggregate_repair`），**不应由用户手写**：
+**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件由 Stage 3.5 在每次 ingest 时维护（见 `_stage_3_write.py::stage_3_3_aggregate_repair`），**不应由用户手写**：
 
 - `log.md`：**程序化追加**变更日志条目（确定性，从不调用 LLM）。
 - `index.md` / `overview.md`：默认由 **LLM 整页重写**（喂入磁盘上的权威页面清单 / 内容综合），LLM 调用失败或超出体量上限时回退到确定性追加。
@@ -295,7 +295,7 @@ wiki/media/<slug>/_manifest.json
 ├── ingest-queue.json           # 待处理队列
 ├── ingest-progress/            # <hash[:16]>.json 检查点
 ├── extract-tmp/<slug>/         # 文本抽取临时文件
-├── review-suggestions.json     # Stage 3.4 产物（`_stage_3_4_review.py`）
+├── review-suggestions.json     # Stage 3.4 产物（`_stage_3_review.py`）
 ├── review.json                 # review store（LLM Wiki app 维护，NashSU review-store.ts）
 ├── lint-cache.json             # lint 结果缓存
 ├── lint-semantic.json          # 语义 lint 结果
@@ -391,7 +391,7 @@ N 为单调递增计数器（`review-store.ts:10`）。
 | 文件 | 来源 |
 |------|------|
 | `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 3.4 每项一个 md |
-| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON（`_stage_3_4_review.py`） |
+| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON（`_stage_3_review.py`） |
 | `<runtime>/review.json` | review store（LLM Wiki app 维护，NashSU review-store.ts；review 状态维护见 `sweep_reviews.py`） |
 | `wiki/REVIEW/_summaries/_audit_<scope>.md` | LLM 审计汇总报告（meta，非 review item） |
 

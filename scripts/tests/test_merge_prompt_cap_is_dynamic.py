@@ -71,7 +71,7 @@ def _merge_and_capture(existing: str, new: str, cfg: _core.Config) -> tuple[str,
     orig = sw.call_anthropic_protocol
     sw.call_anthropic_protocol = fake_call
     try:
-        sw._stage_3_1_merge_page_content(existing, new, cfg)
+        sw._stage_3_2_merge_page_content(existing, new, cfg)
     finally:
         sw.call_anthropic_protocol = orig
     return captured.get("prompt", ""), captured

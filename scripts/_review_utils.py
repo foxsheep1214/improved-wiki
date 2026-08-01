@@ -5,7 +5,7 @@ Port of NashSU ``src/lib/review-utils.ts`` (``normalizeReviewTitle`` +
 ``src/stores/review-store.ts`` (``reviewIdFor`` / ``unionField`` /
 ``mergeReviewItems`` / ``normalizeReviewItems``).
 
-Kept dependency-free so both ``_stage_3_4_review`` (write side) and
+Kept dependency-free so both ``_stage_3_review`` (write side) and
 ``sweep_reviews`` (read/dedup side) can import it without a cycle.
 
 Python 3.9 target: no ``match``, no ``X | Y`` runtime unions.

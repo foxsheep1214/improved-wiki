@@ -20,7 +20,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import _stage_3_4_review as review  # noqa: E402
+import _stage_3_review as review  # noqa: E402
 
 
 def _make_config(tmp: Path) -> SimpleNamespace:
@@ -63,7 +63,7 @@ class TestReviewFailureRaises(unittest.TestCase):
             raise ValueError("provider down")
         review.call_with_retry = _boom
         with self.assertRaises(RuntimeError) as ctx:
-            review.stage_3_4_review_suggestions(_BLOCKS, self.raw_file, self.config)
+            review.stage_3_review_suggestions(_BLOCKS, self.raw_file, self.config)
         self.assertIn("provider down", str(ctx.exception))
         log = self._log_text()
         self.assertIn("Book.pdf", log)
@@ -72,7 +72,7 @@ class TestReviewFailureRaises(unittest.TestCase):
     def test_yaml_garbage_raises_and_logs(self):
         review.call_with_retry = lambda fn, **kw: ("total garbage, not yaml", "end_turn")
         with self.assertRaises(RuntimeError) as ctx:
-            review.stage_3_4_review_suggestions(_BLOCKS, self.raw_file, self.config)
+            review.stage_3_review_suggestions(_BLOCKS, self.raw_file, self.config)
         self.assertIn("parse failed", str(ctx.exception))
         self.assertIn("parse failed", self._log_text())
 
@@ -81,7 +81,7 @@ class TestReviewFailureRaises(unittest.TestCase):
         # NashSU parity, an explicit "[]" is a legitimate "nothing found"
         # response and must NOT raise or be treated as a parse failure.
         review.call_with_retry = lambda fn, **kw: ("```yaml\n[]\n```", "end_turn")
-        result = review.stage_3_4_review_suggestions(_BLOCKS, self.raw_file, self.config)
+        result = review.stage_3_review_suggestions(_BLOCKS, self.raw_file, self.config)
         self.assertEqual(result.get("items"), 0)
 
     def test_valid_yaml_still_writes_review_pages(self):
@@ -97,7 +97,7 @@ class TestReviewFailureRaises(unittest.TestCase):
             "```"
         )
         review.call_with_retry = lambda fn, **kw: (yaml_resp, "end_turn")
-        result = review.stage_3_4_review_suggestions(_BLOCKS, self.raw_file, self.config)
+        result = review.stage_3_review_suggestions(_BLOCKS, self.raw_file, self.config)
         self.assertEqual(result.get("items"), 1)
         self.assertEqual(len(result.get("page_refs", [])), 1)
         self.assertTrue(any((self.config.wiki_dir / "REVIEW").rglob("*.md")))
@@ -116,12 +116,12 @@ class TestReviewFailureRaises(unittest.TestCase):
         )
         review.call_with_retry = lambda fn, **kw: (yaml_resp, "end_turn")
 
-        prepared = review.stage_3_4_prepare_review_suggestions(
+        prepared = review.stage_3_1_prepare_review_suggestions(
             _BLOCKS, self.raw_file, self.config)
         self.assertEqual(len(prepared.get("items_data", [])), 1)
         self.assertFalse((self.config.wiki_dir / "REVIEW").exists())
 
-        result = review.stage_3_4_persist_review_suggestions(
+        result = review.stage_3_5_persist_review_suggestions(
             prepared, self.raw_file, self.config)
         self.assertEqual(result.get("items"), 1)
         self.assertTrue(any((self.config.wiki_dir / "REVIEW").rglob("*.md")))
@@ -139,7 +139,7 @@ class TestReviewFailureRaises(unittest.TestCase):
         review.call_with_retry = lambda fn, **kw: (yaml_resp, "end_turn")
 
         with self.assertRaisesRegex(RuntimeError, "schema validation failed"):
-            review.stage_3_4_review_suggestions(
+            review.stage_3_review_suggestions(
                 _BLOCKS, self.raw_file, self.config)
         self.assertFalse((self.config.wiki_dir / "REVIEW").exists())
         self.assertIn("affected_pages", self._log_text())
@@ -157,7 +157,7 @@ class TestReviewFailureRaises(unittest.TestCase):
         review.call_with_retry = lambda fn, **kw: (yaml_resp, "end_turn")
 
         with self.assertRaisesRegex(RuntimeError, "requires 2-3"):
-            review.stage_3_4_review_suggestions(
+            review.stage_3_review_suggestions(
                 _BLOCKS, self.raw_file, self.config)
         self.assertFalse((self.config.wiki_dir / "REVIEW").exists())
 
@@ -174,7 +174,7 @@ class TestReviewFailureRaises(unittest.TestCase):
         review.call_with_retry = lambda fn, **kw: (yaml_resp, "end_turn")
 
         with self.assertRaisesRegex(RuntimeError, "empty search_queries"):
-            review.stage_3_4_review_suggestions(
+            review.stage_3_review_suggestions(
                 _BLOCKS, self.raw_file, self.config)
 
 

@@ -2,7 +2,7 @@
 
 This module holds Stage 3.1 (write, incl. three-layer page merge for
 same-slug collisions) and 3.5 (aggregate repair + cache). Sibling modules:
-_stage_3_2_inject_images.py (image injection), _stage_3_4_review.py (content
+_stage_3_4_inject_images.py (image injection), _stage_3_review.py (content
 review), and _stage_3_7_embed.py (embeddings, runs from ingest.py post-ingest).
 
 Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
@@ -29,10 +29,10 @@ from _wikilinks import (
 )
 
 __all__ = [
-    "stage_3_1_write_wiki_file",       # Stage 3.1
-    "stage_3_1_build_slug_dirs",       # Stage 3.1 link normalizer (universe)
-    "stage_3_1_normalize_page_links",  # Stage 3.1 link normalizer (per page)
-    "stage_3_5_aggregate_repair",      # Stage 3.5
+    "stage_3_2_write_wiki_file",       # Stage 3.1
+    "stage_3_2_build_slug_dirs",       # Stage 3.1 link normalizer (universe)
+    "stage_3_2_normalize_page_links",  # Stage 3.1 link normalizer (per page)
+    "stage_3_3_aggregate_repair",      # Stage 3.5
     "rebuild_index_deterministic",     # standalone recovery tool (rebuild_index.py)
 ]
 
@@ -57,7 +57,7 @@ def _extract_fm_field(content: str, field_name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def _stage_3_1_contains_cjk(text: str) -> bool:
+def _stage_3_2_contains_cjk(text: str) -> bool:
     """Check if text contains CJK characters (NashSU parity: containsCjk)."""
     for ch in text:
         cp = ord(ch)
@@ -72,7 +72,7 @@ def _stage_3_1_contains_cjk(text: str) -> bool:
     return False
 
 
-def _stage_3_1_make_cjk_slug(title: str) -> str:
+def _stage_3_2_make_cjk_slug(title: str) -> str:
     """Create a readable CJK slug from a page title.
 
     Rules (NashSU parity):
@@ -95,7 +95,7 @@ def _stage_3_1_make_cjk_slug(title: str) -> str:
     return slug if slug else ""
 
 
-def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None,
+def _stage_3_2_auto_correct_wiki_path(rel_path: str, content: str, config: Config | None = None,
                                       quiet: bool = False) -> str | None:
     """Auto-correct malformed wiki paths from LLM output.
 
@@ -106,7 +106,7 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
 
     Same-slug collisions are not resolved here — when a path already exists
     on disk, Stage 3.1 write merges old + new (three-layer page merge, see
-    `stage_3_1_write_wiki_file`).
+    `stage_3_2_write_wiki_file`).
 
     Returns corrected path (relative to wiki/ dir, NO "wiki/" prefix) or None if uncorrectable.
     """
@@ -127,9 +127,9 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
 
     # ── CJK slug rewriting (NashSU parity: rewriteIngestPathFromTitleForTargetLanguage) ──
     fm_title = _extract_fm_field(content, "title").strip("\"'") or None
-    if fm_title and _stage_3_1_contains_cjk(fm_title) and not _stage_3_1_contains_cjk(slug):
-        cjk_slug = _stage_3_1_make_cjk_slug(fm_title)
-        if cjk_slug and _stage_3_1_contains_cjk(cjk_slug):
+    if fm_title and _stage_3_2_contains_cjk(fm_title) and not _stage_3_2_contains_cjk(slug):
+        cjk_slug = _stage_3_2_make_cjk_slug(fm_title)
+        if cjk_slug and _stage_3_2_contains_cjk(cjk_slug):
             if not quiet:
                 print(f"  ⚠️  [cjk] Slug '{slug}' → '{cjk_slug}' (CJK title detected)")
             slug = cjk_slug
@@ -203,11 +203,11 @@ def _stage_3_1_auto_correct_wiki_path(rel_path: str, content: str, config: Confi
     # branch above returns before this point (this function only fires for paths
     # whose top dir is NOT a valid subdir), so a schema check here would be dead
     # code AND base-type-only. Schema routing runs at the write boundary via
-    # _stage_3_1_schema_route(), which consults the project's schema typeDirs.
+    # _stage_3_2_schema_route(), which consults the project's schema typeDirs.
     return None
 
 
-def _stage_3_1_schema_route(rel_path: str, content: str,
+def _stage_3_2_schema_route(rel_path: str, content: str,
                             routing: dict[str, str],
                             *, quiet: bool = False) -> str:
     """Route a page to the directory its frontmatter ``type`` declares (schema
@@ -246,7 +246,7 @@ def _stage_3_1_schema_route(rel_path: str, content: str,
     return basename if target == "" else f"{target}/{basename}"
 
 
-def _stage_3_1_wiki_path_for_source(raw_file: Path, config: Config) -> Path:
+def _stage_3_2_wiki_path_for_source(raw_file: Path, config: Config) -> Path:
     """Return wiki/sources/<raw-rel-path>.md mirroring raw/ directory structure.
 
     Delegates to ``source_slug_from_raw_path()`` in _core.py for canonical
@@ -259,7 +259,7 @@ def _stage_3_1_wiki_path_for_source(raw_file: Path, config: Config) -> Path:
     return config.wiki_dir / "sources" / raw_file.with_suffix(".md").name
 
 
-def _stage_3_1_sanitize_ingested_content(content: str) -> str:
+def _stage_3_2_sanitize_ingested_content(content: str) -> str:
     """NashSU parity (ingest-sanitize.ts): fix common LLM formatting errors.
 
     Delegates to _ingest_sanitize for the full 4-pattern port: outer ```yaml
@@ -279,7 +279,7 @@ def _stage_3_1_sanitize_ingested_content(content: str) -> str:
     return _decode_html_entities(content)
 
 
-def _stage_3_1_backup_existing_page(path: Path, config: Config) -> None:
+def _stage_3_2_backup_existing_page(path: Path, config: Config) -> None:
     """NashSU parity (ingest.ts L2575-2584): snapshot existing page before overwrite."""
     if not path.exists():
         return
@@ -308,7 +308,7 @@ from _frontmatter import (
 )
 
 
-def _stage_3_1_merge_page_content(
+def _stage_3_2_merge_page_content(
     existing_text: str,
     new_text: str,
     config: Config,
@@ -404,7 +404,7 @@ with duplicates consolidated and new information integrated, and must:
     )
 
 
-def _stage_3_1_source_reference_identity(value: str) -> str:
+def _stage_3_2_source_reference_identity(value: str) -> str:
     """Normalize source frontmatter references for ownership comparison."""
     ref = str(value or "").strip().replace("\\", "/").strip("/").lower()
     for marker in ("/raw/sources/", "/raw/"):
@@ -418,7 +418,7 @@ def _stage_3_1_source_reference_identity(value: str) -> str:
     return ref.strip("/")
 
 
-def _stage_3_1_is_owned_only_by_source(
+def _stage_3_2_is_owned_only_by_source(
     content: str,
     canonical_source: str,
 ) -> bool:
@@ -431,14 +431,14 @@ def _stage_3_1_is_owned_only_by_source(
     sources = parse_frontmatter_array(content, "sources")
     if not sources:
         return False
-    expected = _stage_3_1_source_reference_identity(canonical_source)
+    expected = _stage_3_2_source_reference_identity(canonical_source)
     return bool(expected) and all(
-        _stage_3_1_source_reference_identity(source) == expected
+        _stage_3_2_source_reference_identity(source) == expected
         for source in sources
     )
 
 
-def _stage_3_1_canonicalize_sources_field(content: str, canonical_source: str) -> str:
+def _stage_3_2_canonicalize_sources_field(content: str, canonical_source: str) -> str:
     """NashSU parity (ingest.ts L1298-1324): union-merge sources[] with dedup.
 
     Preserves existing sources from prior ingests. Only adds the canonical
@@ -454,7 +454,7 @@ def _stage_3_1_canonicalize_sources_field(content: str, canonical_source: str) -
     # carries that newline into fm, and re-serializing below then produces
     # '---\n\ntype:...' — a blank line after the fence that breaks YAML
     # parsing. Mirrors the fix already applied to
-    # _stage_3_1_stamp_frontmatter_dates for the same off-by-one.
+    # _stage_3_2_stamp_frontmatter_dates for the same off-by-one.
     fm = content[4:end]
     body = content[end + 4:]
 
@@ -506,7 +506,7 @@ def _stage_3_1_canonicalize_sources_field(content: str, canonical_source: str) -
     return "---\n" + "\n".join(new_lines) + "\n---" + body
 
 
-def _stage_3_1_stamp_frontmatter_dates(content: str, today: str) -> str:
+def _stage_3_2_stamp_frontmatter_dates(content: str, today: str) -> str:
     """NashSU parity (ingest.ts L1440-1468): stamp created/updated dates."""
     if not content.startswith("---"):
         return content
@@ -545,7 +545,7 @@ def _stage_3_1_stamp_frontmatter_dates(content: str, today: str) -> str:
 # slugs, STRICT [[dir/slug]] body links, no self-links) but nothing enforced
 # them in code — three format diseases spread across page types (audit M6).
 # This is the code backstop: ONE normalization pass applied to every
-# non-listing FILE block right before stage_3_1_write_wiki_file. Loud
+# non-listing FILE block right before stage_3_2_write_wiki_file. Loud
 # per-page prints, never silent.
 
 _WIKILINK_RE = re.compile(r"\[\[([^\[\]]+)\]\]")
@@ -580,7 +580,7 @@ _HEADING_LINE_RE = re.compile(r"^#{1,6}[ \t]")
 _CODE_FENCE_RE = re.compile(r"^\s{0,3}(```|~~~)")
 
 
-def _stage_3_1_wrap_figure_refs(body: str, source_page_slug: str) -> tuple[str, int]:
+def _stage_3_2_wrap_figure_refs(body: str, source_page_slug: str) -> tuple[str, int]:
     """Wrap bare figure/table refs as ``[[<source-page>|据<ref>]]`` (D4 backstop).
 
     Line-by-line: heading lines and fenced code blocks are skipped whole;
@@ -614,7 +614,7 @@ def _stage_3_1_wrap_figure_refs(body: str, source_page_slug: str) -> tuple[str, 
     return "\n".join(out_lines), count
 
 
-def _stage_3_1_normalize_link_target(raw: str) -> str:
+def _stage_3_2_normalize_link_target(raw: str) -> str:
     """Reduce one link target to a bare (possibly dir-prefixed) slug.
 
     Strips ``[[..]]`` wrapping (incl. stray single brackets — a
@@ -632,7 +632,7 @@ def _stage_3_1_normalize_link_target(raw: str) -> str:
     return t.strip().strip("/")
 
 
-def _stage_3_1_scan_wiki_slug_dirs(config: Config) -> dict[str, set[str]]:
+def _stage_3_2_scan_wiki_slug_dirs(config: Config) -> dict[str, set[str]]:
     """stem → {wiki_dir-relative parent dir} for every knowledge page on disk.
 
     Mirrors list_existing_slugs' exclusions (artifact dirs, ``_``-prefixed
@@ -668,7 +668,7 @@ def resolve_ingest_write_path(
     The single implementation of the write-path chain: traversal/safety reject →
     application-managed aggregate reject → top-dir accept-list or auto-correct →
     ``.md`` suffix → schema route. Three callers must agree exactly on the
-    result — the write loop, the ``slug_dirs`` link universe, and the Stage 3.4a
+    result — the write loop, the ``slug_dirs`` link universe, and the Stage 3.1
     review projection — so any drift between copies would silently reintroduce
     dangling links or reviews pointed at paths that were never written.
 
@@ -691,7 +691,7 @@ def resolve_ingest_write_path(
 
     top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
     if top_dir not in valid_subdirs:
-        corrected = _stage_3_1_auto_correct_wiki_path(
+        corrected = _stage_3_2_auto_correct_wiki_path(
             rel_path, content, config, quiet=quiet)
         if not corrected:
             if not quiet:
@@ -704,7 +704,7 @@ def resolve_ingest_write_path(
     if not rel_path.endswith(".md"):
         rel_path = rel_path + ".md"
 
-    routed = _stage_3_1_schema_route(rel_path, content, routing, quiet=quiet)
+    routed = _stage_3_2_schema_route(rel_path, content, routing, quiet=quiet)
     if routed != rel_path:
         if not quiet:
             print(f"  [write] Schema-routed: {rel_path} → {routed}")
@@ -712,7 +712,7 @@ def resolve_ingest_write_path(
     return rel_path
 
 
-def stage_3_1_build_slug_dirs(
+def stage_3_2_build_slug_dirs(
     file_blocks: list[tuple[str, str]],
     config: Config,
     valid_subdirs: set[str],
@@ -723,7 +723,7 @@ def stage_3_1_build_slug_dirs(
     Batch blocks are mapped through ``resolve_ingest_write_path`` — the SAME
     chain the write loop applies — so a block's universe entry matches where the
     loop will actually write it. Built once per book, before the write loop."""
-    slug_dirs = _stage_3_1_scan_wiki_slug_dirs(config)
+    slug_dirs = _stage_3_2_scan_wiki_slug_dirs(config)
     for rel_path, content in file_blocks:
         resolved = resolve_ingest_write_path(
             rel_path, content, config, valid_subdirs, routing, quiet=True)
@@ -747,7 +747,7 @@ def project_write_result_blocks(
 ) -> list[tuple[str, str]]:
     """Project the in-memory generation onto its post-write paths and links.
 
-    Stage 3.4a runs before any page write (NashSU 0.6.6 order), so the reviewer
+    Stage 3.1 runs before any page write (NashSU 0.6.6 order), so the reviewer
     would otherwise judge a draft that Stage 3.1 then changes deterministically:
     schema routing moves a page out of the directory the model guessed, and
     ``strict_missing_targets`` de-links a target outside the batch ∪ disk
@@ -767,11 +767,11 @@ def project_write_result_blocks(
             rel_path, content, config, valid_subdirs, routing, quiet=True)
         if not resolved:
             continue
-        content = _stage_3_1_sanitize_ingested_content(content)
-        content = _stage_3_1_canonicalize_sources_field(
+        content = _stage_3_2_sanitize_ingested_content(content)
+        content = _stage_3_2_canonicalize_sources_field(
             content, canonical_source)
-        content = _stage_3_1_stamp_frontmatter_dates(content, today)
-        content = stage_3_1_normalize_page_links(
+        content = _stage_3_2_stamp_frontmatter_dates(content, today)
+        content = stage_3_2_normalize_page_links(
             resolved,
             content,
             slug_dirs,
@@ -783,7 +783,7 @@ def project_write_result_blocks(
     return projected
 
 
-def stage_3_1_normalize_page_links(
+def stage_3_2_normalize_page_links(
     rel_path: str, content: str, slug_dirs: dict[str, set[str]],
     source_page_slug: str | None = None,
     *,
@@ -821,9 +821,9 @@ def stage_3_1_normalize_page_links(
 
     Already-clean pages pass through byte-identical. All fixes print loud
     per-page ``[normalize]`` lines — never silent, except for ``quiet`` callers
-    that only PREDICT the written result (Stage 3.4a's review projection) and
+    that only PREDICT the written result (Stage 3.1's review projection) and
     would otherwise print every fix twice per page."""
-    content = _stage_3_1_sanitize_ingested_content(content)
+    content = _stage_3_2_sanitize_ingested_content(content)
     norm_rel = rel_path[len("wiki/"):] if rel_path.startswith("wiki/") else rel_path
     own_prefixed = norm_rel[:-3] if norm_rel.endswith(".md") else norm_rel
     own_stem = own_prefixed.rsplit("/", 1)[-1]
@@ -850,7 +850,7 @@ def stage_3_1_normalize_page_links(
         self_removed: list[str] = []
         seen: set[str] = set()
         for entry in orig_entries:
-            t = _stage_3_1_normalize_link_target(entry)
+            t = _stage_3_2_normalize_link_target(entry)
             if not t:
                 dropped.append(entry)
                 continue
@@ -916,7 +916,7 @@ def stage_3_1_normalize_page_links(
         target, alias, _ = split_wikilink_inner(inner)
         if alias and alias.strip():
             return alias.strip()
-        t = _stage_3_1_normalize_link_target(target)
+        t = _stage_3_2_normalize_link_target(target)
         return t.rsplit("/", 1)[-1] if t else target.strip()
 
     def _delink_h1(m: re.Match) -> str:
@@ -931,7 +931,7 @@ def stage_3_1_normalize_page_links(
         target, alias_value, _ = split_wikilink_inner(inner)
         alias = (alias_value or "").strip()
         anchor = target.split("#", 1)[1].strip() if "#" in target else ""
-        t = _stage_3_1_normalize_link_target(target)
+        t = _stage_3_2_normalize_link_target(target)
         if not t:
             return m.group(0)
         if t in (own_prefixed, own_stem):
@@ -1001,7 +1001,7 @@ def stage_3_1_normalize_page_links(
     # ── Rule 5: D4 figure-ref backstop (source page itself excluded) ──
     fig_count = 0
     if source_page_slug and own_prefixed != source_page_slug:
-        new_body, fig_count = _stage_3_1_wrap_figure_refs(new_body, source_page_slug)
+        new_body, fig_count = _stage_3_2_wrap_figure_refs(new_body, source_page_slug)
         if fig_count:
             changed = True
     new_body, counts["table_alias"] = escape_markdown_table_wikilink_aliases(
@@ -1043,7 +1043,7 @@ def stage_3_1_normalize_page_links(
     return content
 
 
-def stage_3_1_write_wiki_file(
+def stage_3_2_write_wiki_file(
     path: Path,
     content: str,
     config: Config | None = None,
@@ -1056,7 +1056,7 @@ def stage_3_1_write_wiki_file(
     already_merged: bool = False,
     same_run_collision: bool = False,
 ) -> None:
-    content = _stage_3_1_sanitize_ingested_content(content)
+    content = _stage_3_2_sanitize_ingested_content(content)
     existing: str | None = None
     if config is not None:
         if merge and path.exists():
@@ -1071,10 +1071,10 @@ def stage_3_1_write_wiki_file(
             replace_existing_body = bool(
                 source_file
                 and not same_run_collision
-                and _stage_3_1_is_owned_only_by_source(
+                and _stage_3_2_is_owned_only_by_source(
                     existing, source_file)
             )
-            content = _stage_3_1_merge_page_content(
+            content = _stage_3_2_merge_page_content(
                 existing,
                 content,
                 config,
@@ -1088,7 +1088,7 @@ def stage_3_1_write_wiki_file(
             # mismatched body prefixes copied from a legacy page. Normalize the
             # actual merged result once more before the atomic write.
             if normalize_rel_path and slug_dirs is not None:
-                content = stage_3_1_normalize_page_links(
+                content = stage_3_2_normalize_page_links(
                     normalize_rel_path,
                     content,
                     slug_dirs,
@@ -1103,7 +1103,7 @@ def stage_3_1_write_wiki_file(
         # page-history snapshot and atomic rewrite.
         if existing is not None and content == existing:
             return
-        _stage_3_1_backup_existing_page(path, config)
+        _stage_3_2_backup_existing_page(path, config)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, content)
 
@@ -1245,7 +1245,7 @@ def _assert_aggregate_outputs(
             f"Stage 3.5 index does not contain a link to {source_stem}")
 
 
-def stage_3_5_aggregate_repair(
+def stage_3_3_aggregate_repair(
     source_path: Path,
     raw_file: Path,
     analysis: dict,
@@ -1267,7 +1267,7 @@ def stage_3_5_aggregate_repair(
         log_text = "# Log\n"
     source_rel = source_path.relative_to(config.wiki_dir)
     if _log_contains_ingest_record(log_text, source_identity, source_hash):
-        print("[stage 3.5] Log already contains this source/hash — append skipped")
+        print("[stage 3.3] Log already contains this source/hash — append skipped")
     else:
         entry = (
             f"\n## {time.strftime('%Y-%m-%d %H:%M:%S')} — INGEST\n"
@@ -1277,7 +1277,7 @@ def stage_3_5_aggregate_repair(
             f"- Method: {extract_method}\n"
         )
         log_text += entry
-        stage_3_1_write_wiki_file(log_path, log_text, config)
+        stage_3_2_write_wiki_file(log_path, log_text, config)
     files_written.append(PageRef.parse(
         log_path, config.wiki_root, config.wiki_dir).project_relative)
 
@@ -1304,7 +1304,7 @@ def stage_3_5_aggregate_repair(
         if not current_index:
             # Fresh wiki: write the skeleton WITH the new source link, not an
             # empty skeleton (the latter silently dropped the first ingest).
-            stage_3_1_write_wiki_file(
+            stage_3_2_write_wiki_file(
                 index_path,
                 f"# Wiki Index\n\n## source\n\n{new_link}\n",
                 config,
@@ -1325,13 +1325,13 @@ def stage_3_5_aggregate_repair(
             insert_at = m.end()
             updated = current_index[:insert_at] + f"\n\n{new_link}" + current_index[insert_at:]
         else:
-            print("[stage 3.5] ⚠️ index.md has no source section — "
+            print("[stage 3.3] ⚠️ index.md has no source section — "
                   "appending one at end of file")
             updated = (
                 current_index.rstrip("\n")
                 + f"\n\n## source\n\n{new_link}\n"
             )
-        stage_3_1_write_wiki_file(index_path, updated, config)
+        stage_3_2_write_wiki_file(index_path, updated, config)
         files_written.append(str(index_path.relative_to(config.wiki_root)))
 
     INDEX_MAX_CHARS = max(4096, int(config.source_budget * 0.12))
@@ -1350,7 +1350,7 @@ def stage_3_5_aggregate_repair(
                        f"LLM cannot emit a complete index")
 
     if skip_reason:
-        print(f"[stage 3.5] {skip_reason} — LLM rewrite skipped, using append fallback")
+        print(f"[stage 3.3] {skip_reason} — LLM rewrite skipped, using append fallback")
         _index_append_fallback()
     else:
         inv_lines: list[str] = []
@@ -1389,17 +1389,17 @@ Output ONLY the complete new index.md. No commentary.
         try:
             response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
             if "---FILE:" in response:
-                print("[stage 3.5] Index LLM response contained FILE blocks — falling back")
+                print("[stage 3.3] Index LLM response contained FILE blocks — falling back")
                 _index_append_fallback()
             elif "## " in response and "[[" in response:
-                stage_3_1_write_wiki_file(index_path, response.strip() + "\n", config)
+                stage_3_2_write_wiki_file(index_path, response.strip() + "\n", config)
                 files_written.append(str(index_path.relative_to(config.wiki_root)))
-                print(f"[stage 3.5] Index rewritten via LLM ({len(response)} chars)")
+                print(f"[stage 3.3] Index rewritten via LLM ({len(response)} chars)")
             else:
-                print("[stage 3.5] Index LLM response missing sections/links — falling back")
+                print("[stage 3.3] Index LLM response missing sections/links — falling back")
                 _index_append_fallback()
         except Exception as e:
-            print(f"[stage 3.5] Index LLM rewrite failed ({e}) — using append fallback")
+            print(f"[stage 3.3] Index LLM rewrite failed ({e}) — using append fallback")
             _index_append_fallback()
     files_written.append(PageRef.parse(
         index_path, config.wiki_root, config.wiki_dir).project_relative)
@@ -1423,7 +1423,7 @@ Output ONLY the complete new index.md. No commentary.
     # no hard ceiling.
     OVERVIEW_MAX_CHARS = max(4096, int(config.source_budget * 0.12))
     if current_overview and len(current_overview) > OVERVIEW_MAX_CHARS:
-        print(f"[stage 3.5] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
+        print(f"[stage 3.3] Overview too large ({len(current_overview)} > {OVERVIEW_MAX_CHARS}) — "
               f"skipping repair (NashSU isAggregateRepairSafe parity), leaving current overview untouched")
         _assert_aggregate_outputs(
             log_path,
@@ -1480,21 +1480,21 @@ ingested source — not just the new source.
     try:
         response, stop_reason = call_anthropic_protocol(prompt, config, max_tokens=4096)
         if "---FILE:" in response:
-            print("[stage 3.5] Overview LLM response contained FILE blocks — keeping current")
+            print("[stage 3.3] Overview LLM response contained FILE blocks — keeping current")
         else:
             body = response.strip()
             if not body.startswith("#"):
-                print("[stage 3.5] Overview LLM response did not start with '#' — keeping current")
+                print("[stage 3.3] Overview LLM response did not start with '#' — keeping current")
             else:
-                stage_3_1_write_wiki_file(overview_path, body + "\n", config)
+                stage_3_2_write_wiki_file(overview_path, body + "\n", config)
                 files_written.append(PageRef.parse(
                     overview_path,
                     config.wiki_root,
                     config.wiki_dir,
                 ).project_relative)
-                print(f"[stage 3.5] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
+                print(f"[stage 3.3] Overview updated via LLM ({len(response)} chars, stop={stop_reason})")
     except Exception as e:
-        print(f"[stage 3.5] Overview LLM update failed ({e}) — keeping current")
+        print(f"[stage 3.3] Overview LLM update failed ({e}) — keeping current")
 
     _assert_aggregate_outputs(
         log_path,

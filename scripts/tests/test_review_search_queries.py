@@ -18,7 +18,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import _stage_3_4_review as review  # noqa: E402
+import _stage_3_review as review  # noqa: E402
 import sweep_reviews  # noqa: E402
 
 
@@ -97,7 +97,7 @@ class TestPromptAsksForSearchQueries(unittest.TestCase):
 
     def test_prompt_mentions_search_queries(self):
         import inspect
-        src = inspect.getsource(review.stage_3_4_prepare_review_suggestions)
+        src = inspect.getsource(review.stage_3_1_prepare_review_suggestions)
         self.assertIn("search_queries", src)
         self.assertIn("suggestion", src)
         self.assertIn("missing-page", src)

@@ -76,7 +76,7 @@ class MergePromptTruncation(unittest.TestCase):
             orig = sw.call_anthropic_protocol
             sw.call_anthropic_protocol = fake_call
             try:
-                result = sw._stage_3_1_merge_page_content(existing, new, cfg)
+                result = sw._stage_3_2_merge_page_content(existing, new, cfg)
             finally:
                 sw.call_anthropic_protocol = orig
 

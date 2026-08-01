@@ -663,42 +663,42 @@ class TestStage31SchemaRoute(unittest.TestCase):
 
     def test_moves_concept_out_of_schema_folder(self):
         # type:concept written into a schema folder → routed to concepts/.
-        out = wr._stage_3_1_schema_route("people/foo.md", self._page("concept"),
+        out = wr._stage_3_2_schema_route("people/foo.md", self._page("concept"),
                                          {"person": "people"})
         self.assertEqual(out, "concepts/foo.md")
 
     def test_moves_schema_type_out_of_entities(self):
-        out = wr._stage_3_1_schema_route("entities/ada.md", self._page("person"),
+        out = wr._stage_3_2_schema_route("entities/ada.md", self._page("person"),
                                          {"person": "people"})
         self.assertEqual(out, "people/ada.md")
 
     def test_correct_page_unchanged(self):
-        out = wr._stage_3_1_schema_route("people/ada.md", self._page("person"),
+        out = wr._stage_3_2_schema_route("people/ada.md", self._page("person"),
                                          {"person": "people"})
         self.assertEqual(out, "people/ada.md")
 
     def test_base_type_routed_without_schema(self):
-        out = wr._stage_3_1_schema_route("entities/c.md", self._page("concept"), {})
+        out = wr._stage_3_2_schema_route("entities/c.md", self._page("concept"), {})
         self.assertEqual(out, "concepts/c.md")
 
     def test_unknown_type_left_alone(self):
-        out = wr._stage_3_1_schema_route("entities/x.md", self._page("widget"), {})
+        out = wr._stage_3_2_schema_route("entities/x.md", self._page("widget"), {})
         self.assertEqual(out, "entities/x.md")
 
     def test_source_subdir_preserved(self):
-        out = wr._stage_3_1_schema_route("sources/book/title.md",
+        out = wr._stage_3_2_schema_route("sources/book/title.md",
                                          self._page("source"), {})
         self.assertEqual(out, "sources/book/title.md")
 
     def test_root_mapped_type_moved_to_root(self):
         # A schema type routed to the wiki root ("") must be moved there (no
         # leading slash), not treated as an unknown type and left in place.
-        out = wr._stage_3_1_schema_route("concepts/foo.md", self._page("dashboard"),
+        out = wr._stage_3_2_schema_route("concepts/foo.md", self._page("dashboard"),
                                          {"dashboard": ""})
         self.assertEqual(out, "foo.md")
 
     def test_root_mapped_type_already_at_root_unchanged(self):
-        out = wr._stage_3_1_schema_route("foo.md", self._page("dashboard"),
+        out = wr._stage_3_2_schema_route("foo.md", self._page("dashboard"),
                                          {"dashboard": ""})
         self.assertEqual(out, "foo.md")
 

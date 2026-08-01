@@ -71,7 +71,7 @@ class TestNoopWriteBackup(unittest.TestCase):
             path.write_text(content, encoding="utf-8")
             before_mtime = path.stat().st_mtime_ns
 
-            write_stage.stage_3_1_write_wiki_file(path, content, cfg)
+            write_stage.stage_3_2_write_wiki_file(path, content, cfg)
 
             self.assertEqual(content, path.read_text(encoding="utf-8"))
             self.assertEqual(before_mtime, path.stat().st_mtime_ns)
@@ -101,7 +101,7 @@ class TestNoopWriteBackup(unittest.TestCase):
             path.write_text(existing, encoding="utf-8")
             before_mtime = path.stat().st_mtime_ns
 
-            write_stage.stage_3_1_write_wiki_file(
+            write_stage.stage_3_2_write_wiki_file(
                 path,
                 incoming,
                 cfg,
@@ -130,7 +130,7 @@ class TestNoopWriteBackup(unittest.TestCase):
             )
             path.write_text(existing, encoding="utf-8")
 
-            write_stage.stage_3_1_write_wiki_file(path, changed, cfg)
+            write_stage.stage_3_2_write_wiki_file(path, changed, cfg)
 
             self.assertEqual(changed, path.read_text(encoding="utf-8"))
             backups = _history_pages(cfg)

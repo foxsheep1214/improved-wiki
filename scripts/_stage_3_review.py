@@ -239,7 +239,7 @@ _待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 `resolv
 """
 
 
-def stage_3_4_prepare_review_suggestions(
+def stage_3_1_prepare_review_suggestions(
     file_blocks: list[tuple[str, str]],
     raw_file: Path,
     config: Config,
@@ -265,7 +265,7 @@ def stage_3_4_prepare_review_suggestions(
     inert; the volume signal now reads directly off ``file_blocks`` instead.
 
     The returned normalized items are persisted later by
-    :func:`stage_3_4_persist_review_suggestions`.
+    :func:`stage_3_5_persist_review_suggestions`.
     """
     # Generation-volume signal: total chars across the pages generated this pass.
     # file_blocks content is the full FILE-block content (frontmatter + body) —
@@ -291,7 +291,7 @@ def stage_3_4_prepare_review_suggestions(
             except OSError:
                 continue
     if cumulative_blocks < 4 and gen_chars < 10000:
-        print(f"[stage 3.4] Skipped — {len(file_blocks)} blocks this pass "
+        print(f"[stage 3.5] Skipped — {len(file_blocks)} blocks this pass "
               f"({cumulative_blocks} cumulative across replays), {gen_chars} chars "
               f"(all below NashSU thresholds)")
         return {
@@ -301,7 +301,7 @@ def stage_3_4_prepare_review_suggestions(
             "stop_reason": "",
         }
 
-    print(f"[stage 3.4] Running review over {len(file_blocks)} new pages + existing wiki...")
+    print(f"[stage 3.5] Running review over {len(file_blocks)} new pages + existing wiki...")
 
     # Collect new page contents
     new_pages: list[str] = []
@@ -393,7 +393,7 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
         raise RuntimeError(msg) from e
 
     if verbose:
-        print(f"[stage 3.4] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
+        print(f"[stage 3.5] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
 
     # Parse YAML
     text = response
@@ -450,7 +450,7 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
     }
 
 
-def stage_3_4_persist_review_suggestions(
+def stage_3_5_persist_review_suggestions(
     prepared: dict,
     raw_file: Path,
     config: Config,
@@ -504,7 +504,7 @@ def stage_3_4_persist_review_suggestions(
             page_path, config.wiki_root, config.wiki_dir).project_relative)
         written += 1
 
-    print(f"[stage 3.4] {written} review pages -> wiki/REVIEW/")
+    print(f"[stage 3.5] {written} review pages -> wiki/REVIEW/")
 
     # Also write JSON for tooling (backward compat)
     runtime_dir = config.runtime_dir
@@ -527,7 +527,7 @@ def stage_3_4_persist_review_suggestions(
     }
 
 
-def stage_3_4_review_suggestions(
+def stage_3_review_suggestions(
     file_blocks: list[tuple[str, str]],
     raw_file: Path,
     config: Config,
@@ -540,6 +540,6 @@ def stage_3_4_review_suggestions(
     NashSU's pre-write review generation and post-write persistence order.
     Direct callers retain the historical one-call behavior.
     """
-    prepared = stage_3_4_prepare_review_suggestions(
+    prepared = stage_3_1_prepare_review_suggestions(
         file_blocks, raw_file, config, verbose=verbose)
-    return stage_3_4_persist_review_suggestions(prepared, raw_file, config)
+    return stage_3_5_persist_review_suggestions(prepared, raw_file, config)

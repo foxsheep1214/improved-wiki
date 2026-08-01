@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 
 
-STAGE_2_CONTEXT_POLICY_VERSION = "nashsu-0.6.6-consolidated-v3"
+STAGE_2_CONTEXT_POLICY_VERSION = "nashsu-0.6.6-consolidated-v4"
 _TRUNCATION_MARKER = "\n... [middle omitted to fit context budget] ...\n"
 
 # Analysis detail levels, most detailed first. Each level names the fields it

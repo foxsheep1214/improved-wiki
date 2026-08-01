@@ -27,7 +27,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 import sweep_reviews as sweep  # noqa: E402
 import _review_utils as ru  # noqa: E402
-import _stage_3_4_review as review  # noqa: E402
+import _stage_3_review as review  # noqa: E402
 
 
 def _make_wiki(tmp: Path, pages, reviews):

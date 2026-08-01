@@ -11,7 +11,7 @@ from _progress import (
     mark_stage_done,
     unmark_stage_done,
 )
-from _stage_3_write import _stage_3_1_wiki_path_for_source
+from _stage_3_write import _stage_3_2_wiki_path_for_source
 
 def _should_stop_after(config: Config, stage: str, result: dict) -> bool:
     """Check if we should stop after completing `stage`. Progress already saved before call."""
@@ -65,7 +65,7 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
         return False
 
     if is_stage_done(config, h, "ingested"):
-        if not _stage_3_1_wiki_path_for_source(raw_file, config).exists():
+        if not _stage_3_2_wiki_path_for_source(raw_file, config).exists():
             # Stale marker (source page deleted externally) — clear and re-ingest.
             from _progress import stages_path as _sp
             _sp(config, h).unlink(missing_ok=True)
@@ -91,7 +91,7 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
         print(f"  [skip] Ingest complete (ingested marker present)")
         return True
 
-    source_page = _stage_3_1_wiki_path_for_source(raw_file, config)
+    source_page = _stage_3_2_wiki_path_for_source(raw_file, config)
     if not source_page.exists():
         return False
 

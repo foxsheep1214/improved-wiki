@@ -17,11 +17,11 @@ class TestPhase3NashsuOrder(unittest.TestCase):
     def test_phase3_calls_follow_nashsu_order(self):
         source = inspect.getsource(ingest_write._do_write)
         ordered_calls = [
-            "stage_3_4_prepare_review_suggestions(",
-            "stage_3_1_write_wiki_file(",
-            "stage_3_5_aggregate_repair(",
-            "stage_3_2_inject_images(",
-            "stage_3_4_persist_review_suggestions(",
+            "stage_3_1_prepare_review_suggestions(",
+            "stage_3_2_write_wiki_file(",
+            "stage_3_3_aggregate_repair(",
+            "stage_3_4_inject_images(",
+            "stage_3_5_persist_review_suggestions(",
             "save_cache(",
         ]
         positions = [source.index(call) for call in ordered_calls]

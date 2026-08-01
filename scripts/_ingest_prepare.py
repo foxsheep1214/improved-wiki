@@ -33,11 +33,10 @@ from _stage_1_extract import (
 from _stage_1_3_caption import _stage_1_3_inline_captions
 from _stage_1_2_images import validate_stage_1_2_artifact
 from _stage_1_3_caption import validate_stage_1_3_artifact
+from _stage_2_4_generation import source_page_rel_stem
 from _stage_2_6_source_page import (
-    _stage_2_6_validate_source_file_block,
     build_fallback_source_summary,
     source_analysis_text,
-    stage_2_6_source_page,
 )
 from _stage_validators import (
     verify_stage_0,
@@ -71,104 +70,64 @@ def _count_comparison_blocks(file_blocks: list[tuple[str, str]]) -> int:
     return count
 
 
-def _prepare_source_page(
+def _ensure_source_page(
     global_digest: dict, raw_file: Path, config: Config,
-    template_content: str, progress: dict | None, file_blocks: list,
-    verbose: bool, source_context: str = "",
-    consolidated_context: str = "",
-    associations: dict | None = None,
+    file_blocks: list,
     chunk_claims: list | None = None,
     chunk_analyses: list[dict] | None = None,
 ) -> tuple[list, bool]:
-    """Stage 2.6: generate one NashSU-style source summary and merge it.
+    """Guarantee the source page exists in ``file_blocks`` — no second LLM call.
 
-    Returns ``(file_blocks, source_page_truncated)``. The flag is True when the
-    real source page was lost to an unrecovered truncation and a deterministic
-    summary stood in for it, so the caller can refuse to cache the run
-    (NashSU ingest.ts:1326-1341).
+    NashSU 0.6.6 parity (merged 2026-08-01): Stage 2.4's single generation call
+    is asked for the source page along with the key/schema-typed pages
+    (``_source_page_output_section``). This function only checks the result and,
+    when the model omitted or malformed the block, writes the SAME deterministic
+    fallback NashSU uses (ingest.ts:1287) from the complete Stage 2 analysis.
+
+    The retired Stage 2.6 issued a dedicated call that re-sent a byte-identical
+    whole-source context — measured at 104,000 duplicated characters per book on
+    the HardwareWiki ingest of "热设计的世界 - 2020 - 李波".
+
+    Returns ``(file_blocks, source_page_missing)``. The flag is True when the
+    generation did not supply a usable source block and the deterministic
+    summary stood in, so the caller refuses to cache the run (NashSU
+    ingest.ts:1326-1341).
     """
-    try:
-        source_rel_stem = str(
-            raw_file.relative_to(config.raw_root).with_suffix("")
-        )
-    except ValueError:
-        source_rel_stem = raw_file.stem
+    source_rel_stem = source_page_rel_stem(raw_file, config)
     source_identity = canonical_source_path(raw_file, config)
+    expected = f"sources/{source_rel_stem}.md"
 
-    _source_page_stop_reason = ""
-    if progress and "source_page_response" in progress:
-        source_page_response = progress["source_page_response"]
-        print(f"  [stage 2.6] (cached) Source page already generated")
-    else:
-        # Issue 2 fix: build the linkable-slug set (concepts/entities generated
-        # this ingest + existing wiki slugs) so the source page cannot wikilink
-        # to an ALREADY-COVERED concept's never-written own slug.
-        _linkable: list[str] = []
-        for _path, _ in file_blocks:
-            _stem = str(_path)
-            # normalize "wiki/concepts/foo.md" → "concepts/foo"
-            if _stem.startswith("wiki/"):
-                _stem = _stem[len("wiki/"):]
-            if _stem.endswith(".md"):
-                _stem = _stem[:-3]
-            _linkable.append(_stem)
-        # Generated-this-ingest key-page slugs feed link validation/relevance.
-        # They are not a checklist: Stage 2.6 links only materially relevant
-        # pages and never dumps the entire set into the source summary.
-        _gen_concepts = [s for s in _linkable if s.startswith("concepts/")]
-        _gen_entities = [s for s in _linkable if s.startswith("entities/")]
-        _gen_pages = list(_linkable)
-        _linkable.extend(list_existing_slugs(config))
-        source_page_response, _source_page_stop_reason = stage_2_6_source_page(
-            global_digest, raw_file, config,
-            template=template_content, verbose=verbose,
-            linkable_slugs=_linkable, source_context=source_context,
-            consolidated_context=consolidated_context,
-            associations=associations,
-            generated_concepts=_gen_concepts, generated_entities=_gen_entities,
-            chunk_claims=chunk_claims,
-            chunk_analyses=chunk_analyses,
-            generated_pages=_gen_pages,
-        )
+    def _is_source_block(path: str) -> bool:
+        norm = path[len("wiki/"):] if path.startswith("wiki/") else path
+        return norm == expected
 
-    try:
-        _stage_2_6_validate_source_file_block(
-            source_page_response,
-            source_rel_stem,
-        )
-    except RuntimeError as exc:
-        # Cache compatibility and final guard: a pre-policy response may be
-        # empty/malformed even though fresh Stage 2.6 now handles this itself.
-        # Match NashSU by writing a deterministic source page from the complete
-        # analysis instead of pausing or inventing a fixed-section stub.
-        source_page_response = build_fallback_source_summary(
-            source_rel_stem,
-            source_identity,
-            source_analysis_text(
-                global_digest,
-                chunk_analyses=chunk_analyses,
-                chunk_claims=chunk_claims,
-            ),
-            time.strftime("%Y-%m-%d"),
-        )
-        print(
-            "  [stage 2.6] Replaced missing/malformed cached source response "
-            f"with deterministic analysis fallback ({exc})"
-        )
+    if any(_is_source_block(p) and c.strip() for p, c in file_blocks):
+        return file_blocks, False
 
-    source_blocks = parse_file_blocks(source_page_response)
-    if source_blocks:
-        file_blocks = source_blocks + list(file_blocks)
-        print(f"  [stage 2.6] Source page block merged ({len(file_blocks)} total)")
-        return file_blocks, (
-            _source_page_stop_reason
-            == "fallback-source-summary-unrecovered-truncation"
-        )
-
-    raise RuntimeError(
-        "Stage 2.6 deterministic source fallback could not be parsed; "
-        "refusing to continue without a source page."
+    print(
+        f"  [stage 2.4] Source page absent from generation — writing the "
+        f"NashSU deterministic fallback for {expected}"
     )
+    fallback = build_fallback_source_summary(
+        source_rel_stem,
+        source_identity,
+        source_analysis_text(
+            global_digest,
+            chunk_analyses=chunk_analyses,
+            chunk_claims=chunk_claims,
+        ),
+        time.strftime("%Y-%m-%d"),
+    )
+    source_blocks = parse_file_blocks(fallback)
+    if not source_blocks:
+        raise RuntimeError(
+            "Stage 2.4 deterministic source fallback could not be parsed; "
+            "refusing to continue without a source page."
+        )
+    # Drop any malformed same-path block the model emitted before prepending.
+    kept = [(p, c) for p, c in file_blocks if not _is_source_block(p)]
+    return source_blocks + kept, True
+
 
 def _do_prepare(
     raw_file: Path, config: Config,
@@ -252,7 +211,7 @@ def _do_prepare(
         # with wiki state (pages written/rewritten), looping forever before
         # _do_write can be reached. _do_write handles write_phase_done by
         # setting _write_blocks=[] and skipping 3.1/3.2, then runs
-        # the remaining 3.4b/cache/3.7 work over the on-disk wiki. A legacy
+        # the remaining 3.5/cache/3.7 work over the on-disk wiki. A legacy
         # checkpoint that predates review_prepared reconstructs the review
         # input from those bound pages once; new checkpoints restore the
         # already validated pre-write review items.
@@ -591,19 +550,15 @@ def _do_prepare(
             # (see is_query_bridge_source / deep-research.md).
             _is_query_bridge = is_query_bridge_source(raw_file, config)
             if _is_query_bridge:
-                print("  [stage 2.6] Skipped (deep-research query bridge — "
-                      "no source page; see references/deep-research.md)")
+                print("  [stage 2.4] Source page skipped (deep-research query "
+                      "bridge — the query page IS the artifact; see "
+                      "references/deep-research.md)")
             else:
-                file_blocks, _source_page_truncated = _prepare_source_page(
-                    global_digest, raw_file, config, template_content, progress,
-                    file_blocks, verbose,
-                    consolidated_context=_stage_2_context,
-                    associations=incremental_associations,
-                    # Source-wide claim candidates. Stage 2.6 selects and
-                    # synthesizes only core claims; it does not preserve this
-                    # list one-for-one or target a fixed count.
+                file_blocks, _source_page_truncated = _ensure_source_page(
+                    global_digest, raw_file, config, file_blocks,
+                    # Source-wide claim candidates, used only by the
+                    # deterministic fallback when generation omitted the page.
                     chunk_claims=[c for ca in (chunk_analyses or [])
-                                  if isinstance(ca, dict)
                                   for c in (ca.get("claims") or [])],
                     chunk_analyses=chunk_analyses,
                 )

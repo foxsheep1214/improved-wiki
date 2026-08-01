@@ -3,7 +3,7 @@
 NashSU 0.6.6's corrected-source rule says: when every ``sources`` entry on an
 existing page resolves to the source being ingested, that page is owned solely
 by this source, so the freshly generated body supersedes the stale one
-(_stage_3_write._stage_3_1_is_owned_only_by_source → replace_existing_body).
+(_stage_3_write._stage_3_2_is_owned_only_by_source → replace_existing_body).
 
 That rule is about a page left behind by a PREVIOUS ingest. Applied to a page
 this same write loop wrote moments ago it is destructive: the "owner" test
@@ -109,7 +109,7 @@ class SameRunCollisionMerges(unittest.TestCase):
             "call_anthropic_protocol",
             return_value=(merged_marker, "end_turn"),
         ) as llm:
-            sw.stage_3_1_write_wiki_file(
+            sw.stage_3_2_write_wiki_file(
                 self.page,
                 SECOND,
                 self.cfg,
