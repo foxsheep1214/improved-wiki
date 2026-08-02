@@ -135,20 +135,8 @@ preserved the images.
 | Source page size | `wc -c` old vs new |
 | Concept count | `find wiki/concepts -name "*.md" -exec grep -l "$BOOK" {} \; | wc -l` |
 | Entity count | Same for `wiki/entities/` |
-| Query count | Same for `wiki/queries/`（注：Stage 2.7 已于 2026-07-12 移除——新 ingest 恒为 0，此行仅对历史消化的旧结果有意义） |
 | Comparison count | Same for `wiki/comparisons/` |
 | Review count | Same for `wiki/REVIEW/` |
 | Media count | `find "wiki/media/Book/$BOOK" -type f | wc -l` |
-| Validation | Check pipeline stdout for `Result: N/M` |
+| Validation | Run `validate_ingest.py --root <project> --source <raw-relative-path>` |
 | Cross-references | `grep -c '\[\[' source-page.md` (wikilink density) |
-
-## Key findings from 2026-06-24 comparison (old pipeline vs new)
-
-- New pipeline produces **fewer but better-connected** pages (73 vs 84 concepts,
-  but 52 cross-references to existing wiki vs ~0 in old)
-- New stages add significant value: **queries** (3 new), **comparisons** (2 new),
-  **reviews** (8 items), **embeddings** (20354 entries)
-- Source page is more structured but smaller (43KB vs 76KB) — less narrative
-  detail, more concise structure
-- Main quality bottleneck: image captions (202 of 528 images missing captions
-  → Stage 1.3 needs more VLM calls)

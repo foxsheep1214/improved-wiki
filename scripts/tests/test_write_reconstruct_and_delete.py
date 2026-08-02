@@ -1,17 +1,10 @@
-"""Regression tests for post-write disk reconstruction + --delete orphan sweep.
+"""Tests for post-write disk reconstruction and ``--delete`` orphan sweep.
 
 Stdlib `unittest` only — no pytest, no network, no LLM calls.
 
-Covers the 2026-06-25 Orin re-ingest findings:
-
-  Cluster (#3/#4/#5): on a write_phase/write_loop_done resume, file_blocks is []
-  so Stage 3.4 re-fired over "0 pages", validation reported false "0 FILE blocks"
-  failures, and cache stats were zeroed. _reconstruct_blocks_from_disk rebuilds
-  the real page set from files_written_paths so all three see the true pages.
-
-  #2: --delete left source-specific query/comparison pages behind, so a
-  re-ingest stacked stale duplicates. _cleanup_orphan_pages now sweeps queries
-  and comparisons too (but preserves sources:[] comparison hub pages).
+On a post-write resume, `_reconstruct_blocks_from_disk` restores the bound page
+set for review persistence, validation, and cache statistics. Source deletion
+sweeps source-owned schema pages while preserving shared or source-less hubs.
 """
 from __future__ import annotations
 

@@ -1,14 +1,8 @@
-"""Regression tests for --stop-after-stage Stage-0..2 in-prepare halting.
+"""Tests for the supported ``--stop-after-stage`` prepare boundaries.
 
-Historical bug (2026-06-25): ``--stop-after-stage 0`` was documented as the
-"OCR-only then re-run" split, but the stop check lived AFTER ``_do_prepare``
-returned — and ``_do_prepare`` runs all of Stage 0-2 (pausing at the 2.1/2.2/
-2.4 LLM handoffs) before that check. So on a fresh run the flag was dead: the
-process entered Stage 2.1 and exited 101 (ConversationPending) instead of
-halting after extraction. Fix: raise ``PrepareStopAfter`` at the in-prepare
-boundaries (0=extract, 1=global digest, 2=generation) so the flag actually
-halts. ``ingest_one`` catches it and returns ``{"status":"ok",
-"stopped_after":stage}``.
+The CLI accepts 0 (Phase 1), 1.5 (Stage 2.2 analysis), and 2/2.0
+(generation). ``PrepareStopAfter`` exits at those in-prepare boundaries after
+artifacts are cached; ``ingest_one`` converts it to a clean result.
 
 Stdlib unittest only — no pytest, no network, no LLM calls.
 """
@@ -43,14 +37,14 @@ class StopAfterStageCheck(unittest.TestCase):
         cfg = _FakeConfig()
         cfg.stop_after_stage = "2"
         self.assertFalse(_stop_after_stage(cfg, "0"))
-        self.assertFalse(_stop_after_stage(cfg, "1"))
+        self.assertFalse(_stop_after_stage(cfg, "1.5"))
 
     def test_returns_false_when_attr_absent(self):
         # Config instances built outside ingest.py arg parsing have no
         # stop_after_stage attribute — must not raise.
         cfg = _FakeConfig()
         self.assertFalse(_stop_after_stage(cfg, "0"))
-        self.assertFalse(_stop_after_stage(cfg, "1"))
+        self.assertFalse(_stop_after_stage(cfg, "1.5"))
 
     def test_does_not_print(self):
         # The helper is a pure check; the raise site owns the message so it
@@ -58,10 +52,10 @@ class StopAfterStageCheck(unittest.TestCase):
         import io
         import contextlib
         cfg = _FakeConfig()
-        cfg.stop_after_stage = "1"
+        cfg.stop_after_stage = "1.5"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            _stop_after_stage(cfg, "1")
+            _stop_after_stage(cfg, "1.5")
             _stop_after_stage(cfg, "0")
         self.assertEqual(buf.getvalue(), "")
 

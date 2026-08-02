@@ -7,9 +7,8 @@ the user decides what to do with each still-pending item, one at a time, using
 the predefined options NashSU offers per item: **Deep Research / Create Page /
 Skip**.
 
-This flow is where `wiki/queries/` pages are born after the 2026-07-12 Stage 2.7
-removal: ingest flags "open question worth researching" as a REVIEW suggestion
-item (with `search_queries`), and a query page only materializes when the user
+This flow is where `wiki/queries/` pages are born: ingest flags an open research
+question as a REVIEW suggestion (with `search_queries`), and a query page only materializes when the user
 chooses Deep Research (research result page) or Create Page here. Query pages
 carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答 + 研究`.
 

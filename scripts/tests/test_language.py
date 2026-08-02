@@ -6,9 +6,8 @@ Run:
     python3 -m unittest tests.test_language   # from scripts/
     python3 scripts/tests/test_language.py     # from skill root
 
-Each test maps to a real misdetection hit during radar-book ingestion
-(see references/known-issues.md): math Greek symbols and stray Latin
-function words must not flip the detected language of an English
+These regressions came from real radar-book ingests: math Greek symbols and
+stray Latin function words must not flip the detected language of an English
 technical document.
 """
 from __future__ import annotations
@@ -255,7 +254,7 @@ class TestMathAndAcronymFalsePositivesStayEnglish(unittest.TestCase):
 
 class TestNonLatinScriptNeedsShareNotJustPresence(unittest.TestCase):
     """A handful of stray non-Latin characters must not outvote thousands of
-    ASCII letters (known-issues.md, fixed 2026-07-30).
+    ASCII letters.
 
     The dominant-script test used to be a bare absolute count
     (``max_count >= 2``). Latin-script text is pure ASCII and contributes
@@ -272,7 +271,7 @@ class TestNonLatinScriptNeedsShareNotJustPresence(unittest.TestCase):
     cleanly."""
 
     def test_pipeline_boilerplate_han_does_not_flip_english_page(self):
-        # Real hit (346 HardwareWiki pages): Stage 2.4/2.6 inject the Chinese
+        # Stage 2.4 can emit the Chinese
         # figure-citation word 据图 and the see-also heading 参见 into pages
         # whose prose is entirely English. 2 Han chars vs ~1500 ASCII letters.
         text = (

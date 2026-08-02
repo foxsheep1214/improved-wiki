@@ -1,4 +1,4 @@
-"""Tests for the conversation-mode router (round iv, 2026-06-22).
+"""Tests for the conversation-mode router.
 
 Verifies that:
   * ingest.py registers its `call_anthropic_protocol` as the conversation
@@ -13,6 +13,7 @@ Conversation mode is the only text-gen path now — there is no "without
 conversation mode" state to test (see test_llm_api_direct.py for the
 no-router-registered error case).
 """
+import hashlib
 import sys
 import tempfile
 import unittest
@@ -107,6 +108,37 @@ class TestConversationHandoff(unittest.TestCase):
             self.assertEqual(task["status"], "completed")
             self.assertEqual(task["attempts"], 1)
             self.assertEqual(task["response_chars"], len("digest: ready"))
+
+    def test_current_review_stage_consumes_legacy_inflight_handoff(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg = _make_config(tmp)
+            prompt = (
+                "你是 HardwareWiki 的 review agent。"
+                "审阅当前 wiki 内容，找出 5 类可疑项："
+            )
+            content_hash = hashlib.sha256(
+                prompt.encode("utf-8")
+            ).hexdigest()[:8]
+            legacy_slug = f"Stage-3-4-Review-{content_hash}"
+            current_slug = f"Stage-3-1-Review-{content_hash}"
+            conv_dir = (
+                cfg.runtime_dir / "conversation" / cfg.conversation_prefix
+            )
+            conv_dir.mkdir(parents=True)
+            (conv_dir / f"{legacy_slug}.md").write_text(
+                prompt, encoding="utf-8"
+            )
+            (conv_dir / f"{legacy_slug}.txt").write_text(
+                "[]", encoding="utf-8"
+            )
+
+            text, stop = _llm_api.call_anthropic_protocol(prompt, cfg)
+
+            self.assertEqual((text, stop), ("[]", "end_turn"))
+            self.assertFalse((conv_dir / f"{current_slug}.md").exists())
+            manifest = _load_task_manifest(cfg)
+            self.assertIn(legacy_slug, manifest["completed"])
 
     def test_cached_result_survives_replay_for_multi_stage_resume(self):
         # Regression: ingest.py replays every stage from the top on each
@@ -248,14 +280,9 @@ class TestConversationHandoff(unittest.TestCase):
 
 
 class TestInferStageWithLanguageDirective(unittest.TestCase):
-    # Regression (fallout of the c359232 output-language fix): the ~890-char
-    # "## ⚠️ MANDATORY OUTPUT LANGUAGE" directive is prepended to every
-    # generation/analysis prompt. It pushed the distinctive stage marker past
-    # _infer_stage's 500-char head window, collapsing Stage 2.4/2.6 and legacy
-    # generation prompts to
-    # the generic "LLM-task" label (observed live on the Printed Circuits
-    # Handbook ingest — every chunk-generation cache file mis-prefixed). The
-    # directive block must be skipped before inferring the stage.
+    # The output-language directive is prepended to generation prompts and can
+    # put the distinctive stage marker beyond _infer_stage's 500-char window.
+    # The directive block must be skipped before inferring the stage.
     DIRECTIVE = (
         "## ⚠️ MANDATORY OUTPUT LANGUAGE: English\n"
         + ("Preserve proper nouns and technical identifiers in their original form. " * 14)
@@ -267,19 +294,14 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
         self.assertGreater(prompt.find("generating wiki pages"), 500)
         self.assertEqual(_infer_stage(prompt), "Stage-2-4-Generation")
 
-    def test_source_page_label_survives_language_directive_prefix(self):
-        prompt = self.DIRECTIVE + "\n\n# Role\nYou are writing a **source page** for a book.\n"
-        self.assertEqual(_infer_stage(prompt), "Stage-2-6-SourcePage")
-
     def test_bare_generation_prompt_still_labeled(self):
         self.assertEqual(
             _infer_stage("# Role\nYou are generating wiki pages for ONE chunk.\n"),
             "Stage-2-4-Generation")
 
     def test_dedup_confirm_labeled_under_stage_2_4(self):
-        # The in-source dedup-confirm was folded into Stage 2.4's closing when the
-        # numbering was consolidated (2.5 retired). Its cache label must align to
-        # 2.4 (the stage code already prints "[stage 2.4]" for it).
+        # In-source dedup is Stage 2.4's closing sub-step, so its cache label
+        # must align with Stage 2.4.
         prompt = ("You are reviewing concept pages generated from the same source "
                   "for duplicates.\n\n### Concept 1: ...\n")
         self.assertEqual(_infer_stage(prompt), "Stage-2-4-DedupConfirm")
@@ -295,16 +317,19 @@ class TestInferStageWithLanguageDirective(unittest.TestCase):
             "Stage-2-TruncatedFileRepair",
         )
 
-    def test_non_directive_prompt_untouched(self):
-        # Prompts that do NOT open with the directive must infer exactly as
-        # before, so their slug/cache key is unchanged across this fix.
-        # (The Stage-2-1-Global-Digest label was removed with Stage 2.1,
-        # 2026-07-08 — its old prompt phrase now falls through to LLM-task.)
+    def test_review_prompt_uses_current_stage_label(self):
+        prompt = "你是 HardwareWiki 的 review agent。审阅当前 wiki 内容，找出 5 类可疑项："
+        self.assertEqual(_infer_stage(prompt), "Stage-3-1-Review")
+
+    def test_retired_prompt_shapes_fall_through(self):
         self.assertEqual(
             _infer_stage("You are writing a **source page** for this book"),
-            "Stage-2-6-SourcePage")
+            "LLM-task")
         self.assertEqual(
             _infer_stage("performing **Stage 1: Global Digest** for this source"),
+            "LLM-task")
+        self.assertEqual(
+            _infer_stage("You have finished generating source/concept/entity pages"),
             "LLM-task")
         self.assertEqual(_infer_stage("plain prompt with no markers"), "LLM-task")
 

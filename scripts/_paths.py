@@ -198,9 +198,8 @@ def iter_wiki_pages(
 #
 # These mirror the raw/ directory structure to derive media-directory slugs and
 # raw-type subdirectories. They live here (not in the Stage 1 image module) so
-# that Stage 3.2 / validators / Stage 2 can use them without a fake dependency
-# on Stage 1. Moved from _stage_1_2_images.py on 2026-06-24; the old
-# `_stage_1_2_*` names are kept as back-compat aliases by the facade.
+# that Stage 3.4, validators, and Stage 2 can use them without a fake dependency
+# on Stage 1.
 # ══════════════════════════════════════════════════════════════════════════════
 
 

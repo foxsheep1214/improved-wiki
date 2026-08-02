@@ -1,4 +1,4 @@
-"""Stage 2.1 must parse fenced blocks without shifting later chunk boundaries.
+"""Stage 2.2 must parse fenced blocks without shifting later chunk boundaries.
 
 OCR output can contain a fence-looking language marker such as `````asm``
 inside an already open `````txt`` block. It is content, not a valid closing
@@ -35,7 +35,7 @@ class FencedRangeParsing(unittest.TestCase):
             "after\n"
         )
 
-        ranges = s2._stage_2_1_find_protected_ranges(text)
+        ranges = s2._stage_2_2_find_protected_ranges(text)
 
         self.assertEqual(2, len(ranges))
         outside_pos = text.index("outside")
@@ -54,7 +54,7 @@ class FencedRangeParsing(unittest.TestCase):
             "outside\n"
         )
 
-        ranges = s2._stage_2_1_find_protected_ranges(text)
+        ranges = s2._stage_2_2_find_protected_ranges(text)
 
         self.assertEqual(1, len(ranges))
         protected = text[ranges[0][0]:ranges[0][1]]
@@ -76,10 +76,10 @@ class FencedRangeParsing(unittest.TestCase):
             "```\n"
         )
 
-        ranges = s2._stage_2_1_find_protected_ranges(text)
+        ranges = s2._stage_2_2_find_protected_ranges(text)
         self.assertLess(max(end - start for start, end in ranges), 100)
 
-        chunks = s2._stage_2_1_chunk_text(
+        chunks = s2._stage_2_2_chunk_text(
             text,
             target_chars=5_000,
             overlap_chars=3_000,

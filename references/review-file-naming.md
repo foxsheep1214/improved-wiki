@@ -3,7 +3,7 @@
 Authoritative naming rule for every item under `wiki/REVIEW/<type>/` —
 across all five types (`contradiction` / `suggestion` / `missing-page` /
 `confirm` / `duplicate`, plus the improved-wiki-only `orphan`) and every
-generation source (ingest Stage 3.4, structural/semantic lint, deep-research,
+generation source (ingest Stages 3.1/3.5, structural/semantic lint, deep-research,
 process-reviews, caption-skip).
 
 ## How NashSU actually stores reviews (the alignment target)
@@ -104,7 +104,7 @@ Helpers behind it: `derive_review_topic(title, rtype)` and
 
 | Source | File | Type(s) |
 |--------|------|---------|
-| Ingest Stage 3.4 review | `scripts/_stage_3_review.py` | all 5 |
+| Ingest Stages 3.1/3.5 review | `scripts/_stage_3_review.py` | all 5 |
 | Structural lint `--fix-links` (missing target) | `scripts/wiki-lint-fix.py` | missing-page |
 | Structural lint (unsuggestable orphan/no-outlinks) | `scripts/wiki-lint-fix.py` | suggestion |
 | Structural lint (uncertain rewrite, score-gated) | `scripts/wiki-lint-fix.py` | suggestion |

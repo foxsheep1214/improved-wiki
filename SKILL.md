@@ -77,9 +77,9 @@ Active order:
 → 3.7 touched-page embedding upsert → ingested marker
 ```
 
-Stage 2.7 query generation and the dedicated Stage 2.9 comparison generator are
-retired. Comparison/synthesis/finding/thesis/methodology use Stage 2.2→2.4's
-shared schema-typed lifecycle. Review suggestions are handled by
+Ingest does not create unanswered query pages. Comparison, synthesis, finding,
+thesis, and methodology pages use Stage 2.2→2.4's shared schema-typed
+lifecycle. Review suggestions are handled by
 `process-reviews`; Graph remains a separate explicit command. The authoritative
 stage gates are in `references/ingest-stages-mandatory.md`.
 
@@ -274,12 +274,10 @@ default; its delete-orphans continuation is always human-gated at exit 102.
 - Conventions: `naming-conventions.md`, `raw-naming-conventions.md`,
   `raw-layout-compat.md`, `review-file-naming.md`
 - Operations: `initial-setup.md`, `re-ingest-comparison.md`,
-  `maintenance-cleanup.md`, `known-issues.md`, `cron-installation.md`,
-  `scripting-pitfalls.md`
+  `maintenance-cleanup.md`, `known-issues.md`, `cron-installation.md`
 - Retrieval and search: `kb-retrieval.md`, `nashsu-search-architecture.md`
 - Background: `architecture-decisions.md`, `roadmap.md` (planned, not built),
-  `nashsu-lint-source-analysis.md`, `query-generation.md` (Stage 2.7
-  tombstone — the stage is removed)
+  `nashsu-lint-source-analysis.md`
 
 Templates live under `templates/`. Ingest templates are selected by source
 type; aggregate templates cover schema, index, log, and overview.

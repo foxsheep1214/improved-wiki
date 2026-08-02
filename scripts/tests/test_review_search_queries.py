@@ -1,6 +1,6 @@
 """Tests for the NashSU searchQueries parity on review items.
 
-Stage 3.4 populates ``search_queries`` (2-3 web-search queries) on
+Stage 3.1 populates ``search_queries`` (2-3 web-search queries) on
 suggestion/missing-page reviews; the field rides in the review page
 frontmatter and is surfaced by ``sweep_reviews`` so deep-research can seed
 its web queries with no extra LLM call. These tests pin the render + the
@@ -64,7 +64,7 @@ class TestSweepRoundTrip(unittest.TestCase):
 
 
 class TestReviewIdInFrontmatter(unittest.TestCase):
-    """Stage 3.4 writes a content-stable review_id (NashSU reviewIdFor) into the
+    """Stage 3.5 writes a content-stable review_id (NashSU reviewIdFor) into the
     review page frontmatter so resolved state survives re-ingest."""
 
     def test_review_id_present_and_stable(self):
@@ -92,7 +92,7 @@ class TestReviewIdInFrontmatter(unittest.TestCase):
 
 
 class TestPromptAsksForSearchQueries(unittest.TestCase):
-    """The Stage 3.4 system prompt must instruct the LLM to emit search_queries
+    """The Stage 3.1 system prompt must instruct the LLM to emit search_queries
     for suggestion/missing-page (NashSU SEARCH-line parity)."""
 
     def test_prompt_mentions_search_queries(self):

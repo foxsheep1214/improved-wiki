@@ -80,15 +80,11 @@ def _ensure_source_page(
 ) -> tuple[list, bool]:
     """Guarantee the source page exists in ``file_blocks`` — no second LLM call.
 
-    NashSU 0.6.6 parity (merged 2026-08-01): Stage 2.4's single generation call
+    NashSU 0.6.6 parity: Stage 2.4's single generation call
     is asked for the source page along with the key/schema-typed pages
     (``_source_page_output_section``). This function only checks the result and,
     when the model omitted or malformed the block, writes the SAME deterministic
     fallback NashSU uses (ingest.ts:1287) from the complete Stage 2 analysis.
-
-    The retired Stage 2.6 issued a dedicated call that re-sent a byte-identical
-    whole-source context — measured at 104,000 duplicated characters per book on
-    the HardwareWiki ingest of "热设计的世界 - 2020 - 李波".
 
     Returns ``(file_blocks, source_page_missing)``. The flag is True when the
     generation did not supply a usable source block and the deterministic
@@ -106,11 +102,8 @@ def _ensure_source_page(
     generated = [(p, c) for p, c in file_blocks
                  if _is_source_block(p) and c.strip()]
     if generated:
-        # Structural gate + frontmatter repair, inherited from the retired
-        # Stage 2.6 implementation. Without them the merge would lose two
-        # behaviours: a malformed block reaching disk, and blank bibliographic
-        # fields staying blank (the Strauss/Witte source pages that shipped
-        # with no authors/year/venue).
+        # Structural gate + frontmatter repair prevent malformed blocks and
+        # fill blank bibliographic fields from the digest before write.
         path, content = generated[0]
         stem = source_rel_stem
         bib = _source_bibliographic_fields(
@@ -163,7 +156,7 @@ def _do_prepare(
     """Stage 0-2 for one book.
 
     Two segments with different cross-book safety:
-      - **Snapshot-stable (0/1/2.1/2.2)** — Stage 2.2 freezes read-only wiki
+      - **Snapshot-stable (0–2.2)** — Stage 2.2 freezes read-only wiki
         slug/index context once at entry, then reads only the book and that
         snapshot and writes no wiki/ state. Safe to run for several books in
         parallel ("prefetch"). ``prefetch_only=True`` runs exactly this segment
@@ -179,9 +172,8 @@ def _do_prepare(
     _set_current_file(raw_file.name)
     print(f"\n=== [prepare] {raw_file.name} ===")
     try:
-        # ── Stage 0.1: raw naming gate (wired into the pipeline 2026-07-08;
-        # previously the one agent-run-only gate). Raises on violation or when
-        # the project has no naming rules — rename/draft first, then re-run.
+        # ── Stage 0.1: raw naming gate. Raises on violations or when the
+        # project has no naming rules — rename/draft first, then re-run.
         _naming_errors = stage_0_1_check_file(raw_file, config.wiki_root)
         if _naming_errors:
             raise RuntimeError(
@@ -228,15 +220,12 @@ def _do_prepare(
                 for _stage in ("stage_1_1_done", "stage_1_2_done"):
                     if is_stage_done(config, h, _stage):
                         unmark_stage_done(config, h, _stage)
-        # ── write_phase short-circuit (Bug 2 fix, 2026-06-25) ──
-        # If the Stage 3.1/3.5/3.2 write-media phase already completed in a
-        # prior run,
-        # skip the entire 2.x pipeline. Re-running Stage 2.4 generation would
+        # If Stages 3.2–3.4 already completed, skip the entire Phase 2 pipeline.
+        # Re-running Stage 2.4 generation would
         # cache-miss every resume because the generation prompt hash drifts
         # with wiki state (pages written/rewritten), looping forever before
-        # _do_write can be reached. _do_write handles write_phase_done by
-        # setting _write_blocks=[] and skipping 3.1/3.2, then runs
-        # the remaining 3.5/cache/3.7 work over the on-disk wiki. A legacy
+        # _do_write can be reached. _do_write reconstructs the bound disk pages
+        # and runs the remaining Stages 3.5–3.7. A legacy
         # checkpoint that predates review_prepared reconstructs the review
         # input from those bound pages once; new checkpoints restore the
         # already validated pre-write review items.
@@ -427,10 +416,8 @@ def _do_prepare(
 
             return stage_1_2_result, stage_1_3_result
 
-        # Stage 1.2->1.3 image pipeline. The standalone whole-book global
-        # digest (former Stage 2.1) was removed 2026-07-08 for NashSU
-        # alignment: the digest now rolls up inside Stage 2.2 (empty seed,
-        # per-chunk updated_global_digest). 1.2/1.3 no longer parallel 2.1.
+        # Stage 1.2→1.3 image pipeline. The document digest rolls up inside
+        # Stage 2.2 from an empty seed via each chunk's updated_global_digest.
         stop_after_0 = _stop_after_stage(config, "0")
 
         stage_1_2_result, stage_1_3_result = _run_image_pipeline()
@@ -450,8 +437,8 @@ def _do_prepare(
                   "clean exit (--stop-after-stage=0)")
             raise PrepareStopAfter("0")
 
-        # 2.1 removed: global_digest starts empty; Stage 2.2 rolls it up and
-        # returns the final rolled-up dict consumed by Stage 2.4.
+        # Stage 2.2 starts from an empty digest and returns the final roll-up
+        # consumed by Stage 2.4.
         global_digest = {}
 
         # Stage 1.3 → 2 inline (NashSU ingest.ts Step 0.6 parity): rewrite
@@ -543,16 +530,15 @@ def _do_prepare(
             print(f"  [generation tail] (cached) outputs restored — "
                   f"{len(file_blocks)} blocks")
         else:
-            # Stage 2.4 closing sub-step: in-source concept dedup & merge
-            # (multi-chunk books only). Runs before the source page so the index
-            # lists de-duplicated concepts. (Former standalone Stage 2.5; folded
-            # into 2.4 — embedding prefilter + LLM confirm, no-fallback raise.)
+            # Stage 2.4 closing sub-step: in-source concept dedup and merge for
+            # multi-chunk books. Runs before the source page so the index lists
+            # de-duplicated concepts.
             from _dedup_intra_source import dedup_intra_source
-            _stage_2_5 = dedup_intra_source(file_blocks, chunk_analyses, config)
-            file_blocks = _stage_2_5["file_blocks"]
-            dedup_was_run = _stage_2_5["dedup_was_run"]
-            concept_count_before = _stage_2_5["concept_count_before"]
-            concept_count_after = _stage_2_5["concept_count_after"]
+            dedup_result = dedup_intra_source(file_blocks, chunk_analyses, config)
+            file_blocks = dedup_result["file_blocks"]
+            dedup_was_run = dedup_result["dedup_was_run"]
+            concept_count_before = dedup_result["concept_count_before"]
+            concept_count_after = dedup_result["concept_count_after"]
 
             # Rebuild the exact deterministic whole-source context used by
             # Stage 2.4: final rolling digest + every chunk analysis + bounded
@@ -585,13 +571,6 @@ def _do_prepare(
                 )
             _verify_stage_2_4_file_blocks(file_blocks, raw_file,
                                           is_query_bridge=_is_query_bridge)
-
-            # (Stage 2.7 query generation + cross-source query resolution
-            # removed 2026-07-12 for NashSU parity: NashSU's ingest never
-            # generates query pages — wiki/queries/ is fed only by deep
-            # research, saved chat answers, and human-triggered lint stubs.
-            # The "open question worth researching" signal flows through
-            # Stage 3.4 REVIEW suggestion items (with search_queries).)
 
             # Backward-compatible statistic. Comparison pages now arrive in the
             # shared Stage 2.4 FILE-block set; there is no separate count cap or

@@ -1,4 +1,4 @@
-"""Tests for the Stage 3.1 write-time link normalizer (audit 2026-07-02, A5/M6).
+"""Tests for the Stage 3.2 write-time link normalizer.
 
 One normalization pass applied to every non-listing FILE block right before
 stage_3_2_write_wiki_file:

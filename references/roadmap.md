@@ -1,6 +1,6 @@
 # Roadmap — planned enhancements (not yet built)
 
-Future features. Distinct from `known-issues.md` (bugs/workarounds): these are
+Future features. Distinct from `known-issues.md` (unresolved limitations): these are
 capabilities that don't exist yet and are intentionally deferred.
 
 ---
@@ -14,7 +14,7 @@ capabilities that don't exist yet and are intentionally deferred.
 
 - 普通 ingest 已把 `comparison` / `synthesis` / `finding` / `methodology` /
   `thesis` 统一接入 Stage 2.2 `schema_typed_candidates` → Stage 2.4 FILE
-  generation；不再有独立 Stage 2.9。候选可使用滚动 digest 与冻结的
+  generation。候选可使用滚动 digest 与冻结的
   `wiki/index.md` 快照识别已有 living page，但正文仍必须由当前输入的真实
   来源证据支撑。按 NashSU bundled schema，普通来源可建立 cross-cutting
   synthesis 初稿或 speculative working thesis，后续来源再 merge/update；

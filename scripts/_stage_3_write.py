@@ -1,11 +1,9 @@
-"""Phase 3: Write pages to disk + aggregate repair.
+"""Phase 3: Write pages to disk and repair aggregate pages.
 
-This module holds Stage 3.1 (write, incl. three-layer page merge for
-same-slug collisions) and 3.5 (aggregate repair + cache). Sibling modules:
+This module holds Stage 3.2 (write, including three-layer page merge for
+same-slug collisions) and Stage 3.3 (aggregate repair). Sibling modules:
 _stage_3_4_inject_images.py (image injection), _stage_3_review.py (content
-review), and _stage_3_7_embed.py (embeddings, runs from ingest.py post-ingest).
-
-Extracted as separate module 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
+review), and _stage_3_7_embed.py (embeddings).
 """
 from __future__ import annotations
 
@@ -29,10 +27,10 @@ from _wikilinks import (
 )
 
 __all__ = [
-    "stage_3_2_write_wiki_file",       # Stage 3.1
-    "stage_3_2_build_slug_dirs",       # Stage 3.1 link normalizer (universe)
-    "stage_3_2_normalize_page_links",  # Stage 3.1 link normalizer (per page)
-    "stage_3_3_aggregate_repair",      # Stage 3.5
+    "stage_3_2_write_wiki_file",
+    "stage_3_2_build_slug_dirs",
+    "stage_3_2_normalize_page_links",
+    "stage_3_3_aggregate_repair",
     "rebuild_index_deterministic",     # standalone recovery tool (rebuild_index.py)
 ]
 
@@ -106,7 +104,7 @@ def _stage_3_2_auto_correct_wiki_path(
       wiki/Some Entity        → entities/Some Entity.md
 
     Same-slug collisions are not resolved here — when a path already exists
-    on disk, Stage 3.1 write merges old + new (three-layer page merge, see
+    on disk, Stage 3.2 write merges old + new (three-layer page merge, see
     `stage_3_2_write_wiki_file`).
 
     Returns corrected path (relative to wiki/ dir, NO "wiki/" prefix) or None if uncorrectable.
@@ -540,7 +538,7 @@ def _stage_3_2_stamp_frontmatter_dates(content: str, today: str) -> str:
     return "---\n" + "\n".join(new_lines) + "\n---" + body
 
 
-# ---------- Stage 3.1 write-time link normalizer (audit 2026-07-02, A5/M6) ----------
+# ---------- Stage 3.2 write-time link normalizer ----------
 # The generation prompts state link-format rules (related as prefixed bare
 # slugs, STRICT [[dir/slug]] body links, no self-links) but nothing enforced
 # them in code — three format diseases spread across page types (audit M6).
@@ -662,7 +660,7 @@ def resolve_ingest_write_path(
     *,
     quiet: bool = False,
 ) -> str | None:
-    """Where Stage 3.1 will actually write one FILE block, or ``None`` if dropped.
+    """Where Stage 3.2 will write one FILE block, or ``None`` if dropped.
 
     The single implementation of the write-path chain: traversal/safety reject →
     application-managed aggregate reject → top-dir accept-list or auto-correct →
@@ -679,13 +677,13 @@ def resolve_ingest_write_path(
     if not is_safe_ingest_path(rel_path):
         return None
     if Path(rel_path).name in _LISTING_BASENAMES:
-        # Stage 3.5 rebuilds index/overview deterministically, log.md is
+        # Stage 3.3 rebuilds index/overview deterministically, log.md is
         # append-only, and schema.md is the user's contract. A generation block
         # claiming one would overwrite the whole file (NashSU
         # isAppManagedAggregatePath, ingest.ts:1428-1431).
         if not quiet:
             print(f"  [write] Dropped — {rel_path} is an application-managed "
-                  "aggregate; Stage 3.5 owns it")
+                  "aggregate; Stage 3.3 owns it")
         return None
 
     top_dir = rel_path.split("/")[0] if "/" in rel_path else ""
@@ -746,7 +744,7 @@ def project_write_result_blocks(
     """Project the in-memory generation onto its post-write paths and links.
 
     Stage 3.1 runs before any page write (NashSU 0.6.6 order), so the reviewer
-    would otherwise judge a draft that Stage 3.1 then changes deterministically:
+    would otherwise judge a draft that Stage 3.2 then changes deterministically:
     schema routing moves a page out of the directory the model guessed, and
     ``strict_missing_targets`` de-links a target outside the batch ∪ disk
     inventory. Reviewing the raw draft produced ``missing-page`` items that were
@@ -1062,7 +1060,7 @@ def stage_3_2_write_wiki_file(
             # NashSU's corrected-source replacement is about a page left behind
             # by a PREVIOUS ingest. ``same_run_collision`` marks a page this
             # same write loop already wrote, where the sole-owner test holds by
-            # construction (Stage 3.1 canonicalizes ``sources`` to the current
+            # construction (Stage 3.2 canonicalizes ``sources`` to the current
             # source) and replacing would silently discard the earlier block's
             # body. Two FILE blocks landing on one path is the designed
             # same-slug collision merge, so keep it on the merger.
@@ -1123,7 +1121,7 @@ _INDEX_CATEGORIES: list[tuple[str, str]] = [
 def _scan_wiki_inventory(wiki_dir: Path) -> dict[str, list[tuple[str, str]]]:
     """Scan category subdirs for (stem, title) — authoritative on-disk page list.
 
-    Used by Stage 3.5 index.md rewrite so the LLM gets the real page inventory
+    Used by Stage 3.3 index.md rewrite so the LLM gets the real page inventory
     instead of trusting the current index text (which drifts: only Sources was
     ever appended, Concepts/Entities/etc. went stale)."""
     inventory: dict[str, list[tuple[str, str]]] = {}
@@ -1221,17 +1219,17 @@ def _assert_aggregate_outputs(
     source_hash: str,
     source_stem: str,
 ) -> None:
-    """Hard Stage 3.5 postcondition used before its done marker is written."""
+    """Hard Stage 3.3 postcondition used before its done marker is written."""
     if not log_path.is_file():
-        raise RuntimeError(f"Stage 3.5 log artifact is missing: {log_path}")
+        raise RuntimeError(f"Stage 3.3 log artifact is missing: {log_path}")
     if not index_path.is_file():
-        raise RuntimeError(f"Stage 3.5 index artifact is missing: {index_path}")
+        raise RuntimeError(f"Stage 3.3 index artifact is missing: {index_path}")
     log_text = log_path.read_text(encoding="utf-8")
     if not _log_contains_ingest_record(
         log_text, source_identity, source_hash
     ):
         raise RuntimeError(
-            "Stage 3.5 log does not contain the source/hash INGEST record")
+            "Stage 3.3 log does not contain the source/hash INGEST record")
     index_text = index_path.read_text(encoding="utf-8")
     link_pattern = re.compile(
         r"\[\[(?:[^|\]\n]+/)?"
@@ -1240,7 +1238,7 @@ def _assert_aggregate_outputs(
     )
     if not link_pattern.search(index_text):
         raise RuntimeError(
-            f"Stage 3.5 index does not contain a link to {source_stem}")
+            f"Stage 3.3 index does not contain a link to {source_stem}")
 
 
 def _project_aggregate_context(text: str, limit: int) -> str:
@@ -1274,7 +1272,7 @@ def stage_3_3_aggregate_repair(
     extract_method: str,
     config: Config,
 ) -> list[str]:
-    """NashSU Stage 2.6: log.md (deterministic append), index.md (LLM whole-page
+    """Stage 3.3: log.md (deterministic append), index.md (LLM whole-page
     rewrite fed by on-disk inventory, append fallback), overview.md (LLM rewrite
     with structural validation + compress mode, keep-current fallback)."""
     files_written: list[str] = []

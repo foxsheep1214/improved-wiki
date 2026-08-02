@@ -86,21 +86,10 @@ def _stage_2_3_bare_surname_mismatch(name: str, existing_title: str) -> bool:
     (zero disambiguating tokens) while the NEW name is strictly more
     specific (multiple parts, at least one single-letter initial).
 
-    Live failure (2026-07-09, Wiley ELINT re-ingest): existing page
-    entities/taylor.md is titled just "Taylor" (no initials in slug OR
-    title — the initials guard above requires BOTH sides to carry initials,
-    so it correctly declined to cover this). A new chunk's "J. W. Taylor"
-    (fully qualified) word-Jaccard-matched {taylor} == {taylor} → 1.0 →
-    ALREADY COVERED. Stage 2.4 generation caught the risk (per an explicit
-    prompt warning) and created a separate entities/j-w-taylor page anyway,
-    but Stage 2.6's source-page generation — a different subagent, same
-    buggy fact, no such warning — trusted the association and wikilinked
-    Key Entities to the WRONG [[taylor]] instead of the real
-    [[entities/j-w-taylor]]. A bare-surname existing page provides zero
-    evidence of being the SAME specific person as a fully-initialed new
-    name; blocking here is a one-directional refinement — a bare NEW name
-    against an initialed EXISTING page, or bare-vs-bare, are unaffected
-    (those need real semantic judgment, not a token heuristic).
+    A bare-surname page provides no evidence that it represents the same
+    specific person as a fully-initialed new name. The guard is intentionally
+    one-directional: a bare new name against an initialed existing page, or
+    bare-vs-bare, still requires semantic judgment.
     """
     existing_words = _stage_2_title_words(existing_title)
     if len(existing_words) != 1:

@@ -123,5 +123,5 @@ This distinction is also captured in your persistent memory: "成功不推送，
 ## See also
 
 - `SKILL.md` — The ingest pipeline reference
-- `references/known-issues.md` — Failure handling
+- `references/known-issues.md` — Unresolved limitations
 - `references/initial-setup.md` — Verifying the install

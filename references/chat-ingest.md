@@ -153,15 +153,16 @@ Generate FILE blocks now. Start with ---FILE: as the first characters.
 
 **Critical difference from auto-ingest**: The user guidance section is placed FIRST and labeled as authoritative. This ensures the LLM prioritizes user intent over default behavior.
 
-### Step 5: Write & Embed (Stage 3.1-3.7)
+### Step 5: Review, Write & Embed (Stage 3.1–3.7)
 
 After generation, the calling agent:
-1. Parses FILE blocks
-2. Writes pages to `wiki/` (using page merge if page exists)
-3. Injects image references into source page (Stage 3.2)
-4. Reviews written pages (Stage 3.4)
-5. Appends to index.md / log.md (Stage 3.5, programmatic)
-6. Embeds touched pages (Stage 3.7, configured provider; defaults to local Ollama bge-m3) — final stage
+1. Parses FILE blocks and prepares review items (Stage 3.1)
+2. Writes/merges pages to `wiki/` (Stage 3.2)
+3. Repairs index/log/overview (Stage 3.3)
+4. Injects image references into the source page (Stage 3.4)
+5. Persists the prepared review items (Stage 3.5)
+6. Saves the ingest cache (Stage 3.6)
+7. Embeds touched pages (Stage 3.7, configured provider; defaults to local Ollama bge-m3)
 
 `validate_ingest.py` is **no longer auto-run** (the Stage 4.1 audit was removed for NashSU alignment). It remains an **optional manual check**:
 
@@ -253,4 +254,7 @@ ingest.py <file>         → 全自动流水线（批量、定时）
 /improved-wiki chat-ingest → 交互式人工引导（单本、重要源）
 ```
 
-Both modes write through the same `writeFileBlocks` → Stage 3.1 写盘 path. Both update the same `ingest-cache.json`. Both trigger the same aggregate repair (Stage 3.5). The only difference is where the generation prompt's "user guidance" section comes from: empty in auto mode, filled from conversation in chat mode.
+Both modes write through the same Stage 3.2 path, update the same
+`ingest-cache.json`, and run the same Stage 3.3 aggregate repair. The only
+difference is where the generation prompt's "user guidance" section comes
+from: empty in auto mode, filled from conversation in chat mode.

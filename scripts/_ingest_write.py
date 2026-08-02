@@ -291,11 +291,11 @@ def _reconstruct_blocks_from_disk(
 ) -> list[tuple[str, str]]:
     """Read the just-written wiki pages back as (wiki_dir-relative path, content).
 
-    Post-write stages — Stage 3.4 review, go/no-go validation, and the cache
+    Post-write stages — Stage 3.5 review persistence, validation, and cache
     stage-stats — must operate on the ACTUAL pages on disk, not on the
     in-memory ``file_blocks`` list. On a write_phase / write_loop_done resume,
     ``file_blocks`` is legitimately ``[]`` (the prepare short-circuit returns no
-    blocks), which previously made those stages: (3.4) re-fire a redundant
+    blocks), which previously made those stages: (3.1) re-fire a redundant
     review over "0 new pages", (validation) report spurious "0 FILE blocks /
     source page missing" failures, and (cache) record zeroed stage stats.
 
@@ -425,23 +425,22 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     existing_slugs = list_existing_slugs(config) if enrich_enabled else []
     enrich_candidates: list[tuple[str, Path]] = []
 
-    # Option A: stage-aware resume.  If the write phase (3.1 write loop —
-    # incl. same-slug page-merge / slug-collision handling — + enrichment +
-    # 3.2 inject) already completed in a prior run, skip it entirely.
+    # Stage-aware resume: if Stages 3.2–3.4 (write/merge, enrichment,
+    # aggregates, and media injection) completed in a prior run, skip them.
     # Re-running the write loop would spuriously fire page-merge LLM
     # round-trips because post-write steps (enrichment, image injection) have
     # mutated page bodies.  Restore file list from the marker.
     write_phase_done = is_stage_done(config, h, "write_phase")
-    # write_loop_done is the finer-grained 3.1-only gate: the write loop
-    # completed but enrichment/3.2 have not. An enrich ConversationPending
+    # write_loop_done is the finer-grained Stage 3.2 gate: the write loop
+    # completed but enrichment/aggregate/media work has not. An enrichment
     # handoff fires AFTER the write loop; without this marker, resume would
-    # re-run 3.1 and spuriously re-merge every page. On write_loop_done resume
-    # we still need to run enrich + 3.2, so enrich_candidates are
+    # re-run 3.2 and spuriously re-merge every page. On write_loop_done resume
+    # we still need to run enrichment and Stages 3.3–3.4, so candidates are
     # reconstructed from the persisted file list instead of collected in-loop.
     write_loop_done = (not write_phase_done
                        and is_stage_done(config, h, "write_loop_done"))
     if write_phase_done:
-        print("  [write] write_phase marker present — skipping 3.1/3.2")
+        print("  [write] write_phase marker present — skipping Stages 3.2–3.4")
         _wp = get_stage_payload(config, h, "write_phase")
         files_written_paths = canonical_page_refs(
             list(_wp.get("files_written", [])),
@@ -450,9 +449,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         )
         source_block = ("source", "")  # source page already written
         hard_failures = []
-        stage_3_2_result = {"injected": _wp.get("images_injected", 0)}
+        image_injection_result = {"injected": _wp.get("images_injected", 0)}
     elif write_loop_done:
-        print("  [write] write_loop_done marker present — skipping 3.1 write loop")
+        print("  [write] write_loop_done marker present — skipping Stage 3.2 write loop")
         _wlp = get_stage_payload(config, h, "write_loop_done")
         files_written_paths = canonical_page_refs(
             list(_wlp.get("files_written", [])),
@@ -504,7 +503,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 "[stage 3.1] review_prepared marker present — restored "
                 f"{len(prepared_review['items_data'])} item(s)")
         else:
-            # Review the generation as Stage 3.1 will write it. Schema routing
+            # Review the generation as Stage 3.2 will write it. Schema routing
             # and the strict missing-target de-link are deterministic, so
             # reviewing the raw draft instead produced missing-page items the
             # writer had already resolved and affected_pages entries pointing at
@@ -725,8 +724,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             "files_written": partial_refs,
         }
 
-    # Mark the 3.1 write loop complete so an enrich/3.2 ConversationPending
-    # resume skips the loop (preventing spurious page re-merge). Only when the
+    # Mark the Stage 3.2 write loop complete so an enrichment handoff resume
+    # skips the loop (preventing spurious page re-merge). Only when the
     # loop ran fresh — not on write_phase_done / write_loop_done resumes.
     if not (write_phase_done or write_loop_done):
         bind_page_refs(config, h, files_written_paths)
@@ -781,7 +780,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         required_aggregate = {"wiki/log.md", "wiki/index.md"}
         if not required_aggregate.issubset(set(index_log_files)):
             raise RuntimeError(
-                "Stage 3.5 did not return wiki/log.md and wiki/index.md")
+                "Stage 3.3 did not return wiki/log.md and wiki/index.md")
         bind_page_refs(
             config,
             h,
@@ -791,20 +790,20 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             "page_refs": index_log_files,
         })
 
-    # Stage 3.2: Image injection (after aggregate maintenance, as in NashSU).
+    # Stage 3.4: Image injection (after aggregate maintenance, as in NashSU).
     if not write_phase_done:
-        stage_3_2_result: dict = {"injected": 0}
+        image_injection_result: dict = {"injected": 0}
         if source_path.exists():
-            stage_3_2_result = stage_3_4_inject_images(
+            image_injection_result = stage_3_4_inject_images(
                 config, raw_file, source_path)
 
         try:
             expected_images = int(stage_1_2_result.get("count", 0) or 0)
-            injected_images = int(stage_3_2_result.get("injected", 0) or 0)
+            injected_images = int(image_injection_result.get("injected", 0) or 0)
         except (TypeError, ValueError) as exc:
             return {
                 "status": "hard-error",
-                "error": f"invalid Stage 3.2 media counts: {exc}",
+                "error": f"invalid Stage 3.4 media counts: {exc}",
                 "files_written": files_written_paths,
             }
         if (
@@ -817,13 +816,13 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             return {
                 "status": "hard-error",
                 "error": (
-                    f"Stage 3.2 injected {injected_images}/"
+                    f"Stage 3.4 injected {injected_images}/"
                     f"{expected_images} required images"
                 ),
                 "files_written": files_written_paths,
             }
 
-        # Mark write phase complete so a post-media resume skips 3.1/3.2.
+        # Mark write phase complete so a post-media resume skips Stages 3.2–3.4.
         # Aggregate pages already exist in the NashSU-aligned order, so keep
         # them in the task binding even though the write_phase payload itself
         # remains scoped to generated pages.
@@ -857,7 +856,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     if is_stage_done(config, h, "review_done"):
         _review_payload, review_page_refs = _validated_marker_page_refs(
             config, h, "review_done")
-        stage_3_4_result = {
+        review_persistence_result = {
             "items": int(_review_payload.get("items", 0) or 0),
             "skipped": bool(_review_payload.get("skipped", False)),
             "reason": _review_payload.get("reason", ""),
@@ -870,12 +869,12 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     else:
         if prepared_review is None:
             raise RuntimeError(
-                "Stage 3.4 review persistence reached without a prepared "
+                "Stage 3.5 review persistence reached without a prepared "
                 "pre-write result")
-        stage_3_4_result = stage_3_5_persist_review_suggestions(
+        review_persistence_result = stage_3_5_persist_review_suggestions(
             prepared_review, raw_file, config)
         review_page_refs = canonical_page_refs(
-            list(stage_3_4_result.get("page_refs", [])),
+            list(review_persistence_result.get("page_refs", [])),
             config.wiki_root,
             config.wiki_dir,
         )
@@ -885,10 +884,10 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
             files_written_paths + index_log_files + review_page_refs,
         )
         mark_stage_done(config, h, "review_done", payload={
-            "items": int(stage_3_4_result.get("items", 0) or 0),
-            "skipped": bool(stage_3_4_result.get("skipped", False)),
-            "reason": stage_3_4_result.get("reason", ""),
-            "stop_reason": stage_3_4_result.get("stop_reason", ""),
+            "items": int(review_persistence_result.get("items", 0) or 0),
+            "skipped": bool(review_persistence_result.get("skipped", False)),
+            "reason": review_persistence_result.get("reason", ""),
+            "stop_reason": review_persistence_result.get("stop_reason", ""),
             "page_refs": review_page_refs,
         })
 
@@ -943,9 +942,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         "coverage_pct": analysis.get("coverage_pct", 1.0),
         "images_extracted": stage_1_2_result.get("count", 0),
         "images_captioned": _total_captioned,
-        "images_injected": stage_3_2_result.get("injected", 0),
+        "images_injected": image_injection_result.get("injected", 0),
         "comparisons_generated": max(comp_count, _n_comps),
-        "review_items": stage_3_4_result.get("items", 0),
+        "review_items": review_persistence_result.get("items", 0),
     }
     _merged_stages = _preserve_stage_counters(_prev_stages, _new_stages)
 

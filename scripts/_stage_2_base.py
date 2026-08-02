@@ -10,7 +10,7 @@ from _frontmatter import extract_frontmatter_title as _extract_fm_title
 def _stage_2_frontmatter_title(content: str) -> str:
     """Extract a page's `title:` frontmatter value, quotes stripped.
 
-    Shared by Stage 2.3 / 2.8's title-Jaccard matching — frontmatter titles
+    Shared by Stage 2.3 association and Stage 2.4 dedup matching. Titles
     are written as `title: "Foo Bar"`, and feeding the raw quoted string into
     a word-split silently weakens every match by one token on each end (the
     first/last word carries a stray `"`).

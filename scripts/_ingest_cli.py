@@ -128,8 +128,7 @@ def main() -> int:
         help="Stop pipeline after completing the named stage (clean exit, cache saved). "
              "Use for chunked runs to avoid Bash timeout. "
              "Stops: 0=Phase 1 done (extract+images+captions), 1.5=Stage 2.2 chunk "
-             "analysis done (prefetch boundary), 2/2.0=generation done (before write). "
-             "(Legacy ids 0.5/0.6/1/2.3/2.5/3/… retired — their check sites are gone.)",
+             "analysis done (prefetch boundary), 2/2.0=generation done (before write).",
     )
     parser.add_argument(
         "--no-project-lock", action="store_true",

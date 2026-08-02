@@ -92,7 +92,7 @@ python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch
 | `embed-cache.json` | Legacy pre-NashSU-0.6.6 full-rebuild vector cache; current code ignores it | After confirming no old-version embedding process is running |
 
 **Do NOT delete** (active state):
-- `ingest-cache.json` — dedup hash cache (Stage 3.5)
+- `ingest-cache.json` — dedup hash cache (Stage 3.6)
 - `batch.pause` / `batch-prefetch.pause` — explicit pause state
 - `batch-bg.json` / `batch-workers/*.json[.lease]` — detached-worker identity
 - `spine-reservation.json` — source-bound Stage 2.3+ owner across handoffs
@@ -141,8 +141,8 @@ rm -rf .llm-wiki/extract-tmp/ .llm-wiki/.extract-tmp/ .llm-wiki/conversation/ .l
 
 **Symptom**: A file literally named `.md` appears in `wiki/concepts/`.
 **Cause**: Pipeline bug where a chunk with zero concepts triggers a FILE
-block with an empty slug. The code fix exists (`is_safe_ingest_path` now
-rejects empty filenames — see known-issues.md), but
+block with an empty slug. Current `is_safe_ingest_path` rejects empty
+filenames, but
 residual files from older ingests persist.
 
 **Action**: Delete the file. It has no content value.

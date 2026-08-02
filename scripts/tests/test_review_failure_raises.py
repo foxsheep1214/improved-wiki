@@ -1,4 +1,4 @@
-"""Stage 3.4 failure semantics (fix 2026-07-12).
+"""Stage 3.1 failure semantics.
 
 An LLM failure (retries exhausted) or a YAML parse that yields zero items must
 RAISE RuntimeError — not silently degrade to 0 review pages — and append the

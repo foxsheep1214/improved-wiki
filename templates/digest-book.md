@@ -89,7 +89,7 @@ The LLM takes the analysis and writes these files:
   standards / devices that are genuinely central to the book's argument.
   Briefly mentioned people (one sentence) do not qualify.
 - **`chunk_plan.estimated_total_chunks`** — chunk 大小由上下文窗口动态计算（`_core.py _compute_chunk_targets`：默认 token ceiling 64K，可用 `IMPROVED_WIKI_TARGET_TOKENS_CEIL` 覆盖），不是固定 60K。文本量不足一个 chunk 预算的书（如短 datasheet、应用笔记）仍得 1 chunk — Stage 2.2 is never skipped.
-- **`connections_to_existing_wiki`** (in Stage 2.2 per-chunk analysis, not Stage 2.1) — be conservative. Only flag clear conflicts, not subtle differences in framing. False positives pollute the LLM-curated review queue.
+- **`connections_to_existing_wiki`** (Stage 2.2 per-chunk analysis) — be conservative. Only flag clear conflicts, not subtle differences in framing. False positives pollute the LLM-curated review queue.
 
 ---
 

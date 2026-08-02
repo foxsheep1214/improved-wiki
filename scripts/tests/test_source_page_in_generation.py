@@ -6,11 +6,6 @@ key/schema-typed pages (ingest.ts:1016). If the block is absent from the write
 set afterwards, NashSU writes a deterministic fallback built from the analysis
 (ingest.ts:1287) — it never issues a second LLM call.
 
-improved-wiki used to run this as a separate Stage 2.6 call, which re-sent a
-byte-identical whole-source context: measured on the live HardwareWiki ingest of
-"热设计的世界 - 2020 - 李波", both prompts carried the same 104,000-character
-`<stage2-context>` payload. Merged 2026-08-01 (user decision) to match NashSU.
-
 Stdlib unittest only — no pytest, no network, no LLM calls.
 """
 from __future__ import annotations
@@ -98,8 +93,7 @@ class GenerationPromptRequestsTheSourcePage(unittest.TestCase):
         )
 
     def test_prompt_carries_the_source_summary_body_guidance(self):
-        # Ported verbatim from the retired Stage 2.6 prompt so the merged call
-        # produces the same kind of page: free-form, synthesized, not an
+        # The source page is free-form and synthesized, not an
         # exhaustive inventory of everything the analysis found.
         for phrase in (
             "scope, approach, and intended audience",
@@ -146,12 +140,12 @@ class SourcePageStemHelper(unittest.TestCase):
                 gen.source_page_rel_stem(outside, cfg), "Loose File")
 
 
-class RetiredStage26IsGone(unittest.TestCase):
+class SingleGenerationCallContract(unittest.TestCase):
     def test_no_dedicated_source_page_llm_call_remains(self):
         import _ingest_prepare
         self.assertFalse(
             hasattr(_ingest_prepare, "stage_2_6_source_page"),
-            "the separate Stage 2.6 LLM call must no longer be wired in",
+            "a separate source-page LLM call must not be wired in",
         )
 
     def test_deterministic_fallback_is_still_available(self):
@@ -164,13 +158,10 @@ class RetiredStage26IsGone(unittest.TestCase):
         self.assertIn("---END FILE---", out)
 
 class GeneratedSourceBlockIsNormalizedAndGated(unittest.TestCase):
-    """The structural gate and frontmatter repair that Stage 2.6 used to run
-    must still run — now against the block Stage 2.4 produced.
+    """The structural gate and frontmatter repair run on Stage 2.4 output.
 
-    Dropping them with the stage would have been a silent regression: the old
-    call repaired blank bibliographic fields from the digest (the fix for the
-    Strauss/Witte source pages that shipped without authors/year/venue), and it
-    refused a malformed/duplicated/empty source block outright.
+    They fill blank bibliographic fields from the digest and reject malformed,
+    duplicated, or empty source blocks.
     """
 
     def setUp(self):

@@ -82,8 +82,7 @@ def _rank_linkable_fill(candidates: list[str], reference_texts: list[str]) -> li
 
     When the fill candidate set exceeds its cap, an ALPHABETICAL cut
     systematically drops late-sorting slugs — CJK sorts after ASCII, so Chinese
-    pages vanish first as the wiki grows (observed live 2026-07-02 on the 2.6
-    [:1500] cap; same disease as the fixed [:200]/[:300] caps). Instead, score
+    pages vanish first as the wiki grows. Instead, score
     each candidate by its best token/CJK-bigram Jaccard overlap against the
     source's own generated slugs/titles and keep the most relevant.
 
@@ -136,11 +135,7 @@ Short pages may merge or drop sections, but never emit one undifferentiated para
 # 10 = D4 figure-reference ruling (2026-07-02): cited figure numbers link to
 #      the source page (needs the per-source source-page slug, hence a
 #      builder function instead of a constant).
-# 11-13 = NashSU subject-attribution rules, verbatim from ingest.ts:2218-2220.
-#      Stage 2.6 carried a weaker paraphrase of these while 2.4 — which
-#      produces nearly every concept/entity page — had none, so a book covering
-#      several devices could silently attach one part's limits or benchmark
-#      numbers to a neighbouring entity's page.
+# 11-13 = NashSU subject-attribution rules from ingest.ts:2218-2220.
 def _extra_rules(source_page_slug: str) -> str:
     return f"""7. related frontmatter — EXACT format: prefixed bare slugs, comma-separated,
    NO [[ ]] and NO .md — e.g. related: [concepts/matched-filter, entities/bell-labs].
@@ -341,8 +336,7 @@ def _final_digest_from_analyses(chunk_analyses: list[dict]) -> dict:
 def _source_bibliographic_fields(global_digest: dict, stem: str) -> dict:
     """Pre-filled `authors/year/url/venue` YAML for the source page.
 
-    Ported verbatim from the retired Stage 2.6 so the merged call produces the
-    same frontmatter: a type-specific ``*_meta`` block (paper_meta, ...)
+    A type-specific ``*_meta`` block (paper_meta, ...)
     overrides ``book_meta``, a bare DOI becomes a URL, and a book's
     ``publisher`` folds into ``venue`` (NashSU has no publisher field).
     """
@@ -383,7 +377,7 @@ def _source_bibliographic_fields(global_digest: dict, stem: str) -> dict:
 
 
 def _source_page_guidance_section(stem: str) -> str:
-    """What the source summary should contain (ported from Stage 2.6)."""
+    """Describe the mandatory source-summary block."""
     return f"""# MANDATORY Source Page — wiki/sources/{stem}.md
 Exactly one source summary page is REQUIRED in this response, at that exact
 path. It is not a candidate and is never optional.
@@ -889,10 +883,8 @@ def _stage_2_4_build_all_prompt(
         _schema_typed_output_section(raw_rel)
         if schema_candidate_slugs else ""
     )
-    # NashSU 0.6.6 parity (merged 2026-08-01): the source summary is one more
-    # FILE block of THIS call, not a second LLM round-trip. The retired Stage
-    # 2.6 re-sent a byte-identical whole-source context (measured: 104,000
-    # chars duplicated per book).
+    # NashSU parity: the source summary is one more FILE block of this call,
+    # not a second LLM round-trip.
     source_rel_stem = source_page_rel_stem(file_path, config)
     _source_digest = _final_digest_from_analyses(chunk_analyses)
     source_page_section = _source_page_guidance_section(source_rel_stem)

@@ -811,7 +811,7 @@ def _stage_1_2_extract_markdown_images(
     (extract-source-images.ts). A .md source may embed images via ![[ref]]
     (Obsidian/wikilink) or ![alt](ref) (standard markdown) pointing at local
     files; each referenced image is copied into the media dir and recorded in
-    the manifest so Stage 1.3 captions it and Stage 3.2 injects it — same
+    the manifest so Stage 1.3 captions it and Stage 3.4 injects it — same
     pipeline as minerU-harvested figures.
 
     Remote (http/https/ftp/data:) URIs are left in place (not copied). Only

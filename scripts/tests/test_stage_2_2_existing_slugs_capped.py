@@ -1,10 +1,8 @@
-"""Redundancy fix A (2026-07-09): cap the existing-wiki slug list in 2.2 prompts.
+"""Cap the existing-wiki slug list in Stage 2.2 prompts.
 
 _stage_2_2_build_prompt embedded the FULL list_existing_slugs() joined on one
-line — 6,253 pages → a single 259KB prompt line, repeated in EVERY chunk
-prompt (5-12 per book), 5× NashSU's 40K Current-Wiki-Index trim. It also broke
-answering subagents' Read tooling (observed live 2026-07-09). 2.4 and 2.6
-already rank-and-cap their linkable lists; 2.2 was the only uncapped one.
+line, so large wikis repeated an oversized index in every chunk. Stage 2.4
+already ranks and caps its linkable list.
 
 Fix: rank by relevance to THIS chunk's text (slug-token containment in the
 chunk token set — deterministic, prompt-hash stable across resumes) and keep

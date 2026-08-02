@@ -20,9 +20,9 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import List
 
 from _paths import atomic_write
-from typing import List
 
 WHITELIST_FILE = "dedup-whitelist.json"
 
@@ -80,9 +80,6 @@ def canonical_key(slugs: List[str]) -> str:
     return ",".join(sorted(s.lower() for s in slugs))
 
 
-_canonical_key = canonical_key  # back-compat alias
-
-
 def add_not_duplicate(runtime_dir: Path, slugs: List[str]) -> bool:
     """Add a group to the whitelist. Idempotent — if the same group (any order,
     any casing) is already present, this is a no-op. Mirrors NashSU
@@ -101,9 +98,9 @@ def add_not_duplicate(runtime_dir: Path, slugs: List[str]) -> bool:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         groups = load_not_duplicates(runtime_dir)
-        new_key = _canonical_key(slugs)
+        new_key = canonical_key(slugs)
         for existing in groups:
-            if _canonical_key(existing) == new_key:
+            if canonical_key(existing) == new_key:
                 return False  # already there
         groups.append(sorted(slugs))
         save_not_duplicates(runtime_dir, groups)

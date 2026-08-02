@@ -1,7 +1,6 @@
-"""Source-page contracts that survived merging Stage 2.6 into Stage 2.4.
+"""Source-page contracts for the block emitted by Stage 2.4.
 
-The dedicated source-page LLM call is gone (2026-08-01), but three of its
-guarantees still run — now against the block Stage 2.4 emits:
+Three guarantees run before write:
   * the structural gate (`_validate_source_file_block`);
   * frontmatter repair (`_normalize_source_frontmatter`);
   * bibliographic pre-fill, which moved to `_source_bibliographic_fields`.
@@ -19,7 +18,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import _core  # noqa: E402
-import _source_page as s26  # noqa: E402
+import _source_page as source_page  # noqa: E402
 
 
 def _config(tmp: Path) -> _core.Config:
@@ -61,42 +60,42 @@ def _page(body: str, path: str = "wiki/sources/book.md") -> str:
 
 class TestStructuralGate(unittest.TestCase):
     def test_arbitrary_useful_structure_is_valid(self):
-        s26._validate_source_file_block(
+        source_page._validate_source_file_block(
             _page("## Why this matters\n\nA concise synthesis."), "book"
         )
 
     def test_no_h2_heading_is_valid(self):
-        s26._validate_source_file_block(
+        source_page._validate_source_file_block(
             _page("A short but substantive source summary."), "book"
         )
 
     def test_wrong_path_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "exactly one"):
-            s26._validate_source_file_block(
+            source_page._validate_source_file_block(
                 _page("body", "wiki/sources/other.md"), "book"
             )
 
     def test_multiple_blocks_are_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "exactly one"):
-            s26._validate_source_file_block(
+            source_page._validate_source_file_block(
                 _page("body") + _page("other", "wiki/sources/other.md"),
                 "book",
             )
 
     def test_missing_end_marker_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "END FILE"):
-            s26._validate_source_file_block(
+            source_page._validate_source_file_block(
                 _page("body").replace("---END FILE---", ""), "book"
             )
 
     def test_empty_body_is_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "non-empty body"):
-            s26._validate_source_file_block(_page(""), "book")
+            source_page._validate_source_file_block(_page(""), "book")
 
 
 class TestPromptPolicy(unittest.TestCase):
     def test_empty_related_is_preserved(self):
-        normalized = s26._normalize_source_frontmatter(
+        normalized = source_page._normalize_source_frontmatter(
             _page("body"),
             authors_yaml="[]",
             year_yaml='""',
@@ -114,7 +113,7 @@ class TestPromptPolicy(unittest.TestCase):
             "url: \"\"\n"
             "venue: \"\"\n",
         )
-        normalized = s26._normalize_source_frontmatter(
+        normalized = source_page._normalize_source_frontmatter(
             response,
             authors_yaml='["A. Author"]',
             year_yaml="2024",
@@ -128,9 +127,9 @@ class TestPromptPolicy(unittest.TestCase):
 
     def test_specific_paper_meta_overrides_compatibility_meta(self):
         """A type-specific ``*_meta`` block wins over the compatibility
-        ``book_meta``, and a bare DOI becomes a URL. This moved from the Stage
-        2.6 prompt builder to ``_source_bibliographic_fields``, which now
-        pre-fills the same fields inside the merged Stage 2.4 prompt."""
+        ``book_meta``, and a bare DOI becomes a URL. The shared
+        ``_source_bibliographic_fields`` helper pre-fills those fields in the
+        Stage 2.4 prompt."""
         from _stage_2_4_generation import _source_bibliographic_fields
         bib = _source_bibliographic_fields({
             "book_meta": {"title": "Compat", "authors": ["Ignored"]},

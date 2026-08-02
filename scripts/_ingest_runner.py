@@ -32,7 +32,7 @@ def _finalize_book(raw_file: Path, config: Config,
     validate_ingest.py) was REMOVED for NashSU alignment: NashSU has no
     post-ingest verification stage. NashSU's only ingest-time check is schema
     routing (``validateWikiPageRouting``), which improved-wiki already performs
-    where NashSU does — at WRITE time in Stage 3.1
+    where NashSU does — at WRITE time in Stage 3.2
     (``_stage_3_2_auto_correct_wiki_path``) — so it is preserved automatically.
     The completion marker is named ``ingested`` (renamed from the legacy
     ``stage_4_1`` key on 2026-07-08: the old name implied a Stage 4.1 that no
@@ -93,7 +93,7 @@ def ingest_one(
     # Stage-completion markers (Option A) drive resume semantics: the skip-check
     # only short-circuits once the ``ingested`` marker is set, so a mid-flight resume (pages
     # written but post-review stages pending) is never dropped.  _do_write in
-    # turn skips the non-idempotent 3.1 write loop when `write_phase` is marked.
+    # turn skips the non-idempotent Stage 3.2 write loop when `write_phase` is marked.
     try:
         prepared = _do_prepare(raw_file, config, template_override, verbose)
     except PrepareStopAfter as stop:

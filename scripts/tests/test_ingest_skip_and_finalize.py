@@ -14,8 +14,8 @@ Covers two 2026-06-25 audit findings:
   ingested marker is the single completeness signal. Test: the four
   marker/source-page states resolve to the right skip/resume decision.
 
-  Finding 3 (2026-07-15) — deep-research query bridges (raw/queries/*.md)
-  deliberately get no Stage 2.6 source page (wiki/queries/<slug>.md is
+  Finding 3 — legacy deep-research query bridges (raw/queries/*.md)
+  deliberately get no separate source page (wiki/queries/<slug>.md is
   already the canonical artifact). The source-page-existence staleness
   check in _stage_0_2_should_skip doesn't know that, so every call saw
   "no source page" and force-cleared the ingested marker — an endless
@@ -287,7 +287,7 @@ class TestStage02ShouldSkip(unittest.TestCase):
 
 
 class TestStage02ShouldSkipQueryBridge(unittest.TestCase):
-    """Query bridges (raw/queries/*.md) never get a Stage 2.6 source page —
+    """Query bridges (raw/queries/*.md) never get a separate source page —
     the ingested marker alone must decide skip/resume (Finding 3)."""
 
     def test_marker_set_skips_even_though_no_source_page_exists(self):

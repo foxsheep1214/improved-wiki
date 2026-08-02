@@ -1,9 +1,7 @@
 """Extract, caption, and validate raw source files (Phase 1).
 
-FACADE module (refactored 2026-06-24): keeps the Stage 1.1 text-extraction
-entry points and re-exports the Stage 1.1 scanned-OCR / 1.2 image / 1.3 caption
-implementations from their split sibling modules so existing importers are
-unchanged:
+This facade owns Office text extraction and PDF routing, and re-exports the
+public Stage 1.2 image and Stage 1.3 caption entry points:
 
   - _stage_1_1_scanned.py  — minerU API OCR pipeline (text/scanned/mixed PDFs)
   - _stage_1_2_images.py   — PPTX/DOCX image extraction + minerU figure harvest
@@ -14,8 +12,6 @@ Pipeline stages:
   Phase 1 Stage 1.2: Extract embedded images from PDF
   Phase 1 Stage 1.3: Generate image captions via VLM
 
-Extracted from ingest.py on 2026-06-18. Refactored 2026-06-21 for explicit stage naming.
-Split into facade + sub-modules 2026-06-24. Imports shared infrastructure from _core.
 """
 from __future__ import annotations
 
@@ -24,35 +20,11 @@ import random
 import re
 from pathlib import Path
 
-# Shared infrastructure
 from _config import Config
 
-# ── Re-exports from split sub-stage modules (facade back-compat) ──────────────
-# External importers (ingest.py, _ingest_prepare.py) import these names from
-# this facade; do not remove. Dependency direction is one-way at load time:
-#   _stage_1_extract → {scanned, images, caption}
-#   scanned → {images, caption}
-#   caption → {}  (log_event reached via late import)
-#   images → {}
-from _stage_1_1_scanned import (  # noqa: F401
-    _stage_1_1_extract_text_scanned,
-    _stage_1_1_reharvest_media,
-    log_event,
-)
-from _stage_1_2_images import (  # noqa: F401
-    stage_1_2_extract_images,
-    _stage_1_2_extract_from_mineru,
-)
-from _stage_1_3_caption import (  # noqa: F401
-    stage_1_3_caption_images,
-    CAPTION_MAX_WORKERS,
-)
-# Back-compat alias: media_slug now lives in _paths.py. Kept under the old
-# `_stage_1_2_*` name so existing
-# `from _stage_1_extract import _stage_1_2_media_slug` callers keep working.
-from _paths import (  # noqa: F401
-    media_slug as _stage_1_2_media_slug,
-)
+from _stage_1_1_scanned import _stage_1_1_extract_text_scanned
+from _stage_1_2_images import stage_1_2_extract_images
+from _stage_1_3_caption import stage_1_3_caption_images
 
 # Public API: only export stage entry points
 # Internal helpers (prefixed with _) are imported directly when needed

@@ -1,4 +1,4 @@
-"""Stage 3.5 idempotency and required aggregate-artifact postconditions."""
+"""Stage 3.3 idempotency and required aggregate-artifact postconditions."""
 from __future__ import annotations
 
 import sys

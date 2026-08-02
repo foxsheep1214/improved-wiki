@@ -89,10 +89,6 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 
 `_mineru_stats.json` 记录每个 chunk 的状态（completed_chunks/failed_chunks/images）。中断后重新运行 `ingest.py` 会自动跳过已完成的 chunk，只重跑未完成的——这部分行为不变。
 
-### Image harvesting gap (2026-06-24, FIXED)
-
-API path 的 `_stage_1_2_harvest_images()` 曾不读 `content_list` 的 `image_caption`（`content_list` 是 JSON 字符串，`isinstance(cl, list)` 永远 False）→ 全量图倾倒 + minerU caption 被浪费。**已修**（`json.loads(cl)` + 写 sidecar）：528→340 图，VLM 调用 ↓70%，caption 覆盖 62%→98%。详见 `known-issues.md`。
-
 ## 相关的其他 pipeline
 
 - **Stage 1.3 Caption**：对默认路径而言，caption 已经在这条 pipeline 内部跑完了（见上方"输出物"），不再是 ingest.py 里独立调度的一步。详见 `references/image-caption-strategy.md`。

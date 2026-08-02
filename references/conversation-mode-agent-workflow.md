@@ -6,7 +6,7 @@ publication, and completion lifecycle are authoritative in `delegate-mode.md`.
 ## Common guardrails
 
 - Read the whole prompt and embedded source segment.
-- Never emit index, log, or overview pages; Stage 3.5 owns aggregates.
+- Never emit index, log, or overview pages; Stage 3.3 owns aggregates.
 - Every generated page needs the required frontmatter fields:
   `type`, `title`, `tags`, `related`, `created`, `updated`; include `sources`
   where applicable.
@@ -21,7 +21,7 @@ publication, and completion lifecycle are authoritative in `delegate-mode.md`.
 | 2.2 | `Stage-2-2-Chunk-N-*.md` | Valid YAML containing chunk index, entities, concepts, claims, formulas, existing-wiki connections, schema-typed candidates, and the rolling `updated_global_digest` |
 | 2.4 | `Stage-2-4-Generation-*.md` | Exact requested key/schema-typed `---FILE:wiki/<path>--- … ---END FILE---` blocks |
 | FILE repair | `Stage-2-TruncatedFileRepair-*.md` | Exactly one complete FILE block for every requested path and no unrequested paths |
-| 3.4 | `Stage-3-4-Review-*.md` | Strict YAML array of real findings; empty `[]` is valid |
+| 3.1 | `Stage-3-1-Review-*.md` | Strict YAML array of real findings; empty `[]` is valid |
 | Page merge | `LLM-task-*.md` | Merged body without frontmatter; preserve richer facts and wikilinks |
 | Wikilink enrichment | JSON `LLM-task-*.md` | Requested JSON mapping; `{}` is valid when no safe addition exists |
 
@@ -91,7 +91,7 @@ creates NashSU's deterministic minimum source page from the complete Stage 2
 analysis; no additional handoff is needed.
 
 Comparison pages are ordinary Stage 2.4 schema-typed outputs. Follow the
-project schema and the source evidence; there is no dedicated Stage 2.9 prompt,
+project schema and the source evidence; there is no separate comparison prompt,
 fixed heading set, zero sentinel, or numeric comparison cap. Under the NashSU
 bundled schema, one source may seed a cross-cutting synthesis distinct from its
 source summary, and may seed a falsifiable thesis with `status: speculative`;
@@ -99,7 +99,7 @@ later ingests merge contributing evidence and update thesis confidence/status.
 Never invent other sources from index titles, and obey a project schema that
 declares a stricter evidence gate.
 
-Stage 3.4 runs after pages are written. Each item requires:
+Stage 3.1 reviews the projected write result before pages are written. Each item requires:
 
 - `type`, `title`, `description`, `affected_pages`, `severity`,
   `search_queries`;

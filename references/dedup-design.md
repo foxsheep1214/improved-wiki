@@ -11,7 +11,7 @@ improved-wiki 有**两种职责不同、不可互换**的去重。它们名字�
 
 ## 职责对比
 
-| 维度 | 源内去重（Stage 2.4 收尾子步，原 2.5） | 跨源去重（lint sweep） |
+| 维度 | 源内去重（Stage 2.4 收尾子步） | 跨源去重（lint sweep） |
 |---|---|---|
 | 范围 | 单源——只看本次 LLM 生成的 file_blocks | 全 wiki——跨所有已消化源 |
 | 目标问题 | LLM 在**同一本书内**把同一概念起两个名 | 跨源累积——多次 ingest 把同一主题命名不同 |
@@ -44,7 +44,7 @@ NashSU `dedup-runner.ts` parity：**默认先 embedding 预筛再 LLM 语义检�
 
 ## 何时用哪个
 
-- **ingest 时**：自动跑源内去重（Stage 2.4 收尾子步，原 2.5），无需人工干预。
+- **ingest 时**：自动跑源内去重（Stage 2.4 收尾子步），无需人工干预。
 - **积累了一批 ingest 后**：手动跑跨源去重清理全 wiki：
   ```bash
   python3 "$SKILL_DIR/scripts/cross_source_dedup.py" --project /path/to/wiki            # LLM 语义去重
@@ -53,9 +53,11 @@ NashSU `dedup-runner.ts` parity：**默认先 embedding 预筛再 LLM 语义检�
 
 ## 已知遗留：跨书历史重复 slug 变体
 
-Stage 2.3 的标题 Jaccard 匹配曾漏判重音/标点变体（如 "Thévenin's" vs "Thevenin's"），已修（见 `known-issues.md`）——但只防未来新重复。已存在的跨书历史重复（同一概念的多个 slug 变体）是更大的内容去重课题，**不会**被这次修复回溯清理，需要靠上面的跨源去重手动扫一遍。
+Stage 2.3 标题匹配会折叠重音并去除标点，防止新的
+`Thévenin` / `Thevenin` 类变体。该规则不回溯合并已存在的跨书
+slug 变体；存量重复仍需通过上述跨源去重流程处理。
 
-## 通过 wiki-lint.sh 驱动跨源去重时：只跑一轮（2026-07-12，user-directed）
+## 通过 wiki-lint.sh 驱动跨源去重时：默认只跑一轮
 
 普通 `wiki-lint.sh` 默认运行一轮跨源去重；`--no-dedup` 跳过，
 `--diagnostic-only` 则关闭全部 wiki 修改。

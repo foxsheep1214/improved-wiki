@@ -29,7 +29,7 @@ _RESEARCH_REVIEW_TYPES = {"suggestion", "missing-page"}
 def _review_preview(content: str, max_chars: int) -> str:
     """Return a bounded review preview without fabricating a broken file tail.
 
-    Stage 3.4 used to pass ``content[:max_chars]`` to the reviewer.  That hard
+    Stage 3.1 used to pass ``content[:max_chars]`` to the reviewer.  That hard
     slice routinely ended in the middle of a word, wikilink, formula, or table
     row.  Because the prompt called the result a "page", the reviewer quite
     reasonably reported the synthetic preview boundary as source truncation.
@@ -65,7 +65,7 @@ def _review_preview(content: str, max_chars: int) -> str:
 
 
 def _append_review_failure_log(config: Config, raw_file: Path, messages: list[str]) -> None:
-    """Persist Stage 3.4 failure info to runtime_dir/ingest-warnings.log.
+    """Persist Stage 3.1 failure info to runtime_dir/ingest-warnings.log.
 
     Same entry format as _ingest_write._append_ingest_warning_log (not imported
     directly: _ingest_write imports this module, so importing back would be
@@ -85,7 +85,7 @@ def _append_review_failure_log(config: Config, raw_file: Path, messages: list[st
 
 
 def _validate_review_items(items: list, config: Config) -> list[dict]:
-    """Validate and normalize the complete Stage 3.4 response before writing.
+    """Validate and normalize the complete Stage 3.1 response before writing.
 
     Review type is used as a directory name and affected pages become
     wikilinks, so permissive coercion here is unsafe: one malformed item must
@@ -188,7 +188,7 @@ def _validate_review_items(items: list, config: Config) -> list[dict]:
         preview = "; ".join(errors[:12])
         if len(errors) > 12:
             preview += f"; +{len(errors) - 12} more"
-        raise ValueError(f"invalid Stage 3.4 review schema: {preview}")
+        raise ValueError(f"invalid Stage 3.1 review schema: {preview}")
     return normalized
 
 
@@ -291,7 +291,7 @@ def stage_3_1_prepare_review_suggestions(
             except OSError:
                 continue
     if cumulative_blocks < 4 and gen_chars < 10000:
-        print(f"[stage 3.5] Skipped — {len(file_blocks)} blocks this pass "
+        print(f"[stage 3.1] Skipped — {len(file_blocks)} blocks this pass "
               f"({cumulative_blocks} cumulative across replays), {gen_chars} chars "
               f"(all below NashSU thresholds)")
         return {
@@ -301,7 +301,7 @@ def stage_3_1_prepare_review_suggestions(
             "stop_reason": "",
         }
 
-    print(f"[stage 3.5] Running review over {len(file_blocks)} new pages + existing wiki...")
+    print(f"[stage 3.1] Running review over {len(file_blocks)} new pages + existing wiki...")
 
     # Collect new page contents
     new_pages: list[str] = []
@@ -382,18 +382,18 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
     try:
         response, stop_reason = call_with_retry(
             lambda: call_anthropic_protocol(prompt, config, max_tokens=8192),
-            max_retries=3, label="stage-3.4",
+            max_retries=3,
         )
     except Exception as e:
         # No silent degradation to 0 reviews.  This runs before wiki page
         # writes, so a handoff/provider failure leaves Phase 3 mutation-free;
         # the conversation cache makes the resume cheap.
-        msg = f"stage 3.4 review LLM call failed after retries: {e}"
+        msg = f"stage 3.1 review LLM call failed after retries: {e}"
         _append_review_failure_log(config, raw_file, [msg])
         raise RuntimeError(msg) from e
 
     if verbose:
-        print(f"[stage 3.5] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
+        print(f"[stage 3.1] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
 
     # Parse YAML
     text = response
@@ -429,7 +429,7 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
             parse_failed = True
 
     if parse_failed:
-        msg = (f"stage 3.4 review YAML parse failed — response did not "
+        msg = (f"stage 3.1 review YAML parse failed — response did not "
                f"parse into a usable items list "
                f"(response {len(response)} chars, stop={stop_reason})")
         _append_review_failure_log(config, raw_file, [msg])
@@ -438,7 +438,7 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
     try:
         items = _validate_review_items(items, config)
     except ValueError as exc:
-        msg = f"stage 3.4 review schema validation failed: {exc}"
+        msg = f"stage 3.1 review schema validation failed: {exc}"
         _append_review_failure_log(config, raw_file, [msg])
         raise RuntimeError(msg) from exc
 
@@ -468,7 +468,7 @@ def stage_3_5_persist_review_suggestions(
     items = prepared.get("items_data")
     if not isinstance(items, list):
         raise RuntimeError(
-            "Stage 3.4 prepared review result has no validated items list")
+            "Stage 3.1 prepared review result has no validated items list")
     stop_reason = str(prepared.get("stop_reason", ""))
 
     # Write review pages to wiki/REVIEW/<review_type>/ (分子目录，一目了然).

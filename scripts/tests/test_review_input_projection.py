@@ -1,8 +1,8 @@
 """Stage 3.1 must review what Stage 3.2 will actually write.
 
-NashSU 0.6.6 generates and validates review suggestions BEFORE ``writeFileBlocks``
-(improved-wiki: Stage 3.1, moved pre-write 2026-07-30; renumbered from 3.4a). Feeding it the raw
-in-memory FILE blocks makes the reviewer describe a draft the writer then
+NashSU 0.6.6 generates and validates review suggestions before
+``writeFileBlocks`` (improved-wiki Stage 3.1). Feeding it raw in-memory FILE
+blocks makes the reviewer describe a draft the writer then
 changes deterministically, in two ways that both reach ``wiki/REVIEW/``:
 
   * ``strict_missing_targets`` de-links a ``[[prefixed/target]]`` that is

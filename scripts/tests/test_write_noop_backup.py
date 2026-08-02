@@ -1,4 +1,4 @@
-"""Stage 3.1 no-op writes must not create redundant page-history snapshots."""
+"""Stage 3.2 no-op writes must not create redundant page-history snapshots."""
 from __future__ import annotations
 
 import sys

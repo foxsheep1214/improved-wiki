@@ -27,7 +27,7 @@ from _schema import (
 )
 from _stage_2_analyze import (
     ChunkAnalysisValidationError,
-    _stage_2_1_chunk_text,
+    _stage_2_2_chunk_text,
     _stage_2_2_analyze_chunk,
     _stage_2_2_chunk_retries,
     _stage_2_2_resolve_chunk_heading_path,
@@ -41,7 +41,7 @@ from _stage_2_context import (
     STAGE_2_CONTEXT_POLICY_VERSION,
     build_consolidated_stage_2_context,
 )
-from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_1_digest
+from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_2_digest
 from _task_manifest import bind_chunk_plan
 
 CHUNK_PLAN_SCHEMA_VERSION = 3
@@ -538,7 +538,7 @@ def _run_chunk_pipeline(
             analysis = progress.get("analysis", {})
             incremental_associations = progress.get("incremental_associations", {})
             global_digest = progress.get("global_digest", global_digest)
-            _verify_stage_2_1_digest(global_digest, raw_file)
+            _verify_stage_2_2_digest(global_digest, raw_file)
             return chunk_analyses, analysis, persisted_blocks, incremental_associations, global_digest
 
     # Prefetch resume: Stage 2.2 was cached on its own (analyze_only run) but 2.3+
@@ -567,7 +567,7 @@ def _run_chunk_pipeline(
             unmark_stage_done(config, _h, "stage_2_2_done")
         else:
             try:
-                _verify_stage_2_1_digest(_digest_cached, raw_file)
+                _verify_stage_2_2_digest(_digest_cached, raw_file)
             except RuntimeError as exc:
                 print(
                     "  [stage 2.2] ⚠️  cached rolled-up global_digest failed "
@@ -590,9 +590,8 @@ def _run_chunk_pipeline(
           f"target {config.target_chars:,} chars/chunk (est. {est_sec/60:.0f} min)")
     _stage_begin("Stage 2.2: Chunk Analysis")
     t_start = time.time()
-    # 2.1 removed (NashSU parity, 2026-07-08): accumulated_digest starts
-    # empty — the global digest rolls up across chunks via each chunk's
-    # updated_global_digest. No whole-book prior.
+    # The global digest starts empty and rolls up across chunks via each
+    # chunk's updated_global_digest.
     accumulated_digest = ""
 
     # Existing-wiki SNAPSHOT: freeze both the slug list and NashSU-style current
@@ -639,12 +638,9 @@ def _run_chunk_pipeline(
     # Stage 2.4. Persist so a cached resume restores it.
     global_digest = _parse_accumulated_to_dict(accumulated_digest)
 
-    # Verify the rolled-up digest has the 5 required keys (book_meta/outline/
-    # key_concepts/key_claims/key_entities) that Stage 2.4 consumes.
-    # Migrated from Stage 2.1 (removed 2026-07-08): the gate now runs on the
-    # 2.2 roll-up instead of the former whole-book prior.
+    # Verify the Stage 2.2 roll-up has the five keys Stage 2.4 consumes.
     if chunk_analyses:
-        _verify_stage_2_1_digest(global_digest, raw_file)
+        _verify_stage_2_2_digest(global_digest, raw_file)
 
     save_progress(config, _h, {"chunk_plan_v2": chunk_plan,
                                "chunk_analyses": chunk_analyses,
@@ -666,7 +662,7 @@ def _build_chunk_meta(extracted_text: str, config: Config):
     Chunking is pure (same text + config \u2192 same chunks), so the prefetch-resume
     path rebuilds it cheaply instead of persisting every chunk's text.
     """
-    chunks = _stage_2_1_chunk_text(extracted_text, config.target_chars, config.chunk_overlap,
+    chunks = _stage_2_2_chunk_text(extracted_text, config.target_chars, config.chunk_overlap,
                                    target_tokens=config.target_tokens)
     chunk_total = len(chunks)
     chunk_meta: list[tuple[int, str, str, str]] = []

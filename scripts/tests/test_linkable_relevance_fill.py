@@ -1,10 +1,6 @@
-"""Fix 2026-07-02: relevance-ranked Linkable-list fill (was alphabetical).
+"""Relevance-ranked Linkable-list fill.
 
-The Stage 2.6 linkable[:1500] cap and the Stage 2.4 background-fill caps
-truncated an ALPHABETICALLY sorted list, so late-sorting slugs — CJK sorts
-after ASCII — systematically vanished as the wiki grew (observed live: 4 valid
-CJK slugs fell outside a source-page prompt's 1500 cap; same disease as the
-fixed [:200]/[:300] caps). When candidates exceed the cap, the fill is now
+When candidates exceed the prompt cap, the fill is
 ranked by token/CJK-bigram overlap with the book's own generated slugs/titles
 (deterministic: score desc, slug asc — prompt-hash stable within one ingest).
 Must-link semantics unchanged. Stdlib unittest only; LLM calls are spied.

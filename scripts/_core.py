@@ -73,20 +73,12 @@ class ConversationPending(BaseException):
 
 
 class PrepareStopAfter(BaseException):
-    """Raised inside ``_do_prepare`` when ``--stop-after-stage`` matches a
-    Stage-0..2 boundary that has just completed (0=extract, 1=global digest,
-    2=generation). Subclasses BaseException so the broad ``except Exception``
-    in ``_do_prepare`` (which prints FAILED + traceback and re-raises) does
-    not noisy-up a clean, intentional stop. Caught in ``ingest_one`` and
-    converted to ``{"status": "ok", "stopped_after": stage}``.
+    """Signal a clean, cached ``--stop-after-stage`` boundary.
 
-    Without this, ``--stop-after-stage 0`` could not actually halt after OCR:
-    the stop check lived AFTER ``_do_prepare`` returned, but ``_do_prepare``
-    runs all of Stage 0-2 (pausing at the 2.1/2.2/2.4 LLM handoffs) before
-    that check — so the flag was effectively dead on a fresh run. Raising at
-    the in-prepare boundary makes the documented "OCR-only then re-run" split
-    work. Boundaries 1.5/2.3 (inside the chunk pipeline, no clean resume
-    marker) remain best-effort and are not intercepted here.
+    Supported values are 0 (Phase 1), 1.5 (Stage 2.2 analysis), and 2/2.0
+    (generation). Subclassing ``BaseException`` prevents broad stage-level
+    retry handlers from treating this intentional stop as a failure.
+    ``ingest_one`` converts it to an ``ok`` result with ``stopped_after``.
     """
 
     def __init__(self, stage: str):
@@ -201,7 +193,7 @@ def canonical_source_path(raw_file: Path, config: "Config") -> str:
 
     Single source of truth: every place that writes a ``sources:`` field
     (canonical write in ``_ingest_write.py``, the per-page prompt hints in
-    Stage 2.4, the log.md line in Stage 3.5) must call this — not
+    Stage 2.4, the log.md line in Stage 3.3) must call this — not
     hand-roll an ``f"raw/{rel}"`` string — so they can never drift out of
     sync with each other. A drift would silently defeat
     ``_stage_3_2_canonicalize_sources_field``'s basename-based "already

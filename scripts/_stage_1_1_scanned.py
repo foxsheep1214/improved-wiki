@@ -964,7 +964,7 @@ def _stage_1_1_extract_text_scanned_impl(
     _mineru_stats.json for crash recovery. ``out_dir_override`` is reserved
     for the isolated media-reharvest path; it prevents lost image bytes from
     forcing deletion or mutation of a still-valid OCR text cache.
-    Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.2 (mirrors raw/).
+    Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.4 (mirrors raw/).
 
     Note: File-based lock managed by wrapper function _stage_1_1_extract_text_scanned_locked().
     """
@@ -1010,8 +1010,7 @@ def _stage_1_1_extract_text_scanned_impl(
     pending = [c for c in chunks if f"{c[0]}-{c[1]}" not in stats["completed_chunks"]]
     if not pending:
         doc.close()
-        # BUGFIX 2026-06-24: was [end for _, end in chunks] — only chunk-end pages
-        # (16 of 794), so cache-resume fed Stage 2.1 ~1% of the text. Assemble ALL pages.
+        # Cache resume must assemble every page, not only chunk-end pages.
         return _stage_1_1_assemble_ocr_text(out_dir, list(range(total_pages)))
 
     api_proc = None

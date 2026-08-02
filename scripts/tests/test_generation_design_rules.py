@@ -1,10 +1,9 @@
-"""Audit 2026-07-02 section D design rulings (user-decided).
+"""Tests for generation policy rules.
 
   D1 — slug language = source-text language: rule injected into the Stage 2.4
-       generation prompt. (The Stage 2.7 query-constraint case was removed
-       2026-07-12 with Stage 2.7 itself — NashSU parity.)
+       generation prompt.
   D2 — book-level granularity switch: Stage 2.2 injects a COARSE directive
-       ONLY when Stage 2.1 classified book_meta.granularity == "manual".
+       only when the rolling digest classifies book_meta.granularity as manual.
   D4 — figure references link to the book's source page (never bare numbers).
 
 Stdlib unittest only.

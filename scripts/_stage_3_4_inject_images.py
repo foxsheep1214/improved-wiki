@@ -1,7 +1,6 @@
-"""Stage 3.2: Image injection into the source page.
+"""Stage 3.4: Image injection into the source page.
 
-Extracted from ingest.py on 2026-06-21 for stage-module locality (was inline
-in the orchestrator). Appends an '## Embedded Images' section to the source
+Appends an '## Embedded Images' section to the source
 page, reading from the unified _manifest.json (Path A PyMuPDF + Path B minerU)
 with legacy _figures.json / cloud-OCR caption fallbacks.
 """
@@ -16,7 +15,7 @@ from _paths import media_slug, atomic_write
 from _wikilinks import WIKILINK_RE
 
 
-def _stage_3_2_language_sample(content: str) -> str:
+def _stage_3_4_language_sample(content: str) -> str:
     """Return page prose without metadata/link targets that can spoof script.
 
     A nested raw path such as ``Paper/01_反无人机探测与识别/...`` appears in
@@ -43,7 +42,7 @@ def _stage_3_2_language_sample(content: str) -> str:
     return sample[:4000]
 
 
-def _stage_3_2_source_kind(raw_file: Path, config: Config) -> str:
+def _stage_3_4_source_kind(raw_file: Path, config: Config) -> str:
     try:
         category = raw_file.relative_to(config.raw_root).parts[0].lower()
     except (ValueError, IndexError):
@@ -57,7 +56,7 @@ def _stage_3_2_source_kind(raw_file: Path, config: Config) -> str:
     }.get(category, "document")
 
 
-def _stage_3_2_count_line(
+def _stage_3_4_count_line(
     *, is_zh: bool, source_kind: str, count: int, is_mineru: bool,
 ) -> str:
     if is_zh:
@@ -109,8 +108,8 @@ def stage_3_4_inject_images(
     # "### Page N") stay English in both cases, matching the rest of the
     # pipeline's FILE-block convention: only prose
     # vocabulary is localized, not structural markup).
-    is_zh = get_output_language(_stage_3_2_language_sample(content)) == "Chinese"
-    source_kind = _stage_3_2_source_kind(raw_file, config)
+    is_zh = get_output_language(_stage_3_4_language_sample(content)) == "Chinese"
+    source_kind = _stage_3_4_source_kind(raw_file, config)
 
     # Unified image injection: reads _manifest.json (the single source of truth
     # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
@@ -146,7 +145,7 @@ def stage_3_4_inject_images(
         if images:
             is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
             section = "## Embedded Images\n\n"
-            section += _stage_3_2_count_line(
+            section += _stage_3_4_count_line(
                 is_zh=is_zh,
                 source_kind=source_kind,
                 count=len(images),
@@ -219,7 +218,7 @@ def stage_3_4_inject_images(
 
     if images_in_media:
         section = "## Embedded Images\n\n"
-        section += _stage_3_2_count_line(
+        section += _stage_3_4_count_line(
             is_zh=is_zh,
             source_kind=source_kind,
             count=len(images_in_media),

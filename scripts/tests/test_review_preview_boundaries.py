@@ -1,4 +1,4 @@
-"""Regression tests for Stage 3.4 bounded page previews.
+"""Regression tests for Stage 3.1 bounded page previews.
 
 The old ``content[:1500]`` slice fabricated endings such as ``[[con`` and a
 half table cell.  The review model then reported intact wiki pages as

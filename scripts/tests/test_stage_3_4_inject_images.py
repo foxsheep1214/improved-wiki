@@ -1,4 +1,4 @@
-"""Regression tests for Stage 3.2 image injection following the page's own
+"""Regression tests for Stage 3.4 image injection following the page's own
 language instead of hardcoding Chinese boilerplate (2026-07-15 KB policy:
 every page is Chinese or English — see _language.get_output_language).
 
