@@ -140,5 +140,28 @@ class ZeroOutlinkGate(unittest.TestCase):
             result["comparisons/motors.md"],
         )
 
+    def test_rejects_target_outside_prompt_whitelist(self):
+        page = (
+            "concepts/radar.md",
+            _page(LONG + " The matched filter maximizes SNR."),
+        )
+
+        def fake(prompt, config, **kw):
+            return (
+                '{"concepts/radar.md": [{"term": "matched filter", '
+                '"target": "concepts/hallucinated-target"}]}',
+                None,
+            )
+
+        orig = ew.call_anthropic_protocol
+        ew.call_anthropic_protocol = fake
+        try:
+            with self.assertRaisesRegex(ValueError, "prompt whitelist"):
+                ew.enrich_wikilinks_batch(
+                    [page], ["concepts/matched-filter"], object()
+                )
+        finally:
+            ew.call_anthropic_protocol = orig
+
 if __name__ == "__main__":
     unittest.main()

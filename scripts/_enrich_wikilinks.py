@@ -91,6 +91,61 @@ def _enrichment_link(target: str, term: str) -> str:
     return f"[[{target}|{term}]]"
 
 
+def _validate_enrichment_suggestions(
+    suggestions_by_path: dict,
+    candidates: list[tuple[str, str]],
+    allowed_targets: set[str],
+    max_terms_per_page: int,
+) -> None:
+    """Reject suggestions outside the exact prompt contract."""
+    candidate_bodies = {
+        rel_path: parse_frontmatter(content)[1]
+        for rel_path, content in candidates
+    }
+    unknown_paths = sorted(set(suggestions_by_path) - set(candidate_bodies))
+    if unknown_paths:
+        raise ValueError(
+            "enrich_wikilinks_batch: response contains unknown page(s): "
+            + ", ".join(unknown_paths)
+        )
+
+    for rel_path, suggestions in suggestions_by_path.items():
+        if not isinstance(suggestions, list):
+            raise ValueError(
+                f"enrich_wikilinks_batch: {rel_path} suggestions must be a list"
+            )
+        if len(suggestions) > max_terms_per_page:
+            raise ValueError(
+                f"enrich_wikilinks_batch: {rel_path} exceeds the "
+                f"{max_terms_per_page}-suggestion limit"
+            )
+        this_slug = Path(rel_path).stem
+        body = candidate_bodies[rel_path]
+        for index, suggestion in enumerate(suggestions, 1):
+            if not isinstance(suggestion, dict):
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    "must be an object"
+                )
+            term = suggestion.get("term")
+            target = suggestion.get("target")
+            if not isinstance(term, str) or not term or term not in body:
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    "term must be exact body text"
+                )
+            if not isinstance(target, str) or target not in allowed_targets:
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    f"target is outside the prompt whitelist: {target!r}"
+                )
+            if target == this_slug:
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    "is a self-link"
+                )
+
+
 def enrich_wikilinks_batch(
     pages: list[tuple[str, str]],
     existing_slugs: list[str],
@@ -181,6 +236,13 @@ Pages with no suggestions may be omitted from the object.
         raise ValueError(
             f"enrich_wikilinks_batch: expected a JSON object keyed by path, "
             f"got {type(suggestions_by_path).__name__}")
+
+    _validate_enrichment_suggestions(
+        suggestions_by_path,
+        candidates,
+        set(all_targets),
+        max_terms_per_page,
+    )
 
     enriched: dict[str, str] = {}
     for rel_path, content in candidates:
