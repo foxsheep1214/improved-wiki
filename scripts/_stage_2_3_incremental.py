@@ -19,6 +19,16 @@ from _stage_2_base import (
 # Cross-domain acronym guard: shared tokens no longer than this are treated as
 # bare acronyms ("ram", "mti") rather than full words.
 _STAGE_2_3_ACRONYM_MAX_LEN = 4
+# Same-route associations are destructive update targets downstream, so an
+# ASCII fuzzy-title match must be substantially closer than a mere majority.
+# A 0.8 floor still accepts spelling/order variants with the same content
+# words, while rejecting live collisions such as "Transmission Line RLGC
+# Model" vs "Patch Transmission Line Model" (3/5), "Transmission Line Wave
+# Parameters" vs "Transmission Line Loss Parameters" (3/5), and "Lange
+# Coupler" vs "Unfolded Lange Coupler" (2/3).  Exact slug matches remain
+# unconditional.  CJK bigrams keep their separate >0.5 threshold because one
+# suffix character commonly adds two bigrams to an otherwise identical term.
+_STAGE_2_3_ASCII_UPDATE_JACCARD = 0.8
 _STAGE_2_3_CJK_RE = re.compile("[\\u3400-\\u4dbf\\u4e00-\\u9fff]")
 
 
@@ -154,7 +164,8 @@ def _stage_2_3_matching_targets(
         if slug_form == stem.lower():
             matches.append(target)
         elif (words and name_words
-              and len(name_words & words) / len(name_words | words) > 0.5
+              and len(name_words & words) / len(name_words | words)
+              >= _STAGE_2_3_ASCII_UPDATE_JACCARD
               and not _stage_2_3_acronym_only_mismatch(
                   name, stem, name_words & words)
               and not _stage_2_3_initials_mismatch(name, stem)

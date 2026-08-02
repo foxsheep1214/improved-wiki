@@ -116,6 +116,10 @@ Chunk 窗口末端落在受保护 block（表格/代码块）内部时曾无条�
 ### Stage 2.3 标题 Jaccard 去重漏判重音/标点变体（已修，2026-06-30）
 既有页关联/去重只按 `[\s/]+` 切分+小写+去停用词，不折叠重音、不去标点。已存在页 "Thévenin's Theorem" 因此漏配新生成的 "Thevenin's Theorem"（词集合交集只有 `{theorem}`，Jaccard 0.33 < 0.5 阈值，精确 slug 匹配也因撇号差异失败）——**结果是生成了一个重复页**。已修：每个 token 先过 `unicodedata.normalize("NFKD", ...)` 折叠重音再去标点，才做 Jaccard 比较。**范围**：只防未来新重复，不回溯清理已存在的跨书历史重复 slug 变体（更大的独立课题，见 `dedup-design.md`）。
 
+### Stage 2.3 相似标题误作精确更新目标（已修，2026-08-02）
+
+同类型 Stage 2.3 命中会在 Stage 2.4/3.2 成为可写入的精确更新目标，因此 ASCII 标题仅“多数 token 相同”不够安全。Steer Volume 2 实际出现 `Transmission Line RLGC Model`→`Patch Transmission Line Model`（3/5）、`Transmission Line Wave Parameters`→`Transmission Line Loss Parameters`（3/5）以及 `Lange Coupler`→`Unfolded Lange Coupler`（2/3）三次误路由。已将 ASCII 模糊更新匹配门槛收紧为 Jaccard ≥0.8；精确 slug 仍无条件命中，CJK bigram 继续使用独立的 >0.5 门槛，以保留常见单字后缀变体。
+
 ### Stage 2.4 生成概念数上限按行数算，曾静默丢尾部概念（已修，2026-06-30）
 `_stage_2_4_generation.py` 原按**行数**截断 GENERATE 列表（每概念约 4 行，实际只放得下约 25-34 个），而可链接 slug 列表本身不受限。chunk 分析密度提升后，密集 chunk 的尾部概念被静默从生成列表剔除、但仍留在可链接列表里——产生指向"从未生成"页面的死链。已修：上限大幅提高（分chunk 480/160，单发 800/200）。**教训**：这类上限必须按概念数算（或留出 ≫ 密度×4 的余量），绝不能是纯行数截断。
 
