@@ -257,9 +257,11 @@ wiki/media/<raw_subpath>/<source_stem>/
 p<NNNN>-mineru_<md5前8>.<ext>
 ```
 
-- `NNNN`：PDF 页码（zero-padded，4 位）
+- `NNNN`：PDF 的 0-based 内部页索引（zero-padded，4 位）
 - `mineru_<md5前8>`：minerU 提取，图片内容 md5 前 8 位
 - 示例：`p0007-mineru_a1b2c3d4.png`
+
+source 页 `## Embedded Images` 中的 `### Page N` 是面向读者的 1-based 页码，因此 `p0007-*` 对应 `### Page 8`；不得把内部索引直接展示为 `Page 0`。
 
 **去重**：按 `page+md5前8` 命名，**不做跨页 sha256 全局去重**（同一图重复出现在不同页会各存一份）。**过滤**：`MINERU_IMG_MIN_WIDTH/HEIGHT` 默认 20px（故意设低，只过滤 1×1/2×2 噪声，保留公式截图）。
 

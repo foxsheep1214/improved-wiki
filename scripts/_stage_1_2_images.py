@@ -518,14 +518,11 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
                     continue
                 seen_hashes.add(fhash)
 
-                # Determine page context if available (from slide/word numbering)
-                # PPTX: ppt/slides/slideN.xml → N; DOCX: no direct page mapping
-                page = 0
-                # For PPTX, try to extract slide number from parent dir structure
-                if fmt == "pptx":
-                    # Images are in ppt/media/, referenced from ppt/slides/slideN.xml
-                    # We can't easily map back without parsing XML, so use 0
-                    pass
+                # This ZIP-only extractor does not parse OOXML relationships,
+                # so it cannot reliably map an image back to a DOCX page or a
+                # PPTX slide. Keep it unpaged instead of fabricating Page 0/1;
+                # Stage 3.4 groups it under NashSU's `### Document` heading.
+                page = None
 
                 filename = Path(name).name
                 out_path = media_dir / filename

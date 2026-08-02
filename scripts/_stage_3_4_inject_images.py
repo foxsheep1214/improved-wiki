@@ -136,6 +136,13 @@ def stage_3_4_inject_images(
                 raise RuntimeError(
                     f"[stage 3.4] malformed image entry in {source_path_to_read}: "
                     f"missing 'page'/'filename' — entry: {img}")
+            page_index = img["page"]
+            if (page_index is not None
+                    and (not isinstance(page_index, int)
+                         or isinstance(page_index, bool) or page_index < 0)):
+                raise RuntimeError(
+                    f"[stage 3.4] malformed image entry in {source_path_to_read}: "
+                    f"'page' must be null or a non-negative integer — entry: {img}")
         if images:
             is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
             section = "## Embedded Images\n\n"
@@ -146,18 +153,32 @@ def stage_3_4_inject_images(
                 is_mineru=is_mineru,
             ) + "\n\n"
             # NashSU parity (extract-source-images.ts:buildImageMarkdownSection):
-            # group by page under `### Page N`, emit markdown image syntax
-            # ![caption](path) with the FULL caption as alt text (sanitized —
-            # no newlines, no `]`), not a truncated table cell. Path is resolved
+            # group numbered images under `### Page N` and unpaged DOCX/
+            # Markdown images under `### Document`. Emit markdown image syntax
+            # with 1-based source page numbers.  The manifest deliberately
+            # keeps minerU's zero-based page index (also encoded in pNNNN), so
+            # convert only at this presentation boundary. Emit ![caption](path)
+            # with the FULL caption as alt text (sanitized — no newlines, no
+            # `]`), not a truncated table cell. Path is resolved
             # relative to the source page so the image renders without a
             # markdown-image-resolver (which improved-wiki does not have).
             source_dir = source_path.parent
-            by_page: dict[int, list] = {}
-            for img in sorted(images, key=lambda x: (x["page"], x.get("img_idx_in_page", 0))):
-                by_page.setdefault(img["page"], []).append(img)
-            for page in sorted(by_page):
-                section += f"### Page {page}\n\n"
-                for img in by_page[page]:
+            by_page: dict[str, list] = {}
+            for img in images:
+                page_index = img["page"]
+                key = "Document" if page_index is None else f"Page {page_index + 1}"
+                by_page.setdefault(key, []).append(img)
+            for page_images in by_page.values():
+                page_images.sort(key=lambda x: x.get("img_idx_in_page", 0))
+
+            def page_order(key: str) -> tuple[int, int]:
+                if key == "Document":
+                    return (1, 0)
+                return (0, int(key.removeprefix("Page ")))
+
+            for key in sorted(by_page, key=page_order):
+                section += f"### {key}\n\n"
+                for img in by_page[key]:
                     cap_path = media_dir / (img["filename"] + ".caption.txt")
                     cap = cap_path.read_text(encoding="utf-8").strip() if cap_path.exists() else ""
                     cap = re.sub(r"[\r\n]+", " ", cap).replace("]", ")").strip()

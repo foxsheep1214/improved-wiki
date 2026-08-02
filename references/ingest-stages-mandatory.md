@@ -161,6 +161,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 3.4 · 图片注入
 - **作用**：在 source 页末尾追加 `## Embedded Images` 段，列出所有图 + caption。
 - **执行位置**：在 3.3 aggregate repair 之后、3.5 review persistence 之前，复现 NashSU 0.6.6 的 image injection 时机。
+- **页码契约**：manifest 与 `pNNNN` 文件名保留 minerU 的 0-based 内部页索引；source 页的 `### Page N` 在注入边界转换为面向读者的 1-based 页码。页码为 `null` 的 DOCX/Markdown 图片归入末尾 `### Document`，与 NashSU `SavedImage.page` / `buildImageMarkdownSection` 对齐。
 - **go/no-go**：`media_policy=required` 时 `images_injected == images_extracted`，否则不写 `write_phase` marker。
 
 ### Stage 3.7 · Embeddings
