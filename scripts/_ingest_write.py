@@ -64,16 +64,28 @@ _STAGE_COUNTER_FIELDS = (
     "global_digest_keys", "chunks_analyzed", "file_blocks_generated",
     "concepts_identified", "concepts_core", "concepts_supporting",
     "concepts_generated", "entities_generated",
-    "images_extracted", "images_captioned", "images_injected",
     "queries_generated", "comparisons_generated", "review_items",
 )
 
+# Media counts describe the current authoritative manifest/write, so they may
+# legitimately shrink after a clean re-extraction or manifest deduplication.
+_STAGE_MEDIA_FIELDS = (
+    "images_extracted", "images_captioned", "images_injected",
+)
 
-def _preserve_stage_counters(prev_stages: dict, new_stages: dict) -> dict:
+def _preserve_stage_counters(
+    prev_stages: dict,
+    new_stages: dict,
+    *,
+    write_phase_resume: bool = False,
+) -> dict:
     """Return new_stages with monotonic counters preserved as max(old, new).
 
     Non-counter fields (coverage_core / coverage_supporting / coverage_pct —
-    ratios, not counts) keep the new value. prev_stages may be empty (first
+    ratios, not counts) keep the new value. Media counts are authoritative for
+    the current run and are never merged with ``max``. On a true write-phase
+    resume only, a zero media value can be a short-circuit placeholder; in
+    that case retain the prior non-zero value. prev_stages may be empty (first
     write); then new_stages is returned unchanged.
     """
     if not prev_stages:
@@ -82,6 +94,10 @@ def _preserve_stage_counters(prev_stages: dict, new_stages: dict) -> dict:
     for k in _STAGE_COUNTER_FIELDS:
         if k in out:
             out[k] = max(int(prev_stages.get(k, 0) or 0), int(out[k] or 0))
+    if write_phase_resume:
+        for k in _STAGE_MEDIA_FIELDS:
+            if k in out and int(out[k] or 0) == 0:
+                out[k] = int(prev_stages.get(k, 0) or 0)
     return out
 
 
@@ -946,7 +962,11 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         "comparisons_generated": max(comp_count, _n_comps),
         "review_items": review_persistence_result.get("items", 0),
     }
-    _merged_stages = _preserve_stage_counters(_prev_stages, _new_stages)
+    _merged_stages = _preserve_stage_counters(
+        _prev_stages,
+        _new_stages,
+        write_phase_resume=write_phase_done,
+    )
 
     all_written_refs = canonical_page_refs(
         files_written_paths + review_page_refs + index_log_files,

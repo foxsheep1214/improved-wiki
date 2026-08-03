@@ -181,7 +181,8 @@ class TestPreserveStageCounters(unittest.TestCase):
                 "images_extracted": 309, "review_items": 7}
         new = {"chunks_analyzed": 0, "concepts_generated": 0,
                "images_extracted": 0, "review_items": 0}
-        out = _ingest_write._preserve_stage_counters(prev, new)
+        out = _ingest_write._preserve_stage_counters(
+            prev, new, write_phase_resume=True)
         self.assertEqual(out["chunks_analyzed"], 4)
         self.assertEqual(out["concepts_generated"], 10)
         self.assertEqual(out["images_extracted"], 309)
@@ -192,6 +193,27 @@ class TestPreserveStageCounters(unittest.TestCase):
         new = {"chunks_analyzed": 6, "concepts_generated": 5}
         out = _ingest_write._preserve_stage_counters(prev, new)
         self.assertEqual(out["chunks_analyzed"], 6)
+
+    def test_current_media_counts_replace_larger_stale_cache_values(self):
+        prev = {"images_extracted": 254, "images_captioned": 254,
+                "images_injected": 254}
+        new = {"images_extracted": 212, "images_captioned": 212,
+               "images_injected": 212}
+        out = _ingest_write._preserve_stage_counters(prev, new)
+        self.assertEqual(out["images_extracted"], 212)
+        self.assertEqual(out["images_captioned"], 212)
+        self.assertEqual(out["images_injected"], 212)
+
+    def test_write_phase_resume_restores_missing_media_counts(self):
+        prev = {"images_extracted": 212, "images_captioned": 212,
+                "images_injected": 212}
+        new = {"images_extracted": 0, "images_captioned": 0,
+               "images_injected": 0}
+        out = _ingest_write._preserve_stage_counters(
+            prev, new, write_phase_resume=True)
+        self.assertEqual(out["images_extracted"], 212)
+        self.assertEqual(out["images_captioned"], 212)
+        self.assertEqual(out["images_injected"], 212)
 
     def test_coverage_ratios_keep_new_value(self):
         prev = {"coverage_pct": 0.95, "chunks_analyzed": 4}
