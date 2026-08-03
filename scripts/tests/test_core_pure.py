@@ -214,10 +214,9 @@ class TestDetectTemplateType(unittest.TestCase):
 
 
 class TestIsQueryBridgeSource(unittest.TestCase):
-    """wiki/queries/*.md deep-research pages (2026-07-16: ingested directly —
-    no more raw/queries/ bridge copy, NashSU autoIngest path-agnostic parity)
-    plus backward-compat recognition of pre-2026-07-16 raw/queries/*.md bridge
-    copies still sitting in older wikis."""
+    """Explicitly ingested wiki/queries/*.md pages use no raw/ bridge copy;
+    pre-2026-07-16 raw/queries/*.md bridge copies remain recognized. Current
+    Deep Research does not invoke this compatibility route automatically."""
 
     def setUp(self):
         self.config = _make_config(Path("/proj"))

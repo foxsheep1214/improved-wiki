@@ -26,7 +26,7 @@ carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答
 | Review panel lists pending items | Calling agent scans `wiki/REVIEW/*/` for `resolved: false` |
 | Per-item buttons: Deep Research / Create Page / Skip | Present the same three options to the user per item |
 | `__deep_research__` → `queueResearch(topic, searchQueries)` | run the deep-research flow (`deep-research.md`) with the item's `search_queries` as seed queries |
-| No search API configured → falls back to Create Page | no web-search capability available → offer Create Page instead |
+| Explicit Deep Research with no configured selected source → alert and leave unresolved | report the missing `web`/`anytxt` capability; keep pending and let the user configure it or choose Create Page |
 | `createReviewPageDrafts` type routing | same routing rules (below) |
 | `resolveItem(id, action)` — resolved in store, never deleted | frontmatter `resolved: true` + `resolved_at` + `resolved_reason` — file kept on disk (audit trail, same convention as sweep) |
 
@@ -61,8 +61,14 @@ Options (NashSU OPTIONS parity — do not invent custom actions):
   `queueResearch` verbatim; fall back to the title if empty)
 - one topic per invocation still applies — with multiple Research choices,
   run them serially
-- resolve the item: `resolved_reason: "Queued for research"` (mark when the
-  research is launched, matching NashSU)
+- choosing the option confirms this topic; do not ask the same scope question again
+- if the source mode has no usable configured capability, do not silently switch
+  modes or auto-create a page; leave the review pending and offer configuration or
+  the separate Create Page choice (`both` may proceed when either branch is configured)
+- do **not** auto-ingest the resulting query page
+- resolve only after the page has been written successfully:
+  `resolved_reason: "Research saved: wiki/queries/<saved-file>.md"`; search,
+  synthesis, or write failure leaves the item pending
 
 **Create Page** → NashSU `createReviewPageDrafts` parity:
 - page type routing (first match wins):
@@ -81,8 +87,9 @@ Options (NashSU OPTIONS parity — do not invent custom actions):
 
 ### Step 4: Report
 
-Summary table: N processed — X research launched, Y pages created, Z skipped,
-W left pending.
+Summary table: N processed — X research pages saved, Y pages created, Z skipped,
+W left pending. Separately report research attempts that failed and therefore
+left their reviews pending.
 
 ## Boundaries
 
@@ -91,3 +98,5 @@ W left pending.
 - Resolved review files stay on disk (audit trail) — never delete them.
 - Deep Research here follows all `deep-research.md` gates (🔴 topic confirmed
   by the very act of choosing the option; no auto-chain to new topics).
+- Launching/queuing research is not resolution. The saved path is the success
+  boundary, matching NashSU v0.6.7's `resolveReviewForSavedResearch` guard.

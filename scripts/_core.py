@@ -162,10 +162,11 @@ def detect_template_type(raw_file: Path, raw_root: Path, override: str | None) -
 
 
 def is_query_bridge_source(raw_file: Path, config: "Config") -> bool:
-    """True iff raw_file is a deep-research research page — ingested directly
-    from ``wiki/queries/<slug>.md`` (2026-07-16: the ``raw/queries/`` copy
-    step was removed, NashSU ``autoIngest`` parity — query pages are no
-    longer duplicated into raw/) or, for pre-2026-07-16 data, a legacy bridge
+    """True iff raw_file is a query page accepted by explicit/manual ingest.
+
+    The current Deep Research default never calls ingest on its saved page.
+    This historical compatibility route accepts ``wiki/queries/<slug>.md``
+    without duplicating it under raw/, or recognizes a pre-2026-07-16 bridge
     copy still sitting under ``raw/queries/``.
 
     These are not real source documents — the ``wiki/queries/<slug>.md``
@@ -186,8 +187,8 @@ def canonical_source_path(raw_file: Path, config: "Config") -> str:
     """The authoritative ``sources:`` frontmatter value for ``raw_file``.
 
     ``raw/<rel>`` for a normal source under ``config.raw_root``; ``wiki/queries/<rel>``
-    for a deep-research page ingested directly from ``wiki/queries/`` (2026-07-16:
-    no more ``raw/queries/`` bridge copy — see ``is_query_bridge_source``). Falls
+    for a query page explicitly ingested from ``wiki/queries/`` (no
+    ``raw/queries/`` bridge copy — see ``is_query_bridge_source``). Falls
     back to the bare filename for any other path (should not normally happen —
     ``ingest.py``'s CLI gate only accepts these two roots).
 
@@ -217,7 +218,7 @@ def source_cache_key(raw_file: Path, config: "Config") -> str:
     re-ingest skip logic — this key never affects whether a source gets
     re-ingested, only ``--delete``/``validate_ingest.py`` bookkeeping).
 
-    A deep-research page ingested from ``wiki/queries/<rel>`` gets the SAME
+    An explicitly ingested query page from ``wiki/queries/<rel>`` gets the SAME
     key (``queries/<rel>``) a pre-2026-07-16 ``raw/queries/<rel>`` bridge
     copy of the same file would have gotten — this is deliberate, so
     ``--delete`` on a query source ingested before/after the bridge removal

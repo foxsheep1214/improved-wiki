@@ -137,8 +137,8 @@ def _verify_stage_2_4_file_blocks(
     _verify_or_die(len(file_blocks) >= 1, "Stage 2",
                    f"0 FILE blocks parsed from LLM response for {raw_file.name}. "
                    f"LLM did not generate any wiki pages.")
-    # Verify source page block exists — skipped for deep-research query bridges,
-    # which deliberately have no Stage 2.4 source page (see is_query_bridge_source).
+    # Verify source page block exists — skipped for explicitly ingested query
+    # pages, whose canonical query artifact already exists (compatibility path).
     if not is_query_bridge:
         source_blocks = [p for p, _ in file_blocks if "sources/" in p]
         _verify_or_die(len(source_blocks) >= 1, "Stage 2",

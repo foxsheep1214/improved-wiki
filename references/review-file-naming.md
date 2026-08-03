@@ -3,8 +3,9 @@
 Authoritative naming rule for every item under `wiki/REVIEW/<type>/` —
 across all five types (`contradiction` / `suggestion` / `missing-page` /
 `confirm` / `duplicate`, plus the improved-wiki-only `orphan`) and every
-generation source (ingest Stages 3.1/3.5, structural/semantic lint, deep-research,
-process-reviews, caption-skip).
+generation source (ingest Stages 3.1/3.5, structural/semantic lint,
+process-reviews, caption-skip). NashSU v0.6.7 Deep Research creates no new
+review; it may only resolve its originating item after the research page saves.
 
 ## How NashSU actually stores reviews (the alignment target)
 

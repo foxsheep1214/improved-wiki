@@ -555,15 +555,14 @@ def _do_prepare(
                 config.source_budget,
             )
 
-            # Stage 2.4 source-page gate — skipped for deep-research
-            # pages (wiki/queries/*.md): the page itself is already the
-            # canonical human-readable artifact, so no separate digest page
-            # (see is_query_bridge_source / deep-research.md).
+            # Stage 2.4 source-page gate — skipped for an explicitly ingested
+            # query page: the page itself is already the canonical artifact.
+            # This is a manual/historical compatibility path; v0.6.7 Deep
+            # Research does not auto-ingest its result.
             _is_query_bridge = is_query_bridge_source(raw_file, config)
             if _is_query_bridge:
-                print("  [stage 2.4] Source page skipped (deep-research query "
-                      "bridge — the query page IS the artifact; see "
-                      "references/deep-research.md)")
+                print("  [stage 2.4] Source page skipped (explicit query-page "
+                      "ingest — the query page IS the canonical artifact)")
             else:
                 file_blocks, _source_page_truncated = _ensure_source_page(
                     global_digest, raw_file, config, file_blocks,

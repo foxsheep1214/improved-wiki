@@ -13,7 +13,7 @@ Full script inventory by category. Entry points (user-facing) are **bold**.
 | Queue | **`wiki-monitor.sh`**, **`run-queue.sh`** (thin launchers) → `queue_cli.py` (atomic scan/merge/run); `run-ingest.sh` maps exit 101 for task UIs |
 | Embeddings | **`build_embeddings.py`**, **`search_wiki.py`** |
 | Repair | `sweep_reviews.py`, `enrich_wikilinks_retroactive.py`, `cross_source_dedup.py`（跨源去重 CLI）, `rebuild_index.py`（index.md 确定性全量重建，不调 LLM，无页数上限；与 Stage 3.3 的 ingest 聚合修复互补） |
-| Search | `search_local.py` (local source search for deep-research) |
+| Deep Research | `search_local.py`（v0.6.7 AnyTXT 的项目内 CLI analogue：1–3 queries、15 条全局上限、WebSearchResult JSON）, `write_research_page.py`（20 来源去重门禁、thinking 清理、确定性 query page 原子写入；不 auto-ingest） |
 | QC / Review guard | `qc_stage22.py` (Stage 2.2 响应离线质检), `review_fix_guard.py` |
 | Lint internals | `_lint_suggest.py`, `_lint_fixes.py` |
 | Dedup internals | `_dedup.py`, `_dedup_embedding.py`, `_dedup_storage.py` |

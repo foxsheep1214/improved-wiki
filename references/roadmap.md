@@ -10,7 +10,7 @@ capabilities that don't exist yet and are intentionally deferred.
 **优先级:** 低-中(能力增强,非阻断;ingest 主链质量已达标)。
 **状态:** 未开始。调研已完成(2026-07-02)。
 
-### 现状 / gap（2026-07-28 按 NashSU 0.6.6 更新）
+### 现状 / gap（2026-08-03 按 NashSU 0.6.7 更新）
 
 - 普通 ingest 已把 `comparison` / `synthesis` / `finding` / `methodology` /
   `thesis` 统一接入 Stage 2.2 `schema_typed_candidates` → Stage 2.4 FILE
@@ -19,12 +19,14 @@ capabilities that don't exist yet and are intentionally deferred.
   来源证据支撑。按 NashSU bundled schema，普通来源可建立 cross-cutting
   synthesis 初稿或 speculative working thesis，后续来源再 merge/update；
   项目 schema 可以声明更严格门槛。
-- Deep Research 页本身整合多个真实来源，因此 auto-ingest 时也可产生
-  synthesis/thesis；无论哪种来源都不得把章节清单冒充 synthesis。
+- Deep Research 页本身整合多个真实来源，但 v0.6.7 直接保留这一张 query
+  page（仅可选单页 embedding），不再 auto-ingest，也不会自动派生
+  synthesis/thesis。若未来 Synthesize 命令要复用研究证据，应直接读取已保存
+  的 grounded query page，而不是依赖二次 ingest。
 - **仍缺少的是主动扫描既有 wiki 多页/多书、再自动创造新的 synthesis /
   thesis 的机制。** `cross_source_dedup.py` 只合并去重；普通单源 ingest
   不会读取整库正文来主动做新结论。
-- NashSU 0.6.6 同样没有既有 wiki 的自动全库合成器；`deep-research.ts`
+- NashSU 0.6.7 同样没有既有 wiki 的自动全库合成器；`deep-research.ts`
   合成的是用户主动触发后取得的多来源研究结果。这个 roadmap 项仍是新增
   peer capability，不是 ingest 对齐缺陷。
 
@@ -44,8 +46,8 @@ capabilities that don't exist yet and are intentionally deferred.
   surprising-connections),只差"社区 or 高共现对 → LLM 综述成页"这最后一步。
 - 流程:① 从 graph 取社区 / 高共现对 → ② dedup vs 已有 `synthesis/` 页 → ③ 打分排序(共现、
   跨域、跨源、能否消解 REVIEW 里挂着的矛盾)→ ④ LLM 为 top-N 写 `synthesis` / `thesis` 页
-  (grounded 到贡献页,`related:` 引全部来源)→ ⑤ 对新页 `auto-ingest`(拆 concept/entity +
-  建 wikilink)。
+  (grounded 到贡献页,`related:` 引全部来源)→ ⑤ 确定性写盘并按配置做单页 embedding；
+  不把生成页再 auto-ingest 成第二轮摘要/Review。
 - 输出类型:`synthesis`(跨切结论)/ `thesis`(假设及其演化)—— 两类目录 `schema.md` 已定义。
 
 ### 落地时要注意

@@ -15,10 +15,11 @@ from _media_integrity import assert_cached_media_complete
 from _task_manifest import assert_task_ready_for_completion
 
 def _is_ingestable_source_path(rf: Path, config: Config) -> bool:
-    """True for a normal ``raw/`` source, or a deep-research page under
-    ``wiki/queries/`` (2026-07-16: ingested directly — see
-    ``is_query_bridge_source``/deep-research.md; there is no longer a
-    ``raw/queries/`` copy step, NashSU ``autoIngest`` path-agnostic parity)."""
+    """True for a normal ``raw/`` source or an explicitly supplied query page.
+
+    ``wiki/queries/`` acceptance is a manual/historical compatibility ability;
+    NashSU v0.6.7 Deep Research does not invoke it. Query pages are accepted in
+    place without a ``raw/queries/`` copy (see ``is_query_bridge_source``)."""
     return rf.is_relative_to(config.raw_root) or rf.is_relative_to(config.wiki_dir / "queries")
 
 

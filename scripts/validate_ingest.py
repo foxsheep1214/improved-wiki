@@ -160,9 +160,9 @@ def _validate_find_media_dir(slug: str) -> Optional[Path]:
 def _validate_recorded_source_pages(entry: dict, project_root: Path) -> tuple[list[str], list[Path]]:
     """Return source-page paths recorded by this cache entry and those on disk.
 
-    Cache entries are not globally one-to-one with source pages: deep-research
-    entries intentionally write no source page, while older ingests may retain
-    pre-migration paths.  Per-source validation must therefore inspect the
+    Cache entries are not globally one-to-one with source pages: explicitly
+    ingested query-page entries intentionally write no source page, while older
+    ingests may retain pre-migration paths. Per-source validation must inspect the
     selected entry instead of comparing project-wide cache/page totals.
     """
     recorded: list[str] = []

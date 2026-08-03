@@ -14,7 +14,7 @@ Covers two 2026-06-25 audit findings:
   ingested marker is the single completeness signal. Test: the four
   marker/source-page states resolve to the right skip/resume decision.
 
-  Finding 3 — legacy deep-research query bridges (raw/queries/*.md)
+  Finding 3 — legacy/manual query bridges (raw/queries/*.md)
   deliberately get no separate source page (wiki/queries/<slug>.md is
   already the canonical artifact). The source-page-existence staleness
   check in _stage_0_2_should_skip doesn't know that, so every call saw

@@ -367,9 +367,9 @@ def main() -> int:
         if not rf.exists():
             print(f"ERROR: {rf} not found", file=sys.stderr)
             return ERROR
-        # NashSU deep-research parity (2026-07-16): accept a wiki/queries/<page>
-        # research page as an ingest source directly, no raw/queries/ copy step
-        # (see _is_ingestable_source_path / is_query_bridge_source).
+        # Manual/historical query-ingest compatibility: accept a
+        # wiki/queries/<page> source directly, with no raw/queries/ copy step.
+        # NashSU v0.6.7 Deep Research itself no longer invokes source ingest.
         if not _is_ingestable_source_path(rf, config):
             print(f"ERROR: {rf} is not under raw_root ({config.raw_root}) "
                   f"or wiki/queries/ ({config.wiki_dir / 'queries'})", file=sys.stderr)

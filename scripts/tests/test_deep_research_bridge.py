@@ -1,9 +1,9 @@
-"""Tests for ingest accepting a wiki/queries page directly.
+"""Tests for the explicit/manual query-page ingest compatibility route.
 
-NashSU parity: ``deep-research.ts`` hands ``wiki/queries/<page>`` straight to
-``autoIngest``, which is path-agnostic. improved-wiki now matches this
-(2026-07-16): ``ingest.py`` accepts ``wiki/queries/<page>`` as a source
-without copying it into ``raw/queries/`` first (the old bridge step,
+NashSU v0.6.7 Deep Research no longer auto-ingests a saved research page.
+improved-wiki nevertheless retains the pre-v0.6.7/manual ability for
+``ingest.py`` to accept ``wiki/queries/<page>`` as a source without copying it
+into ``raw/queries/`` first (the old bridge step,
 ``ingest._bridge_wiki_queries_to_raw``, was removed — the ~20
 ``relative_to(raw_root)`` call sites it existed to work around now route
 through ``_core.canonical_source_path``/``source_cache_key``, which handle a
@@ -44,7 +44,7 @@ def _make_config(tmp: Path) -> _core.Config:
 
 
 class TestIsIngestableSourcePath(unittest.TestCase):
-    """The CLI gate (ingest.py main()) that replaced the old bridge copy."""
+    """The compatibility CLI gate that replaced the old bridge copy."""
 
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
