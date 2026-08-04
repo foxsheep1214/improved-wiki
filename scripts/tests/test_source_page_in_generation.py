@@ -226,3 +226,48 @@ class GeneratedSourceBlockIsNormalizedAndGated(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueryBridgeGetsNoSourcePage(unittest.TestCase):
+    """A deep-research page under wiki/queries/ must NOT be asked for a source
+    page — the query page IS the artifact (is_query_bridge_source docstring:
+    "it should not get its own wiki/sources/ digest page from Stage 2.4").
+
+    Regression 2026-08-01→08-03: merging Stage 2.6 into 2.4 kept the
+    query-bridge skip on the post-write check (_ensure_source_page) but not on
+    the prompt, which still demanded a mandatory source page. The model
+    complied, the block landed in file_blocks before the skip could apply, and
+    four bogus wiki/sources/research-*.md pages were written on RadarWiki —
+    each citing a raw/research-*.md file that does not exist, because
+    source_page_rel_stem falls back to the bare stem outside raw_root.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.cfg = _config(self.tmp)
+        self.query_page = self.cfg.wiki_dir / "queries" / "research-x-2026-08-02.md"
+        self.query_page.parent.mkdir(parents=True, exist_ok=True)
+        self.query_page.write_text("# Research X\n", encoding="utf-8")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_prompt_omits_the_mandatory_source_page_section(self):
+        prompt = gen._stage_2_4_build_all_prompt(
+            _analyses(), self.query_page, self.cfg,
+            consolidated_context="CTX")
+        self.assertNotIn("MANDATORY Source Page", prompt)
+        self.assertNotIn("source page is mandatory", prompt.lower())
+        self.assertNotIn("---FILE:wiki/sources/", prompt)
+
+    def test_prompt_never_invents_a_nonexistent_raw_path(self):
+        prompt = gen._stage_2_4_build_all_prompt(
+            _analyses(), self.query_page, self.cfg,
+            consolidated_context="CTX")
+        self.assertNotIn("raw/research-x-2026-08-02.md", prompt)
+
+    def test_normal_source_still_gets_the_section(self):
+        prompt = gen._stage_2_4_build_all_prompt(
+            _analyses(), _raw(self.tmp), self.cfg, consolidated_context="CTX")
+        self.assertIn("MANDATORY Source Page", prompt)

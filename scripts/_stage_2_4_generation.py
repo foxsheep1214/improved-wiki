@@ -8,6 +8,7 @@ from pathlib import Path
 from _config import Config
 from _core import (
     canonical_source_path,
+    is_query_bridge_source,
     slugify,
 )
 from _schema import (
@@ -885,11 +886,54 @@ def _stage_2_4_build_all_prompt(
     )
     # NashSU parity: the source summary is one more FILE block of this call,
     # not a second LLM round-trip.
-    source_rel_stem = source_page_rel_stem(file_path, config)
-    _source_digest = _final_digest_from_analyses(chunk_analyses)
-    source_page_section = _source_page_guidance_section(source_rel_stem)
-    source_page_output_section = _source_page_output_section(
-        source_rel_stem, file_path.suffix, _source_digest)
+    # A deep-research query bridge (wiki/queries/<slug>.md) is NOT a real
+    # source document: the query page itself is the artifact, so it must never
+    # be asked for — nor given — a wiki/sources/ digest page (see
+    # is_query_bridge_source). Before the Stage 2.6 merge this was enforced by
+    # skipping the whole call; the prompt must carry the same condition, or the
+    # model dutifully emits a source block that reaches file_blocks before the
+    # post-write skip can apply (regression 2026-08-01: four bogus
+    # wiki/sources/research-*.md pages on RadarWiki, each citing a
+    # raw/research-*.md that does not exist because source_page_rel_stem falls
+    # back to the bare stem outside raw_root).
+    if is_query_bridge_source(file_path, config):
+        source_page_section = ""
+        source_page_output_section = ""
+        _no_pages_clause = (
+            f"output exactly `{_NO_KEY_PAGES_SENTINEL}` and nothing else.")
+        _first_line_rule = (
+            "- If at least one candidate qualifies, your FIRST line MUST start "
+            "with `---FILE:wiki/`.\n"
+            f"- Otherwise output exactly `{_NO_KEY_PAGES_SENTINEL}`.")
+        _closing_rule = (
+            "Generate only qualifying new and UPDATE EXISTING key pages that "
+            "are not marked\n[ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one "
+            "response. Start with the first FILE\nblock, or output exactly "
+            f"`{_NO_KEY_PAGES_SENTINEL}` if none qualifies. This source is a "
+            "deep-research\nquery page — do NOT emit any wiki/sources/ page "
+            "for it.")
+    else:
+        source_rel_stem = source_page_rel_stem(file_path, config)
+        _source_digest = _final_digest_from_analyses(chunk_analyses)
+        source_page_section = _source_page_guidance_section(source_rel_stem)
+        source_page_output_section = _source_page_output_section(
+            source_rel_stem, file_path.suffix, _source_digest)
+        _no_pages_clause = (
+            "emit ONLY the mandatory source page below, then the exact\n"
+            f"  line `{_NO_KEY_PAGES_SENTINEL}` and nothing else.")
+        _first_line_rule = (
+            "- Your FIRST line MUST start with `---FILE:wiki/`. The source "
+            "page is mandatory,\n  so there is always at least one FILE "
+            "block.\n- If no key/schema-typed candidate qualifies, emit the "
+            f"source page block and\n  then the exact line "
+            f"`{_NO_KEY_PAGES_SENTINEL}`.")
+        _closing_rule = (
+            "Generate the MANDATORY source page plus every qualifying "
+            "new/UPDATE EXISTING key\npage not marked [ALREADY "
+            "COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with\nthe "
+            f"first FILE block. `{_NO_KEY_PAGES_SENTINEL}` means \"no "
+            "key/schema-typed page\nqualifies\" — it NEVER excuses omitting "
+            "the source page.")
 
     language_sample = context_text or json.dumps(chunk_analyses, ensure_ascii=False)
     language_directive = build_language_directive(language_sample)
@@ -937,16 +981,12 @@ Chunks: {len(chunk_analyses)}
   to increase the number of FILE blocks.
 - Every candidate remains optional at generation time. If NONE is genuinely
   important and substantively developed enough for a standalone page or
-  material update, emit ONLY the mandatory source page below, then the exact
-  line `{_NO_KEY_PAGES_SENTINEL}` and nothing else.
+  material update, {_no_pages_clause}
 
 {source_page_section}
 
 # ⚠️ CRITICAL — START IMMEDIATELY WITH THE RESULT
-- Your FIRST line MUST start with `---FILE:wiki/`. The source page is mandatory,
-  so there is always at least one FILE block.
-- If no key/schema-typed candidate qualifies, emit the source page block and
-  then the exact line `{_NO_KEY_PAGES_SENTINEL}`.
+{_first_line_rule}
 - Do NOT write any preamble, introduction, or commentary. IGNORED by parser.
 
 # [[wikilink]] Rules — STRICT
@@ -1013,10 +1053,7 @@ updated: {time.strftime('%Y-%m-%d')}
 {schema_output_section}
 {source_page_output_section}
 
-Generate the MANDATORY source page plus every qualifying new/UPDATE EXISTING key
-page not marked [ALREADY COVERED]/[SKIP]/CROSS-TYPE, in one response. Start with
-the first FILE block. `{_NO_KEY_PAGES_SENTINEL}` means "no key/schema-typed page
-qualifies" — it NEVER excuses omitting the source page.
+{_closing_rule}
 
 {language_directive}
 """
