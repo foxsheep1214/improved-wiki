@@ -18,16 +18,18 @@ and without `--apply` the tool only previews. `sweep_reviews.py` remains the
 automatic side (it clears items later ingests already satisfied); this tool is
 the human side operating in bulk.
 
-`--dismiss` matches `dismissItem` exactly: the file is deleted. NashSU has no
-persistence for review items at all — no `persist` middleware backs
-review-store.ts, and `ingest.ts` never writes one to disk; the in-memory store
-IS the only record, so `dismissItem` removing it from the array is the entire
-lifecycle. improved-wiki's file-per-item persistence exists so review items
-survive across separate CLI invocations, which is what `--reason`/resolve
-(NashSU's `resolveItem`, kept-but-flagged) is for — dismiss is the other verb,
-and it means the same thing here as there: gone (user decision 2026-08-05,
-superseding this project's earlier "never delete a review file" convention for
-this one verb only; resolve/sweep still never delete).
+`--dismiss` matches `dismissItem` exactly: the file is deleted.
+
+NashSU DOES persist review items — corrected 2026-08-05, an earlier note here
+claimed otherwise after only checking for a `persist` middleware inside
+review-store.ts. The persistence is external: `auto-save.ts` subscribes to the
+store and debounce-writes `.llm-wiki/review.json` 1s after any change, and
+`App.tsx` rehydrates it via `loadReviewItems` on project open. What makes
+dismiss a deletion is not the absence of persistence but WHAT gets persisted:
+`dismissItem` does `items.filter(i => i.id !== id)`, and auto-save then writes
+that shorter array back — so the item is gone from the stored record too.
+Deleting the file here reproduces exactly that net effect (user decision
+2026-08-05; resolve/sweep still never delete).
 
 Usage:
     # preview what the filter selects (no writes)
@@ -50,6 +52,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+from _review_utils import is_review_resolved  # noqa: E402
 from sweep_reviews import _resolve_review  # noqa: E402
 
 BULK_RESOLVE_REASON = "Bulk resolved"
@@ -64,7 +67,7 @@ def _frontmatter_value(text: str, key: str) -> str:
 
 
 def _is_pending(text: str) -> bool:
-    return _frontmatter_value(text, "resolved").lower() != "true"
+    return not is_review_resolved(text)
 
 
 def _created_compact(path: Path, text: str) -> str:

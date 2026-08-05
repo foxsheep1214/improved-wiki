@@ -16,6 +16,7 @@ from pathlib import Path
 
 from _config import Config
 from _paths import media_slug
+from _review_utils import is_review_resolved
 
 
 class StageValidationError(Exception):
@@ -264,8 +265,11 @@ def validate_stage_outputs(
     if reviews_dir.exists():
         unresolved = 0
         for rp in reviews_dir.rglob("*.md"):
-            content = rp.read_text(encoding="utf-8")
-            if "resolved: false" in content[:500]:
+            try:
+                content = rp.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if not is_review_resolved(content):
                 unresolved += 1
         if unresolved > 0:
             print(f"  ℹ️  wiki/REVIEW/: {unresolved} unresolved review pages pending human triage")

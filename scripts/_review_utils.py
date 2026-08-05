@@ -18,6 +18,37 @@ from typing import Dict, List, Optional, Sequence
 # Port of NashSU review-utils.ts REVIEW_TITLE_PREFIX_RE — common prefixes the
 # LLM may prepend in English or Chinese review titles. Kept in one place so
 # dedup and sweep agree on what "the same concept" means.
+# Values that mean "this review is done". Superset of every form the three
+# former hand-rolled checks accepted, so collapsing them onto this helper can
+# only ever resolve MORE items, never fewer.
+_RESOLVED_TRUE = frozenset({"true", "yes", "1"})
+
+# Frontmatter-only `resolved:` line. Anchored to the block between the opening
+# and closing `---` so a body sentence mentioning "resolved: true" can never
+# flip the verdict, and unbounded so a long frontmatter is not truncated away
+# (the `content[:500]` prefix scan silently lost those).
+_RESOLVED_LINE_RE = re.compile(r"^resolved:\s*(.*?)\s*$", re.MULTILINE)
+
+
+def is_review_resolved(content: str) -> bool:
+    """Whether a review page's frontmatter marks it resolved.
+
+    The single answer for every caller — sweep, batch resolve, and the ingest
+    validator's pending count. They previously disagreed: `resolved: yes` read
+    as done to sweep but pending to batch resolve, and a frontmatter longer
+    than 500 characters read as done to the validator regardless of its actual
+    value. Absent or unparseable means pending, which is the safe default: an
+    item stays visible rather than silently disappearing from triage.
+    """
+    if not content:
+        return False
+    head = content.split("\n---", 1)[0] if content.startswith("---") else content
+    match = _RESOLVED_LINE_RE.search(head)
+    if not match:
+        return False
+    return match.group(1).strip().strip('"').strip("'").lower() in _RESOLVED_TRUE
+
+
 REVIEW_TITLE_PREFIX_RE = re.compile(
     r"^(missing[\s-]?page[:：]\s*|duplicate[\s-]?page[:：]\s*|"
     r"possible[\s-]?duplicate[:：]\s*|缺失页面[:：]\s*|缺少页面[:：]\s*|"
