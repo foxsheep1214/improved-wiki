@@ -12,7 +12,7 @@ Full script inventory by category. Entry points (user-facing) are **bold**.
 | Graph | **`graph.py`**（独立命令；Lint 不调用） |
 | Queue | **`wiki-monitor.sh`**, **`run-queue.sh`** (thin launchers) → `queue_cli.py` (atomic scan/merge/run); `run-ingest.sh` maps exit 101 for task UIs |
 | Embeddings | **`build_embeddings.py`**, **`search_wiki.py`** |
-| Repair | `sweep_reviews.py`, `enrich_wikilinks_retroactive.py`, `cross_source_dedup.py`（跨源去重 CLI）, `rebuild_index.py`（index.md 确定性全量重建，不调 LLM，无页数上限；与 Stage 3.3 的 ingest 聚合修复互补） |
+| Repair | `sweep_reviews.py`, `batch_resolve_reviews.py`（REVIEW 批量裁决 CLI，对齐 NashSU 面板的全选+批量按钮；无 `--apply` 只预览）, `enrich_wikilinks_retroactive.py`, `cross_source_dedup.py`（跨源去重 CLI）, `rebuild_index.py`（index.md 确定性全量重建，不调 LLM，无页数上限；与 Stage 3.3 的 ingest 聚合修复互补） |
 | Deep Research | `search_local.py`（v0.6.7 AnyTXT 的项目内 CLI analogue：1–3 queries、15 条全局上限、WebSearchResult JSON）, `write_research_page.py`（20 来源去重门禁、thinking 清理、确定性 query page 原子写入；不 auto-ingest） |
 | QC / Review guard | `qc_stage22.py` (Stage 2.2 响应离线质检), `review_fix_guard.py` |
 | Lint internals | `_lint_suggest.py`, `_lint_fixes.py` |

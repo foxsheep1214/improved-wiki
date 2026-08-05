@@ -28,6 +28,8 @@ carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答
 | `__deep_research__` → `queueResearch(topic, searchQueries)` | run the deep-research flow (`deep-research.md`) with the item's `search_queries` as seed queries |
 | Explicit Deep Research with no configured selected source → alert and leave unresolved | report the missing `web`/`anytxt` capability; keep pending and let the user configure it or choose Create Page |
 | `createReviewPageDrafts` type routing | same routing rules (below) |
+| Select-all checkbox + **Mark selected resolved** / **Dismiss selected** (`handleBatchResolve` / `handleBatchDismiss`) | `scripts/batch_resolve_reviews.py` — human supplies the filter and `--apply`; without `--apply` it only previews |
+| `dismissItem(id)` removes the item from the store | recorded as a resolution with a `Dismissed (bulk)` reason — improved-wiki keeps every review file on disk (audit trail), so nothing is unlinked |
 | `resolveItem(id, action)` — resolved in store, never deleted | frontmatter `resolved: true` + `resolved_at` + `resolved_reason` — file kept on disk (audit trail, same convention as sweep) |
 
 ## Workflow
@@ -40,7 +42,10 @@ Default focus: **suggestion** and **missing-page** (the two types that carry
 (confirm/contradiction/duplicate) only when the user asks for a full pass —
 those usually need judgment/editing rather than one of the three buttons.
 
-Present a short queue summary first (count by type), then process items
+Present a short queue summary first (count by type). When the backlog is
+large, offer the batch route below before grinding item-by-item —
+measured on RadarWiki, 510 actionable items is 128 rounds of
+four-at-a-time questions. Otherwise process items
 one by one or in small batches (AskUserQuestion supports up to 4 questions
 per call — one item per question).
 
@@ -85,6 +90,30 @@ Options (NashSU OPTIONS parity — do not invent custom actions):
 
 **Skip** → resolve only: `resolved_reason: "Skipped"`.
 
+### Step 3b: Batch route (NashSU select-all parity)
+
+For a backlog the user wants cleared in bulk rather than adjudicated one by one:
+
+```bash
+# preview exactly what a filter selects — writes nothing
+python3 "$SKILL_DIR/scripts/batch_resolve_reviews.py" --project <wiki-root> \
+    --type suggestion --created-before 2026-08-01
+# act on that same set
+... --reason "Superseded by later ingest" --apply
+```
+
+- The **user** chooses the filter (`--type`, `--created-before`,
+  `--title-contains`, `--limit`) and authorizes `--apply`. Always show the
+  preview and the count first; treat `--apply` as the click on NashSU's button.
+- `--dismiss` records `Dismissed (bulk)` instead of a resolution. Files are
+  kept either way.
+- Already-resolved items are never re-touched, so a filter is safe to re-run.
+- This does not replace per-item adjudication for anything that needs judgment
+  (Deep Research / Create Page). Use it for the stale tail; keep the three
+  buttons for items with real research value.
+- Run `sweep_reviews.py` first when the backlog predates later ingests — sweep
+  is the automatic side and removes items that no longer need any human at all.
+
 ### Step 4: Report
 
 Summary table: N processed — X research pages saved, Y pages created, Z skipped,
@@ -93,8 +122,12 @@ left their reviews pending.
 
 ## Boundaries
 
-- Never auto-choose for the user — every pending item gets an explicit human
-  decision (that is the whole point vs sweep).
+- Never auto-choose for the user. The *agent* must not decide; the human does.
+  That does **not** mean one decision per item: NashSU's panel offers select-all
+  plus batch resolve/dismiss, so one human decision may legitimately cover N
+  items (`scripts/batch_resolve_reviews.py`). What is forbidden is the agent
+  picking the filter, or firing `--apply`, on its own — a bulk action needs the
+  same explicit instruction a single one does.
 - Resolved review files stay on disk (audit trail) — never delete them.
 - Deep Research here follows all `deep-research.md` gates (🔴 topic confirmed
   by the very act of choosing the option; no auto-chain to new topics).
