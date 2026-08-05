@@ -29,7 +29,7 @@ carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答
 | Explicit Deep Research with no configured selected source → alert and leave unresolved | report the missing `web`/`anytxt` capability; keep pending and let the user configure it or choose Create Page |
 | `createReviewPageDrafts` type routing | same routing rules (below) |
 | Select-all checkbox + **Mark selected resolved** / **Dismiss selected** (`handleBatchResolve` / `handleBatchDismiss`) | `scripts/batch_resolve_reviews.py` — human supplies the filter and `--apply`; without `--apply` it only previews |
-| `dismissItem(id)` removes the item from the store | recorded as a resolution with a `Dismissed (bulk)` reason — improved-wiki keeps every review file on disk (audit trail), so nothing is unlinked |
+| `dismissItem(id)` removes the item from the store | the file is deleted — NashSU has no persistence for review items at all (no `persist` middleware, `ingest.ts` never writes one to disk), so the in-memory store IS the record and removal from it is the whole lifecycle; `--dismiss` matches that exactly (user decision 2026-08-05, overriding this project's earlier "never delete" convention for this one verb) |
 | `resolveItem(id, action)` — resolved in store, never deleted | frontmatter `resolved: true` + `resolved_at` + `resolved_reason` — file kept on disk (audit trail, same convention as sweep) |
 
 ## Workflow
@@ -105,8 +105,10 @@ python3 "$SKILL_DIR/scripts/batch_resolve_reviews.py" --project <wiki-root> \
 - The **user** chooses the filter (`--type`, `--created-before`,
   `--title-contains`, `--limit`) and authorizes `--apply`. Always show the
   preview and the count first; treat `--apply` as the click on NashSU's button.
-- `--dismiss` records `Dismissed (bulk)` instead of a resolution. Files are
-  kept either way.
+- `--dismiss` **deletes** the matched files instead of resolving them — NashSU
+  parity, not a resolution with a reason. `--apply` is still required; without
+  it the tool only previews what would be deleted. This is the one place in
+  the review workflow where a file is removed rather than kept.
 - Already-resolved items are never re-touched, so a filter is safe to re-run.
 - This does not replace per-item adjudication for anything that needs judgment
   (Deep Research / Create Page). Use it for the stale tail; keep the three
@@ -129,6 +131,9 @@ left their reviews pending.
   picking the filter, or firing `--apply`, on its own — a bulk action needs the
   same explicit instruction a single one does.
 - Resolved review files stay on disk (audit trail) — never delete them.
+  Exception: `batch_resolve_reviews.py --dismiss` deletes on purpose, matching
+  NashSU's `dismissItem`; that is the only sanctioned deletion path for a
+  review file.
 - Deep Research here follows all `deep-research.md` gates (🔴 topic confirmed
   by the very act of choosing the option; no auto-chain to new topics).
 - Launching/queuing research is not resolution. The saved path is the success

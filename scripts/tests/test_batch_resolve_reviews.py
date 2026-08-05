@@ -113,11 +113,15 @@ class BulkResolveMatchesNashsu(unittest.TestCase):
                       self.a.read_text(encoding="utf-8"))
 
 
-class DismissKeepsTheAuditTrail(unittest.TestCase):
-    """NashSU's dismissItem drops the item from its in-memory store. On disk
-    improved-wiki keeps every review file as an audit trail (process-reviews.md:
-    "Resolved review files stay on disk — never delete them"), so dismiss is
-    recorded as a resolution with a distinct reason instead of unlinking."""
+class DismissMatchesNashsuRemoval(unittest.TestCase):
+    """NashSU's dismissItem drops the item from its in-memory store — it does
+    not exist anywhere else (no persist middleware backs review-store.ts, and
+    ingest.ts never writes a review item to a file; the store IS the only
+    record). improved-wiki's file-per-item persistence is how review items
+    survive across separate CLI invocations, but that durability need is what
+    resolveItem parity (bulk_resolve) is for. Dismiss should mean what it means
+    in NashSU: gone. User decision 2026-08-05 — align with NashSU over the
+    project's own prior "never delete a review file" convention for this verb."""
 
     def setUp(self):
         self._t = tempfile.TemporaryDirectory()
@@ -127,13 +131,24 @@ class DismissKeepsTheAuditTrail(unittest.TestCase):
     def tearDown(self):
         self._t.cleanup()
 
-    def test_dismiss_marks_resolved_without_deleting(self):
+    def test_dismiss_deletes_the_file(self):
         n = br.bulk_dismiss([self.a], dry_run=False)
         self.assertEqual(n, 1)
+        self.assertFalse(self.a.exists(),
+                         "dismissed items must be gone, matching dismissItem")
+
+    def test_dismiss_dry_run_deletes_nothing(self):
+        n = br.bulk_dismiss([self.a], dry_run=True)
+        self.assertEqual(n, 1)
         self.assertTrue(self.a.is_file())
-        t = self.a.read_text(encoding="utf-8")
-        self.assertIn("resolved: true", t)
-        self.assertIn("Dismissed", t)
+
+    def test_resolve_still_keeps_the_file(self):
+        """Only dismiss changed. resolveItem parity (bulk_resolve) still keeps
+        the file — that half of the audit trail is untouched."""
+        n = br.bulk_resolve([self.a], dry_run=False)
+        self.assertEqual(n, 1)
+        self.assertTrue(self.a.is_file())
+        self.assertIn("resolved: true", self.a.read_text(encoding="utf-8"))
 
 
 class RequiresAnExplicitHumanTrigger(unittest.TestCase):

@@ -18,10 +18,16 @@ and without `--apply` the tool only previews. `sweep_reviews.py` remains the
 automatic side (it clears items later ingests already satisfied); this tool is
 the human side operating in bulk.
 
-Dismiss deviates from NashSU deliberately. `dismissItem` drops the item from
-an in-memory store; improved-wiki keeps every review file on disk as an audit
-trail (process-reviews.md: "Resolved review files stay on disk — never delete
-them"), so a dismissal is recorded as a resolution carrying a distinct reason.
+`--dismiss` matches `dismissItem` exactly: the file is deleted. NashSU has no
+persistence for review items at all — no `persist` middleware backs
+review-store.ts, and `ingest.ts` never writes one to disk; the in-memory store
+IS the only record, so `dismissItem` removing it from the array is the entire
+lifecycle. improved-wiki's file-per-item persistence exists so review items
+survive across separate CLI invocations, which is what `--reason`/resolve
+(NashSU's `resolveItem`, kept-but-flagged) is for — dismiss is the other verb,
+and it means the same thing here as there: gone (user decision 2026-08-05,
+superseding this project's earlier "never delete a review file" convention for
+this one verb only; resolve/sweep still never delete).
 
 Usage:
     # preview what the filter selects (no writes)
@@ -30,6 +36,8 @@ Usage:
     # act on it
     batch_resolve_reviews.py --project <wiki-root> --type suggestion \
         --created-before 2026-08-01 --reason "Superseded by later ingest" --apply
+    # dismiss = delete; no --reason needed, --apply is still required
+    batch_resolve_reviews.py --project <wiki-root> --type duplicate --dismiss --apply
 """
 from __future__ import annotations
 
@@ -126,8 +134,23 @@ def bulk_resolve(paths, reason: str = BULK_RESOLVE_REASON,
 
 def bulk_dismiss(paths, reason: str = BULK_DISMISS_REASON,
                  dry_run: bool = True) -> int:
-    """Record a dismissal. Unlike NashSU's dismissItem the file is kept."""
-    return _apply(paths, reason, dry_run)
+    """Delete each item — NashSU dismissItem parity: the review is gone.
+
+    ``reason`` exists for the CLI/tests to share ``_apply``'s signature; it has
+    no on-disk effect once the file is removed.
+    """
+    del reason
+    done = 0
+    for path in paths:
+        if dry_run:
+            done += 1
+            continue
+        try:
+            path.unlink()
+            done += 1
+        except OSError as exc:
+            print(f"  x failed to delete {path}: {exc}", file=sys.stderr)
+    return done
 
 
 def main() -> int:
@@ -162,9 +185,8 @@ def main() -> int:
         print("No pending review items match this filter.")
         return 0
 
-    reason = args.reason or (
-        BULK_DISMISS_REASON if args.dismiss else BULK_RESOLVE_REASON)
-    verb = "dismiss" if args.dismiss else "resolve"
+    reason = args.reason or BULK_RESOLVE_REASON
+    verb = "delete" if args.dismiss else "resolve"
     dry_run = not args.apply
 
     print(f"{len(items)} pending item(s) selected to {verb}:")
@@ -172,7 +194,10 @@ def main() -> int:
         print(f"  - {path.parent.name}/{path.name}")
     if len(items) > 15:
         print(f"  ... and {len(items) - 15} more")
-    print(f'reason: "{reason}"')
+    if args.dismiss:
+        print("dismiss = delete: these files will be removed, not marked resolved.")
+    else:
+        print(f'reason: "{reason}"')
 
     if dry_run:
         print("\nPREVIEW ONLY — nothing was written. Re-run with --apply "
@@ -181,7 +206,8 @@ def main() -> int:
 
     fn = bulk_dismiss if args.dismiss else bulk_resolve
     done = fn(items, reason=reason, dry_run=False)
-    print(f"\n✓ {verb}d {done}/{len(items)} item(s); files kept on disk.")
+    tail = "deleted" if args.dismiss else "kept on disk, marked resolved"
+    print(f"\n✓ {verb}d {done}/{len(items)} item(s); files {tail}.")
     return 0 if done == len(items) else 1
 
 
