@@ -3,9 +3,17 @@
 参考 NashSU `review-view.tsx`（审核面板）: the CLI/agent counterpart of NashSU's
 review panel. Sweep（`review-sweep.md`）is the **automatic** side — it clears
 items already satisfied by later ingests. Process-reviews is the **human** side —
-the user decides what to do with each still-pending item, one at a time, using
-the predefined options NashSU offers per item: **Deep Research / Create Page /
-Skip**.
+the user decides what to do with each still-pending item, using the options
+that item actually carries.
+
+**The routing is code, not prose.** `scripts/review_actions.py` is a port of
+`review-view.tsx`'s `handleResolve` and `review-create-page.ts`. Consult it;
+do not re-derive an action's meaning from this document. It answers three
+questions: which buttons an item offers (`buttons_for`), what a chosen action
+means (`route_review_action`), and which page(s) a Create Page produces
+(`create_review_page_drafts`). This file describes the *flow*; the module owns
+the *rules*, because prose cannot be tested and this section had silently
+drifted from NashSU on all three.
 
 This flow is where `wiki/queries/` pages are born: ingest flags an open research
 question as a REVIEW suggestion (with `search_queries`), and a query page only materializes when the user
@@ -24,12 +32,18 @@ carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答
 | NashSU review-view.tsx | improved-wiki |
 |---|---|
 | Review panel lists pending items | Calling agent scans `wiki/REVIEW/*/` for `resolved: false` |
-| Per-item buttons: Deep Research / Create Page / Skip | Present the same three options to the user per item |
+| `item.options` — per-item data, parsed from the ingest REVIEW block | `options:` in the review file's frontmatter, derived from the type by `review_actions.buttons_for` |
+| Deep Research button is UI-added for `suggestion`/`missing-page` only | same gate — the other three types never offer it |
+| No OPTIONS line → parser default `Approve \| Skip` | `confirm` (NashSU's unrecognized-type bucket) offers `Approve \| Skip`, not `Create Page` |
 | `__deep_research__` → `queueResearch(topic, searchQueries)` | run the deep-research flow (`deep-research.md`) with the item's `search_queries` as seed queries |
-| Explicit Deep Research with no configured selected source → alert and leave unresolved | report the missing `web`/`anytxt` capability; keep pending and let the user configure it or choose Create Page |
-| `createReviewPageDrafts` type routing | same routing rules (below) |
+| Explicit Deep Research with no configured source → alert, leave unresolved | `blocked_no_search_source`: report the missing `web`/`anytxt` capability; keep pending |
+| Heuristic research action with no configured source → falls through to Create Page | same fallback — this path does **not** block (it is the opposite of the explicit button) |
+| `open:` / bare "open"/"查看" → preview the page, do **not** resolve | `open_page` with `resolves: false` — looking at a page is not triaging it |
+| `delete:<path>` → delete file, resolve "Deleted" | `delete_file` |
+| `save:<base64>` → decode, write `wiki/queries/`, resolve "Saved to Wiki" | `save_page` |
+| `createReviewPageDrafts` type routing | `review_actions.create_review_page_drafts` — a direct port, two documented defect fixes |
 | Select-all checkbox + **Mark selected resolved** / **Dismiss selected** (`handleBatchResolve` / `handleBatchDismiss`) | `scripts/batch_resolve_reviews.py` — human supplies the filter and `--apply`; without `--apply` it only previews |
-| `dismissItem(id)` removes the item from the store | the file is deleted — NashSU has no persistence for review items at all (no `persist` middleware, `ingest.ts` never writes one to disk), so the in-memory store IS the record and removal from it is the whole lifecycle; `--dismiss` matches that exactly (user decision 2026-08-05, overriding this project's earlier "never delete" convention for this one verb) |
+| `dismissItem(id)` removes the item from the store | the file is deleted. NashSU **does** persist review items — externally, not via a `persist` middleware: `auto-save.ts` subscribes to the store and debounce-writes `.llm-wiki/review.json`, and `App.tsx` rehydrates it with `loadReviewItems` on project open. What makes dismiss a deletion is *what* gets persisted: `dismissItem` does `items.filter(i => i.id !== id)` and auto-save writes that shorter array back, so the item leaves the stored record too. Deleting the file reproduces that net effect (user decision 2026-08-05, overriding this project's earlier "never delete" convention for this one verb) |
 | `resolveItem(id, action)` — resolved in store, never deleted | frontmatter `resolved: true` + `resolved_at` + `resolved_reason` — file kept on disk (audit trail, same convention as sweep) |
 
 ## Workflow
@@ -52,11 +66,20 @@ per call — one item per question).
 ### Step 2: Present each item
 
 Show: title, description (trimmed), affected_pages, and its `search_queries`.
-Options (NashSU OPTIONS parity — do not invent custom actions):
 
-1. **Deep Research**（推荐，当 search_queries 非空且已配置搜索源）
-2. **Create Page**
-3. **Skip**
+Offer exactly the item's own options — read `options:` from its frontmatter,
+or call `review_actions.buttons_for(review_type)`. They are **not** the same
+for every type, and never invent a label outside that list:
+
+| review_type | buttons |
+|---|---|
+| `suggestion`, `missing-page` | Deep Research · Create Page · Skip |
+| `contradiction`, `duplicate` | Create Page · Skip |
+| `confirm` | Approve · Skip |
+
+Deep Research is recommended when `search_queries` is non-empty and a search
+source is configured. Older review files predate the `options:` field; fall
+back to `buttons_for(review_type)` for those.
 
 ### Step 3: Execute the choice
 
@@ -67,28 +90,63 @@ Options (NashSU OPTIONS parity — do not invent custom actions):
 - one topic per invocation still applies — with multiple Research choices,
   run them serially
 - choosing the option confirms this topic; do not ask the same scope question again
-- if the source mode has no usable configured capability, do not silently switch
-  modes or auto-create a page; leave the review pending and offer configuration or
-  the separate Create Page choice (`both` may proceed when either branch is configured)
+- if the source mode has no usable configured capability, the behaviour depends
+  on **which** research path was taken, and the two are opposites:
+  - the explicit **Deep Research button** (`__deep_research__`) blocks — leave
+    the review pending and offer configuration or the separate Create Page
+    choice (`both` may proceed when either branch is configured)
+  - a **heuristic** research action (any label containing research/investigate/
+    explore/研究/调研/探索) falls through and creates a page instead
+  `route_review_action` returns `blocked_no_search_source` vs `create_page`
+  accordingly — do not decide this by hand
 - do **not** auto-ingest the resulting query page
 - resolve only after the page has been written successfully:
   `resolved_reason: "Research saved: wiki/queries/<saved-file>.md"`; search,
   synthesis, or write failure leaves the item pending
 
-**Create Page** → NashSU `createReviewPageDrafts` parity:
-- page type routing (first match wins):
-  - title/description matches entity keywords (person/tool/org/product/型号) → `entities/`
-  - matches concept keywords (method/technique/理论/原理) → `concepts/`
-  - contains comparison/compare/比较 → `comparisons/`
-  - contains synthesis/综合 → `synthesis/`
-  - else: missing-page item → `concepts/`; suggestion/contradiction → `queries/`
-- missing-page items: create one page per missing `[[target]]` named in the item
+**Create Page** → call `review_actions.create_review_page_drafts(item, action)`
+and create exactly the drafts it returns. Do not route by hand. The rules it
+implements (first match wins, matched over **action + title + description** —
+the action string participates):
+- literal `entity`/`entities`/`实体` → `entities/`
+- literal `concept`/`concepts`/`概念` → `concepts/`
+- `comparison`/`compare`/`比较` → `comparisons/`
+- `synthesis`/`综合` → `synthesis/`
+- else by type: missing-page → `concepts/`; **every other type** → `queries/`
+
+Only the literal words match. Semantic keyword lists (person/tool/org/product/
+型号, method/technique/理论/原理) were this document's own invention and routed
+pages NashSU would have sent to `queries/`.
+
+- missing-page items fan out to one page per extracted candidate (colon tails,
+  `缺少 X 页面`, `missing X`) — not per `[[target]]` wikilink
 - page body: `# <title>` + the item's description as seed content; frontmatter
   `type/title/created/tags: []/related: []`
 - update `wiki/index.md` (section for the dir) + `wiki/log.md` entry
 - resolve the item: `resolved_reason: "Created page(s): <names>"`
 
-**Skip** → resolve only: `resolved_reason: "Skipped"`.
+**Skip** / **Approve** → resolve only, recording the action verbatim as
+`resolved_reason`. Every dismissal label (skip / dismiss / ignore / approve /
+keep existing / no / 跳过 / 忽略) lands here; anything else creates a page.
+
+#### Other actions NashSU routes (previously undocumented)
+
+An item's `options` may carry an action beyond the standard labels, and lint
+or a human may supply one directly. Pass it through `route_review_action` —
+these three branches exist in `handleResolve` and were missing here entirely:
+
+- `open:<path>`, or a bare `open`/`view`/`打开`/`查看` → **preview the page and
+  leave the item pending.** Viewing is not triaging. Without an explicit path
+  it targets the first `affected_pages` entry, then `source_path`; with
+  neither it is a no-op. This is the only non-blocking action that
+  deliberately does not resolve.
+- `delete:<path>` → delete that file, then resolve `"Deleted"`. Confirm the
+  path with the user first — deletion is outside the default authorization for
+  this flow.
+- `save:<base64>` → decode and write it as a `wiki/queries/` page (frontmatter
+  + index + log, same as the deep-research save), resolve `"Saved to Wiki"`.
+  An undecodable payload resolves `"Save failed"` rather than silently
+  dropping the item.
 
 ### Step 3b: Batch route (NashSU select-all parity)
 

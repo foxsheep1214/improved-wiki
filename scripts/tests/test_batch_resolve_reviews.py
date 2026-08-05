@@ -114,14 +114,14 @@ class BulkResolveMatchesNashsu(unittest.TestCase):
 
 
 class DismissMatchesNashsuRemoval(unittest.TestCase):
-    """NashSU's dismissItem drops the item from its in-memory store — it does
-    not exist anywhere else (no persist middleware backs review-store.ts, and
-    ingest.ts never writes a review item to a file; the store IS the only
-    record). improved-wiki's file-per-item persistence is how review items
-    survive across separate CLI invocations, but that durability need is what
-    resolveItem parity (bulk_resolve) is for. Dismiss should mean what it means
-    in NashSU: gone. User decision 2026-08-05 — align with NashSU over the
-    project's own prior "never delete a review file" convention for this verb."""
+    """NashSU's dismissItem drops the item from its store, and that removal
+    reaches disk: `auto-save.ts` debounce-writes the store to
+    `.llm-wiki/review.json`, so the shorter array replaces the stored record
+    (App.tsx rehydrates it via loadReviewItems). Dismiss therefore means gone,
+    not "kept but flagged" — deleting the file here reproduces that net effect.
+    resolveItem parity (bulk_resolve) is the half that keeps the file.
+    User decision 2026-08-05 — align with NashSU over the project's own prior
+    "never delete a review file" convention for this verb."""
 
     def setUp(self):
         self._t = tempfile.TemporaryDirectory()

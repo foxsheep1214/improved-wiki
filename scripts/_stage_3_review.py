@@ -12,6 +12,7 @@ from _retry import call_with_retry
 from _page_ref import PageRef, PageRefError
 from _paths import atomic_write
 from _review_utils import review_id_for, resolve_review_path
+from review_actions import buttons_for
 from _schema import load_purpose_md, load_schema_md, schema_prompt_text
 
 
@@ -215,6 +216,13 @@ def _render_review_page(rtype: str, title: str, desc: str, affected: list[str],
     # FNV-1a over (type :: normalized-title). The same logical review keeps the
     # same id across re-ingest, so resolved state survives via field-union dedup.
     review_id = review_id_for(rtype, title)
+    # Actions available on this item (NashSU ReviewItem.options parity).
+    # NashSU carries them ON the item; this file is that item's persistent
+    # form, so it carries them too. Recording them here is what keeps the
+    # panel reconstructable — while they lived only in process-reviews.md
+    # prose they drifted into a fixed three-button triple that no NashSU item
+    # type actually has. Derived from the type: see review_actions.buttons_for.
+    options = ", ".join(f'"{b}"' for b in buttons_for(rtype))
     return f"""---
 type: review
 review_id: {review_id}
@@ -222,6 +230,7 @@ review_type: {rtype}
 severity: {severity}
 affected_pages: [{', '.join(affected)}]
 search_queries: [{', '.join(f'"{q}"' for q in queries)}]
+options: [{options}]
 resolved: false
 created: {date_str}
 source_ingest: "{source_stem}"
