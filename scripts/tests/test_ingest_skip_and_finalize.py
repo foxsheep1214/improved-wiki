@@ -36,6 +36,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 import _core  # noqa: E402
 import ingest  # noqa: E402
+import _media_integrity  # noqa: E402
+from _frontmatter import parse_frontmatter  # noqa: E402
+from _ingest_events import load_ingest_events  # noqa: E402
 from _ingest_skip import _stage_0_2_should_skip  # noqa: E402
 from _stage_3_write import _stage_3_2_wiki_path_for_source  # noqa: E402
 from _task_manifest import (  # noqa: E402
@@ -95,14 +98,13 @@ def _seed_completion_state(
 
     source = _stage_3_2_wiki_path_for_source(raw, cfg)
     source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text("# x\n", encoding="utf-8")
-    log = cfg.wiki_dir / "log.md"
-    log.write_text(
-        "# Log\n\n## 2026-01-01 — INGEST\n"
-        "- Source: `raw/Book/x.pdf`\n"
-        f"- Hash: {source_hash[:16]}\n",
+    source.write_text(
+        "---\ntype: source\ntitle: x\n"
+        "created: 2026-01-02\nupdated: 2026-01-02\n---\n\n# x\n",
         encoding="utf-8",
     )
+    log = cfg.wiki_dir / "log.md"
+    log.write_text("# Log\n", encoding="utf-8")
     index = cfg.wiki_dir / "index.md"
     index.write_text("# Index\n\n- [[x]]\n", encoding="utf-8")
     refs = ["wiki/sources/x.md", "wiki/log.md", "wiki/index.md"]
@@ -187,6 +189,23 @@ class TestFinalizeBook(unittest.TestCase):
             # failing/missing embed stack pauses BEFORE the book is marked done.
             self.assertEqual(self.calls, ["embed"])
             self.assertTrue(_core.is_stage_done(cfg, h, "ingested"))
+            events = load_ingest_events(cfg)
+            self.assertEqual(len(events), 1)
+            marker = _core.load_stages(cfg, h)
+            self.assertEqual(marker["ingested"], events[0]["completed_at_ms"])
+            self.assertEqual(
+                marker["ingested__payload"]["run_id"], events[0]["run_id"]
+            )
+            source = _stage_3_2_wiki_path_for_source(raw, cfg)
+            fm, _body = parse_frontmatter(source.read_text(encoding="utf-8"))
+            self.assertEqual(
+                fm["first_ingested_at"], fm["last_ingested_at"]
+            )
+            self.assertEqual(fm["created"], "2026-01-02")
+            self.assertEqual(fm["updated"], "2026-01-02")
+            log_text = (cfg.wiki_dir / "log.md").read_text(encoding="utf-8")
+            self.assertIn("— INGEST COMPLETED", log_text)
+            self.assertIn(f"- Run: `{events[0]['run_id']}`", log_text)
 
     def test_embed_failure_leaves_book_unmarked(self):
         """No-fallback: if embeddings raise, the book is NOT marked complete."""
@@ -204,6 +223,7 @@ class TestFinalizeBook(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ingest._finalize_book(raw, cfg, refs, h)
             self.assertFalse(_core.is_stage_done(cfg, h, "ingested"))
+            self.assertEqual(load_ingest_events(cfg), [])
 
     def test_missing_postwrite_marker_refuses_embedding_and_completion(self):
         with tempfile.TemporaryDirectory() as d:
@@ -284,6 +304,43 @@ class TestStage02ShouldSkip(unittest.TestCase):
             tmp = Path(d)
             cfg, raw, _h = self._setup(tmp)
             self.assertFalse(_stage_0_2_should_skip(raw, cfg))
+
+    def test_media_repair_preserves_full_ingest_time_and_records_repair(self):
+        with tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            cfg, raw, h = self._setup(tmp)
+            self._write_source_page(cfg, raw)
+            original_audit = _media_integrity.audit_cached_media
+            original_repair = _media_integrity.repair_completed_media
+            original_assert = _media_integrity.assert_cached_media_complete
+            try:
+                _media_integrity.audit_cached_media = (
+                    lambda *a, **k: (False, "missing-caption", {})
+                )
+                _media_integrity.repair_completed_media = lambda *a, **k: None
+                _media_integrity.assert_cached_media_complete = lambda *a, **k: None
+                marker_ms = 1_700_000_000_123
+                _core.mark_stage_done(
+                    cfg,
+                    h,
+                    "ingested",
+                    payload={"run_id": "original-run"},
+                    timestamp_ms=marker_ms,
+                )
+
+                self.assertTrue(_stage_0_2_should_skip(raw, cfg))
+                stages = _core.load_stages(cfg, h)
+                self.assertEqual(stages["ingested"], marker_ms)
+                self.assertEqual(
+                    stages["ingested__payload"]["run_id"], "original-run"
+                )
+                events = load_ingest_events(cfg)
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["event"], "repair_completed")
+            finally:
+                _media_integrity.audit_cached_media = original_audit
+                _media_integrity.repair_completed_media = original_repair
+                _media_integrity.assert_cached_media_complete = original_assert
 
 
 class TestStage02ShouldSkipQueryBridge(unittest.TestCase):

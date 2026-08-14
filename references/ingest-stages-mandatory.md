@@ -142,8 +142,8 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
 
 ### Stage 3.3 · Aggregate Repair
-- **作用**：紧接 3.2 写盘后执行：log.md 程序化 append（同一 source identity + hash 幂等，不重复追加）+ index.md LLM 整页重写（失败/超容量/>250 页时 Sources 单行 append）+ overview.md 尽力重写。
-- **go/no-go**：log.md 必须含本 source/hash 的 INGEST block，index.md 必须含 source link；两页以 `aggregate_done` 绑定。overview 是可选修复，不作为完成硬门禁。`ingest-cache.json` 不在本 stage 内写；它在 3.4 与 3.5 之后更新，并与 task manifest 的完整 page refs 一致。
+- **作用**：紧接 3.2 写盘后执行：保证 log.md 聚合文件存在 + index.md LLM 整页重写（失败/超容量/>250 页时 Sources 单行 append）+ overview.md 尽力重写。此时尚未过 Stage 3.7，**不得**写完成记录。
+- **go/no-go**：log.md 必须存在，index.md 必须含 source link；两页以 `aggregate_done` 绑定。overview 是可选修复，不作为完成硬门禁。`ingest-cache.json` 不在本 stage 内写；它在 3.4 与 3.5 之后更新，并与 task manifest 的完整 page refs 一致。`wiki/log.md` 的 `INGEST COMPLETED` 由 finalization 按 run_id 投影。
 
 ### Stage 3.4 · 图片注入
 - **作用**：在 source 页末尾追加 `## Embedded Images` 段，列出所有图 + caption。
@@ -170,7 +170,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **升级迁移**：旧索引采用旧 chunk 边界且没有版本元数据，不能安全地与新规则自动判别。升级后先显式 full re-index 一次；之后普通 ingest 才会稳定保持 page-scoped 增量更新。
 - **无回退（ingest）**：stack 缺失或 touched-page coverage 不完整 → `raise RuntimeError` 暂停。页面已落盘，修好后重跑从 3.7 恢复（`write_phase`、`review_done`、`aggregate_done` 分别跳过已完成段）。搜索侧则按 NashSU 报警后 keyword-only，不把搜索降级等同于 ingest 完成。
 - **为何 NashSU 可选而 improved-wiki 强制**：NashSU 的核心检索仍可用 keyword + graph，向量索引是可失效的搜索增强，因此 ingest 捕获 embedding 错误后仍可返回已写页面；improved-wiki 有意采用更强的完成语义：`ingested` 必须同时证明 Markdown 页面和语义索引同步。故 ingest 期 upsert 失败停在 3.7、修复后从 checkpoint 恢复；只有搜索请求本身允许按 NashSU 降级到 keyword-only。
-- **最终完成门禁**：embedding 前必须同时证明 media 完整、4 个 post-write markers 齐全、cache/source hash/task manifest/page refs 一致、所有页面存在且非空；否则不得置 `ingested`。
+- **最终完成门禁**：embedding 前必须同时证明 media 完整、5 个 post-write markers 齐全、cache/source hash/task manifest/page refs 一致、所有页面存在且非空；否则不得提交事件或置 `ingested`。embedding 成功后冻结本 run 的完成时间，投影 source 页与 log，原子追加 `.llm-wiki/ingest-events.jsonl`，最后以同一 run_id/timestamp 写 `ingested`。历史与状态的完整契约见 `references/time-recording.md`。
 
 ---
 
@@ -180,6 +180,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 0.1 → 0.2 → 1.1 → 1.2 → 1.3 → 2.2 → 2.3 → 2.4
      → 3.1(review generate/validate) → 3.2(write) → 3.3(aggregate)
      → 3.4(media) → 3.5(review persist) → 3.6(cache) → 3.7(embed)
+     → completion event/projections → ingested marker
 
 （1.2→1.3 是 image pipeline：1.3 依赖 1.2 输出；1.3 内部可并发 caption。
  Stage 2.4 在生成后完成源内去重收尾。）
@@ -193,7 +194,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - 3.1 在 3.2 前审查并校验 in-memory generation；`review_prepared` 让 resume 不重复调用 reviewer
 - **3.2 写盘时同名 slug 走 page-merge**（NashSU parity）
 - 3.3 紧随 3.2；3.4 注图后由 3.5 持久化已校验 review，再更新 cache
-- 3.7 强制（缺 stack 暂停），是**最后一个 stage**；之后 `_finalize_book` 置完成标记
+- 3.7 强制（缺 stack 暂停），是**最后一个 stage**；之后 `_finalize_book` 先提交 run 事件与可重建时间投影，再置完成标记
 
 ## Resume marker 粒度 ≠ stage 编号
 
@@ -203,7 +204,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 1. `stage_2_2_done | stage_2_3_done` —— wiki-独立/依赖分界；批量 prefetch 靠在这里精确停住（`raise PrepareStopAfter("1.5")`）才能让下一本书的 prefetch 并行跑。
 2. `write_loop_done | enrichment_done | write_phase` —— 中间夹着 wikilink enrichment 的非幂等 handoff；合并会让 resume 重跑非幂等的 Stage 3.2 写盘或再次询问确实没有安全链接的页面。enrichment 是每次 ingest 的一次性全量 zero-outlink 投影；回答省略某页表示该页本次没有安全精确匹配，也是终态。必须在答案原子应用后才写 `enrichment_done`。同时要保持 artifact-before-marker 的写序，碰这段边界时不要打乱写序。
 3. `review_prepared | write_loop_done` —— 前者固定 pre-write review 结果，后者开始记录磁盘写入；若丢掉该边界，resume 可能对已变更的磁盘页面再次调用 reviewer，破坏 prompt/结果稳定性。
-4. `aggregate_done | write_phase | review_done` —— log/index、media 完整性、review artifacts 分别绑定自己的页面集合；cache/finalization 只能消费三者均完成后的并集，避免重复 append log、重复注图或重写 review。
+4. `aggregate_done | write_phase | review_done` —— log/index 文件、media 完整性、review artifacts 分别绑定自己的页面集合；cache/finalization 只能消费三者均完成后的并集，避免重复注图或重写 review。完成日志不在 `aggregate_done` 内追加，而由 finalization 按 run_id 幂等投影。
 
 ## 自动验证（ingest.py 内置）
 
@@ -215,11 +216,11 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 | 2.4 | 全部 chunk analysis 已完成；整书只执行一次 generation；可选 key/schema-typed 页可为 0（仅精确 `NO_KEY_PAGES` 可作为模型主动弃权）；同一响应中的 source block 必须存在且路径正确。未闭合 exact path 做一次 targeted repair；仍缺失/错误则从完整 Stage 2 analysis 生成 deterministic fallback。最终至少 1 个 FILE block，且恰好一个 exact-path、frontmatter/END 完整、正文非空的 source block（`_verify_stage_2_4_file_blocks`，**写盘前** in-memory 检查） |
 | 3.1 | review YAML 严格 schema + wiki 内安全路径；整批校验后才写 `review_prepared`，不写 REVIEW artifacts |
 | 3.2 | 写入无 hard failure；成功页先落盘再写 `write_loop_done` |
-| 3.3 | log source/hash 与 index source link 两个确定性 postcondition |
+| 3.3 | log 文件存在 + index source link 两个确定性 postcondition；禁止提前写完成记录 |
 | 3.4 | required media 全量注入后才写 `write_phase` |
 | 3.5 | 只持久化 `review_prepared` 的已验证 items；成功后绑定 REVIEW page refs |
 | 3.6 | cache 中的 source hash/page refs 与 task manifest 一致 |
-| finalize | media、markers、cache、task manifest、page refs 与磁盘页面交叉一致 |
+| finalize | media、markers、cache、task manifest、page refs 与磁盘页面交叉一致；Stage 3.7 成功后 event/source/log/marker 的 run_id 与时间一致 |
 
 > `validate_stage_outputs` 仍是软质量校验（warning，不 raise）；上表新增的 3.x/finalize 检查是 artifact 完整性与安全门禁，不是恢复已移除的全量 post-ingest 内容质量 audit。
 

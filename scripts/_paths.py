@@ -52,6 +52,7 @@ def detect_runtime_dir(wiki_root: Path) -> Path:
     # If .llm-wiki/ exists and has valid content, use it regardless of legacy wiki/
     llm_wiki_indicators = [
         llm_wiki / "ingest-cache.json",
+        llm_wiki / "ingest-events.jsonl",
         llm_wiki / "ingest-progress",
         llm_wiki / "lancedb",
         llm_wiki / "embed-cache.json",

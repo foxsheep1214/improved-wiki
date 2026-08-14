@@ -88,11 +88,16 @@ python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch
 | `extract-tmp/` | minerU staging dir for PDF extraction | After ingest completes |
 | `.extract-tmp/` | Legacy back-compat marker checked by `_paths.py` when detecting old `wiki/`-based runtime layout — not an active temp dir on its own | N/A (detection-only path, not written by current code) |
 | `conversation/` | LLM prompt/response handoff files | After ingest completes |
-| `ingest-progress/` | Crash-recovery checkpoints | When no ingest is running |
 | `embed-cache.json` | Legacy pre-NashSU-0.6.6 full-rebuild vector cache; current code ignores it | After confirming no old-version embedding process is running |
 
 **Do NOT delete** (active state):
 - `ingest-cache.json` — dedup hash cache (Stage 3.6)
+- `ingest-events.jsonl` — append-only completed-run/repair history authority
+- `source-page-snapshots/` — `--delete` 后等待下一次 re-ingest 消费的一次性
+  page-time/content-hash baseline
+- `ingest-progress/` — contains current `ingested` status, task/run envelopes,
+  and resumable checkpoints; clear only a source's stage file through the
+  explicit source lifecycle or a diagnosed recovery procedure
 - `batch.pause` / `batch-prefetch.pause` — explicit pause state
 - `batch-bg.json` / `batch-workers/*.json[.lease]` — detached-worker identity
 - `spine-reservation.json` — source-bound Stage 2.3+ owner across handoffs
@@ -134,7 +139,7 @@ index while reclaiming old LanceDB snapshots.
 ```bash
 cd ~/Documents/知识库/<Project>
 # Verify no ingest running first!
-rm -rf .llm-wiki/extract-tmp/ .llm-wiki/.extract-tmp/ .llm-wiki/conversation/ .llm-wiki/ingest-progress/
+rm -rf .llm-wiki/extract-tmp/ .llm-wiki/.extract-tmp/ .llm-wiki/conversation/
 ```
 
 ## `wiki/concepts/.md` empty-slug file (BUG RESIDUAL)

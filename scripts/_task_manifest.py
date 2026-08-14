@@ -3,13 +3,16 @@
 The artifact cache (``*.json``) stores data and ``*.stages.json`` controls
 flow, but neither file alone says which source identity, pipeline contract,
 chunk plan, and page set constitute one ingest task. This manifest is the
-auditable envelope around both files and remains after progress cleanup.
+auditable envelope around both files and remains after progress cleanup. Its
+stable ``task_id`` is distinct from the UUID ``run_id``: one unfinished run
+survives resume, while an explicit re-ingest rotates the run.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -188,6 +191,19 @@ def _sync_from_disk(manifest: dict, config, source_hash: str) -> dict:
     resume["stage_markers"] = markers
     resume["stage_payload_sha256"] = payload_hashes
     manifest["status"] = "complete" if "ingested" in markers else "running"
+    if "ingested" in markers:
+        payload = stages.get("ingested__payload")
+        run = manifest.get("run")
+        marker_run_id = (
+            str(payload.get("run_id") or "")
+            if isinstance(payload, dict)
+            else ""
+        )
+        if isinstance(run, dict) and run.get("run_id"):
+            if not marker_run_id or marker_run_id == run.get("run_id"):
+                run["completed_at_ms"] = int(stages["ingested"])
+                if isinstance(payload, dict) and payload.get("completed_at"):
+                    run["completed_at"] = payload["completed_at"]
     manifest["updated_at"] = _now_ms()
     return manifest
 
@@ -444,6 +460,80 @@ def sync_task_manifest(config, source_hash: str) -> None:
         _read_manifest(path), config, source_hash)
     _validate_bound_artifacts(manifest, config, source_hash)
     atomic_write(path, json.dumps(manifest, ensure_ascii=False, indent=2))
+
+
+def ensure_active_run(
+    raw_file: Path,
+    config,
+    source_hash: str | None = None,
+    *,
+    now_ms: int | None = None,
+    run_id: str | None = None,
+) -> dict:
+    """Return the unique run envelope for this explicit ingest/resume.
+
+    ``task_id`` remains the stable source+hash task identity. ``run_id`` is a
+    separate UUID: a paused/resumed pipeline reuses it, while a completed task
+    that is explicitly re-ingested receives a new one. The event ledger, not
+    the manifest, remains the historical authority.
+    """
+    actual_hash = file_sha256(raw_file)
+    if source_hash is not None and source_hash != actual_hash:
+        raise TaskManifestError(
+            "active-run source hash does not match the source bytes"
+        )
+    source_hash = actual_hash
+    path = task_manifest_path(config, source_hash)
+    if not path.exists():
+        ensure_task_manifest(raw_file, config)
+    manifest = _read_manifest(path)
+    stages = load_stages(config, source_hash)
+    current = manifest.get("run")
+    current_is_resumable = (
+        isinstance(current, dict)
+        and isinstance(current.get("run_id"), str)
+        and bool(current["run_id"])
+        and not current.get("completed_at_ms")
+        and not stages.get("ingested")
+    )
+    if current_is_resumable:
+        return current
+
+    started_at_ms = now_ms if now_ms is not None else _now_ms()
+    active = {
+        "run_id": run_id or str(uuid.uuid4()),
+        "started_at_ms": started_at_ms,
+    }
+    manifest["run"] = active
+    manifest["status"] = "running"
+    manifest["updated_at"] = _now_ms()
+    atomic_write(path, json.dumps(manifest, ensure_ascii=False, indent=2))
+    return active
+
+
+def prepare_run_completion(
+    raw_file: Path,
+    config,
+    source_hash: str | None = None,
+    *,
+    completed_at_ms: int | None = None,
+) -> dict:
+    """Freeze one completion candidate timestamp for crash-safe finalization."""
+    source_hash = source_hash or file_sha256(raw_file)
+    run = ensure_active_run(raw_file, config, source_hash)
+    path = task_manifest_path(config, source_hash)
+    manifest = _read_manifest(path)
+    active = manifest.get("run")
+    if not isinstance(active, dict) or active.get("run_id") != run["run_id"]:
+        raise TaskManifestError("task manifest active run changed unexpectedly")
+    if active.get("completion_candidate_ms"):
+        return active
+    active["completion_candidate_ms"] = (
+        completed_at_ms if completed_at_ms is not None else _now_ms()
+    )
+    manifest["updated_at"] = _now_ms()
+    atomic_write(path, json.dumps(manifest, ensure_ascii=False, indent=2))
+    return active
 
 
 def bind_chunk_plan(config, source_hash: str, chunk_plan: dict) -> None:

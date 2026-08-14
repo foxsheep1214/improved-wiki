@@ -23,6 +23,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 # === Per-project runtime context ===
@@ -40,6 +41,8 @@ from _lint_suggest import (
     STATE_FILES as _LINT_STATE_FILES,
 )
 from _progress import file_sha256
+from _frontmatter import parse_frontmatter
+from _ingest_events import ingest_events_for_source, load_ingest_events
 RUNTIME = detect_runtime_dir(PROJECT_ROOT)
 SOURCE_SLUG = os.environ.get("SOURCE_SLUG", "")
 
@@ -180,6 +183,51 @@ def _validate_recorded_source_pages(entry: dict, project_root: Path) -> tuple[li
         if path.is_file():
             existing.append(path)
     return recorded, existing
+
+
+def _validate_completion_history(
+    entry: dict,
+    source_page: Path | None,
+) -> tuple[bool, str]:
+    """Cross-check ledger, source projection, and current completion marker."""
+    source_hash = str(entry.get("hash") or entry.get("sourceHash") or "")
+    cache_key = str(entry.get("key") or "").replace("\\", "/")
+    if not source_hash or not cache_key:
+        return False, "cache entry lacks key/hash"
+    source_identity = f"raw/{cache_key}"
+    try:
+        events = ingest_events_for_source(
+            load_ingest_events(SimpleNamespace(runtime_dir=RUNTIME)),
+            source_identity,
+        )
+    except Exception as exc:
+        return False, f"event ledger unreadable: {type(exc).__name__}: {exc}"
+    matching = [
+        event for event in events if event.get("source_hash") == source_hash
+    ]
+    if not matching:
+        return False, f"no ingest_completed event for {source_identity} hash={source_hash[:16]}"
+    latest = matching[-1]
+    stage_path = RUNTIME / "ingest-progress" / f"{source_hash[:16]}.stages.json"
+    if not stage_path.is_file():
+        return False, f"current stages marker missing: {stage_path.name}"
+    try:
+        stages = json.loads(stage_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"current stages marker unreadable: {exc}"
+    payload = stages.get("ingested__payload")
+    if stages.get("ingested") != latest["completed_at_ms"]:
+        return False, "ingested marker timestamp differs from latest run event"
+    if not isinstance(payload, dict) or payload.get("run_id") != latest["run_id"]:
+        return False, "ingested marker run_id differs from latest run event"
+    if source_page is None or not source_page.is_file():
+        return False, "source page missing for time projection check"
+    fm, _body = parse_frontmatter(source_page.read_text(encoding="utf-8"))
+    if fm.get("first_ingested_at") != events[0]["completed_at"]:
+        return False, "source first_ingested_at differs from ledger"
+    if fm.get("last_ingested_at") != latest["completed_at"]:
+        return False, "source last_ingested_at differs from ledger"
+    return True, f"run_id={latest['run_id']} completed_at={latest['completed_at']}"
 
 
 # ── Structural lint suggestions (wiki-wide, non-gating) ─────────────────────
@@ -488,6 +536,22 @@ def main(argv: Optional[list[str]] = None):
               f"{len(entry.get('filesWritten', []))} files")
     else:
         check("ingest-cache.json has matching entry", False, f"slug={SOURCE_SLUG}")
+
+    # ═══════════════════════════════════════════════
+    # Finalization: run event + source/marker projections
+    # ═══════════════════════════════════════════════
+    print("\n[Finalization] Completed-run history")
+    if entry:
+        history_ok, history_detail = _validate_completion_history(
+            entry, source_page
+        )
+        check(
+            "ledger/source/ingested marker agree",
+            history_ok,
+            history_detail,
+        )
+    else:
+        check("completed-run history", False, "cache entry unavailable")
 
     # ═══════════════════════════════════════════════
     # Stage 3.7: Embeddings (mandatory touched-page coverage)

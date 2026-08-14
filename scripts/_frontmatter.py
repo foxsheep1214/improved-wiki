@@ -162,6 +162,38 @@ def write_frontmatter(fm: dict, body: str) -> str:
     return "\n".join(lines) + body
 
 
+OPERATIONAL_TIME_FIELDS = (
+    "created",
+    "updated",
+    "first_ingested_at",
+    "last_ingested_at",
+)
+
+
+def strip_operational_time_fields(content: str) -> str:
+    """Remove volatile lifecycle dates from semantic-embedding input.
+
+    The source Markdown keeps these fields. They are omitted only from the text
+    sent to the embedding model, so a completion-time projection cannot make a
+    successfully embedded page appear stale or trigger meaningless vector
+    churn. The line-based edit preserves block-style arrays verbatim.
+    """
+    if not content.startswith("---"):
+        return content
+    end = content.find("\n---", 3)
+    if end == -1:
+        return content
+    frontmatter = content[4:end]
+    field_pattern = re.compile(
+        r"^(?:" + "|".join(map(re.escape, OPERATIONAL_TIME_FIELDS)) + r"):\s*"
+    )
+    kept = [
+        line for line in frontmatter.splitlines()
+        if not field_pattern.match(line)
+    ]
+    return "---\n" + "\n".join(kept) + content[end:]
+
+
 # ── Merge ────────────────────────────────────────────────────────────────────
 
 # Fields whose values are UNIONED (not replaced) across re-ingests

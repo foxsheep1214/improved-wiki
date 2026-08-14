@@ -42,7 +42,7 @@ class TestAggregateCompletionGate(unittest.TestCase):
     def tearDown(self):
         stage3.call_anthropic_protocol = self._original_call
 
-    def test_resume_does_not_append_duplicate_log_record(self):
+    def test_stage_3_3_does_not_claim_completion_before_embedding(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             cfg = _config(root)
@@ -69,8 +69,8 @@ class TestAggregateCompletionGate(unittest.TestCase):
                 source, raw, source_hash, "mineru-api", cfg)
 
             log_text = (cfg.wiki_dir / "log.md").read_text(encoding="utf-8")
-            self.assertEqual(
-                log_text.count(f"- Hash: {source_hash[:16]}"), 1)
+            self.assertEqual(log_text, "# Log\n")
+            self.assertNotIn("INGEST COMPLETED", log_text)
             for refs in (first, second):
                 self.assertIn("wiki/log.md", refs)
                 self.assertIn("wiki/index.md", refs)
@@ -83,12 +83,7 @@ class TestAggregateCompletionGate(unittest.TestCase):
             index = cfg.wiki_dir / "index.md"
             log.parent.mkdir(parents=True)
             source_hash = "a" * 64
-            log.write_text(
-                "# Log\n\n## 2026-01-01 — INGEST\n"
-                "- Source: `raw/Book/x.pdf`\n"
-                f"- Hash: {source_hash[:16]}\n",
-                encoding="utf-8",
-            )
+            log.write_text("# Log\n", encoding="utf-8")
             index.write_text("# Index\n", encoding="utf-8")
 
             with self.assertRaisesRegex(RuntimeError, "does not contain"):
@@ -108,12 +103,7 @@ class TestAggregateCompletionGate(unittest.TestCase):
             index = cfg.wiki_dir / "index.md"
             log.parent.mkdir(parents=True)
             source_hash = "b" * 64
-            log.write_text(
-                "# Log\n\n## 2026-01-01 — INGEST\n"
-                "- Source: `raw/Book/x.pdf`\n"
-                f"- Hash: {source_hash[:16]}\n",
-                encoding="utf-8",
-            )
+            log.write_text("# Log\n", encoding="utf-8")
             index.write_text(
                 "# Wiki Index\n\n## source\n\n"
                 "- [[sources/Book/x|Book X]]\n",

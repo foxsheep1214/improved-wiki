@@ -56,9 +56,10 @@ cat wiki/sources/My\ Book\ -\ 2024\ -\ Author.md
 cat wiki/log.md
 ```
 
-Step 7 is complete only when the source's `.stages.json` contains `ingested`
-and `validate_ingest.py` passes. A source page alone can be a resumable
-mid-pipeline artifact.
+Step 7 is complete only when the source's `.stages.json` contains `ingested`,
+the same run_id exists in `.llm-wiki/ingest-events.jsonl`, and
+`validate_ingest.py` passes. A source page alone can be a resumable mid-pipeline
+artifact.
 
 ```bash
 # 9. Install the cron (see references/cron-installation.md)
@@ -133,12 +134,16 @@ echo $?  # should be 0
 python3 "$SKILL_DIR/scripts/ingest.py" --batch-status
 rg '"ingested"' .llm-wiki/ingest-progress/*.stages.json
 
-# Check 4: the cache file is created/updated after the first ingest
+# Check 4: the authoritative completed-run history exists and is queryable
+test -f .llm-wiki/ingest-events.jsonl
+python3 "$SKILL_DIR/scripts/ingest_history.py" --project "$IMPROVED_WIKI_ROOT" list --limit 1
+
+# Check 5: the cache file is created/updated after the first ingest
 test -f .llm-wiki/ingest-cache.json
 cat .llm-wiki/ingest-cache.json | python3 -m json.tool  # should be valid JSON
 
-# Check 5: the log file got an entry
-tail -10 wiki/log.md  # should show the most recent ingest
+# Check 6: the human-readable log projection got a run_id entry
+tail -12 wiki/log.md  # should show INGEST COMPLETED + Run
 ```
 
 If any check fails, the most common cause is **the wrong `IMPROVED_WIKI_ROOT`** — the script defaults to `os.getcwd()`. Always pass it explicitly:

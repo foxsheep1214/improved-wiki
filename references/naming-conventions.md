@@ -143,7 +143,7 @@ wiki/log.md
 
 **来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件由 Stage 3.3 在每次 ingest 时维护（见 `_stage_3_write.py::stage_3_3_aggregate_repair`），**不应由用户手写**：
 
-- `log.md`：**程序化追加**变更日志条目（确定性，从不调用 LLM）。
+- `log.md`：完成事件的人类可读投影（确定性，从不调用 LLM）；只在 Stage 3.7 成功后的 finalization 按 `run_id` 追加，历史权威是 `.llm-wiki/ingest-events.jsonl`。
 - `index.md` / `overview.md`：默认由 **LLM 整页重写**（喂入磁盘上的权威页面清单 / 内容综合），LLM 调用失败或超出体量上限时回退到确定性追加。
 
 > 注意：与早期文档「纯程序化 append，LLM 永远不应生成」的表述不同——index.md/overview.md 现在确实经过 LLM 重写，需留意内容漂移风险（重写 prompt 已要求逐字保留已有条目描述与 frontmatter）。
@@ -216,7 +216,13 @@ year: 2025
 url: ""
 venue: ""
 sources: ["raw/Book/原文件.pdf"]
+first_ingested_at: "2026-06-30T10:00:00.000+08:00"
+last_ingested_at: "2026-08-14T10:34:43.334+08:00"
 ```
+
+前两项时间字段是 improved-wiki 的 completed-run 投影，不是 NashSU 原生字段。
+`created` 是页面逻辑首次创建日且锁定；`updated` 只随知识内容实质变化；纯消化时间
+投影不得修改 `updated`。详见 `references/time-recording.md`。
 
 ### 4.3 Finding 页面额外字段
 
@@ -294,6 +300,8 @@ wiki/media/<slug>/_manifest.json
 ```
 .llm-wiki/
 ├── ingest-cache.json           # sha256 → {hash, filesWritten, stages}
+├── ingest-events.jsonl         # completed run/repair append-only 历史权威
+├── source-page-snapshots/      # --delete 后供下一 run 一次性比较/恢复页面时间
 ├── ingest-queue.json           # 待处理队列
 ├── ingest-progress/            # <hash[:16]>.json 检查点
 ├── extract-tmp/<slug>/         # 文本抽取临时文件

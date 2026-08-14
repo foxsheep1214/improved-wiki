@@ -43,7 +43,10 @@ from _embedding_chunker import (  # noqa: E402
     chunk_markdown,
 )
 from _embedding_store import remove_page_embeddings  # noqa: E402
-from _frontmatter import extract_frontmatter_title  # noqa: E402
+from _frontmatter import (  # noqa: E402
+    extract_frontmatter_title,
+    strip_operational_time_fields,
+)
 
 import lancedb  # noqa: E402
 
@@ -633,7 +636,7 @@ def collect_pages(page_paths: list[str] | None = None) -> list[dict]:
                 "page_id": rel_path[:-3],
                 "path": rel_path,
                 "title": extract_frontmatter_title(content) or stem,
-                "content": content,
+                "content": strip_operational_time_fields(content),
             }
         )
     pages.sort(key=lambda page: page["path"])

@@ -48,7 +48,14 @@ authors: []
 year: YYYY
 url: ""
 venue: ""
+first_ingested_at: "YYYY-MM-DDTHH:MM:SS.sss+HH:MM"
+last_ingested_at: "YYYY-MM-DDTHH:MM:SS.sss+HH:MM"
 ```
+
+`created` is the immutable logical page-creation date; `updated` changes only
+for a material knowledge-content edit. The two source-only ingest timestamps
+are projections of completed runs from `.llm-wiki/ingest-events.jsonl`; changing
+them never changes `updated`.
 
 Thesis pages also include:
 
@@ -96,12 +103,14 @@ frontmatter type using full wiki-relative targets:
 
 ## Log Format
 
-`wiki/log.md` records activity in reverse chronological order:
+`wiki/log.md` is a human-readable projection of completed run events. The
+append-only `.llm-wiki/ingest-events.jsonl` ledger is authoritative:
 
 ```text
-## YYYY-MM-DD
-
-- Action taken / finding noted
+## YYYY-MM-DDTHH:MM:SS.sss+HH:MM — INGEST COMPLETED
+- Run: `<uuid>`
+- Source: `raw/<path>`
+- Hash: <full sha256>
 ```
 
 ## Cross-referencing Rules

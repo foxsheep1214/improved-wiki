@@ -1,6 +1,7 @@
 """_ingest_skip.py — Stage 0.2 dedup/skip + stage go/no-go (extracted from ingest.py)."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from _config import Config
@@ -8,8 +9,13 @@ from _core import is_query_bridge_source
 from _progress import (
     file_sha256,
     is_stage_done,
+    load_stages,
     mark_stage_done,
     unmark_stage_done,
+)
+from _ingest_events import (
+    build_repair_completed_event,
+    commit_repair_completion,
 )
 from _stage_3_write import _stage_3_2_wiki_path_for_source
 
@@ -81,10 +87,37 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
                 "considered complete")
             # Clear the authoritative marker before any I/O/API work. If the
             # repair pauses, the next run cannot silently skip the source.
+            prior_stages = load_stages(config, h)
+            prior_ingested_ms = int(prior_stages["ingested"])
+            prior_ingested_payload = prior_stages.get("ingested__payload")
             unmark_stage_done(config, h, "ingested")
             repair_completed_media(raw_file, config)
             assert_cached_media_complete(raw_file, config)
-            mark_stage_done(config, h, "ingested")
+            repair_event = build_repair_completed_event(
+                raw_file,
+                config,
+                h,
+                int(time.time() * 1000),
+                repair_kind="media",
+            )
+            try:
+                commit_repair_completion(config, repair_event)
+            finally:
+                # Repair history is separate from full-ingest history. Restore
+                # the exact original completion marker even if audit-ledger
+                # recording itself raises; the successful media repair must
+                # never masquerade as an unfinished or newer full digestion.
+                mark_stage_done(
+                    config,
+                    h,
+                    "ingested",
+                    payload=(
+                        prior_ingested_payload
+                        if isinstance(prior_ingested_payload, dict)
+                        else None
+                    ),
+                    timestamp_ms=prior_ingested_ms,
+                )
             print("  [skip] Media repaired and re-verified")
         print("  [skip] Ingest complete (ingested marker present)")
         return True

@@ -108,7 +108,8 @@ Active order:
 → 3.1 pre-write review generation
 → 3.2 write/merge → 3.3 aggregate repair → 3.4 media injection
 → 3.5 review persistence → 3.6 cache
-→ 3.7 touched-page embedding upsert → ingested marker
+→ 3.7 touched-page embedding upsert
+→ run event + source/log time projections → ingested marker
 ```
 
 Ingest does not create unanswered query pages. Comparison, synthesis, finding,
@@ -234,6 +235,16 @@ There is no silent quality fallback:
   only the pages written by this ingest. Every touched page must have exact
   chunk coverage before `ingested` may be set. It never performs an implicit
   full-wiki rebuild and does not use the legacy `embed-cache.json`.
+- Completion history is separate from current completion state. The append-only
+  `.llm-wiki/ingest-events.jsonl` ledger is authoritative for completed runs;
+  source-page `first_ingested_at` / `last_ingested_at` and `wiki/log.md` are
+  projections. `<hash>.stages.json` `ingested` remains the authoritative current
+  skip marker. One explicit ingest gets one UUID run_id; resumes reuse it.
+- Stage 3.3 never writes a completed-ingest claim. Finalization writes the event
+  and its projections only after mandatory Stage 3.7 succeeds, then sets
+  `ingested` with the same run_id and epoch-millisecond timestamp. Repairs use
+  `repair_completed` and restore the prior full-ingest marker unchanged. See
+  `references/time-recording.md` for query and migration commands.
 - `scripts/build_embeddings.py ... embed` is the explicit full re-index route.
   It prepares every current chunk before overwriting the live table and verifies
   the final row count. Both incremental and full successful writes run compact

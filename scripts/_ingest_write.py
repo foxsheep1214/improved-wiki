@@ -788,9 +788,9 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
 
     # NashSU Phase-3 order: maintain aggregate navigation immediately after
     # FILE writes and before source-summary image injection / review
-    # persistence.  The marker makes retries idempotent; the aggregate
-    # implementation separately guards log.md against duplicate source/hash
-    # entries for legacy/marker-loss recovery.
+    # persistence. The marker makes retries idempotent. Stage 3.3 only owns the
+    # log artifact here; finalization appends the completed-run projection by
+    # run_id after mandatory Stage 3.7.
     if is_stage_done(config, h, "aggregate_done"):
         _aggregate_payload, index_log_files = _validated_marker_page_refs(
             config, h, "aggregate_done")

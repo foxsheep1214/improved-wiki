@@ -54,7 +54,7 @@ from _ingest_chunks import (
 )
 from _stage_2_context import build_consolidated_stage_2_context
 from normalize_raw_names import stage_0_1_check_file
-from _task_manifest import ensure_task_manifest
+from _task_manifest import ensure_active_run, ensure_task_manifest
 
 def _stage_2_2_only_requested(config: Config, prefetch_only: bool) -> bool:
     """Whether prepare must stop before wiki-dependent Stage 2.3/2.4."""
@@ -184,12 +184,28 @@ def _do_prepare(
         # Bind this run to one source identity + pipeline contract before any
         # cache or marker is allowed to influence control flow.
         h = file_sha256(raw_file)
+
+        # A source page removed outside the pipeline leaves a stale legacy
+        # completion marker. Clear that marker before manifest validation: an
+        # existing manifest may still bind the now-missing page and would
+        # otherwise fail before Stage 0.2 gets a chance to perform its stated
+        # stale-marker recovery.
+        if is_stage_done(config, h, "ingested") and not is_query_bridge_source(
+            raw_file, config
+        ):
+            from _stage_3_write import _stage_3_2_wiki_path_for_source
+            if not _stage_3_2_wiki_path_for_source(raw_file, config).exists():
+                _stage_0_2_should_skip(raw_file, config)
         ensure_task_manifest(raw_file, config)
 
         # Dedup check — skip only if the ingest is truly complete (the
         # ``ingested`` completion marker is set); otherwise resume or re-ingest.
         if _stage_0_2_should_skip(raw_file, config):
             return None
+
+        # One explicit ingest gets a unique run_id; every handoff/crash resume
+        # of that same unfinished pipeline reuses it.
+        ensure_active_run(raw_file, config, h)
 
         progress = load_progress(config, h)
 

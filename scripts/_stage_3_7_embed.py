@@ -8,8 +8,9 @@ embed`` operation.
 Embedding remains mandatory in improved-wiki: a missing configured backend or
 an incomplete touched page pauses the ingest instead of silently degrading.
 
-Stage 3.7 is the FINAL ingest stage: after it, _finalize_book sets the
-completion marker. (The former Stage 4.1 post-ingest validation audit was
+Stage 3.7 is the FINAL ingest stage: after it, _finalize_book commits the
+run-level completion event/projections and sets the completion marker. (The
+former Stage 4.1 post-ingest validation audit was
 removed for NashSU alignment — NashSU has no such stage; its only ingest-time
 check, schema routing, runs at write time in Stage 3.2.)
 """

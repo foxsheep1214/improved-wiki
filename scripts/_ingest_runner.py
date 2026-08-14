@@ -12,7 +12,17 @@ from _ingest_prepare import _do_prepare
 from _ingest_write import _do_write
 from _stage_3_7_embed import stage_3_7_embed_new_pages
 from _media_integrity import assert_cached_media_complete
-from _task_manifest import assert_task_ready_for_completion
+from _ingest_events import (
+    build_ingest_completed_event,
+    clear_source_page_time_snapshot,
+    commit_ingest_completion,
+    ingest_event_path,
+    restore_source_page_times,
+)
+from _task_manifest import (
+    assert_task_ready_for_completion,
+    prepare_run_completion,
+)
 
 def _is_ingestable_source_path(rf: Path, config: Config) -> bool:
     """True for a normal ``raw/`` source or an explicitly supplied query page.
@@ -27,7 +37,9 @@ def _finalize_book(raw_file: Path, config: Config,
                    files_written: list, source_hash: str) -> None:
     """Per-book post-write finalization shared by the single-book and batch paths.
 
-    Runs Stage 3.7 (embeddings) → sets the ``ingested`` completion marker.
+    Runs Stage 3.7 (embeddings) → commits the run event/projections → sets the
+    ``ingested`` completion marker. The event and marker share one frozen
+    completion timestamp and run_id.
 
     The dedicated post-ingest validation audit (formerly "Stage 4.1", running
     validate_ingest.py) was REMOVED for NashSU alignment: NashSU has no
@@ -65,7 +77,36 @@ def _finalize_book(raw_file: Path, config: Config,
         source_hash,
     )
     stage_3_7_embed_new_pages(config, canonical_files)
-    mark_stage_done(config, source_hash, "ingested")
+    run = prepare_run_completion(raw_file, config, source_hash)
+    completed_at_ms = int(run["completion_candidate_ms"])
+    restore_source_page_times(raw_file, config, run["run_id"])
+    event = build_ingest_completed_event(
+        raw_file,
+        config,
+        source_hash,
+        run["run_id"],
+        completed_at_ms,
+    )
+    commit_ingest_completion(config, event)
+    try:
+        ledger_ref = str(
+            ingest_event_path(config).relative_to(config.wiki_root)
+        )
+    except ValueError:
+        ledger_ref = str(ingest_event_path(config))
+    mark_stage_done(
+        config,
+        source_hash,
+        "ingested",
+        payload={
+            "run_id": event["run_id"],
+            "completed_at": event["completed_at"],
+            "event": event["event"],
+            "event_ledger": ledger_ref,
+        },
+        timestamp_ms=completed_at_ms,
+    )
+    clear_source_page_time_snapshot(raw_file, config, run["run_id"])
 
 
 def ingest_one(

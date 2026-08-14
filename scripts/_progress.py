@@ -156,11 +156,21 @@ def mark_stage_done(
     source_hash: str,
     stage: str,
     payload: dict | None = None,
+    *,
+    timestamp_ms: int | None = None,
 ) -> None:
+    marker_time = (
+        timestamp_ms if timestamp_ms is not None else int(time.time() * 1000)
+    )
+    if not isinstance(marker_time, int) or marker_time <= 0:
+        raise ValueError(
+            f"stage marker timestamp must be positive epoch milliseconds: "
+            f"{marker_time!r}"
+        )
     with _progress_lock(config, source_hash):
         stages = load_stages(config, source_hash)
-        stages[stage] = int(time.time() * 1000)
-        if payload:
+        stages[stage] = marker_time
+        if payload is not None:
             stages[f"{stage}__payload"] = payload
         atomic_write(
             stages_path(config, source_hash),

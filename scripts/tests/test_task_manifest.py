@@ -16,7 +16,9 @@ from _task_manifest import (  # noqa: E402
     TaskManifestError,
     bind_chunk_plan,
     bind_page_refs,
+    ensure_active_run,
     ensure_task_manifest,
+    prepare_run_completion,
     task_manifest_path,
 )
 
@@ -54,6 +56,43 @@ def _raw(root: Path, name: str = "book.pdf", content: bytes = b"same") -> Path:
 
 
 class TestTaskManifest(unittest.TestCase):
+    def test_run_id_is_unique_per_explicit_run_and_stable_across_resume(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cfg = _config(root)
+            raw = _raw(root)
+            source_hash = _core.file_sha256(raw)
+            ensure_task_manifest(raw, cfg)
+
+            first = ensure_active_run(
+                raw, cfg, source_hash, now_ms=1000, run_id="run-first"
+            )
+            resumed = ensure_active_run(
+                raw, cfg, source_hash, now_ms=2000, run_id="ignored"
+            )
+            self.assertEqual(first["run_id"], "run-first")
+            self.assertEqual(resumed["run_id"], "run-first")
+
+            candidate = prepare_run_completion(
+                raw, cfg, source_hash, completed_at_ms=3000
+            )
+            self.assertEqual(candidate["completion_candidate_ms"], 3000)
+            _core.mark_stage_done(
+                cfg,
+                source_hash,
+                "ingested",
+                payload={"run_id": "run-first", "completed_at": "fixed"},
+                timestamp_ms=3000,
+            )
+            # Explicit re-ingest clears current markers but preserves the
+            # completed run envelope and event history.
+            _core.stages_path(cfg, source_hash).unlink()
+            ensure_task_manifest(raw, cfg)
+            second = ensure_active_run(
+                raw, cfg, source_hash, now_ms=4000, run_id="run-second"
+            )
+            self.assertEqual(second["run_id"], "run-second")
+
     def test_manifest_is_source_bound_and_secret_free(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)

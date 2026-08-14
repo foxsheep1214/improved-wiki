@@ -685,8 +685,9 @@ def resolve_ingest_write_path(
     if not is_safe_ingest_path(rel_path):
         return None
     if Path(rel_path).name in _LISTING_BASENAMES:
-        # Stage 3.3 rebuilds index/overview deterministically, log.md is
-        # append-only, and schema.md is the user's contract. A generation block
+        # Stage 3.3 rebuilds index/overview and owns log.md; completed-run log
+        # records are appended by finalization. schema.md is the user's
+        # contract. A generation block
         # claiming one would overwrite the whole file (NashSU
         # isAppManagedAggregatePath, ingest.ts:1428-1431).
         if not quiet:
@@ -1202,24 +1203,6 @@ def rebuild_index_deterministic(wiki_dir: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _log_contains_ingest_record(
-    log_text: str,
-    source_identity: str,
-    source_hash: str,
-) -> bool:
-    """True when one INGEST block already binds this source and content hash."""
-    source_line = f"- Source: `{source_identity}`"
-    hash_line = f"- Hash: {source_hash[:16]}"
-    blocks = re.split(
-        r"(?m)(?=^## [^\n]+ — INGEST\s*$)",
-        log_text,
-    )
-    return any(
-        source_line in block and hash_line in block
-        for block in blocks
-    )
-
-
 def _assert_aggregate_outputs(
     log_path: Path,
     index_path: Path,
@@ -1227,17 +1210,16 @@ def _assert_aggregate_outputs(
     source_hash: str,
     source_stem: str,
 ) -> None:
-    """Hard Stage 3.3 postcondition used before its done marker is written."""
+    """Hard Stage 3.3 postcondition used before its done marker is written.
+
+    Stage 3.3 owns the aggregate files, but an INGEST completion record is no
+    longer allowed here: it is projected from the authoritative event ledger
+    only after mandatory Stage 3.7 succeeds.
+    """
     if not log_path.is_file():
         raise RuntimeError(f"Stage 3.3 log artifact is missing: {log_path}")
     if not index_path.is_file():
         raise RuntimeError(f"Stage 3.3 index artifact is missing: {index_path}")
-    log_text = log_path.read_text(encoding="utf-8")
-    if not _log_contains_ingest_record(
-        log_text, source_identity, source_hash
-    ):
-        raise RuntimeError(
-            "Stage 3.3 log does not contain the source/hash INGEST record")
     index_text = index_path.read_text(encoding="utf-8")
     link_pattern = re.compile(
         r"\[\[(?:[^|\]\n]+/)?"
@@ -1280,30 +1262,21 @@ def stage_3_3_aggregate_repair(
     extract_method: str,
     config: Config,
 ) -> list[str]:
-    """Stage 3.3: log.md (deterministic append), index.md (LLM whole-page
-    rewrite fed by on-disk inventory, append fallback), overview.md (LLM rewrite
-    with structural validation + compress mode, keep-current fallback)."""
+    """Stage 3.3: own log.md, repair index.md, and best-effort overview.md.
+
+    ``log.md`` is only ensured here. Its completed-run entry is appended by
+    finalization after Stage 3.7, keyed by run_id rather than source+hash.
+    """
     files_written: list[str] = []
     source_identity = canonical_source_path(raw_file, config)
 
-    # log.md
+    # log.md — ensure the aggregate artifact exists, but never claim a run has
+    # completed before the mandatory embedding gate.
     log_path = config.wiki_dir / "log.md"
     if log_path.exists():
         log_text = log_path.read_text(encoding="utf-8")
     else:
         log_text = "# Log\n"
-    source_rel = source_path.relative_to(config.wiki_dir)
-    if _log_contains_ingest_record(log_text, source_identity, source_hash):
-        print("[stage 3.3] Log already contains this source/hash — append skipped")
-    else:
-        entry = (
-            f"\n## {time.strftime('%Y-%m-%d %H:%M:%S')} — INGEST\n"
-            f"- Source: `{source_identity}`\n"
-            f"- Source page: `wiki/{source_rel}`\n"
-            f"- Hash: {source_hash[:16]}\n"
-            f"- Method: {extract_method}\n"
-        )
-        log_text += entry
         stage_3_2_write_wiki_file(log_path, log_text, config)
     files_written.append(PageRef.parse(
         log_path, config.wiki_root, config.wiki_dir).project_relative)

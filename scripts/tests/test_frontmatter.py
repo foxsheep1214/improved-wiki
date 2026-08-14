@@ -23,6 +23,7 @@ from _frontmatter import (  # noqa: E402
     merge_array_fields_into_content,
     merge_page_content,
     lock_fields,
+    strip_operational_time_fields,
 )
 from _frontmatter_array import parse_frontmatter_array  # noqa: E402
 
@@ -70,6 +71,22 @@ class TestWriteFrontmatterQuoting(unittest.TestCase):
     def test_scalar_starting_with_bracket_quoted(self):
         out = write_frontmatter({"note": "[reserved]"}, "body")
         self.assertIn('"[reserved]"', out)
+
+
+class TestOperationalTimeEmbeddingProjection(unittest.TestCase):
+    def test_time_fields_are_removed_without_rewriting_other_yaml(self):
+        content = (
+            "---\ntype: source\ntags:\n  - alpha\n"
+            "created: 2026-01-01\nupdated: 2026-01-02\n"
+            "first_ingested_at: \"2026-01-01T10:00:00.000+08:00\"\n"
+            "last_ingested_at: \"2026-01-02T10:00:00.000+08:00\"\n"
+            "---\n\n# Body\n"
+        )
+        stripped = strip_operational_time_fields(content)
+        self.assertNotIn("created:", stripped)
+        self.assertNotIn("last_ingested_at:", stripped)
+        self.assertIn("tags:\n  - alpha", stripped)
+        self.assertIn("# Body", stripped)
 
 
 class TestMergeArrayFieldsBlockStyle(unittest.TestCase):
