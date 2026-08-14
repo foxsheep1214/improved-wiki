@@ -96,7 +96,6 @@ class TestBatchIngestConversationPrefix(unittest.TestCase):
             raw1.write_bytes(b"%PDF-1.4 fake done")
             raw2.write_bytes(b"%PDF-1.4 fake owner")
             h1 = _core.file_sha256(raw1)
-            h2 = _core.file_sha256(raw2)
 
             seen_prepares = []
             orig_is_stage_done = ingest.is_stage_done

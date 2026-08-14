@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import sys
 import time
@@ -42,6 +41,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from _review_utils import (  # noqa: E402
+    is_review_resolved,
     normalize_review_title,
     normalize_review_items,
 )
@@ -131,7 +131,7 @@ def _scan_reviews(wiki_dir: Path) -> List[Dict]:
         except Exception:
             continue
         fm = _parse_frontmatter(content)
-        resolved = str(fm.get("resolved", "false")).lower() in ("true", "yes", "1")
+        resolved = is_review_resolved(content)
         # NOTE: resolved items are KEPT here (not skipped) so the content-stable
         # dedup (normalize_review_items, resolved-wins) can let a resolved twin
         # suppress a freshly re-ingested pending duplicate. The caller filters

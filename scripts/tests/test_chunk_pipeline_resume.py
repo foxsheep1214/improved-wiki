@@ -1,4 +1,4 @@
-"""Regression tests for the Stage 2.2→2.4 chunk-pipeline resume (cache) path.
+"""Tests for the Stage 2.2→2.4 chunk-pipeline resume path.
 
 Stdlib `unittest` only — no pytest, no network, no LLM calls.
 
@@ -6,16 +6,9 @@ Run:
     python3 -m unittest tests.test_chunk_pipeline_resume   # from scripts/
     python3 scripts/tests/test_chunk_pipeline_resume.py      # from skill root
 
-Maps to the 2026-06-25 concept/entity/query loss bug:
-
-  On a ``stage_2_3_done`` cache-resume, ``_run_chunk_pipeline`` restored
-  ``file_blocks`` by re-parsing ``raw_response`` — but raw_response was
-  "\n".join(parsed FILE-block BODIES), bodies WITHOUT the ---FILE:...---
-  wrappers, so parse_file_blocks() returned [] and silently dropped every
-  concept/entity page. 2.6 then wrote only the source page. Fix: persist
-  ``file_blocks`` directly and restore it;
-  raw_response was removed. Guard: if the marker is set but no ``file_blocks``
-  artifact exists, invalidate the marker and re-run instead of returning [].
+The authoritative resume artifact is ``file_blocks``. A marker without that
+artifact is invalidated so the generation path reruns instead of publishing a
+source-only partial result.
 """
 from __future__ import annotations
 
@@ -526,7 +519,7 @@ class TestPrefetchBoundary(unittest.TestCase):
     def test_spine_invalidates_pre_rollup_cache_and_reruns_2_2(self):
         """A cached 2.2 WITHOUT a persisted roll-up digest (pre-roll-up cache)
         is invalidated and re-analyzed instead of silently feeding an empty
-        digest to 2.4/2.6."""
+        digest to Stage 2.4."""
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _make_config(tmp)

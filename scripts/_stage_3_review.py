@@ -6,12 +6,19 @@ import time
 from pathlib import Path
 
 from _config import Config
+from _frontmatter_array import parse_frontmatter_array
 from _llm_api import call_anthropic_protocol
 from _parse import parse_simple_yaml
 from _retry import call_with_retry
 from _page_ref import PageRef, PageRefError
-from _paths import atomic_write
-from _review_utils import review_id_for, resolve_review_path
+from _paths import atomic_write, iter_wiki_pages
+from _wikilinks import WIKILINK_RE, split_wikilink_inner
+from _review_utils import (
+    is_resolved_review_file,
+    review_id_for,
+    resolve_review_path,
+)
+from review_actions import buttons_for
 from _schema import load_purpose_md, load_schema_md, schema_prompt_text
 
 
@@ -26,10 +33,13 @@ _REVIEW_SEVERITIES = {"high", "medium", "low"}
 _RESEARCH_REVIEW_TYPES = {"suggestion", "missing-page"}
 
 
+_REVIEW_SCOPE_VERSION = 1
+
+
 def _review_preview(content: str, max_chars: int) -> str:
     """Return a bounded review preview without fabricating a broken file tail.
 
-    Stage 3.4 used to pass ``content[:max_chars]`` to the reviewer.  That hard
+    Stage 3.1 used to pass ``content[:max_chars]`` to the reviewer.  That hard
     slice routinely ended in the middle of a word, wikilink, formula, or table
     row.  Because the prompt called the result a "page", the reviewer quite
     reasonably reported the synthetic preview boundary as source truncation.
@@ -64,8 +74,166 @@ def _review_preview(content: str, max_chars: int) -> str:
     return head + marker + tail
 
 
+def _normalize_review_page_ref(value: str, config: Config) -> str:
+    """Return one safe wiki-relative ``*.md`` reference or ``""``.
+
+    FILE-block paths and wikilinks use several equivalent surface forms.  The
+    review selector needs one representation so an exact link, backlink, or
+    same-path update cannot be displaced by an unrelated alphabetical page.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("[[") and raw.endswith("]]"):
+        raw = raw[2:-2]
+    raw = split_wikilink_inner(raw)[0].split("#", 1)[0].strip()
+    if not raw:
+        return ""
+    if not raw.lower().endswith(".md"):
+        raw += ".md"
+    try:
+        return PageRef.parse(
+            raw, config.wiki_root, config.wiki_dir).wiki_relative
+    except PageRefError:
+        return ""
+
+
+def _review_wikilink_refs(content: str, config: Config) -> set[str]:
+    refs: set[str] = set()
+    for match in WIKILINK_RE.finditer(content or ""):
+        ref = _normalize_review_page_ref(match.group(1), config)
+        if ref:
+            refs.add(ref)
+    for value in parse_frontmatter_array(content or "", "related"):
+        ref = _normalize_review_page_ref(value, config)
+        if ref:
+            refs.add(ref)
+    return refs
+
+
+def _strip_review_frontmatter(content: str) -> str:
+    if not content.startswith("---"):
+        return content
+    end = content.find("\n---", 3)
+    return content[end + 4:] if end != -1 else content
+
+
+def _select_relevant_existing_pages(
+    file_blocks: list[tuple[str, str]],
+    config: Config,
+    *,
+    limit: int = 40,
+) -> list[str]:
+    """Select existing pages directly related to this ingest's new pages.
+
+    The former implementation always passed the alphabetically first 40 wiki
+    pages.  Every ingest therefore re-reviewed the same unrelated pages and
+    attributed those findings to the current source.  The bounded context now
+    contains only deterministic graph neighbours:
+
+    * the prior on-disk version of a page being updated;
+    * an existing page linked by a new page;
+    * an existing page that links back to a new page; or
+    * a cross-directory page with the same basename (a collision/duplicate
+      candidate).
+    """
+    if limit <= 0:
+        return []
+
+    new_refs = {
+        ref for path, _content in file_blocks
+        if (ref := _normalize_review_page_ref(path, config))
+    }
+    if not new_refs:
+        return []
+    new_stems = {Path(ref).stem for ref in new_refs}
+
+    outbound_refs: set[str] = set()
+    for _path, content in file_blocks:
+        outbound_refs.update(_review_wikilink_refs(content, config))
+    outbound_stems = {Path(ref).stem for ref in outbound_refs}
+
+    candidates: list[tuple[int, str, str]] = []
+    for rel_path, content in iter_wiki_pages(
+        config.wiki_dir,
+        anchor_files={"index.md", "log.md", "overview.md", "schema.md", "purpose.md"},
+    ):
+        rel_ref = _normalize_review_page_ref(rel_path, config)
+        if not rel_ref:
+            continue
+        stem = Path(rel_ref).stem
+        score = 0
+        if rel_ref in new_refs:
+            score = max(score, 400)
+        if rel_ref in outbound_refs:
+            score = max(score, 350)
+        if stem in outbound_stems:
+            score = max(score, 300)
+        if stem in new_stems:
+            score = max(score, 250)
+
+        existing_links = _review_wikilink_refs(content, config)
+        if existing_links & new_refs:
+            score = max(score, 325)
+        elif {Path(ref).stem for ref in existing_links} & new_stems:
+            score = max(score, 275)
+
+        if score:
+            candidates.append((score, rel_ref, _strip_review_frontmatter(content)))
+
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    return [
+        f"### {rel_ref} (完整文件 {len(body)} 字符；以下是带真实结尾的审查预览)\n"
+        f"{_review_preview(body, 1000)}"
+        for _score, rel_ref, body in candidates[:limit]
+    ]
+
+
+def _filter_review_items_to_new_pages(
+    items: list[dict],
+    new_page_refs: set[str],
+) -> tuple[list[dict], int]:
+    """Drop findings that concern only pre-existing context pages.
+
+    Existing pages are evidence for duplicate/contradiction checks, not an
+    invitation to run a global lint scan under the current source's name.
+    Every source-ingest Review item must therefore touch at least one page in
+    this ingest's projected write set.
+    """
+    kept = [
+        item for item in items
+        if set(item.get("affected_pages") or []) & new_page_refs
+    ]
+    return kept, len(items) - len(kept)
+
+
+def review_prepared_checkpoint_is_current(prepared: object) -> bool:
+    """Whether a Stage 3.1 checkpoint obeys the current source-scope gate.
+
+    Pre-fix checkpoints contain findings from the old fixed global sample.
+    They have no scope version or projected-page set and must be regenerated,
+    not restored and persisted under the current source's provenance.
+    """
+    if not isinstance(prepared, dict):
+        return False
+    if prepared.get("scope_version") != _REVIEW_SCOPE_VERSION:
+        return False
+    items = prepared.get("items_data")
+    refs = prepared.get("new_page_refs")
+    if not isinstance(items, list) or not isinstance(refs, list):
+        return False
+    if any(not isinstance(item, dict) for item in items):
+        return False
+    new_page_refs = {
+        ref for ref in refs if isinstance(ref, str) and ref.strip()
+    }
+    _kept, dropped = _filter_review_items_to_new_pages(
+        items, new_page_refs)
+    return dropped == 0
+
+
 def _append_review_failure_log(config: Config, raw_file: Path, messages: list[str]) -> None:
-    """Persist Stage 3.4 failure info to runtime_dir/ingest-warnings.log.
+    """Persist Stage 3.1 failure info to runtime_dir/ingest-warnings.log.
 
     Same entry format as _ingest_write._append_ingest_warning_log (not imported
     directly: _ingest_write imports this module, so importing back would be
@@ -85,7 +253,7 @@ def _append_review_failure_log(config: Config, raw_file: Path, messages: list[st
 
 
 def _validate_review_items(items: list, config: Config) -> list[dict]:
-    """Validate and normalize the complete Stage 3.4 response before writing.
+    """Validate and normalize the complete Stage 3.1 response before writing.
 
     Review type is used as a directory name and affected pages become
     wikilinks, so permissive coercion here is unsafe: one malformed item must
@@ -188,7 +356,7 @@ def _validate_review_items(items: list, config: Config) -> list[dict]:
         preview = "; ".join(errors[:12])
         if len(errors) > 12:
             preview += f"; +{len(errors) - 12} more"
-        raise ValueError(f"invalid Stage 3.4 review schema: {preview}")
+        raise ValueError(f"invalid Stage 3.1 review schema: {preview}")
     return normalized
 
 
@@ -215,6 +383,13 @@ def _render_review_page(rtype: str, title: str, desc: str, affected: list[str],
     # FNV-1a over (type :: normalized-title). The same logical review keeps the
     # same id across re-ingest, so resolved state survives via field-union dedup.
     review_id = review_id_for(rtype, title)
+    # Actions available on this item (NashSU ReviewItem.options parity).
+    # NashSU carries them ON the item; this file is that item's persistent
+    # form, so it carries them too. Recording them here is what keeps the
+    # panel reconstructable — while they lived only in process-reviews.md
+    # prose they drifted into a fixed three-button triple that no NashSU item
+    # type actually has. Derived from the type: see review_actions.buttons_for.
+    options = ", ".join(f'"{b}"' for b in buttons_for(rtype))
     return f"""---
 type: review
 review_id: {review_id}
@@ -222,6 +397,7 @@ review_type: {rtype}
 severity: {severity}
 affected_pages: [{', '.join(affected)}]
 search_queries: [{', '.join(f'"{q}"' for q in queries)}]
+options: [{options}]
 resolved: false
 created: {date_str}
 source_ingest: "{source_stem}"
@@ -239,7 +415,7 @@ _待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 `resolv
 """
 
 
-def stage_3_4_prepare_review_suggestions(
+def stage_3_1_prepare_review_suggestions(
     file_blocks: list[tuple[str, str]],
     raw_file: Path,
     config: Config,
@@ -265,13 +441,17 @@ def stage_3_4_prepare_review_suggestions(
     inert; the volume signal now reads directly off ``file_blocks`` instead.
 
     The returned normalized items are persisted later by
-    :func:`stage_3_4_persist_review_suggestions`.
+    :func:`stage_3_5_persist_review_suggestions`.
     """
     # Generation-volume signal: total chars across the pages generated this pass.
     # file_blocks content is the full FILE-block content (frontmatter + body) —
     # the same text the retired raw_response concatenated, so the 10K threshold
     # carries the same intent ("did this source produce substantial content").
     gen_chars = sum(len(content) for _, content in file_blocks)
+    new_page_refs = {
+        ref for path, _content in file_blocks
+        if (ref := _normalize_review_page_ref(path, config))
+    }
     # ``file_blocks`` reflects only THIS conversation-mode replay pass, not the
     # whole ingest. A source that needed several replays (e.g. one pass does the
     # real Stage 2.4 generation, a later pass replays after those pages are
@@ -291,7 +471,7 @@ def stage_3_4_prepare_review_suggestions(
             except OSError:
                 continue
     if cumulative_blocks < 4 and gen_chars < 10000:
-        print(f"[stage 3.4] Skipped — {len(file_blocks)} blocks this pass "
+        print(f"[stage 3.1] Skipped — {len(file_blocks)} blocks this pass "
               f"({cumulative_blocks} cumulative across replays), {gen_chars} chars "
               f"(all below NashSU thresholds)")
         return {
@@ -299,9 +479,11 @@ def stage_3_4_prepare_review_suggestions(
             "reason": "below-thresholds",
             "items_data": [],
             "stop_reason": "",
+            "scope_version": _REVIEW_SCOPE_VERSION,
+            "new_page_refs": sorted(new_page_refs),
         }
 
-    print(f"[stage 3.4] Running review over {len(file_blocks)} new pages + existing wiki...")
+    print(f"[stage 3.1] Running review over {len(file_blocks)} new pages + existing wiki...")
 
     # Collect new page contents
     new_pages: list[str] = []
@@ -310,31 +492,7 @@ def stage_3_4_prepare_review_suggestions(
             f"### {path} (完整文件 {len(content)} 字符；以下是带真实结尾的审查预览)\n"
             f"{_review_preview(content, 1500)}")
 
-    # Sample existing wiki pages (up to 40)
-    existing_pages: list[str] = []
-    for sub in [
-        "sources", "concepts", "entities", "comparisons", "findings",
-        "methodology",
-    ]:
-        d = config.wiki_dir / sub
-        if not d.exists():
-            continue
-        for f in sorted(d.iterdir()):
-            if f.suffix != ".md":
-                continue
-            content = f.read_text(encoding="utf-8")
-            if content.startswith("---"):
-                end = content.find("\n---", 3)
-                body = content[end + 4:] if end != -1 else content
-            else:
-                body = content
-            existing_pages.append(
-                f"### {sub}/{f.name} (完整文件 {len(body)} 字符；以下是带真实结尾的审查预览)\n"
-                f"{_review_preview(body, 1000)}")
-            if len(existing_pages) >= 40:
-                break
-        if len(existing_pages) >= 40:
-            break
+    existing_pages = _select_relevant_existing_pages(file_blocks, config)
 
     schema_text = schema_prompt_text(load_schema_md(config))
     purpose_text = load_purpose_md(config).strip()[:6000]
@@ -348,8 +506,8 @@ def stage_3_4_prepare_review_suggestions(
 # Newly generated pages (from {raw_file.stem})
 {chr(10).join(new_pages)}
 
-# Existing wiki pages (sample of {len(existing_pages)})
-{chr(10).join(existing_pages[:40])}
+# Relevant existing wiki pages (direct graph/path neighbours; {len(existing_pages)})
+{chr(10).join(existing_pages)}
 """
 
     system_prompt = f"""你是 {config.wiki_root.name} 的 review agent。审阅当前 wiki 内容，找出 5 类可疑项：
@@ -378,22 +536,27 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
 “文件真实结尾”。
 只报告真实发现的问题；如果确实没有发现任何可疑项，输出空数组 []。不要为了凑数量而编造问题或写"未发现问题"类的确认项。数字、参数、公式要严格。"""
 
+    system_prompt += """
+每个 review 的 affected_pages 必须至少包含一个上面列出的 Newly generated page。
+Existing wiki pages 只用于判断新页与既有页之间的重复、矛盾或链接关系；不得报告仅存在于
+既有上下文页面、且与本次新页无关的问题。"""
+
     prompt = f"{system_prompt}\n\n{user_content}"
     try:
         response, stop_reason = call_with_retry(
             lambda: call_anthropic_protocol(prompt, config, max_tokens=8192),
-            max_retries=3, label="stage-3.4",
+            max_retries=3,
         )
     except Exception as e:
         # No silent degradation to 0 reviews.  This runs before wiki page
         # writes, so a handoff/provider failure leaves Phase 3 mutation-free;
         # the conversation cache makes the resume cheap.
-        msg = f"stage 3.4 review LLM call failed after retries: {e}"
+        msg = f"stage 3.1 review LLM call failed after retries: {e}"
         _append_review_failure_log(config, raw_file, [msg])
         raise RuntimeError(msg) from e
 
     if verbose:
-        print(f"[stage 3.4] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
+        print(f"[stage 3.1] Response ({len(response)} chars, stop={stop_reason}):\n{response[:2000]}...\n")
 
     # Parse YAML
     text = response
@@ -429,7 +592,7 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
             parse_failed = True
 
     if parse_failed:
-        msg = (f"stage 3.4 review YAML parse failed — response did not "
+        msg = (f"stage 3.1 review YAML parse failed — response did not "
                f"parse into a usable items list "
                f"(response {len(response)} chars, stop={stop_reason})")
         _append_review_failure_log(config, raw_file, [msg])
@@ -438,24 +601,35 @@ PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件�
     try:
         items = _validate_review_items(items, config)
     except ValueError as exc:
-        msg = f"stage 3.4 review schema validation failed: {exc}"
+        msg = f"stage 3.1 review schema validation failed: {exc}"
         _append_review_failure_log(config, raw_file, [msg])
         raise RuntimeError(msg) from exc
+
+    items, dropped = _filter_review_items_to_new_pages(items, new_page_refs)
+    if dropped:
+        print(f"[stage 3.1] Dropped {dropped} review item(s) that did not "
+              "touch this ingest's projected pages")
 
     return {
         "skipped": False,
         "reason": "",
         "items_data": items,
         "stop_reason": stop_reason,
+        "scope_version": _REVIEW_SCOPE_VERSION,
+        "new_page_refs": sorted(new_page_refs),
     }
 
 
-def stage_3_4_persist_review_suggestions(
+def stage_3_5_persist_review_suggestions(
     prepared: dict,
     raw_file: Path,
     config: Config,
 ) -> dict:
     """Persist a pre-write review result after page/media writes complete."""
+    if not review_prepared_checkpoint_is_current(prepared):
+        raise RuntimeError(
+            "Stage 3.5 refuses an unversioned or source-unscoped "
+            "review_prepared payload; regenerate Stage 3.1")
     if prepared.get("skipped"):
         return {
             "items": 0,
@@ -468,7 +642,7 @@ def stage_3_4_persist_review_suggestions(
     items = prepared.get("items_data")
     if not isinstance(items, list):
         raise RuntimeError(
-            "Stage 3.4 prepared review result has no validated items list")
+            "Stage 3.1 prepared review result has no validated items list")
     stop_reason = str(prepared.get("stop_reason", ""))
 
     # Write review pages to wiki/REVIEW/<review_type>/ (分子目录，一目了然).
@@ -479,6 +653,7 @@ def stage_3_4_persist_review_suggestions(
     date_compact = time.strftime("%Y%m%d")    # filename segment
 
     written = 0
+    preserved = 0
     page_refs: list[str] = []
     for it in items:
         rtype = it["type"]
@@ -497,6 +672,13 @@ def stage_3_4_persist_review_suggestions(
         # Readable <type>-<topic>-<date>.md name + content-hash id (collision-safe).
         page_path, _rid = resolve_review_path(reviews_dir, rtype, title, date_compact)
 
+        # NashSU addItems dedups against resolved items too, so a re-ingest
+        # cannot discard a triage decision (review-store.ts). Re-rendering here
+        # would write `resolved: false` straight over it.
+        if is_resolved_review_file(page_path):
+            preserved += 1
+            continue
+
         md = _render_review_page(rtype, title, desc, affected, queries,
                                  severity, date_str, raw_file.stem)
         atomic_write(page_path, md)
@@ -504,7 +686,10 @@ def stage_3_4_persist_review_suggestions(
             page_path, config.wiki_root, config.wiki_dir).project_relative)
         written += 1
 
-    print(f"[stage 3.4] {written} review pages -> wiki/REVIEW/")
+    print(f"[stage 3.5] {written} review pages -> wiki/REVIEW/")
+    if preserved:
+        print(f"[stage 3.5] {preserved} already-resolved review page(s) left "
+              f"untouched (triage decision preserved)")
 
     # Also write JSON for tooling (backward compat)
     runtime_dir = config.runtime_dir
@@ -525,21 +710,3 @@ def stage_3_4_persist_review_suggestions(
         "stop_reason": stop_reason,
         "page_refs": page_refs,
     }
-
-
-def stage_3_4_review_suggestions(
-    file_blocks: list[tuple[str, str]],
-    raw_file: Path,
-    config: Config,
-    *,
-    verbose: bool = False,
-) -> dict:
-    """Compatibility wrapper: prepare review items, then persist them.
-
-    The ingest orchestrator calls the two functions separately to match
-    NashSU's pre-write review generation and post-write persistence order.
-    Direct callers retain the historical one-call behavior.
-    """
-    prepared = stage_3_4_prepare_review_suggestions(
-        file_blocks, raw_file, config, verbose=verbose)
-    return stage_3_4_persist_review_suggestions(prepared, raw_file, config)

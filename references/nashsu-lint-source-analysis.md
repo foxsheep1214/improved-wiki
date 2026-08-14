@@ -344,14 +344,16 @@ incoming item's `description` / `sourcePath` override the old, and
 ```ts
 const reviewItems = [
   ...parseReviewBlocks(generation, sp),         // Stage 2.3's FILE/REVIEW blocks
-  ...parseReviewBlocks(reviewSuggestionOutput, sp),  // Stage 3.4 dedicated review pass
+  ...parseReviewBlocks(reviewSuggestionOutput, sp),  // dedicated review pass
 ]
 if (reviewItems.length > 0) {
   useReviewStore.getState().addItems(reviewItems)
 }
 ```
 
-**Stage 3.4 trigger** (`ingest.ts` L889): `shouldRunDedicatedReviewStage(generation)` fires when generation is ≥10K chars OR ≥4 FILE blocks OR ends with an incomplete REVIEW block.
+**Dedicated-review trigger** (`ingest.ts` L889):
+`shouldRunDedicatedReviewStage(generation)` fires when generation is ≥10K chars,
+contains ≥4 FILE blocks, or ends with an incomplete REVIEW block.
 
 **REVIEW block format** (`ingest.ts` L1623):
 ```ts
@@ -367,7 +369,11 @@ SEARCH: ADC SNR budget | radar SNR budget
 ---END REVIEW---
 ```
 
-**Improved-wiki**: `scripts/ingest.py` already implements Stage 3.4 (`parseReviewBlocks`) and writes to `.llm-wiki/review.json` with the same 5-type schema. **This is already byte-compatible with the app's `review.json`.**
+**Improved-wiki**: Stage 3.1 implements the same five review types and validates
+the complete response before mutation. Stage 3.5 persists one Markdown page
+per item plus `.llm-wiki/review-suggestions.json`. The content contract is
+aligned, but the storage layout is intentionally not byte-identical to the
+app's single `.llm-wiki/review.json` array.
 
 ---
 

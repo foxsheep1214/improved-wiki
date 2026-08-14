@@ -293,14 +293,18 @@ def _collapse_degenerate_table_rows(text: str) -> str:
 # minerU file lock
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
+def _stage_1_1_acquire_mineru_lock(timeout: float | None = None) -> int:
     """Acquire exclusive file lock for minerU execution (race-condition prevention).
 
-    Returns file descriptor (lock holder). Blocks until available or timeout.
+    Returns file descriptor (lock holder). Blocks until available by default;
+    an explicit ``timeout`` is reserved for controlled callers/tests.
     Call _stage_1_1_release_mineru_lock(fd) when done.
 
     Rationale: pgrep-based counting is unreliable under concurrent stress (multiple
-    conversations/cron jobs). File lock is atomic and system-wide.
+    conversations/cron jobs). File lock is atomic and system-wide. A queued batch
+    worker may legitimately wait longer than one hour while a large preceding book
+    is still using minerU, so the default must not manufacture a timeout/relaunch
+    loop while the lock holder remains healthy.
     """
     update_worker_phase("waiting_mineru")
     try:
@@ -317,14 +321,14 @@ def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
                 try:
                     # Non-blocking attempt
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    print(f"[mineru] Lock acquired")
+                    print("[mineru] Lock acquired")
                     update_worker_phase("mineru")
                     acquired = True
                     return fd
                 except OSError:
                     # Lock busy, wait and retry
                     elapsed = time.time() - start
-                    if elapsed > timeout:
+                    if timeout is not None and elapsed > timeout:
                         raise RuntimeError(f"minerU lock timeout after {elapsed:.0f}s")
                     # Print once per minute boundary crossed — `% 60 == 0` drifts
                     # past exact multiples due to the 5s sleep + work-time jitter
@@ -348,7 +352,7 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
     try:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
-        print(f"[mineru] Lock released")
+        print("[mineru] Lock released")
         update_worker_phase("post_mineru")
     except Exception as e:
         print(f"[mineru] Warning: Failed to release lock: {e}")
@@ -893,7 +897,7 @@ def _stage_1_1_scanned_process_chunk(
 
 
 def _stage_1_1_scanned_assemble_manifest(
-    out_dir: Path, stats: dict, file_path: Path, config, total_pages: int,
+    out_dir: Path, file_path: Path, config, total_pages: int,
 ) -> str:
     """Assemble per-page OCR text into full text and write _manifest.json."""
     page_nums = list(range(total_pages))
@@ -960,7 +964,7 @@ def _stage_1_1_extract_text_scanned_impl(
     _mineru_stats.json for crash recovery. ``out_dir_override`` is reserved
     for the isolated media-reharvest path; it prevents lost image bytes from
     forcing deletion or mutation of a still-valid OCR text cache.
-    Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.2 (mirrors raw/).
+    Extracted images go to wiki/media/<raw-subpath>/<slug>/ for Stage 3.4 (mirrors raw/).
 
     Note: File-based lock managed by wrapper function _stage_1_1_extract_text_scanned_locked().
     """
@@ -1006,8 +1010,7 @@ def _stage_1_1_extract_text_scanned_impl(
     pending = [c for c in chunks if f"{c[0]}-{c[1]}" not in stats["completed_chunks"]]
     if not pending:
         doc.close()
-        # BUGFIX 2026-06-24: was [end for _, end in chunks] — only chunk-end pages
-        # (16 of 794), so cache-resume fed Stage 2.1 ~1% of the text. Assemble ALL pages.
+        # Cache resume must assemble every page, not only chunk-end pages.
         return _stage_1_1_assemble_ocr_text(out_dir, list(range(total_pages)))
 
     api_proc = None
@@ -1063,7 +1066,7 @@ def _stage_1_1_extract_text_scanned_impl(
 
     if finalize_media:
         return _stage_1_1_scanned_assemble_manifest(
-            out_dir, stats, file_path, config, total_pages)
+            out_dir, file_path, config, total_pages)
     return _stage_1_1_assemble_ocr_text(
         out_dir, list(range(total_pages)))
 

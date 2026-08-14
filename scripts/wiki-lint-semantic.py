@@ -144,7 +144,7 @@ def resolve_batch_target_chars(state_dir: Path) -> int:
     context_size = _probe_context_size(state_dir)
     ceil_env = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", "").strip()
     hard_ceil = int(ceil_env) if ceil_env.isdigit() else _LINT_TARGET_TOKENS_HARD_CEIL
-    _, target_chars = _compute_chunk_targets(0, context_size, hard_ceil=hard_ceil)
+    _, target_chars = _compute_chunk_targets(context_size, hard_ceil=hard_ceil)
     return target_chars
 
 
@@ -190,14 +190,6 @@ def collect_summary_bundle(
             )
             out.append((rel_str, preview))
     return out, existing_page_names
-
-
-def collect_summaries(
-    wiki_dir: Path, limit: Optional[int] = None
-) -> list[tuple[str, str]]:
-    """Compatibility wrapper returning only deterministic page summaries."""
-    out, _ = collect_summary_bundle(wiki_dir, limit=limit)
-    return out
 
 
 def parse_lint_blocks(

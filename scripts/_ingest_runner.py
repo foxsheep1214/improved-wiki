@@ -15,10 +15,11 @@ from _media_integrity import assert_cached_media_complete
 from _task_manifest import assert_task_ready_for_completion
 
 def _is_ingestable_source_path(rf: Path, config: Config) -> bool:
-    """True for a normal ``raw/`` source, or a deep-research page under
-    ``wiki/queries/`` (2026-07-16: ingested directly — see
-    ``is_query_bridge_source``/deep-research.md; there is no longer a
-    ``raw/queries/`` copy step, NashSU ``autoIngest`` path-agnostic parity)."""
+    """True for a normal ``raw/`` source or an explicitly supplied query page.
+
+    ``wiki/queries/`` acceptance is a manual/historical compatibility ability;
+    NashSU v0.6.7 Deep Research does not invoke it. Query pages are accepted in
+    place without a ``raw/queries/`` copy (see ``is_query_bridge_source``)."""
     return rf.is_relative_to(config.raw_root) or rf.is_relative_to(config.wiki_dir / "queries")
 
 
@@ -32,8 +33,8 @@ def _finalize_book(raw_file: Path, config: Config,
     validate_ingest.py) was REMOVED for NashSU alignment: NashSU has no
     post-ingest verification stage. NashSU's only ingest-time check is schema
     routing (``validateWikiPageRouting``), which improved-wiki already performs
-    where NashSU does — at WRITE time in Stage 3.1
-    (``_stage_3_1_auto_correct_wiki_path``) — so it is preserved automatically.
+    where NashSU does — at WRITE time in Stage 3.2
+    (``_stage_3_2_auto_correct_wiki_path``) — so it is preserved automatically.
     The completion marker is named ``ingested`` (renamed from the legacy
     ``stage_4_1`` key on 2026-07-08: the old name implied a Stage 4.1 that no
     longer exists; existing stages.json files were migrated in lockstep so
@@ -93,7 +94,7 @@ def ingest_one(
     # Stage-completion markers (Option A) drive resume semantics: the skip-check
     # only short-circuits once the ``ingested`` marker is set, so a mid-flight resume (pages
     # written but post-review stages pending) is never dropped.  _do_write in
-    # turn skips the non-idempotent 3.1 write loop when `write_phase` is marked.
+    # turn skips the non-idempotent Stage 3.2 write loop when `write_phase` is marked.
     try:
         prepared = _do_prepare(raw_file, config, template_override, verbose)
     except PrepareStopAfter as stop:
@@ -121,7 +122,7 @@ def ingest_one(
 
     # Check stop-after-stage (best-effort; _do_prepare runs all of Stage 0-2)
     for stage_check in ("0", "1.5", "2.0", "2"):
-        if _should_stop_after(config, stage_check, {"status": "ok"}):
+        if _should_stop_after(config, stage_check):
             return {"status": "ok", "stopped_after": stage_check}
 
     # Stage 3+: Delegate to _do_write (shared with batch path)

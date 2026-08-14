@@ -1,17 +1,10 @@
-"""Regression tests for post-write disk reconstruction + --delete orphan sweep.
+"""Tests for post-write disk reconstruction and ``--delete`` orphan sweep.
 
 Stdlib `unittest` only — no pytest, no network, no LLM calls.
 
-Covers the 2026-06-25 Orin re-ingest findings:
-
-  Cluster (#3/#4/#5): on a write_phase/write_loop_done resume, file_blocks is []
-  so Stage 3.4 re-fired over "0 pages", validation reported false "0 FILE blocks"
-  failures, and cache stats were zeroed. _reconstruct_blocks_from_disk rebuilds
-  the real page set from files_written_paths so all three see the true pages.
-
-  #2: --delete left source-specific query/comparison pages behind, so a
-  re-ingest stacked stale duplicates. _cleanup_orphan_pages now sweeps queries
-  and comparisons too (but preserves sources:[] comparison hub pages).
+On a post-write resume, `_reconstruct_blocks_from_disk` restores the bound page
+set for review persistence, validation, and cache statistics. Source deletion
+sweeps source-owned schema pages while preserving shared or source-less hubs.
 """
 from __future__ import annotations
 
@@ -188,7 +181,8 @@ class TestPreserveStageCounters(unittest.TestCase):
                 "images_extracted": 309, "review_items": 7}
         new = {"chunks_analyzed": 0, "concepts_generated": 0,
                "images_extracted": 0, "review_items": 0}
-        out = _ingest_write._preserve_stage_counters(prev, new)
+        out = _ingest_write._preserve_stage_counters(
+            prev, new, write_phase_resume=True)
         self.assertEqual(out["chunks_analyzed"], 4)
         self.assertEqual(out["concepts_generated"], 10)
         self.assertEqual(out["images_extracted"], 309)
@@ -199,6 +193,27 @@ class TestPreserveStageCounters(unittest.TestCase):
         new = {"chunks_analyzed": 6, "concepts_generated": 5}
         out = _ingest_write._preserve_stage_counters(prev, new)
         self.assertEqual(out["chunks_analyzed"], 6)
+
+    def test_current_media_counts_replace_larger_stale_cache_values(self):
+        prev = {"images_extracted": 254, "images_captioned": 254,
+                "images_injected": 254}
+        new = {"images_extracted": 212, "images_captioned": 212,
+               "images_injected": 212}
+        out = _ingest_write._preserve_stage_counters(prev, new)
+        self.assertEqual(out["images_extracted"], 212)
+        self.assertEqual(out["images_captioned"], 212)
+        self.assertEqual(out["images_injected"], 212)
+
+    def test_write_phase_resume_restores_missing_media_counts(self):
+        prev = {"images_extracted": 212, "images_captioned": 212,
+                "images_injected": 212}
+        new = {"images_extracted": 0, "images_captioned": 0,
+               "images_injected": 0}
+        out = _ingest_write._preserve_stage_counters(
+            prev, new, write_phase_resume=True)
+        self.assertEqual(out["images_extracted"], 212)
+        self.assertEqual(out["images_captioned"], 212)
+        self.assertEqual(out["images_injected"], 212)
 
     def test_coverage_ratios_keep_new_value(self):
         prev = {"coverage_pct": 0.95, "chunks_analyzed": 4}

@@ -9,7 +9,6 @@ from pathlib import Path
 from _config import Config
 from _core import (
     stage_begin as _stage_begin,
-    slugify,
     PrepareStopAfter,
 )
 from _progress import (
@@ -25,18 +24,16 @@ from _schema import (
     load_purpose_md,
     load_schema_md,
     load_wiki_index_context,
-    schema_candidate_routes,
 )
 from _stage_2_analyze import (
     ChunkAnalysisValidationError,
-    _stage_2_1_chunk_text,
+    _stage_2_2_chunk_text,
     _stage_2_2_analyze_chunk,
     _stage_2_2_chunk_retries,
     _stage_2_2_resolve_chunk_heading_path,
     normalize_and_validate_chunk_analysis,
 )
 from _stage_2_4_generation import (
-    stage_2_4_generate_chunk,
     stage_2_4_generate_all,
     _stage_2_4_extract_names,
 )
@@ -44,7 +41,7 @@ from _stage_2_context import (
     STAGE_2_CONTEXT_POLICY_VERSION,
     build_consolidated_stage_2_context,
 )
-from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_1_digest
+from _stage_validators import _verify_stage_2_2_chunks, _verify_stage_2_2_digest
 from _task_manifest import bind_chunk_plan
 
 CHUNK_PLAN_SCHEMA_VERSION = 3
@@ -55,9 +52,10 @@ GENERATION_POLICY_VERSION = STAGE_2_CONTEXT_POLICY_VERSION
 _STAGE_2_2_DOWNSTREAM_MARKERS = (
     "stage_2_2_done",
     "stage_2_3_done",
-    "stage_2_9_done",  # legacy name: Stage 2.4 closing + Stage 2.6 tail
+    "stage_2_9_done",  # legacy name: Stage 2.4 closing + source-page gate
     "review_prepared",
     "write_loop_done",
+    "enrichment_done",
     "aggregate_done",
     "write_phase",
     "review_done",
@@ -99,6 +97,7 @@ _STAGE_2_GENERATION_MARKERS = (
 
 _POST_WRITE_MARKERS = (
     "write_loop_done",
+    "enrichment_done",
     "aggregate_done",
     "write_phase",
     "review_done",
@@ -304,10 +303,10 @@ def _assert_chunk_count_alignment(chunk_meta: list, chunk_analyses: list) -> Non
 
 
 def _parse_accumulated_to_dict(accumulated) -> dict:
-    """Parse the rolled-up accumulated_digest back to a dict for 2.4/2.6.
+    """Parse the rolled-up accumulated_digest back to a dict for Stage 2.4.
 
     2.2's per-chunk updated_global_digest refines accumulated_digest across
-    chunks (NashSU rolling-digest parity). 2.4/2.6 consume the
+    chunks (NashSU rolling-digest parity). Stage 2.4 consumes the
     structured fields (book_meta/outline/key_concepts/key_claims/key_entities),
     so the final accumulated value must be a dict. Returns {} for empty/corrupt.
     """
@@ -373,96 +372,6 @@ def _analyze_all_chunks(
         eta = ((time.time() - t_start) / done) * (chunk_total - done) if done > 0 else 0
         print(f"  [analyze] {done}/{chunk_total} [{pct}% ETA {eta:.0f}s]")
     return chunk_analyses, accumulated_digest
-
-def _build_gen_inventory(
-    chunk_meta: list,
-    chunk_analyses: list,
-    schema_text: str = "",
-) -> dict[str, int]:
-    """Legacy slug→owner-chunk inventory for direct chunk-generation callers.
-
-    Every key concept/entity/schema-candidate slug is DETERMINISTIC:
-    ``slug = slugify(name)`` where ``name`` is taken from the (cached, stable)
-    chunk analyses. So the canonical slug of every page is computable BEFORE
-    generation. The active ingest pipeline does not use this helper; it is
-    retained for callers of the legacy ``stage_2_4_generate_chunk`` API.
-    Returns a flat ``slug_stem -> owner_chunk_index`` map. An eligible
-    schema-specific candidate takes precedence over a generic concept/entity
-    with the same stem; within each tier the FIRST chunk wins. Schema
-    candidates are included only when their type is an eligible route in the
-    authoritative Page Types table. Blank names are skipped.
-    """
-    _assert_chunk_count_alignment(chunk_meta, chunk_analyses)
-    candidate_routes = schema_candidate_routes(schema_text)
-    inventory: dict[str, int] = {}
-
-    # Schema-specific types win over the generic concept/entity buckets even
-    # when the generic mention occurs in an earlier chunk. This mirrors the
-    # generation contract ("prefer the more specific declared type") and keeps
-    # one subject from becoming both concepts/foo and findings/foo.
-    for meta, analysis in zip(chunk_meta, chunk_analyses):
-        i = meta[0]
-        if not isinstance(analysis, dict):
-            continue
-        candidates = analysis.get("schema_typed_candidates", [])
-        if not isinstance(candidates, list):
-            raise RuntimeError(
-                "[Stage 2.4] Unvalidated Stage 2.2 field "
-                "schema_typed_candidates: "
-                f"{type(candidates).__name__}. Re-run Stage 2.2.")
-        for item in candidates:
-            if not isinstance(item, dict):
-                raise RuntimeError(
-                    "[Stage 2.4] Unvalidated Stage 2.2 schema candidate: "
-                    f"{type(item).__name__}. Re-run Stage 2.2.")
-            name = item.get("name", "")
-            candidate_type = item.get("type", "")
-            if (
-                not isinstance(name, str)
-                or not isinstance(candidate_type, str)
-                or candidate_type not in candidate_routes
-            ):
-                continue
-            stem = slugify(name)
-            if stem and stem not in inventory:  # first candidate chunk owns
-                inventory[stem] = i
-
-    for meta, analysis in zip(chunk_meta, chunk_analyses):
-        i = meta[0]
-        if not isinstance(analysis, dict):
-            continue
-        for key in ("concepts_found", "entities_found"):
-            items = analysis.get(key, [])
-            if not isinstance(items, list):
-                raise RuntimeError(
-                    f"[Stage 2.4] Unvalidated Stage 2.2 field {key}: "
-                    f"{type(items).__name__}. Re-run Stage 2.2.")
-            for item in items:
-                if not isinstance(item, dict):
-                    raise RuntimeError(
-                        "[Stage 2.4] Unvalidated Stage 2.2 inventory item: "
-                        f"{type(item).__name__}. Re-run Stage 2.2.")
-                if (
-                    key == "concepts_found"
-                    and str(item.get("importance", "core")).strip().lower()
-                    == "mentioned"
-                ):
-                    # Mentioned concepts are analysis context only. They are not
-                    # standalone NashSU key-page candidates and must not reserve
-                    # an owner slug for a legacy direct chunk-generation call.
-                    continue
-                name = item.get("name", "")
-                if not isinstance(name, str):
-                    continue
-                if not name or not name.strip():
-                    continue
-                stem = slugify(name)
-                if not stem:
-                    continue
-                if stem not in inventory:  # first chunk owns
-                    inventory[stem] = i
-    return inventory
-
 
 def _generate_all_chunks(
     chunk_meta: list, chunk_analyses: list, existing_refs: dict,
@@ -629,7 +538,7 @@ def _run_chunk_pipeline(
             analysis = progress.get("analysis", {})
             incremental_associations = progress.get("incremental_associations", {})
             global_digest = progress.get("global_digest", global_digest)
-            _verify_stage_2_1_digest(global_digest, raw_file)
+            _verify_stage_2_2_digest(global_digest, raw_file)
             return chunk_analyses, analysis, persisted_blocks, incremental_associations, global_digest
 
     # Prefetch resume: Stage 2.2 was cached on its own (analyze_only run) but 2.3+
@@ -645,7 +554,7 @@ def _run_chunk_pipeline(
             chunk_analyses, extracted_text, chunk_plan=chunk_plan)
         # Restore the persisted roll-up digest. A pre-roll-up cache (no valid
         # persisted global_digest) would silently feed an empty digest to
-        # 2.4/2.6 — same pattern as the stage_2_3_done restore above:
+        # Stage 2.4 — same pattern as the stage_2_3_done restore above:
         # warn, invalidate the marker, and fall through to re-run 2.2. This
         # validation runs even for another analyze-only prefetch resume.
         _digest_cached = progress.get("global_digest")
@@ -654,11 +563,11 @@ def _run_chunk_pipeline(
             print("  [stage 2.2] ⚠️  stage_2_2_done set but no valid rolled-up "
                   "global_digest persisted (pre-roll-up cache?) — invalidating "
                   "marker and re-running chunk analysis (prevents an empty "
-                  "digest reaching 2.4/2.6).")
+                  "digest reaching Stage 2.4).")
             unmark_stage_done(config, _h, "stage_2_2_done")
         else:
             try:
-                _verify_stage_2_1_digest(_digest_cached, raw_file)
+                _verify_stage_2_2_digest(_digest_cached, raw_file)
             except RuntimeError as exc:
                 print(
                     "  [stage 2.2] ⚠️  cached rolled-up global_digest failed "
@@ -681,9 +590,8 @@ def _run_chunk_pipeline(
           f"target {config.target_chars:,} chars/chunk (est. {est_sec/60:.0f} min)")
     _stage_begin("Stage 2.2: Chunk Analysis")
     t_start = time.time()
-    # 2.1 removed (NashSU parity, 2026-07-08): accumulated_digest starts
-    # empty — the global digest rolls up across chunks via each chunk's
-    # updated_global_digest. No whole-book prior.
+    # The global digest starts empty and rolls up across chunks via each
+    # chunk's updated_global_digest.
     accumulated_digest = ""
 
     # Existing-wiki SNAPSHOT: freeze both the slug list and NashSU-style current
@@ -727,15 +635,12 @@ def _run_chunk_pipeline(
     # re-analyzing. 2.2 is snapshot-stable after entry, so the frozen analysis
     # is safe to cache before 2.3+ performs fresh live wiki reads.
     # Roll the final accumulated_digest up into global_digest (dict) for
-    # 2.4/2.6. Persist so a cached resume restores it.
+    # Stage 2.4. Persist so a cached resume restores it.
     global_digest = _parse_accumulated_to_dict(accumulated_digest)
 
-    # Verify the rolled-up digest has the 5 required keys (book_meta/outline/
-    # key_concepts/key_claims/key_entities) that 2.4/2.6 consume.
-    # Migrated from Stage 2.1 (removed 2026-07-08): the gate now runs on the
-    # 2.2 roll-up instead of the former whole-book prior.
+    # Verify the Stage 2.2 roll-up has the five keys Stage 2.4 consumes.
     if chunk_analyses:
-        _verify_stage_2_1_digest(global_digest, raw_file)
+        _verify_stage_2_2_digest(global_digest, raw_file)
 
     save_progress(config, _h, {"chunk_plan_v2": chunk_plan,
                                "chunk_analyses": chunk_analyses,
@@ -757,7 +662,7 @@ def _build_chunk_meta(extracted_text: str, config: Config):
     Chunking is pure (same text + config \u2192 same chunks), so the prefetch-resume
     path rebuilds it cheaply instead of persisting every chunk's text.
     """
-    chunks = _stage_2_1_chunk_text(extracted_text, config.target_chars, config.chunk_overlap,
+    chunks = _stage_2_2_chunk_text(extracted_text, config.target_chars, config.chunk_overlap,
                                    target_tokens=config.target_tokens)
     chunk_total = len(chunks)
     chunk_meta: list[tuple[int, str, str, str]] = []
@@ -806,7 +711,7 @@ def _generate_from_analyses(
         print(f"  [stage 2.3] {len(incremental_associations)} candidate(s) "
               f"match existing wiki pages \u2192 fed into generation prompt")
     else:
-        print(f"  [stage 2.3] No existing-wiki associations (first source or no overlap)")
+        print("  [stage 2.3] No existing-wiki associations (first source or no overlap)")
 
     related_pages = stage_2_3_resolve_proposed_connections(
         config.wiki_dir, chunk_analyses, schema_text=schema_text)

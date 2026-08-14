@@ -91,7 +91,6 @@ def ingest_watch(
     drain: bool = False,
     max_concurrent: int = BATCH_MAX_CONCURRENT,
     max_retries: int = 3,
-    resume_from: str | None = None,
     verbose: bool = False,
 ) -> None:
     """Continuously watch ingest-queue.json and process pending entries.
@@ -136,9 +135,9 @@ def ingest_watch(
           f"drain={'yes' if drain else 'no'})")
     print(f"[watch] Queue: {config.runtime_dir / 'ingest-queue.json'}")
     if drain:
-        print(f"[watch] Mode: drain — will exit when queue is empty")
+        print("[watch] Mode: drain — will exit when queue is empty")
     else:
-        print(f"[watch] Mode: continuous — press Ctrl+C to stop")
+        print("[watch] Mode: continuous — press Ctrl+C to stop")
 
     try:
         while True:

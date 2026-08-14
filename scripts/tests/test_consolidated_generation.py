@@ -105,10 +105,12 @@ class TestConsolidatedContext(unittest.TestCase):
             (i, f"HEAD-{i}-" + ("z" * 20_000) + f"-TAIL-{i}", "", f"H{i}")
             for i in range(3)
         ]
+        # Budget is in TOKENS; these ASCII fixtures measure ~4 chars/token, so
+        # 2,000 tokens is the ~8,000-char squeeze this case is about.
         first = build_consolidated_stage_2_context(
-            _digest(), analyses, metas, 8_000)
+            _digest(), analyses, metas, 2_000)
         second = build_consolidated_stage_2_context(
-            _digest(), analyses, metas, 8_000)
+            _digest(), analyses, metas, 2_000)
         self.assertEqual(first, second)
         self.assertLessEqual(len(first), 8_000)
         for index in range(3):
@@ -141,13 +143,8 @@ class TestSingleGenerationCall(unittest.TestCase):
                 "concepts/cross-chunk"
             ], "end_turn"
 
-        def _forbidden_chunk(*_args, **_kwargs):
-            raise AssertionError("per-chunk Stage 2.4 generation was called")
-
         original_all = chunks.stage_2_4_generate_all
-        original_chunk = chunks.stage_2_4_generate_chunk
         chunks.stage_2_4_generate_all = _fake_all
-        chunks.stage_2_4_generate_chunk = _forbidden_chunk
         try:
             with tempfile.TemporaryDirectory() as directory:
                 cfg = _config(Path(directory))
@@ -168,7 +165,6 @@ class TestSingleGenerationCall(unittest.TestCase):
                 )
         finally:
             chunks.stage_2_4_generate_all = original_all
-            chunks.stage_2_4_generate_chunk = original_chunk
 
         self.assertEqual(len(seen), 1)
         self.assertEqual(len(seen[0]["analyses"]), 3)
@@ -177,22 +173,16 @@ class TestSingleGenerationCall(unittest.TestCase):
         self.assertEqual(result[0][0][0], "concepts/cross-chunk.md")
 
     def test_parallel_environment_flag_cannot_restore_chunk_waves(self):
-        calls = {"all": 0, "chunk": 0}
+        calls = {"all": 0}
 
         def _fake_all(*_args, **_kwargs):
             calls["all"] += 1
             return [], [], None
 
-        def _fake_chunk(*_args, **_kwargs):
-            calls["chunk"] += 1
-            return []
-
         previous = os.environ.get("IMPROVED_WIKI_PARALLEL_GEN")
         original_all = chunks.stage_2_4_generate_all
-        original_chunk = chunks.stage_2_4_generate_chunk
         os.environ["IMPROVED_WIKI_PARALLEL_GEN"] = "1"
         chunks.stage_2_4_generate_all = _fake_all
-        chunks.stage_2_4_generate_chunk = _fake_chunk
         try:
             with tempfile.TemporaryDirectory() as directory:
                 cfg = _config(Path(directory))
@@ -210,13 +200,12 @@ class TestSingleGenerationCall(unittest.TestCase):
                 )
         finally:
             chunks.stage_2_4_generate_all = original_all
-            chunks.stage_2_4_generate_chunk = original_chunk
             if previous is None:
                 os.environ.pop("IMPROVED_WIKI_PARALLEL_GEN", None)
             else:
                 os.environ["IMPROVED_WIKI_PARALLEL_GEN"] = previous
 
-        self.assertEqual(calls, {"all": 1, "chunk": 0})
+        self.assertEqual(calls, {"all": 1})
 
     def test_generation_prompt_receives_shared_context_verbatim(self):
         context = (
@@ -275,6 +264,53 @@ class TestGenerationTokenBudget(unittest.TestCase):
                         generation._stage_2_4_generation_max_tokens(cfg),
                         expected,
                     )
+
+    def test_truncation_repair_reuses_the_generation_budget(self):
+        """A repair must be able to regenerate the whole page it lost.
+
+        NashSU passes computeIngestGenerationMaxTokens to the repair call
+        precisely because a smaller budget re-truncates the same long page
+        that exhausted the original response.
+        """
+        budgets: list[int | None] = []
+        truncated = (
+            "---FILE:wiki/concepts/concept-1.md---\n"
+            "---\ntype: concept\ntitle: Concept 1\n---\nbody"
+        )
+        repaired = (
+            "---FILE:wiki/concepts/concept-1.md---\n"
+            "---\ntype: concept\ntitle: Concept 1\n---\nbody\n"
+            "---END FILE---\n"
+        )
+
+        def _spy(prompt, config, max_tokens=None, label=None):
+            budgets.append(max_tokens)
+            return (truncated if len(budgets) == 1 else repaired), "max_tokens"
+
+        original = generation.call_anthropic_protocol
+        generation.call_anthropic_protocol = _spy
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                cfg = _config(Path(directory))
+                cfg.context_size = 256_000
+                cfg.raw_root.mkdir(parents=True)
+                cfg.wiki_dir.mkdir(parents=True)
+                generation.stage_2_4_generate_all(
+                    [_analysis(0)],
+                    cfg.raw_root / "book.pdf",
+                    cfg,
+                    consolidated_context="ctx",
+                )
+        finally:
+            generation.call_anthropic_protocol = original
+
+        self.assertEqual(len(budgets), 2, "expected one generation and one repair call")
+        self.assertEqual(budgets[0], 24_576)
+        self.assertEqual(
+            budgets[1],
+            budgets[0],
+            "repair budget must match the generation budget",
+        )
 
 
 if __name__ == "__main__":

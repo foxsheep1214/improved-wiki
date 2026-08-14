@@ -2,12 +2,12 @@
 
 Historical bug (2026-06-25): re-ingesting a source page whose on-disk version
 carries a 50K+ ``## Embedded Images`` section (457 images, auto-injected by
-Stage 3.2) triggered an LLM page-merge. The merge prompt truncates each body
+Stage 3.4) triggered an LLM page-merge. The merge prompt truncates each body
 to 3K, so the LLM output (~3K) fell below the body-shrink threshold
 (0.7 * max(old_len, new_len) ≈ 0.7 * 64K = 45K), and the no-fallback policy
 paused the ingest. Fix: ``strip_embedded_images_section`` removes the section
 before body comparison/threshold, so a same-book re-ingest hits the
-"bodies identical" fast path (the semantic body is unchanged) and 3.2
+"bodies identical" fast path (the semantic body is unchanged) and Stage 3.4
 re-injects images afterward.
 
 Stdlib unittest only — no pytest, no network, no LLM calls.

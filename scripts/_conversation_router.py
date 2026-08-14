@@ -1,7 +1,7 @@
-"""Conversation-mode LLM router + task manifest.
+"""Conversation-mode LLM router and task manifest.
 
-Extracted from ingest.py on 2026-06-23. This is the single text-generation
-path: ``call_anthropic_protocol`` writes the prompt to a file and raises
+This is the single text-generation path: ``call_anthropic_protocol`` writes
+the prompt to a file and raises
 ``ConversationPending`` so the driving agent answers with the current
 conversation's model; on re-invoke the cached result is read and returned.
 
@@ -61,11 +61,10 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     Delegates the cache-read / prompt-write / raise to
     :func:`_llm_api.conversation_handoff` (shared with the sweep tools).
     """
-    # Stage-name slug + content-hash suffix. The stage name (Stage-1-Global-
-    # Digest, Stage-2-Synthesis, LLM-task, ...) gives human-readable grouping;
+    # Stage-name slug + content-hash suffix gives human-readable grouping;
     # the 8-char content hash guarantees distinct prompts get distinct cache
     # files. Without the hash, every call that falls through _infer_stage to
-    # 'LLM-task' (Stage 2.6 source page, Stage 2.4 generation, ...) shares one
+    # 'LLM-task' otherwise shares one
     # file and the wrong answer gets reused across stages. The hash is
     # deterministic, so replay of the same prompt still hits the cache.
     stage = re.sub(r"[^a-zA-Z0-9]+", "-", _infer_stage(prompt)).strip("-")[:40] or "llm-task"
@@ -78,8 +77,8 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # for the LLM; only the cache *key* is stabilized.
     #
     # Two prompt shapes carry the list, both must be redacted:
-    #   1. Inline single-line (legacy 2.1/2.8 prompt shape): "- Existing wiki pages: a, b, c"
-    #   2. Heading + multi-line list (Stage 2.4/3.4):
+    #   1. Inline single-line: "- Existing wiki pages: a, b, c"
+    #   2. Heading + multi-line list:
     #        "# Existing wiki pages ..." followed by indented dash items or a
     #        bare comma-separated line, terminated by a blank line or the next
     #        "#" heading. The old single-line regex only matched shape 1, so
@@ -102,9 +101,9 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
     # .md for the LLM.
     stable_prompt = re.sub(r'!\[[^\]]*\]\(', '![](', stable_prompt)
     content_hash = hashlib.sha256(stable_prompt.encode("utf-8")).hexdigest()[:8]
-    slug = f"{stage}-{content_hash}"
     prefix = config.conversation_prefix or "00000000"
     conv_dir = config.runtime_dir / "conversation" / prefix
+    slug = _compatible_conversation_slug(conv_dir, stage, content_hash)
 
     response = conversation_handoff(
         conv_dir, slug, prompt,
@@ -116,6 +115,25 @@ def _conversation_llm_call(prompt: str, config: Config, max_tokens=None) -> tupl
             config, slug, prompt, max_tokens),
     )
     return response, "end_turn"
+
+
+def _compatible_conversation_slug(
+    conv_dir: Path,
+    stage: str,
+    content_hash: str,
+) -> str:
+    """Reuse the pre-correction review slug while its handoff is in flight."""
+    current = f"{stage}-{content_hash}"
+    if stage != "Stage-3-1-Review":
+        return current
+
+    legacy = f"Stage-3-4-Review-{content_hash}"
+    suffixes = (".md", ".txt")
+    if any((conv_dir / f"{current}{suffix}").exists() for suffix in suffixes):
+        return current
+    if any((conv_dir / f"{legacy}{suffix}").exists() for suffix in suffixes):
+        return legacy
+    return current
 
 
 def _task_manifest_path(config: Config) -> Path:
@@ -350,7 +368,7 @@ def _conversation_task_logical_key(prompt: str) -> str:
     if stage == "Stage-2-4-Generation":
         chunk = re.search(r"^Chunk:\s*(\d+)\s*$", prompt, flags=re.MULTILINE)
         return f"{stage}:chunk-{chunk.group(1)}" if chunk else f"{stage}:all"
-    if stage in ("Stage-2-6-SourcePage", "Stage-3-4-Review"):
+    if stage == "Stage-3-1-Review":
         return stage
     return ""
 
@@ -367,7 +385,7 @@ def _infer_stage(prompt: str) -> str:
     routinely appear somewhere in a real book by coincidence (confirmed live:
     Plett's BMS Vol.2 preface contains "send me corrections and suggestions
     for improvements", which previously made every digest/chunk-analysis call
-    for that book misreport itself as the Stage 3.4 review step).
+    for that book misreport itself as the Stage 3.1 review step).
     """
     # The output-language directive (commit c359232) is prepended to every
     # generation/analysis prompt and runs ~890 chars — it would push the
@@ -378,8 +396,8 @@ def _infer_stage(prompt: str) -> str:
     # which also defeats the per-stage cache-file grouping). When the prompt
     # literally opens with the directive, skip that block and scan the
     # instruction text that follows. Prompts that don't open with it (e.g. the
-    # cached 2.1/2.2 digest/chunk-analysis prompts, whose marker is already in
-    # the first 500 chars) are untouched, so their slug/cache key is unchanged.
+    # cached Stage 2.2 chunk-analysis prompts, whose marker is already in the
+    # first 500 chars) are untouched, so their slug/cache key is unchanged.
     scan = prompt
     if prompt.lstrip().startswith("## ⚠️ MANDATORY OUTPUT LANGUAGE"):
         stripped = prompt.lstrip()
@@ -392,18 +410,13 @@ def _infer_stage(prompt: str) -> str:
     if "generating wiki pages" in head.lower() or ("Synthesis" in head and "FILE blocks" in head):
         return "Stage-2-4-Generation"
     if "review agent" in head or "可疑项" in head:
-        return "Stage-3-4-Review"
+        return "Stage-3-1-Review"
     if "Chunk Analysis" in head:
         m = re.search(r"chunk (\d+)/(\d+)", prompt)
         if m:
             return f"Stage-2-2-Chunk-{m.group(1)}"
-    if "writing a **source page**" in head:
-        return "Stage-2-6-SourcePage"
-    if "finished generating source/concept/entity pages" in head:
-        return "Stage-2-7-QueryGeneration"
     if "reviewing concept pages generated from the same source for duplicates" in head:
-        # The in-source dedup-confirm was folded into Stage 2.4's closing when the
-        # numbering was consolidated (2.5/2.8 retired); the stage code already
-        # prints "[stage 2.4]" for it, so label its cache files to match.
+        # In-source dedup is Stage 2.4's closing sub-step; use that stage in
+        # cache labels as well.
         return "Stage-2-4-DedupConfirm"
     return "LLM-task"

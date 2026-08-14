@@ -66,8 +66,8 @@ _DIGEST_PROMPT_CAP = 15_000
 # uncapped list grew with the wiki (6,253 pages → one 259KB prompt line,
 # repeated per chunk — observed live 2026-07-09, and it broke answering
 # subagents' Read tooling). NashSU trims its Current Wiki Index to 40K chars
-# (ingest.ts buildChunkAnalysisSystemPrompt); 2.4 (_LINKABLE_TOTAL_CAP) and
-# 2.6 ([:1500]) already rank-and-cap. 1000 slugs ≈ 40K chars — same budget.
+# (ingest.ts buildChunkAnalysisSystemPrompt); Stage 2.4's prompt sections
+# already rank-and-cap. 1000 slugs ≈ 40K chars — the same budget.
 _EXISTING_SLUGS_CAP = 1000
 
 
@@ -81,7 +81,7 @@ def _stage_2_2_cap_existing_slugs(existing_slugs: list, chunk_text: str) -> list
     the ranked prefix (and hence the conversation-handoff prompt hash) is
     stable across resumes. An alphabetical cut would systematically drop
     late-sorting CJK slugs — the same disease _rank_linkable_fill fixed for
-    2.4/2.6.
+    Stage 2.4.
     """
     if len(existing_slugs) <= _EXISTING_SLUGS_CAP:
         return existing_slugs
@@ -104,7 +104,7 @@ _SEARCH_FRAC = 0.15
 _MIN_TAIL_FRAC = 0.25
 
 
-def _stage_2_1_find_protected_ranges(text: str) -> list[tuple[int, int]]:
+def _stage_2_2_find_protected_ranges(text: str) -> list[tuple[int, int]]:
     """Char ranges that must never be split: fenced code blocks and markdown
     tables. Returns sorted, non-overlapping ``(start, end)`` spans."""
     ranges: list[tuple[int, int]] = []
@@ -165,7 +165,7 @@ def _stage_2_1_find_protected_ranges(text: str) -> list[tuple[int, int]]:
     return sorted(ranges)
 
 
-def _stage_2_1_range_at(pos: int, ranges: list[tuple[int, int]]) -> tuple[int, int] | None:
+def _stage_2_2_range_at(pos: int, ranges: list[tuple[int, int]]) -> tuple[int, int] | None:
     for s, e in ranges:
         if s < pos < e:
             return (s, e)
@@ -174,23 +174,23 @@ def _stage_2_1_range_at(pos: int, ranges: list[tuple[int, int]]) -> tuple[int, i
     return None
 
 
-def _stage_2_1_pick_boundary(text, lo, hi, heading_positions, protected) -> int:
+def _stage_2_2_pick_boundary(text, lo, hi, heading_positions, protected) -> int:
     """Best cut index in [lo, hi): heading > paragraph > newline > CJK/EN
     sentence end. Skips boundaries that fall inside a protected range. Returns
     the exclusive cut index, or -1 if none found."""
     for hp in reversed(heading_positions):
-        if lo <= hp < hi and _stage_2_1_range_at(hp, protected) is None:
+        if lo <= hp < hi and _stage_2_2_range_at(hp, protected) is None:
             return hp  # cut before the heading so it leads the next chunk
     for sep, off in (("\n\n", 2), ("\n", 1), ("。", 1), (". ", 2)):
         idx = text.rfind(sep, lo, hi)
-        while idx != -1 and _stage_2_1_range_at(idx, protected) is not None:
+        while idx != -1 and _stage_2_2_range_at(idx, protected) is not None:
             idx = text.rfind(sep, lo, idx)
         if idx != -1:
             return idx + off
     return -1
 
 
-def _stage_2_1_snap_out(start: int, end: int, protected) -> int:
+def _stage_2_2_snap_out(start: int, end: int, protected) -> int:
     """If ``end`` lands inside a protected block, move it to a safe edge: before
     the block (block leads the next chunk) when possible, else after it.
 
@@ -200,7 +200,7 @@ def _stage_2_1_snap_out(start: int, end: int, protected) -> int:
     empty text. Only snap back when it leaves at least half the attempted
     window; otherwise snap forward past the block (let the chunk overflow to
     include the whole table)."""
-    r = _stage_2_1_range_at(end, protected)
+    r = _stage_2_2_range_at(end, protected)
     if r is None:
         return end
     attempted = end - start
@@ -209,7 +209,7 @@ def _stage_2_1_snap_out(start: int, end: int, protected) -> int:
     return r[1]
 
 
-def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int,
+def _stage_2_2_chunk_text(text: str, target_chars: int, overlap_chars: int,
                           *, target_tokens: int | None = None) -> list[str]:
     """Split text into overlapping, token-bounded chunks.
 
@@ -247,7 +247,7 @@ def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int,
           f"~{target_tokens}-tok chunks (~{window} chars/chunk)...", flush=True)
 
     heading_positions = [m.start() for m in _HEADING_RE.finditer(text)]
-    protected = _stage_2_1_find_protected_ranges(text)
+    protected = _stage_2_2_find_protected_ranges(text)
 
     spans: list[tuple[int, int]] = []
     start = 0
@@ -259,12 +259,12 @@ def _stage_2_1_chunk_text(text: str, target_chars: int, overlap_chars: int,
             break
 
         search_start = max(start, end - int(window * _SEARCH_FRAC))
-        boundary = _stage_2_1_pick_boundary(text, search_start, end, heading_positions, protected)
+        boundary = _stage_2_2_pick_boundary(text, search_start, end, heading_positions, protected)
         if boundary > start:
             end = boundary
-        end = _stage_2_1_snap_out(start, end, protected)
+        end = _stage_2_2_snap_out(start, end, protected)
         if end <= start:  # protected block fills the whole window — let it overflow
-            r = _stage_2_1_range_at(start + 1, protected)
+            r = _stage_2_2_range_at(start + 1, protected)
             end = r[1] if r else min(start + window, n)
 
         spans.append((start, end))
@@ -654,7 +654,7 @@ def _stage_2_2_build_prompt(
     # condenses rather than accumulates verbatim (see the updated_global_digest
     # template below). Detail is NOT lost by this: each chunk's full analysis is
     # persisted in chunk_analyses; Stage 2.4 selects eligible key page candidates
-    # and Stage 2.6 synthesizes core claims separately. The digest is only the
+    # and synthesizes core claims. The digest is only the
     # lightweight continuity channel. Earlier fixed caps (6K, 24K) and an
     # interim dynamic cap (target_chars) predate this parity decision.
     if len(digest_str) > _DIGEST_PROMPT_CAP:

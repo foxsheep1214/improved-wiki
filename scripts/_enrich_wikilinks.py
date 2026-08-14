@@ -91,36 +91,59 @@ def _enrichment_link(target: str, term: str) -> str:
     return f"[[{target}|{term}]]"
 
 
-def repair_legacy_bare_enrichment_links(
-    content: str,
-    suggestions: list[dict],
-) -> tuple[str, int]:
-    """Upgrade bare links written by the pre-alias enrichment implementation.
+def _validate_enrichment_suggestions(
+    suggestions_by_path: dict,
+    candidates: list[tuple[str, str]],
+    allowed_targets: set[str],
+    max_terms_per_page: int,
+) -> None:
+    """Reject suggestions outside the exact prompt contract."""
+    candidate_bodies = {
+        rel_path: parse_frontmatter(content)[1]
+        for rel_path, content in candidates
+    }
+    unknown_paths = sorted(set(suggestions_by_path) - set(candidate_bodies))
+    if unknown_paths:
+        raise ValueError(
+            "enrich_wikilinks_batch: response contains unknown page(s): "
+            + ", ".join(unknown_paths)
+        )
 
-    This migration is intentionally narrow: callers must use it only for pages
-    known to have had zero outlinks before enrichment.  Under that precondition,
-    a matching bare ``[[target]]`` was inserted by this module and can safely be
-    rewritten as ``[[target|term]]``.  Suggestions are processed in order so
-    two distinct terms targeting the same page repair two corresponding links.
-    """
-    content = normalize_block_arrays(content)
-    fm, body = parse_frontmatter(content)
-    repaired = 0
-    for suggestion in suggestions:
-        term = suggestion.get("term", "")
-        target = suggestion.get("target", "")
-        if not term or not target:
-            continue
-        aliased = _enrichment_link(target, term)
-        if aliased in body:
-            continue
-        bare = f"[[{target}]]"
-        if bare in body:
-            body = body.replace(bare, aliased, 1)
-            repaired += 1
-    result = write_frontmatter(fm, body)
-    result, _ = escape_markdown_table_wikilink_aliases(result)
-    return result, repaired
+    for rel_path, suggestions in suggestions_by_path.items():
+        if not isinstance(suggestions, list):
+            raise ValueError(
+                f"enrich_wikilinks_batch: {rel_path} suggestions must be a list"
+            )
+        if len(suggestions) > max_terms_per_page:
+            raise ValueError(
+                f"enrich_wikilinks_batch: {rel_path} exceeds the "
+                f"{max_terms_per_page}-suggestion limit"
+            )
+        this_slug = Path(rel_path).stem
+        body = candidate_bodies[rel_path]
+        for index, suggestion in enumerate(suggestions, 1):
+            if not isinstance(suggestion, dict):
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    "must be an object"
+                )
+            term = suggestion.get("term")
+            target = suggestion.get("target")
+            if not isinstance(term, str) or not term or term not in body:
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    "term must be exact body text"
+                )
+            if not isinstance(target, str) or target not in allowed_targets:
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    f"target is outside the prompt whitelist: {target!r}"
+                )
+            if target == this_slug:
+                raise ValueError(
+                    f"enrich_wikilinks_batch: {rel_path} suggestion {index} "
+                    "is a self-link"
+                )
 
 
 def enrich_wikilinks_batch(
@@ -201,8 +224,7 @@ Pages with no suggestions may be omitted from the object.
 # Pages To Enrich
 {pages_str}"""
 
-    response, _ = call_anthropic_protocol(
-        prompt, config, max_tokens=4096, label="wikilink enrichment (batch)")
+    response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
     text = response.strip()
     if text.startswith("```"):
         text = text.split("```", 2)[1]
@@ -214,6 +236,13 @@ Pages with no suggestions may be omitted from the object.
         raise ValueError(
             f"enrich_wikilinks_batch: expected a JSON object keyed by path, "
             f"got {type(suggestions_by_path).__name__}")
+
+    _validate_enrichment_suggestions(
+        suggestions_by_path,
+        candidates,
+        set(all_targets),
+        max_terms_per_page,
+    )
 
     enriched: dict[str, str] = {}
     for rel_path, content in candidates:

@@ -256,6 +256,8 @@ def test_isolated_linkcount_le_1_with_structural_exclusion(wiki):
     _write_page(wiki_dir, "ov", type_="overview", title="Overview")
     # log excluded
     _write_page(wiki_dir, "log", type_="index", title="Log")
+    # redirect is a one-edge compatibility alias, not a content gap
+    _write_page(wiki_dir, "legacy", type_="redirect", title="Legacy", body_links=["x"])
     # a connected pair so they are not isolated
     _write_page(wiki_dir, "x", body_links=["y"])
     _write_page(wiki_dir, "y", body_links=["x"])
@@ -268,6 +270,11 @@ def test_isolated_linkcount_le_1_with_structural_exclusion(wiki):
     assert "wiki/index" not in iso.node_ids
     assert "wiki/ov" not in iso.node_ids
     assert "wiki/log" not in iso.node_ids
+    assert "wiki/legacy" not in iso.node_ids
+    assert all(
+        "wiki/legacy" not in gap.node_ids
+        for gap in gaps
+    )
     # x and y each have linkCount 2 -> not isolated
     assert "wiki/x" not in iso.node_ids
 
@@ -287,6 +294,28 @@ def test_bridge_node_spans_three_communities(wiki):
     bridges = [gp for gp in gaps if gp.gap_type == "bridge-node"]
     bridge_ids = {nid for gp in bridges for nid in gp.node_ids}
     assert "wiki/bridge" in bridge_ids
+
+
+def test_redirect_is_excluded_from_sparse_and_bridge_insights(wiki):
+    root, wiki_dir = wiki
+    for grp in ("p", "q", "r"):
+        _write_page(wiki_dir, f"{grp}1", body_links=[f"{grp}2", f"{grp}3"])
+        _write_page(wiki_dir, f"{grp}2", body_links=[f"{grp}3"])
+        _write_page(wiki_dir, f"{grp}3")
+    _write_page(
+        wiki_dir, "legacy", type_="redirect", title="Legacy",
+        body_links=["p1", "q1", "r1"],
+    )
+    pages, lg, g = _build(root)
+    comms = graph.detect_communities(g, lg)
+    gaps = graph.detect_knowledge_gaps(pages, lg, comms, limit=20)
+    assert all("wiki/legacy" not in gap.node_ids for gap in gaps)
+
+    surprising = graph.find_surprising_connections(g, pages, comms, limit=20)
+    assert all(
+        item.source != "wiki/legacy" and item.target != "wiki/legacy"
+        for item in surprising
+    )
 
 
 def test_no_betweenness_call():
@@ -317,7 +346,7 @@ def test_structural_pages_hidden_by_default_filter(wiki):
     _write_page(wiki_dir, "a", body_links=["index"])
     _write_page(wiki_dir, "schema", type_="other", body_links=["a"])
     pages, lg, g = _build(root)
-    filtered = graph.apply_graph_filters(g, pages, lg, hide_structural=True)
+    filtered = graph.apply_graph_filters(g, pages, hide_structural=True)
     assert "wiki/index" not in filtered.nodes
     assert "wiki/schema" not in filtered.nodes
     assert "wiki/a" in filtered.nodes
@@ -337,9 +366,11 @@ def test_is_structural_graph_node(wiki):
     _write_page(wiki_dir, "purpose", type_="other")
     _write_page(wiki_dir, "regular", type_="concept")
     _write_page(wiki_dir, "ov", type_="overview")
+    _write_page(wiki_dir, "legacy", type_="redirect")
     pages = graph.load_pages(root)
     assert graph.is_structural_graph_node(pages["wiki/purpose"])
     assert graph.is_structural_graph_node(pages["wiki/ov"])  # overview type
+    assert graph.is_structural_graph_node(pages["wiki/legacy"])
     assert not graph.is_structural_graph_node(pages["wiki/regular"])
 
 

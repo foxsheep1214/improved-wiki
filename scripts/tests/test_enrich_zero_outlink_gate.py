@@ -140,25 +140,28 @@ class ZeroOutlinkGate(unittest.TestCase):
             result["comparisons/motors.md"],
         )
 
-    def test_legacy_repair_handles_two_terms_with_same_target(self):
-        content = _page(
-            "A [[wlcsp-fan-in-redistribution]] architecture mounts balls on "
-            "the [[wlcsp-fan-in-redistribution]]."
+    def test_rejects_target_outside_prompt_whitelist(self):
+        page = (
+            "concepts/radar.md",
+            _page(LONG + " The matched filter maximizes SNR."),
         )
-        suggestions = [
-            {"term": "fan-in WLCSP architecture",
-             "target": "wlcsp-fan-in-redistribution"},
-            {"term": "Cu RDL", "target": "wlcsp-fan-in-redistribution"},
-        ]
-        repaired, count = ew.repair_legacy_bare_enrichment_links(
-            content, suggestions)
-        self.assertEqual(count, 2)
-        self.assertIn(
-            "[[wlcsp-fan-in-redistribution|fan-in WLCSP architecture]]",
-            repaired,
-        )
-        self.assertIn("[[wlcsp-fan-in-redistribution|Cu RDL]]", repaired)
 
+        def fake(prompt, config, **kw):
+            return (
+                '{"concepts/radar.md": [{"term": "matched filter", '
+                '"target": "concepts/hallucinated-target"}]}',
+                None,
+            )
+
+        orig = ew.call_anthropic_protocol
+        ew.call_anthropic_protocol = fake
+        try:
+            with self.assertRaisesRegex(ValueError, "prompt whitelist"):
+                ew.enrich_wikilinks_batch(
+                    [page], ["concepts/matched-filter"], object()
+                )
+        finally:
+            ew.call_anthropic_protocol = orig
 
 if __name__ == "__main__":
     unittest.main()

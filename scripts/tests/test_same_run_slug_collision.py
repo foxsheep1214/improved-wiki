@@ -3,19 +3,15 @@
 NashSU 0.6.6's corrected-source rule says: when every ``sources`` entry on an
 existing page resolves to the source being ingested, that page is owned solely
 by this source, so the freshly generated body supersedes the stale one
-(_stage_3_write._stage_3_1_is_owned_only_by_source → replace_existing_body).
+(_stage_3_write._stage_3_2_is_owned_only_by_source → replace_existing_body).
 
 That rule is about a page left behind by a PREVIOUS ingest. Applied to a page
 this same write loop wrote moments ago it is destructive: the "owner" test
-holds by construction (Stage 3.1 canonicalizes ``sources`` to the current
+holds by construction (Stage 3.2 canonicalizes ``sources`` to the current
 source), so the second FILE block silently discards the first block's body —
 no LLM merge, no warning, and the console still prints ``[merge]``.
 
 Observed shapes of the collision:
-  * Stage 2.6 prepends the source page to ``file_blocks``; a stray
-    ``wiki/sources/<stem>.md`` block from Stage 2.4 (which
-    ``_verify_stage_2_4_file_blocks`` already warns about) sorts AFTER it and
-    would replace the real source summary;
   * two Stage 2.2 candidate names that slugify identically
     (``MTI（动目标显示）`` / ``MTI``);
   * two differently-typed candidates that schema routing collapses onto the
@@ -80,7 +76,7 @@ def _page(body: str, *, fm_type: str = "source", tags: str = "[radar]") -> str:
     )
 
 
-FIRST = _page("Rich Stage 2.6 source summary with 40 claims.")
+FIRST = _page("Rich source summary with 40 claims.")
 SECOND = _page("Stray short block from Stage 2.4.", tags="[ew]")
 
 
@@ -101,7 +97,7 @@ class SameRunCollisionMerges(unittest.TestCase):
         # response rather than falling back to the array-only merge.
         merged_marker = (
             "MERGED BODY: both versions preserved.\n\n"
-            "Rich Stage 2.6 source summary with 40 claims.\n\n"
+            "Rich source summary with 40 claims.\n\n"
             "Stray short block from Stage 2.4.\n"
         )
         with mock.patch.object(
@@ -109,7 +105,7 @@ class SameRunCollisionMerges(unittest.TestCase):
             "call_anthropic_protocol",
             return_value=(merged_marker, "end_turn"),
         ) as llm:
-            sw.stage_3_1_write_wiki_file(
+            sw.stage_3_2_write_wiki_file(
                 self.page,
                 SECOND,
                 self.cfg,
@@ -137,7 +133,7 @@ class SameRunCollisionMerges(unittest.TestCase):
             0, llm_calls,
             "a page left by a previous ingest of this same source is replaced")
         self.assertIn("Stray short block", content)
-        self.assertNotIn("Rich Stage 2.6 source summary", content)
+        self.assertNotIn("Rich source summary", content)
 
     def test_default_preserves_replace_semantics(self):
         content, llm_calls = self._write()

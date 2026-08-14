@@ -1,4 +1,4 @@
-"""Regression tests for Stage 3.2 image injection following the page's own
+"""Regression tests for Stage 3.4 image injection following the page's own
 language instead of hardcoding Chinese boilerplate (2026-07-15 KB policy:
 every page is Chinese or English — see _language.get_output_language).
 
@@ -8,7 +8,7 @@ and a Chinese attribution line, even onto English-body source pages (e.g.
 otherwise all-English page.
 
 Run:
-    python3 -m unittest tests.test_stage_3_2_inject_images   # from scripts/
+    python3 -m unittest tests.test_stage_3_4_inject_images   # from scripts/
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _core  # noqa: E402
-from _stage_3_2_inject_images import stage_3_2_inject_images  # noqa: E402
+from _stage_3_4_inject_images import stage_3_4_inject_images  # noqa: E402
 
 _ENGLISH_BODY = (
     "---\ntitle: x\n"
@@ -60,7 +60,12 @@ def _make_config(tmp: Path) -> _core.Config:
     )
 
 
-def _run(tmp: Path, body: str, source_type: str = "Paper") -> str:
+def _run(
+    tmp: Path,
+    body: str,
+    source_type: str = "Paper",
+    images: list[dict] | None = None,
+) -> str:
     config = _make_config(tmp)
     raw_file = (
         config.raw_root / source_type / "01_反无人机探测与识别" / "book.pdf"
@@ -75,14 +80,15 @@ def _run(tmp: Path, body: str, source_type: str = "Paper") -> str:
 
     media_dir = config.wiki_dir / "media" / source_rel.with_suffix("")
     media_dir.mkdir(parents=True, exist_ok=True)
+    default_images = [
+        {"page": 0, "filename": "p0000-mineru_abc.jpg", "img_idx_in_page": 0},
+    ]
     manifest = {
-        "images": [
-            {"page": 0, "filename": "p0000-mineru_abc.jpg", "img_idx_in_page": 0},
-        ]
+        "images": default_images if images is None else images,
     }
     (media_dir / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
-    stage_3_2_inject_images(config, raw_file, source_path)
+    stage_3_4_inject_images(config, raw_file, source_path)
     return source_path.read_text(encoding="utf-8")
 
 
@@ -118,7 +124,39 @@ class TestInjectImagesLanguage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             result = _run(Path(d), _CHINESE_BODY)
         self.assertIn("## Embedded Images", result)
-        self.assertIn("### Page 0", result)
+        self.assertIn("### Page 1", result)
+        self.assertNotIn("### Page 0", result)
+
+    def test_manifest_page_indices_render_as_one_based_source_pages(self):
+        images = [
+            {"page": 20, "filename": "p0020-mineru_late.jpg", "img_idx_in_page": 0},
+            {"page": 0, "filename": "p0000-mineru_first.jpg", "img_idx_in_page": 0},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            result = _run(Path(d), _ENGLISH_BODY, images=images)
+        self.assertIn("### Page 1", result)
+        self.assertIn("### Page 21", result)
+        self.assertLess(result.index("### Page 1\n"), result.index("### Page 21\n"))
+
+    def test_unpaged_images_render_under_document_after_numbered_pages(self):
+        images = [
+            {"page": None, "filename": "md_001_diagram.png"},
+            {"page": 1, "filename": "p0001-mineru_page.jpg"},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            result = _run(Path(d), _ENGLISH_BODY, images=images)
+        self.assertIn("### Page 2", result)
+        self.assertIn("### Document", result)
+        self.assertNotIn("### Page None", result)
+        self.assertLess(
+            result.index("### Page 2\n"), result.index("### Document\n")
+        )
+
+    def test_negative_manifest_page_index_fails_loud(self):
+        images = [{"page": -1, "filename": "p-001-mineru_bad.jpg"}]
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(RuntimeError, "null or a non-negative integer"):
+                _run(Path(d), _ENGLISH_BODY, images=images)
 
 
 if __name__ == "__main__":

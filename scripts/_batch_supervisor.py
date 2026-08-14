@@ -181,11 +181,6 @@ def _pid_probe(pid: int) -> str:
         return "dead"
 
 
-def _pid_alive(pid: int) -> bool:
-    """Compatibility helper; EPERM remains indeterminate rather than dead."""
-    return _pid_probe(pid) != "dead"
-
-
 def _read_worker_status(entry: dict) -> dict | None:
     status_file = entry.get("status_file")
     if not status_file:
@@ -449,22 +444,6 @@ def _launch_bg_extract(file: Path, config: Config, state: dict) -> bool:
     _save_bg_state(config, state)
     print(f"[batch] bg extract launched (pid {proc.pid}) — {file.name}", flush=True)
     return True
-
-
-def _launch_next_pending_extract(
-    raw_files: list[Path],
-    start_index: int,
-    config: Config,
-    state: dict,
-) -> Path | None:
-    """Launch the first not-yet-extracted source at or after ``start_index``."""
-    for file in raw_files[start_index:]:
-        h = _batch_source_hash(file)
-        if is_stage_done(config, h, "stage_1_3_done"):
-            continue
-        _launch_bg_extract(file, config, state)
-        return file
-    return None
 
 
 def _fill_prefetch_slots(

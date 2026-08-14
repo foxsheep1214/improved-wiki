@@ -165,8 +165,8 @@ class TestNashSUSynthesisThesisGeneration(unittest.TestCase):
             cfg.wiki_dir.mkdir(parents=True)
             cfg.raw_root.mkdir(parents=True)
             _write_research_schema(tmp)
-            prompt = generation._stage_2_4_build_prompt(
-                {
+            prompt = generation._stage_2_4_build_all_prompt(
+                [{
                     "concepts_found": [],
                     "entities_found": [],
                     "schema_typed_candidates": [
@@ -184,11 +184,10 @@ class TestNashSUSynthesisThesisGeneration(unittest.TestCase):
                         },
                     ],
                     "formulas": [],
-                },
-                "source text",
-                0,
+                }],
                 cfg.raw_root / "book.pdf",
                 cfg,
+                source_context="source text",
             )
 
         self.assertIn("synthesis/unified-aperture-view", prompt)

@@ -124,8 +124,16 @@ _STABLE_RESERVE_MIN = 12_000
 _STABLE_RESERVE_FRAC = 0.25
 _INSTRUCTION_RESERVE_MIN = 12_000
 _INSTRUCTION_RESERVE_FRAC = 0.08
+# source_budget is a TOKEN budget (the probe reports tokens). NashSU's
+# equivalent constants are CHARACTER-scale because its `maxContextSize` is
+# documented in characters (context-budget.ts) — copying its numbers onto a
+# token-scale context under-budgets a Latin-script source by ~4x. The ceiling
+# is 2x the largest chunk (_TARGET_TOKENS_HARD_CEIL): the consolidated context
+# must hold every chunk analysis plus raw evidence, but must not regress into a
+# second whole-book dump — the A/B behind the 64K chunk cap (references/
+# context-probe.md) showed oversized single prompts analyze worse, not better.
 _SOURCE_BUDGET_MIN = 8_000
-_SOURCE_BUDGET_MAX = 300_000
+_SOURCE_BUDGET_MAX = 128_000
 _SOURCE_BUDGET_FRAC = 0.6
 _TARGET_TOKENS_MIN = 12_000
 _TARGET_TOKENS_CEIL_FRAC = 0.33
@@ -135,12 +143,10 @@ _TARGET_CHARS_HARD_CEIL = 768_000
 
 
 def _compute_chunk_targets(
-    source_budget: int,
     context_size: int,
     hard_ceil: int = _TARGET_TOKENS_HARD_CEIL,
 ) -> tuple[int, int]:
     """Return the token budget and conservative character ceiling per chunk."""
-    del source_budget  # retained in the API for compatibility
     ceiling_env = os.environ.get(
         "IMPROVED_WIKI_TARGET_TOKENS_CEIL",
         "",
@@ -162,6 +168,39 @@ def _compute_chunk_targets(
     return target_tokens, target_chars
 
 
+def _compute_source_budget(context_size: int) -> int:
+    """Tokens the Stage 2.4 consolidated context may claim from the window.
+
+    Reserves mirror NashSU's ``computeIngestSourceBudget`` proportions
+    (response / stable project context / instructions), applied in token space.
+    Consumers that need a character bound convert with the source's own
+    measured chars-per-token — see ``_stage_2_context``.
+    """
+    response_reserve = int(context_size * _RESPONSE_RESERVE_FRAC)
+    stable_reserve = min(
+        int(context_size * _STABLE_RESERVE_FRAC),
+        max(_STABLE_RESERVE_MIN, 50_000),
+    )
+    instruction_reserve = max(
+        _INSTRUCTION_RESERVE_MIN,
+        int(context_size * _INSTRUCTION_RESERVE_FRAC),
+    )
+    available = (
+        context_size
+        - response_reserve
+        - stable_reserve
+        - instruction_reserve
+    )
+    upper = min(
+        _SOURCE_BUDGET_MAX,
+        max(
+            _SOURCE_BUDGET_MIN,
+            int(context_size * _SOURCE_BUDGET_FRAC),
+        ),
+    )
+    return max(_SOURCE_BUDGET_MIN, min(available, upper))
+
+
 @dataclass
 class Config:
     wiki_root: Path
@@ -176,7 +215,7 @@ class Config:
     caption_base_url: str
     caption_model: str
     chunk_overlap: int
-    source_budget: int
+    source_budget: int  # TOKENS (see _compute_source_budget)
     target_chars: int
     target_tokens: int
     max_tokens: int
@@ -199,9 +238,8 @@ class Config:
         provider = load_provider_config()
         caption = load_caption_provider()
         runtime_dir = detect_runtime_dir(wiki_root)
-        source_budget = _CONTEXT_SIZE_DEFAULT
+        source_budget = _compute_source_budget(_CONTEXT_SIZE_DEFAULT)
         target_tokens, target_chars = _compute_chunk_targets(
-            source_budget,
             _CONTEXT_SIZE_DEFAULT,
         )
         media_policy = os.environ.get(
@@ -247,39 +285,13 @@ class Config:
 
     def apply_context(self, context_size: int) -> None:
         self.context_size = context_size
-        response_reserve = int(context_size * _RESPONSE_RESERVE_FRAC)
-        stable_reserve = min(
-            int(context_size * _STABLE_RESERVE_FRAC),
-            max(_STABLE_RESERVE_MIN, 50_000),
-        )
-        instruction_reserve = max(
-            _INSTRUCTION_RESERVE_MIN,
-            int(context_size * _INSTRUCTION_RESERVE_FRAC),
-        )
-        available = (
-            context_size
-            - response_reserve
-            - stable_reserve
-            - instruction_reserve
-        )
-        upper = min(
-            _SOURCE_BUDGET_MAX,
-            max(
-                _SOURCE_BUDGET_MIN,
-                int(context_size * _SOURCE_BUDGET_FRAC),
-            ),
-        )
-        self.source_budget = max(
-            _SOURCE_BUDGET_MIN,
-            min(available, upper),
-        )
+        self.source_budget = _compute_source_budget(context_size)
         self.target_tokens, self.target_chars = _compute_chunk_targets(
-            self.source_budget,
             context_size,
         )
         print(
-            f"[config] probed context={context_size:,} → "
-            f"source_budget={self.source_budget:,} "
+            f"[config] probed context={context_size:,} tok → "
+            f"source_budget={self.source_budget:,} tok "
             f"target_tokens={self.target_tokens:,} "
             f"target_chars≤{self.target_chars:,}"
         )

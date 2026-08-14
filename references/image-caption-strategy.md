@@ -14,6 +14,9 @@ Unified image captioning. Implemented as `stage_1_3_caption_images()` /
 两个图片来源：
 - **PDF** — minerU 在 Stage 1.1 chunk 处理时由 `_stage_1_2_harvest_images()` 内联提取
 - **PPTX/DOCX** — `_stage_1_2_extract_images_office()` 从 zip 内 `ppt/media`/`word/media` 取图
+- **XLSX/ODT/EPUB/RTF** — 无图片抽取。Stage 1.2 的分支是按后缀显式列举的，这四种
+  与 `.txt` 一样自然落空，只有 `_stage_1_1_documents.py` 抽出的正文。EPUB/ODT 的插图
+  当前会丢失；要补需接入 Stage 1.2 与 media 完整性审计
 
 > **NashSU parity**：caption 调用模型与 prompt 结构直接对齐
 > NashSU 的 `src/lib/vision-caption.ts`（`captionImage` 一图一调用 +

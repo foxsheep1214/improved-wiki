@@ -5,6 +5,8 @@ Runs ``_lint_suggest.run_structural_lint`` (with suggestions) over ``wiki/``
 and applies the three fixes ported from NashSU ``lint-fixes.ts``:
 
   - broken-link + suggested_target   → rewrite [[broken]] → [[suggested]]
+                                       (or ``redirect:`` when the finding came
+                                       from redirect frontmatter)
   - broken-link + no suggestion      → REVIEW/missing-page item (default since
                                        2026-07-12, NashSU parity: stubs need an
                                        explicit human choice — pass --stub to
@@ -49,6 +51,7 @@ from _lint_suggest import (  # noqa: E402
 from _lint_fixes import (  # noqa: E402
     append_wikilink,
     rewrite_wikilink_target,
+    rewrite_redirect_frontmatter_target,
     ensure_broken_link_stub,
     stub_relative_path_from_broken_target,
     build_deleted_keys,
@@ -62,7 +65,10 @@ from _frontmatter_array import (  # noqa: E402
     write_frontmatter_array,
 )
 from _paths import iter_wiki_pages, atomic_write as _atomic_write  # noqa: E402
-from _review_utils import resolve_review_path  # noqa: E402
+from _review_utils import (  # noqa: E402
+    is_resolved_review_file,
+    resolve_review_path,
+)
 from _embedding_store import remove_page_embeddings  # noqa: E402
 
 # Scan universe = NashSU {index, log} (overview/schema stay valid link targets,
@@ -88,7 +94,7 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
     """Turn lint findings into a list of fix actions.
 
     Action shapes:
-      {kind: "rewrite", page, broken, suggested}
+      {kind: "rewrite", page, broken, suggested, link_origin}
       {kind: "review-rewrite", page, broken, suggested, score}
                                        # suggestion below the auto-rewrite gate
                                        # → routed to REVIEW, never auto-applied
@@ -102,6 +108,7 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
             broken = fnd.get("broken_target")
             suggested = fnd.get("suggested_target")
             page = fnd.get("page")
+            link_origin = fnd.get("link_origin", "body")
             if not broken or not page:
                 continue
             if suggested:
@@ -110,16 +117,19 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
                 # conservatively: no headless rewrite, route to review.
                 if score is not None and score >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE:
                     actions.append({"kind": "rewrite", "page": page,
-                                    "broken": broken, "suggested": suggested})
+                                    "broken": broken, "suggested": suggested,
+                                    "link_origin": link_origin})
                 else:
                     actions.append({"kind": "review-rewrite", "page": page,
                                     "broken": broken, "suggested": suggested,
-                                    "score": score})
+                                    "score": score,
+                                    "link_origin": link_origin})
             else:
                 # Carry `page` so apply_fixes can repoint [[broken]] at the new
                 # stub — otherwise the link stays dangling and the next lint run
                 # re-reports it (non-idempotent). NashSU handleFix does both.
-                actions.append({"kind": "stub", "broken": broken, "page": page})
+                actions.append({"kind": "stub", "broken": broken, "page": page,
+                                "link_origin": link_origin})
         elif kind == "orphan":
             source = fnd.get("suggested_source")
             page = fnd.get("page")
@@ -188,7 +198,19 @@ def apply_fixes(
             if page_rel:
                 content = load(page_rel)
                 if content is not None:
-                    new = rewrite_wikilink_target(content, act["broken"], rel)
+                    new = content
+                    if act.get("link_origin") == "redirect-frontmatter":
+                        redirected = rewrite_redirect_frontmatter_target(
+                            new, act["broken"], rel)
+                        if redirected == new:
+                            # Do not hide a still-broken top-level redirect by
+                            # rewriting only a coincident prose link.
+                            redirected = None
+                        new = redirected if redirected is not None else new
+                    else:
+                        redirected = new
+                    if redirected is not None:
+                        new = rewrite_wikilink_target(new, act["broken"], rel)
                     if new != content:
                         cache[page_rel] = new
                         dirty.add(page_rel)
@@ -202,7 +224,23 @@ def apply_fixes(
             summary["skipped"] += 1
             continue
         if kind == "rewrite":
-            new = rewrite_wikilink_target(content, act["broken"], act["suggested"])
+            new = content
+            if act.get("link_origin") == "redirect-frontmatter":
+                redirected = rewrite_redirect_frontmatter_target(
+                    new, act["broken"], act["suggested"])
+                if redirected == new:
+                    # A malformed/nested-only redirect field is not the edge
+                    # lint reported. Leave the whole page unchanged so the
+                    # action is visibly skipped rather than a false success.
+                    new = content
+                else:
+                    new = rewrite_wikilink_target(
+                        redirected, act["broken"], act["suggested"])
+            else:
+                new = rewrite_wikilink_target(
+                    new, act["broken"], act["suggested"])
+            # Redirect pages commonly repeat the target as a prose wikilink;
+            # keep both representations synchronized in one atomic write.
         elif kind == "append":
             new = append_wikilink(content, act["target"])
         else:
@@ -374,7 +412,6 @@ def cascade_delete_orphans(
 
 
 def _emit_review_for_broken(
-    project_root: Path,
     wiki_dir: Path,
     stub_actions: list[dict],
     *,
@@ -408,6 +445,8 @@ def _emit_review_for_broken(
         title = f"Missing page: [[{broken}]]"
         fpath, review_id = resolve_review_path(
             review_dir, "missing-page", title, date_str.replace("-", ""))
+        if is_resolved_review_file(fpath):
+            continue
         if dry_run:
             print(f"  [review]    would create {fpath.relative_to(wiki_dir)}")
             count += 1
@@ -488,6 +527,8 @@ def _emit_review_for_unsuggestable(
         title = f"Unsuggestable {kind}: {page}"
         fpath, review_id = resolve_review_path(
             review_dir, "suggestion", title, date_str.replace("-", ""))
+        if is_resolved_review_file(fpath):
+            continue
         if dry_run:
             print(f"  [review]    would create {fpath.relative_to(wiki_dir)}")
             count += 1
@@ -551,6 +592,8 @@ def _emit_review_for_uncertain_rewrite(
         title = f"Uncertain link rewrite: [[{broken}]] → [[{suggested}]]"
         fpath, review_id = resolve_review_path(
             review_dir, "suggestion", title, date_str.replace("-", ""))
+        if is_resolved_review_file(fpath):
+            continue
         if dry_run:
             print(f"  [review]    would create {fpath.relative_to(wiki_dir)}")
             count += 1
@@ -792,7 +835,8 @@ def main() -> int:
                   f"(pass --stub to bulk-create stubs instead)")
             # Generate review items for unsuggestable broken links (NashSU parity:
             # handleFix falls back to Review store when no suggestion exists).
-            _emit_review_for_broken(project_root, wiki_dir, stub_actions, dry_run=not args.apply)
+            _emit_review_for_broken(
+                wiki_dir, stub_actions, dry_run=not args.apply)
             # Orphan / no-outlinks findings with no suggestion are dropped by
             # plan_fixes (no stub/append action possible). Route them to review
             # too (audit M4) — fires on the default path.

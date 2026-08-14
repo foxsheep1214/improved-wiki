@@ -56,7 +56,9 @@ cat wiki/sources/My\ Book\ -\ 2024\ -\ Author.md
 cat wiki/log.md
 ```
 
-If step 7 wrote a `wiki/sources/...` page, step 6-7 worked. Move on to step 9.
+Step 7 is complete only when the source's `.stages.json` contains `ingested`
+and `validate_ingest.py` passes. A source page alone can be a resumable
+mid-pipeline artifact.
 
 ```bash
 # 9. Install the cron (see references/cron-installation.md)
@@ -127,11 +129,15 @@ $SKILL_DIR/scripts/ingest.py raw/Book/X.pdf --dry-run
 test -f schema.md && test -f purpose.md && test -f wiki/index.md && test -f wiki/log.md && test -f wiki/overview.md
 echo $?  # should be 0
 
-# Check 3: the cache file is created/updated after the first ingest
+# Check 3: the authoritative completion marker exists for the source
+python3 "$SKILL_DIR/scripts/ingest.py" --batch-status
+rg '"ingested"' .llm-wiki/ingest-progress/*.stages.json
+
+# Check 4: the cache file is created/updated after the first ingest
 test -f .llm-wiki/ingest-cache.json
 cat .llm-wiki/ingest-cache.json | python3 -m json.tool  # should be valid JSON
 
-# Check 4: the log file got an entry
+# Check 5: the log file got an entry
 tail -10 wiki/log.md  # should show the most recent ingest
 ```
 
@@ -153,7 +159,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
 | Scanned PDF detected | Normal — all PDFs take the unified minerU hybrid-engine/auto path; the PyMuPDF type sample only labels the `--dry-run` estimate | No action needed |
-| `wiki/index.md` is missing the new source link | Stage 3.5 normally rewrites index.md via the LLM; the deterministic fallback (`_index_append_fallback` in `_stage_3_write.py`) inserts after the `## Sources` header line via regex `^##\s+Sources.*$`, so a bilingual `## Sources（来源）` header works. The link is only skipped if there is no `## Sources` header at all | Make sure your `index.md` has a `## Sources` (or `## Sources（来源）`) header line |
+| `wiki/index.md` is missing the new source link | Stage 3.3 normally rewrites index.md via the LLM; the deterministic fallback (`_index_append_fallback` in `_stage_3_write.py`) inserts after the `## Sources` header line via regex `^##\s+Sources.*$`, so a bilingual `## Sources（来源）` header works. The link is only skipped if there is no `## Sources` header at all | Make sure your `index.md` has a `## Sources` (or `## Sources（来源）`) header line |
 
 ---
 

@@ -128,8 +128,7 @@ def main() -> int:
         help="Stop pipeline after completing the named stage (clean exit, cache saved). "
              "Use for chunked runs to avoid Bash timeout. "
              "Stops: 0=Phase 1 done (extract+images+captions), 1.5=Stage 2.2 chunk "
-             "analysis done (prefetch boundary), 2/2.0=generation done (before write). "
-             "(Legacy ids 0.5/0.6/1/2.3/2.5/3/… retired — their check sites are gone.)",
+             "analysis done (prefetch boundary), 2/2.0=generation done (before write).",
     )
     parser.add_argument(
         "--no-project-lock", action="store_true",
@@ -368,9 +367,9 @@ def main() -> int:
         if not rf.exists():
             print(f"ERROR: {rf} not found", file=sys.stderr)
             return ERROR
-        # NashSU deep-research parity (2026-07-16): accept a wiki/queries/<page>
-        # research page as an ingest source directly, no raw/queries/ copy step
-        # (see _is_ingestable_source_path / is_query_bridge_source).
+        # Manual/historical query-ingest compatibility: accept a
+        # wiki/queries/<page> source directly, with no raw/queries/ copy step.
+        # NashSU v0.6.7 Deep Research itself no longer invokes source ingest.
         if not _is_ingestable_source_path(rf, config):
             print(f"ERROR: {rf} is not under raw_root ({config.raw_root}) "
                   f"or wiki/queries/ ({config.wiki_dir / 'queries'})", file=sys.stderr)
@@ -514,12 +513,12 @@ def main() -> int:
                 print(
                     "  Estimated text-generation calls: "
                     f"{chunks_est} (Stage 2.2 chunks) + up to 1 "
-                    "(Stage 2.4 consolidated) + 1 (Stage 2.6 source page), "
+                    "(Stage 2.4 consolidated generation + source page), "
                     "plus optional dedup/review/merge handoffs"
                 )
             except Exception:
                 pass
-        print(f"  Stages: text-extract -> image-extract+caption -> chunk+analyze -> generate -> review -> inject -> write -> cache")
+        print("  Stages: text-extract -> image-extract+caption -> chunk+analyze -> generate -> review -> inject -> write -> cache")
         return OK
 
     h = file_sha256(raw_file)

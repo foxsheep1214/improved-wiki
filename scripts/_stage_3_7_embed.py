@@ -11,7 +11,7 @@ an incomplete touched page pauses the ingest instead of silently degrading.
 Stage 3.7 is the FINAL ingest stage: after it, _finalize_book sets the
 completion marker. (The former Stage 4.1 post-ingest validation audit was
 removed for NashSU alignment — NashSU has no such stage; its only ingest-time
-check, schema routing, runs at write time in Stage 3.1.)
+check, schema routing, runs at write time in Stage 3.2.)
 """
 from __future__ import annotations
 
@@ -82,14 +82,14 @@ def stage_3_7_embed_new_pages(config: Config, files_written: list[str]) -> None:
     ok, reason = _stage_3_7_check_embed_capability(base_url, model)
     if not ok:
         print(f"\n⚠️  [stage 3.7] Embeddings 不可用：{reason}")
-        print(f"⚠️  [stage 3.7] PAUSING ingest — no silent fallback. Semantic retrieval "
-              f"is a required stage, not optional. Fix and re-run (pages are written, "
-              f"resumes here):")
+        print("⚠️  [stage 3.7] PAUSING ingest — no silent fallback. Semantic retrieval "
+              "is a required stage, not optional. Fix and re-run (pages are written, "
+              "resumes here):")
         print("  1. brew install ollama          # 如未安装")
         print("  2. ollama serve                 # 如未启动")
         print(f"  3. ollama pull {model}")
         print("  4. pip install lancedb")
-        print(f"  5. 重跑 ingest（页面已落盘，从此处恢复，无需重新提取/生成）\n")
+        print("  5. 重跑 ingest（页面已落盘，从此处恢复，无需重新提取/生成）\n")
         raise RuntimeError(
             f"Embedding stack unavailable ({reason}) — Stage 3.7 cannot run. "
             f"No fallback: start Ollama, pull {model}, and pip install lancedb, "

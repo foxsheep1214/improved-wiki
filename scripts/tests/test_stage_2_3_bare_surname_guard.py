@@ -1,5 +1,4 @@
-"""Stage 2.3 bare-surname under-specification guard (2026-07-09, Wiley live
-failure).
+"""Stage 2.3 bare-surname under-specification guard.
 
 The initials guard (test_stage_2_3_initials_guard.py) explicitly left one
 case unblocked: "Bare surname on one side -> no initials evidence -> do not
@@ -7,11 +6,7 @@ block here". That case turned out to bite for real: the existing wiki had
 ``entities/taylor.md`` titled just "Taylor" (zero disambiguating info — no
 initials in the slug OR the title). A new chunk's "J. W. Taylor" (fully
 qualified, two initials) collapsed to {taylor} under word-Jaccard and
-associated with it. Stage 2.4 correctly generated a SEPARATE
-entities/j-w-taylor page anyway (per an explicit prompt warning), but Stage
-2.6's source-page generation — a different subagent, same buggy 2.3 fact —
-trusted the association and wikilinked the Key Entities section to the WRONG
-[[taylor]] page instead of the real [[entities/j-w-taylor]].
+associated with it, allowing downstream generation to link the wrong entity.
 
 Fix: when the EXISTING page's title carries ZERO distinguishing tokens beyond
 a bare single-word surname, and the NEW name is a multi-part name with at

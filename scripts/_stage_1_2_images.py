@@ -518,14 +518,11 @@ def _stage_1_2_extract_images_office(raw_file: Path, media_dir: Path, manifest_p
                     continue
                 seen_hashes.add(fhash)
 
-                # Determine page context if available (from slide/word numbering)
-                # PPTX: ppt/slides/slideN.xml → N; DOCX: no direct page mapping
-                page = 0
-                # For PPTX, try to extract slide number from parent dir structure
-                if fmt == "pptx":
-                    # Images are in ppt/media/, referenced from ppt/slides/slideN.xml
-                    # We can't easily map back without parsing XML, so use 0
-                    pass
+                # This ZIP-only extractor does not parse OOXML relationships,
+                # so it cannot reliably map an image back to a DOCX page or a
+                # PPTX slide. Keep it unpaged instead of fabricating Page 0/1;
+                # Stage 3.4 groups it under NashSU's `### Document` heading.
+                page = None
 
                 filename = Path(name).name
                 out_path = media_dir / filename
@@ -805,15 +802,16 @@ def _stage_1_2_extract_from_mineru(
     }
 
 
-def _stage_1_2_extract_markdown_images(raw_file: Path, media_dir: Path, manifest_path: Path,
-                                        config: Config, min_size: int = 100) -> dict:
+def _stage_1_2_extract_markdown_images(
+    raw_file: Path, media_dir: Path, manifest_path: Path, config: Config,
+) -> dict:
     """Extract local images referenced by a Markdown source into wiki/media/<slug>/.
 
     NashSU parity: extractAndSaveMarkdownImages + findLocalMarkdownImageRefs
     (extract-source-images.ts). A .md source may embed images via ![[ref]]
     (Obsidian/wikilink) or ![alt](ref) (standard markdown) pointing at local
     files; each referenced image is copied into the media dir and recorded in
-    the manifest so Stage 1.3 captions it and Stage 3.2 injects it — same
+    the manifest so Stage 1.3 captions it and Stage 3.4 injects it — same
     pipeline as minerU-harvested figures.
 
     Remote (http/https/ftp/data:) URIs are left in place (not copied). Only
@@ -917,5 +915,6 @@ def stage_1_2_extract_images(raw_file: Path, config: Config, min_size: int = 100
 
     media_dir.mkdir(parents=True, exist_ok=True)
     if raw_file.suffix.lower() in (".md", ".markdown"):
-        return _stage_1_2_extract_markdown_images(raw_file, media_dir, manifest_path, config, min_size)
+        return _stage_1_2_extract_markdown_images(
+            raw_file, media_dir, manifest_path, config)
     return _stage_1_2_extract_images_office(raw_file, media_dir, manifest_path, min_size)

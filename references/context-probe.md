@@ -23,13 +23,27 @@ The probe uses the same conversation-mode handoff as every stage: first pass wri
 
 ## Budget math (no extra margin)
 
-The probe value is used **as-is** — no 0.85 safety margin. Headroom comes from the existing reserves in `apply_context`:
+The probe value is used **as-is** — no 0.85 safety margin. Headroom comes from the existing reserves in `_compute_source_budget`:
 
 - 15% response reserve
 - 25% stable-context reserve (schema/purpose/index/overview), floored at 12K, capped at 50K
 - 8% instruction reserve
 
 ≈ 48% total reserved, which is conservative. Adding a margin on top double-counts and was found (2026-06-27 verification) to regress ≤200K-context models into more chunks.
+
+## `source_budget` is TOKENS (2026-08-13)
+
+`source_budget` bounds the Stage 2.4 consolidated context (rolling digest + every chunk analysis + bounded raw evidence). **It is a token budget**, because the probe reports tokens. Consumers that need a character bound convert with the source's own measured chars-per-token — same estimator, same idiom as the Stage 2.2 chunker sizing its window (`_token_budget_to_chars` in `_stage_2_context.py`).
+
+This was previously a units bug: NashSU's `computeIngestSourceBudget` constants are **character**-scale (its `maxContextSize` is documented in characters — `context-budget.ts`), and they were copied onto a token-scale probe value, then spent as characters. A Latin-script source therefore got ~26K tokens of Stage 2.4 context out of a 200K window (~13%) while each Stage 2.2 chunk prompt got 64K (32%) — inverted priority, and the reason the field-dropping ladder in `_stage_2_context.py` was firing as the normal case rather than as a backstop. CJK sources were roughly unaffected (~1 char/token), which is why it stayed hidden.
+
+| Probed context | source_budget | % of window | Latin char bound | CJK char bound |
+|---|---|---|---|---|
+| 128K | 64,800 tok | 51% | ~259K | ~65K |
+| 200K | 104,000 tok | 52% | ~416K | ~104K |
+| 400K+ | 128,000 tok | ≤32% | ~512K | ~128K |
+
+`_SOURCE_BUDGET_MAX` is 128,000 tokens = 2× `_TARGET_TOKENS_HARD_CEIL`. The consolidated context must hold every chunk analysis plus raw evidence, but must not regress into a second whole-book dump — the same A/B that set the 64K chunk cap showed oversized single prompts analyze worse, not better.
 
 ## Chunk sizing by context
 

@@ -14,8 +14,8 @@ Covers two 2026-06-25 audit findings:
   ingested marker is the single completeness signal. Test: the four
   marker/source-page states resolve to the right skip/resume decision.
 
-  Finding 3 (2026-07-15) — deep-research query bridges (raw/queries/*.md)
-  deliberately get no Stage 2.6 source page (wiki/queries/<slug>.md is
+  Finding 3 — legacy/manual query bridges (raw/queries/*.md)
+  deliberately get no separate source page (wiki/queries/<slug>.md is
   already the canonical artifact). The source-page-existence staleness
   check in _stage_0_2_should_skip doesn't know that, so every call saw
   "no source page" and force-cleared the ingested marker — an endless
@@ -37,7 +37,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import _core  # noqa: E402
 import ingest  # noqa: E402
 from _ingest_skip import _stage_0_2_should_skip  # noqa: E402
-from _stage_3_write import _stage_3_1_wiki_path_for_source  # noqa: E402
+from _stage_3_write import _stage_3_2_wiki_path_for_source  # noqa: E402
 from _task_manifest import (  # noqa: E402
     TaskManifestError,
     bind_page_refs,
@@ -93,7 +93,7 @@ def _seed_completion_state(
     source_hash = _core.file_sha256(raw)
     ensure_task_manifest(raw, cfg)
 
-    source = _stage_3_1_wiki_path_for_source(raw, cfg)
+    source = _stage_3_2_wiki_path_for_source(raw, cfg)
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("# x\n", encoding="utf-8")
     log = cfg.wiki_dir / "log.md"
@@ -110,6 +110,11 @@ def _seed_completion_state(
     _core.mark_stage_done(
         cfg, source_hash, "write_loop_done",
         payload={"files_written": ["wiki/sources/x.md"]},
+    )
+    _core.mark_stage_done(
+        cfg, source_hash, "enrichment_done",
+        payload={"status": "no-candidates", "candidates": 0,
+                 "pages_enriched": 0},
     )
     _core.mark_stage_done(
         cfg, source_hash, "write_phase",
@@ -243,7 +248,7 @@ class TestStage02ShouldSkip(unittest.TestCase):
         return cfg, raw, h
 
     def _write_source_page(self, cfg, raw):
-        sp = _stage_3_1_wiki_path_for_source(raw, cfg)
+        sp = _stage_3_2_wiki_path_for_source(raw, cfg)
         sp.parent.mkdir(parents=True, exist_ok=True)
         sp.write_text("---\ntype: source\n---\n# x\n", encoding="utf-8")
         return sp
@@ -282,7 +287,7 @@ class TestStage02ShouldSkip(unittest.TestCase):
 
 
 class TestStage02ShouldSkipQueryBridge(unittest.TestCase):
-    """Query bridges (raw/queries/*.md) never get a Stage 2.6 source page —
+    """Query bridges (raw/queries/*.md) never get a separate source page —
     the ingested marker alone must decide skip/resume (Finding 3)."""
 
     def test_marker_set_skips_even_though_no_source_page_exists(self):
@@ -295,7 +300,7 @@ class TestStage02ShouldSkipQueryBridge(unittest.TestCase):
 
             # Sanity: this is exactly the state that used to be misread as a
             # stale marker for a normal source (page never existed here).
-            self.assertFalse(_stage_3_1_wiki_path_for_source(raw, cfg).exists())
+            self.assertFalse(_stage_3_2_wiki_path_for_source(raw, cfg).exists())
             self.assertTrue(_stage_0_2_should_skip(raw, cfg))
             # And the marker must survive — no false "stale marker" clear.
             self.assertTrue(_core.is_stage_done(cfg, h, "ingested"))

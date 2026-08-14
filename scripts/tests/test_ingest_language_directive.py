@@ -1,13 +1,4 @@
-"""Regression tests for the output-language directive injection into ingest
-generation prompts (NashSU buildLanguageDirective parity).
-
-Stdlib unittest only — no network, no LLM — so it runs with the same python3
-the pipeline uses.
-
-Bug being guarded: build_language_directive() lived only in
-wiki-lint-semantic.py and was NEVER injected into the Stage 2 ingest
-analysis/generation prompts, so the generating model got no language
-instruction and guessed. NashSU injects it at the top of ~7 prompt builders.
+"""Test output-language directive injection into Stage 2 prompts.
 
 Run:
     python3 -m unittest tests.test_ingest_language_directive   # from scripts/

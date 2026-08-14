@@ -34,6 +34,7 @@ TASK_MANIFEST_SCHEMA_VERSION = 1
 PIPELINE_CONTRACT_VERSION = "improved-wiki-ingest-v1"
 POSTWRITE_COMPLETION_MARKERS = (
     "write_loop_done",
+    "enrichment_done",
     "write_phase",
     "review_done",
     "aggregate_done",
@@ -588,10 +589,10 @@ def assert_task_ready_for_completion(
             "wiki/index.md")
 
     if not is_query_bridge_source(raw_file, config):
-        from _stage_3_write import _stage_3_1_wiki_path_for_source
+        from _stage_3_write import _stage_3_2_wiki_path_for_source
 
         source_page = PageRef.parse(
-            _stage_3_1_wiki_path_for_source(raw_file, config),
+            _stage_3_2_wiki_path_for_source(raw_file, config),
             config.wiki_root,
             config.wiki_dir,
         )

@@ -28,7 +28,7 @@ class CaptionProcessLimitTests(unittest.TestCase):
             executor = pool.return_value.__enter__.return_value
             executor.submit.side_effect = lambda *_args, **_kwargs: object()
             result = caption._stage_1_3_caption_one_round(
-                pending, config, Path(d), {}, "", max_workers=2)
+                pending, config, Path(d), {}, max_workers=2)
         self.assertEqual(result, 0)
         pool.assert_called_once_with(max_workers=2)
 

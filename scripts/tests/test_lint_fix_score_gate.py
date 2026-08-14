@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -81,6 +82,34 @@ class TestPlanFixesScoreGate(unittest.TestCase):
         wlf = _load_module()
         actions = wlf.plan_fixes([_bl("a.md", "missing-thing", None, None)])
         self.assertEqual(actions[0]["kind"], "stub")
+
+    def test_redirect_frontmatter_origin_is_preserved_and_applied(self):
+        wlf = _load_module()
+        finding = _bl(
+            "entities/legacy.md", "entities/canoncal",
+            "entities/canonical.md", 0.96)
+        finding["link_origin"] = "redirect-frontmatter"
+        actions = wlf.plan_fixes([finding])
+        self.assertEqual(actions[0]["link_origin"], "redirect-frontmatter")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wiki = root / "wiki"
+            (wiki / "entities").mkdir(parents=True)
+            page = wiki / "entities" / "legacy.md"
+            page.write_text(
+                "---\ntype: redirect\nmetadata:\n"
+                "  redirect: entities/canoncal\n"
+                "redirect: entities/canoncal\n---\n\n"
+                "See [[entities/canoncal]].\n",
+                encoding="utf-8",
+            )
+            summary = wlf.apply_fixes(root, wiki, actions, dry_run=False)
+            updated = page.read_text(encoding="utf-8")
+            self.assertEqual(summary["rewrite"], 1)
+            self.assertIn('redirect: "entities/canonical"', updated)
+            self.assertIn("  redirect: entities/canoncal", updated)
+            self.assertIn("[[entities/canonical]]", updated)
 
 
 class TestMainEndToEndScoreGate(unittest.TestCase):

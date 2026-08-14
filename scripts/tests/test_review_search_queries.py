@@ -1,6 +1,6 @@
 """Tests for the NashSU searchQueries parity on review items.
 
-Stage 3.4 populates ``search_queries`` (2-3 web-search queries) on
+Stage 3.1 populates ``search_queries`` (2-3 web-search queries) on
 suggestion/missing-page reviews; the field rides in the review page
 frontmatter and is surfaced by ``sweep_reviews`` so deep-research can seed
 its web queries with no extra LLM call. These tests pin the render + the
@@ -18,7 +18,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import _stage_3_4_review as review  # noqa: E402
+import _stage_3_review as review  # noqa: E402
 import sweep_reviews  # noqa: E402
 
 
@@ -64,7 +64,7 @@ class TestSweepRoundTrip(unittest.TestCase):
 
 
 class TestReviewIdInFrontmatter(unittest.TestCase):
-    """Stage 3.4 writes a content-stable review_id (NashSU reviewIdFor) into the
+    """Stage 3.5 writes a content-stable review_id (NashSU reviewIdFor) into the
     review page frontmatter so resolved state survives re-ingest."""
 
     def test_review_id_present_and_stable(self):
@@ -92,12 +92,12 @@ class TestReviewIdInFrontmatter(unittest.TestCase):
 
 
 class TestPromptAsksForSearchQueries(unittest.TestCase):
-    """The Stage 3.4 system prompt must instruct the LLM to emit search_queries
+    """The Stage 3.1 system prompt must instruct the LLM to emit search_queries
     for suggestion/missing-page (NashSU SEARCH-line parity)."""
 
     def test_prompt_mentions_search_queries(self):
         import inspect
-        src = inspect.getsource(review.stage_3_4_prepare_review_suggestions)
+        src = inspect.getsource(review.stage_3_1_prepare_review_suggestions)
         self.assertIn("search_queries", src)
         self.assertIn("suggestion", src)
         self.assertIn("missing-page", src)

@@ -7,8 +7,7 @@ Run:
     python3 -m unittest tests.test_core_pure   # from scripts/
     python3 scripts/tests/test_core_pure.py     # from skill root
 
-Each test name maps to a historical bug in references/known-issues.md so a
-regression is obvious from the failure label.
+Test names describe the regression they protect.
 """
 from __future__ import annotations
 
@@ -67,18 +66,18 @@ class TestComputeChunkTargetsHardCeil(unittest.TestCase):
     request a different ceiling without touching the ingest-tuned constant."""
 
     def test_default_hard_ceil_matches_ingest_constant(self):
-        target_tokens, _ = _core._compute_chunk_targets(0, 1_000_000)
+        target_tokens, _ = _core._compute_chunk_targets(1_000_000)
         self.assertEqual(target_tokens, _core._TARGET_TOKENS_HARD_CEIL)
 
     def test_custom_hard_ceil_overrides_default(self):
         target_tokens, target_chars = _core._compute_chunk_targets(
-            0, 1_000_000, hard_ceil=256_000)
+            1_000_000, hard_ceil=256_000)
         self.assertEqual(target_tokens, 256_000)
         self.assertEqual(target_chars, _core._TARGET_CHARS_HARD_CEIL)
 
     def test_small_context_still_respects_floor_under_custom_ceil(self):
         target_tokens, _ = _core._compute_chunk_targets(
-            0, 20_000, hard_ceil=256_000)
+            20_000, hard_ceil=256_000)
         self.assertEqual(target_tokens, _core._TARGET_TOKENS_MIN)
 
 
@@ -124,7 +123,7 @@ class TestParseSimpleYaml(unittest.TestCase):
         self.assertEqual(concepts[1]["importance"], "supporting")
 
     def test_top_level_list_of_dicts(self):
-        # Stage 3.4 review YAML is a top-level list; the prior parser returned
+        # Stage 3.1 review YAML is a top-level list; the prior parser returned
         # {} for it, so review always produced "0 review pages".
         text = (
             "- id: 1\n"
@@ -147,7 +146,7 @@ class TestParseYamlBlock(unittest.TestCase):
         self.assertEqual(_core.parse_yaml_block(resp)["title"], "X")
 
     def test_cjk_curly_quotes_do_not_crash(self):
-        # known-issues.md: yaml.safe_load crashed on nested CJK curly quotes.
+        # yaml.safe_load previously crashed on nested CJK curly quotes.
         resp = '```yaml\ntitle: 9.2 "正激"和"反激"\nconcepts_found:\n  - 正激\n```'
         out = _core.parse_yaml_block(resp)
         self.assertIn("concepts_found", out)
@@ -167,7 +166,7 @@ class TestParseFileBlocks(unittest.TestCase):
         self.assertEqual(_core.parse_file_blocks(resp)[0][0], "concepts/pwm.md")
 
     def test_slash_inside_cjk_slug_merged(self):
-        # known-issues.md: [[热仿真(Cauer/Foster模型)]] → / inside the name.
+        # A wikilink name can contain a slash that is unsafe in a filename.
         resp = "---FILE:wiki/concepts/热仿真(Cauer/Foster模型).md---\nbody\n---END FILE---\n"
         path = _core.parse_file_blocks(resp)[0][0]
         self.assertTrue(path.startswith("concepts/"))
@@ -215,10 +214,9 @@ class TestDetectTemplateType(unittest.TestCase):
 
 
 class TestIsQueryBridgeSource(unittest.TestCase):
-    """wiki/queries/*.md deep-research pages (2026-07-16: ingested directly —
-    no more raw/queries/ bridge copy, NashSU autoIngest path-agnostic parity)
-    plus backward-compat recognition of pre-2026-07-16 raw/queries/*.md bridge
-    copies still sitting in older wikis."""
+    """Explicitly ingested wiki/queries/*.md pages use no raw/ bridge copy;
+    pre-2026-07-16 raw/queries/*.md bridge copies remain recognized. Current
+    Deep Research does not invoke this compatibility route automatically."""
 
     def setUp(self):
         self.config = _make_config(Path("/proj"))

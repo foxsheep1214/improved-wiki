@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_lint_fixes.py — auto-fixes for structural lint findings.
 
-Faithful port of NashSU ``src/lib/lint-fixes.ts``. Three fixes that
+Faithful port of NashSU ``src/lib/lint-fixes.ts``. Four fixes that
 ``_lint_suggest.run_structural_lint`` surfaces suggestions for but the old
 improved-wiki never applied:
 
@@ -9,6 +9,8 @@ improved-wiki never applied:
                                (for orphan / no-outlinks suggestions).
   - rewrite_wikilink_target  — rewrite a broken ``[[broken]]`` link to its
                                suggested target, preserving any ``|alias``.
+  - rewrite_redirect_frontmatter_target — rewrite a redirect page's scalar
+                               target without disturbing other frontmatter.
   - ensure_broken_link_stub  — create a ``type: query`` stub page for a broken
                                link target that has no suggestion, so the link
                                resolves instead of dangling.
@@ -36,6 +38,7 @@ __all__ = [
     "has_wikilink_to_target",
     "append_wikilink",
     "rewrite_wikilink_target",
+    "rewrite_redirect_frontmatter_target",
     "stub_relative_path_from_broken_target",
     "stub_title_from_broken_target",
     "ensure_broken_link_stub",
@@ -146,6 +149,44 @@ def rewrite_wikilink_target(
         return f"[[{replacement}{alias}]]" if alias is not None else f"[[{replacement}]]"
 
     return _WIKILINK_WITH_ALIAS_RE.sub(_sub, content)
+
+
+_FRONTMATTER_BLOCK_RE = re.compile(
+    r"\A(---[ \t]*\r?\n)(.*?)(\r?\n---[ \t]*(?:\r?\n|$))",
+    re.DOTALL,
+)
+_REDIRECT_LINE_RE = re.compile(
+    r"^(redirect[ \t]*:[ \t]*)([^\r\n]*)(\r?)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def rewrite_redirect_frontmatter_target(
+    content: str,
+    broken_target: str,
+    suggested_target: str,
+) -> str:
+    """Rewrite only the leading frontmatter ``redirect:`` scalar.
+
+    The current value must normalize to ``broken_target``; otherwise this is a
+    no-op. The replacement is always double-quoted for YAML safety, while the
+    rest of the frontmatter and body remain byte-for-byte unchanged.
+    """
+    fm_match = _FRONTMATTER_BLOCK_RE.match(content)
+    if not fm_match:
+        return content
+    fm_text = fm_match.group(2)
+    line_match = _REDIRECT_LINE_RE.search(fm_text)
+    if not line_match:
+        return content
+    raw_value = line_match.group(2).strip().strip('"').strip("'")
+    if _normalized_link_target(raw_value) != _normalized_link_target(broken_target):
+        return content
+    replacement = lint_link_target(suggested_target)
+    quoted = '"' + replacement.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    new_line = f"{line_match.group(1)}{quoted}{line_match.group(3)}"
+    new_fm = fm_text[:line_match.start()] + new_line + fm_text[line_match.end():]
+    return content[:fm_match.start(2)] + new_fm + content[fm_match.end(2):]
 
 
 # ── fix 3: stub page for an unresolvable broken link ─────────────────────────

@@ -1,7 +1,6 @@
-"""Stage 2.4 closing sub-step: 源内去重 (intra-source dedup) — concept AND
-entity collapse within ONE source (entities added 2026-07-02, audit A1: entity
-duplicates like `billingsley`×3 previously bypassed dedup entirely; the two
-pools are deduped separately, never merged across the folder boundary).
+"""Stage 2.4 closing sub-step: 源内去重 (intra-source dedup) — concept and
+entity collapse within one source. The two pools are deduplicated separately
+and never merged across the folder boundary.
 
 Runs during ingest, BEFORE write, as a filter on the LLM's just-generated
 file_blocks for this one book. Catches the case where the LLM names the same
@@ -17,8 +16,6 @@ existing wiki (cross-source awareness is Stage 2.3's job). This is distinct
 from the lint-time cross-source dedup (跨源去重, `cross_source_dedup.py`) which
 merges across the whole wiki.
 
-Refactored 2026-06-21 for explicit stage naming; embedding prefilter 2026-06-29
-(folded into Stage 2.4, the 2.5 number retired).
 """
 from pathlib import Path
 import re
@@ -113,7 +110,7 @@ def _dedup_confirm_merges_with_llm(groups_concepts, config):
     any group whose verdict is missing/unparseable/not-yes → (False, "")."""
     prompt = _dedup_confirm_prompt(groups_concepts)
     try:
-        response, _ = call_anthropic_protocol(prompt, config, max_tokens=400, label="dedup-confirm")
+        response, _ = call_anthropic_protocol(prompt, config, max_tokens=400)
     except Exception as e:
         print("  [stage 2.4] LLM confirm failed: {} — keeping all candidates".format(e))
         return [(False, "")] * len(groups_concepts)
@@ -171,7 +168,7 @@ def _dedup_rewrite_wikilinks(content, slug_map, current_slug=""):
     stem and the `concepts/<slug>` path form (case-insensitive per
     naming-conventions.md), since merging deletes the duplicate's FILE block
     and any sibling block still pointing at it would otherwise become a
-    permanently broken link the moment Stage 3.1 writes to disk.
+    permanently broken link the moment Stage 3.2 writes to disk.
 
     When the redirect target IS the current page (``current_slug``, i.e. the
     PRIMARY page linked to its own merged-away duplicate), the link is
@@ -261,8 +258,8 @@ def _dedup_apply_merge_rules(file_blocks, merge_rules):
     return result
 
 
-def dedup_intra_source(file_blocks, chunk_analyses, config, *, verbose: bool = False) -> dict:
-    """In-source concept dedup & merge (2.4 closing sub-step, ex-Stage 2.5; multi-chunk books only).
+def dedup_intra_source(file_blocks, chunk_analyses, config) -> dict:
+    """Stage 2.4 in-source concept dedup and merge for multi-chunk books.
 
     Runs before the source page so the index lists de-duplicated concepts.
     Single-chunk sources skip dedup. Returns a dict with the new file_blocks,

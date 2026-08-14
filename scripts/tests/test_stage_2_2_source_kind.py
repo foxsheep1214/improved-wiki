@@ -107,14 +107,6 @@ class TestStage24SourceKind(unittest.TestCase):
             config = _config(tmp)
             config.wiki_dir.mkdir(parents=True)
             file_path = config.raw_root / "Paper" / "01_topic" / "paper.pdf"
-            per_chunk = generation._stage_2_4_build_prompt(
-                self.ANALYSIS,
-                "A focused paper section.",
-                0,
-                file_path,
-                config,
-                template="# digest-paper.md",
-            )
             all_chunks = generation._stage_2_4_build_all_prompt(
                 [self.ANALYSIS],
                 file_path,
@@ -123,11 +115,10 @@ class TestStage24SourceKind(unittest.TestCase):
                 source_context="A focused paper section.",
             )
 
-        for prompt in (per_chunk, all_chunks):
-            self.assertIn("Source: paper", prompt)
-            self.assertNotIn("Book: paper", prompt)
-            self.assertNotIn("chunks of a book", prompt)
-            self.assertNotIn("chunk of a book", prompt)
+        self.assertIn("Source: paper", all_chunks)
+        self.assertNotIn("Book: paper", all_chunks)
+        self.assertNotIn("chunks of a book", all_chunks)
+        self.assertNotIn("chunk of a book", all_chunks)
 
 
 if __name__ == "__main__":

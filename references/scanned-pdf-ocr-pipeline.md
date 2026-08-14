@@ -5,14 +5,14 @@
 ## 何时使用这条 pipeline
 
 - 任意类型的 PDF（text/scanned/mixed 不再分流）：统一交给这条 pipeline，hybrid-engine/auto 内部按页判 txt vs VLM OCR。method 标签统一为 `mineru-api`。（garbled 字体预检测与提取质量门已于 2026-07-08 移除，对齐 NashSU——`_stage_1_1_sample_pdf` 的 fitz 采样现仅供 `--dry-run` 类型估算，不再影响提取路径。）
-- 不适用：`.txt`/`.md`（直接读文件）、`.pptx`/`.docx`（zipfile/XML 解析，完全不碰 minerU）。
+- 不适用：`.txt`/`.md`（直接读文件）、`.pptx`/`.docx`（zipfile/XML 解析，完全不碰 minerU）、`.xlsx`/`.odt`/`.epub`/`.rtf`（`_stage_1_1_documents.py`，stdlib 解析，仅正文无图片）。
 
 ## 完整流程
 
 ```
 1. （2026-07-08 起无预检——所有 PDF 直接进入下一步；PyMuPDF 采样仅剩 --dry-run 用）
 2. 起一个持久化本地 minerU API 服务器（mineru.cli.fast_api，端口 MINERU_API_PORT 默认 19999）
-   ├─ 系统级文件锁 _stage_1_1_acquire_mineru_lock()（fcntl.flock，超时 3600s）确保只有 1 本书在跑
+   ├─ 系统级文件锁 _stage_1_1_acquire_mineru_lock()（fcntl.flock，默认持续等待）确保只有 1 本书在跑
    └─ 1 页 warmup，避免冷启动延迟计入第一个 chunk
 3. PyMuPDF 渲染页面 + 切分 chunks（32 页/chunk，MINERU_CHUNK_SIZE，2026-07-08 由 50 调整）
 4. 每个 chunk POST 本地 /file_parse（multipart，return_images + return_content_list=true）
@@ -42,7 +42,7 @@
 
 ```python
 # _stage_1_1_scanned.py
-def _stage_1_1_acquire_mineru_lock(timeout: int = 3600) -> int:
+def _stage_1_1_acquire_mineru_lock(timeout: float | None = None) -> int:
     """fcntl.flock 独占锁，原子、跨进程安全。阻塞直到拿到锁或超时。"""
     ...
 
@@ -50,7 +50,7 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
     ...
 ```
 
-等待时打印 `[mineru] Waiting for lock... (Xs elapsed)`（按经过的分钟数打印一次，不是固定轮询间隔）。
+等待时打印 `[mineru] Waiting for lock... (Xs elapsed)`（按经过的分钟数打印一次，不是固定轮询间隔）。默认不设总等待上限：批次中的下一本书可能在大型前序书 OCR 时合法等待超过一小时，不能因此失败并被协调器反复重启。仅受控调用或测试可显式传入 `timeout`。
 
 > 仍然是严格串行——不要手动绕过这个锁。
 
@@ -88,10 +88,6 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 ## 崩溃恢复
 
 `_mineru_stats.json` 记录每个 chunk 的状态（completed_chunks/failed_chunks/images）。中断后重新运行 `ingest.py` 会自动跳过已完成的 chunk，只重跑未完成的——这部分行为不变。
-
-### Image harvesting gap (2026-06-24, FIXED)
-
-API path 的 `_stage_1_2_harvest_images()` 曾不读 `content_list` 的 `image_caption`（`content_list` 是 JSON 字符串，`isinstance(cl, list)` 永远 False）→ 全量图倾倒 + minerU caption 被浪费。**已修**（`json.loads(cl)` + 写 sidecar）：528→340 图，VLM 调用 ↓70%，caption 覆盖 62%→98%。详见 `known-issues.md`。
 
 ## 相关的其他 pipeline
 

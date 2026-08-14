@@ -33,7 +33,7 @@ from _paths import detect_runtime_dir  # noqa: E402
 from _wiki_keyword import keyword_search, rrf_merge  # noqa: E402
 
 
-def _vector_search(query: str, project: Path, runtime: Path, top: int):
+def _vector_search(query: str, runtime: Path, top: int):
     """Run the vector path. Returns (results, error_or_None).
 
     results: list of {path, title, snippet, score, vector_score}.
@@ -128,7 +128,7 @@ def main() -> int:
     vec_results: list[dict] = []
     vec_error = None
     if not args.keyword_only:
-        vec_results, vec_error = _vector_search(args.query, project, runtime, args.top)
+        vec_results, vec_error = _vector_search(args.query, runtime, args.top)
         if vec_error:
             _warn_vector_unavailable(vec_error, project)
 

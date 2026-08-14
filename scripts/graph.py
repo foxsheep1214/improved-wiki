@@ -449,12 +449,21 @@ def detect_knowledge_gaps(pages: dict[str, Page], lg: LinkGraph,
     """Port of NashSU detectKnowledgeGaps (no betweenness)."""
     gaps: list[KnowledgeGap] = []
     assign = community_assignments(communities)
+    # Compatibility aliases are routing metadata, not knowledge content. Keep
+    # them out of every insight pass (isolated, sparse, and bridge), including
+    # edges that merely pass through a redirect.
+    insight_nodes = {
+        nid for nid, page in pages.items() if page.page_type != "redirect"
+    }
 
-    # 1. Isolated nodes: linkCount <= 1, excluding overview/index/log.
+    # 1. Isolated nodes: linkCount <= 1, excluding overview/index/log and
+    # compatibility redirects. A redirect is intentionally a one-edge alias to
+    # its canonical page, so treating it as a knowledge gap creates noise and
+    # invites a pointless canonical-to-legacy backlink.
     isolated = [
-        nid for nid in pages
+        nid for nid in insight_nodes
         if lg.link_counts.get(nid, 0) <= 1
-        and pages[nid].page_type != "overview"
+        and pages[nid].page_type not in {"overview", "redirect"}
         and pages[nid].stem != "index"
         and pages[nid].stem != "log"
     ]
@@ -474,24 +483,38 @@ def detect_knowledge_gaps(pages: dict[str, Page], lg: LinkGraph,
                        "to related pages, or research to expand their content.",
         ))
 
-    # 2. Sparse communities: cohesion < 0.15 with >= 3 nodes.
+    # 2. Sparse communities: cohesion < 0.15 with >= 3 content nodes. Recompute
+    # density after dropping redirects so an alias cannot dilute the cluster.
     for comm in communities:
-        if comm.cohesion < COHESION_LOW and len(comm.nodes) >= 3:
-            entry = pages[comm.top_nodes[0]].title if comm.top_nodes else f"Community {comm.cid}"
+        content_nodes = [n for n in comm.nodes if n in insight_nodes]
+        content_node_set = set(content_nodes)
+        n_content = len(content_nodes)
+        possible = n_content * (n_content - 1) / 2 if n_content > 1 else 1
+        intra = sum(
+            1 for edge in lg.edges
+            if edge.issubset(content_node_set)
+        )
+        content_cohesion = intra / possible
+        if content_cohesion < COHESION_LOW and n_content >= 3:
+            top_content = [n for n in comm.top_nodes if n in insight_nodes]
+            entry_id = top_content[0] if top_content else content_nodes[0]
+            entry = pages[entry_id].title
             gaps.append(KnowledgeGap(
                 gap_type="sparse-community",
                 title=f"Sparse cluster: {entry}",
-                description=f"{len(comm.nodes)} pages with cohesion {comm.cohesion:.2f} — "
+                description=f"{n_content} pages with cohesion {content_cohesion:.2f} — "
                             "internal connections are weak.",
-                node_ids=[n for n in pages if assign.get(n) == comm.cid],
+                node_ids=content_nodes,
                 suggestion="This knowledge area lacks internal cross-references. Consider adding "
                            "links between these pages or researching to fill gaps.",
             ))
 
     # 3. Bridge nodes: neighbors spanning >= 3 distinct communities.
-    community_neighbors: dict[str, set[int]] = {nid: set() for nid in pages}
+    community_neighbors: dict[str, set[int]] = {nid: set() for nid in insight_nodes}
     for pair in lg.edges:
         u, v = tuple(pair)
+        if u not in insight_nodes or v not in insight_nodes:
+            continue
         cu, cv = assign.get(u), assign.get(v)
         if cv is not None:
             community_neighbors[u].add(cv)
@@ -499,7 +522,7 @@ def detect_knowledge_gaps(pages: dict[str, Page], lg: LinkGraph,
             community_neighbors[v].add(cu)
 
     bridge_candidates = [
-        nid for nid in pages
+        nid for nid in insight_nodes
         if pages[nid].stem not in INSIGHT_STRUCTURAL_IDS
         and len(community_neighbors.get(nid, set())) >= 3
     ]
@@ -543,6 +566,8 @@ def find_surprising_connections(g: nx.Graph, pages: dict[str, Page],
 
     scored: list[SurprisingConnection] = []
     for u, v, data in g.edges(data=True):
+        if pages[u].page_type == "redirect" or pages[v].page_type == "redirect":
+            continue
         if pages[u].stem in INSIGHT_STRUCTURAL_IDS or pages[v].stem in INSIGHT_STRUCTURAL_IDS:
             continue
         score = 0
@@ -589,7 +614,7 @@ def is_structural_graph_node(page: Page) -> bool:
     """Port of NashSU isStructuralGraphNode."""
     if page.stem.lower() in STRUCTURAL_IDS:
         return True
-    if page.page_type == "overview":
+    if page.page_type in {"overview", "redirect"}:
         return True
     norm = page.path.as_posix().lower()
     return (
@@ -601,8 +626,9 @@ def is_structural_graph_node(page: Page) -> bool:
     )
 
 
-def apply_graph_filters(g: nx.Graph, pages: dict[str, Page], lg: LinkGraph,
-                        hide_structural: bool = True) -> nx.Graph:
+def apply_graph_filters(
+    g: nx.Graph, pages: dict[str, Page], hide_structural: bool = True,
+) -> nx.Graph:
     """Port of NashSU applyGraphFilters with DEFAULT_GRAPH_FILTERS.
 
     Defaults: hideStructural=True, hideIsolated=False, no hiddenTypes/maxLinks.
@@ -660,8 +686,10 @@ def write_graph_json(out: Path, g: nx.Graph, pages: dict[str, Page], lg: LinkGra
     out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def write_graph_html(out: Path, g: nx.Graph, pages: dict[str, Page], lg: LinkGraph,
-                     communities: list[Community], gaps: list[KnowledgeGap]) -> None:
+def write_graph_html(
+    out: Path, g: nx.Graph, pages: dict[str, Page],
+    communities: list[Community], gaps: list[KnowledgeGap],
+) -> None:
     """Write a self-contained D3.js + ForceAtlas2 force-directed HTML graph."""
     assign = community_assignments(communities)
 
@@ -1114,14 +1142,15 @@ def run_build(wiki_root: Path, output: Optional[Path], dry_run: bool,
         return 0
 
     # Rendered graph uses NashSU default filters unless --include-all.
-    rendered = g if include_all else apply_graph_filters(g, pages, lg, hide_structural=True)
+    rendered = g if include_all else apply_graph_filters(
+        g, pages, hide_structural=True)
 
     runtime = detect_runtime_dir(wiki_root)
     graph_json = output or (runtime / "graph.json")
     write_graph_json(graph_json, rendered, pages, lg, communities, gaps, surprising, stats)
     print(f"📁 Wrote {graph_json}")
     graph_html = graph_json.with_suffix(".html")
-    write_graph_html(graph_html, rendered, pages, lg, communities, gaps)
+    write_graph_html(graph_html, rendered, pages, communities, gaps)
     print(f"🌐 Wrote {graph_html}")
     wiki_dir = wiki_root / "wiki"
     gaps_md = wiki_dir / "REVIEW" / "knowledge-gaps.md"

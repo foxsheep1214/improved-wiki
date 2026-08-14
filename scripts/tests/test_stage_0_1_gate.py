@@ -80,7 +80,7 @@ class TestStage01Gate(unittest.TestCase):
             self.assertTrue(any("禁用字符" in e for e in errors))
 
     def test_non_pdf_not_checked(self):
-        # deep-research bridge copies (raw/queries/*.md) must never be blocked.
+        # Legacy/manual query page sources (raw/queries/*.md) stay out of scope.
         with tempfile.TemporaryDirectory() as d:
             project = _mk_project(Path(d))
             f = _touch(project, "queries/some-research-topic.md")

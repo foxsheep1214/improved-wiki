@@ -40,7 +40,7 @@ wiki/
 `entity/concept/source/query/comparison/synthesis/overview`；Research 模板再声明
 `thesis/methodology/finding`。improved-wiki 的兼容常量仍允许这些历史目录，但项目
 `schema.md` 的 `## Page Types` 表才是权威类型映射。完整的语义 schema（排除
-improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/2.6/3.4；可选
+improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/3.1；可选
 `purpose.md` 同时注入。Stage 2.2 把除 source/entity/concept/query/overview
 之外的 schema 类型（含 comparison/synthesis/finding/thesis/methodology）
 作为 `schema_typed_candidates`，并在 Stage 2.4 按解析后的 type→dir 重新裁决，
@@ -56,7 +56,7 @@ improved-wiki 专用的机器命名 YAML）会注入 Stage 2.2/2.4/2.6/3.4；可
 1. **Accept-list 门禁**：`schema_folders()` 只消费 `parse_wiki_schema_routing()`
    对 `## Page Types` 表的结构化结果，再与兼容基础目录合并。禁止全文正则扫描；
    `wiki/index.md`/`wiki/log.md` 等正文提及不能泄漏为 phantom folder。
-2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_1_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
+2. **精确路由器**（后加，NashSU `wiki-schema.ts` parity）：`_core.py` 的 `parse_wiki_schema_routing()`（结构化解析 `type→dir` 映射表）+ `schema_route_dir()` + `BASE_TYPE_TO_DIR`，接入 `_stage_3_write.py::_stage_3_2_schema_route()`，由 `_ingest_write.py` 调用。每本书算一次路由表，按 FILE block 的 frontmatter `type` 精确路由到目录。
 
 两层在同一次写盘中都跑：第 1 层管"这个目录能不能收"，第 2 层管"具体该放哪个目录"。**与 NashSU 的刻意分歧**：NashSU 路由不上就丢弃该页；improved-wiki 自动纠正、把页面挪到正确目录（不丢数据，符合 no-silent-fallback 策略）。
 
@@ -107,7 +107,7 @@ wiki/sources/<raw-rel-path>.md
 
 **规则**：`<raw-rel-path>` = raw 文件相对于 `raw/` 的路径（去掉 `.pdf` 后缀），**镜像 `raw/` 的目录结构**。
 
-**improved-wiki 实现**：`_stage_3_write.py:_stage_3_1_wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
+**improved-wiki 实现**：`_stage_3_write.py:_stage_3_2_wiki_path_for_source()` — `raw_file.relative_to(config.raw_root).with_suffix(".md")`。
 
 ```
 # 示例
@@ -127,9 +127,9 @@ wiki/queries/<slug>.md
 ...
 ```
 
-**规则**（**2026-07-02 用户裁决**，取代此前任何按页型"英文 kebab-case"的表述）：**slug 语言 = 源文语言**——中文书 → 中文 slug，英文书 → 英文 kebab-case slug。英文术语放 `title`，**不进 slug**；**例外**：约定俗成的缩写（mti、cfar、dds）可留在 slug 中。**禁止中英双拼混合 slug**。英文 slug 仍用 kebab-case；CJK slug 保留可读字符，不强制转拼音。（历史注记：该裁决曾同样约束 Stage 2.7 query slug；2.7 已于 2026-07-12 整体移除，query 页现仅来自 deep-research/save-chat/process-reviews，slug 规则不变。）
+**规则**：**slug 语言 = 源文语言**——中文书 → 中文 slug，英文书 → 英文 kebab-case slug。英文术语放 `title`，**不进 slug**；**例外**：约定俗成的缩写（mti、cfar、dds）可留在 slug 中。**禁止中英双拼混合 slug**。英文 slug 仍用 kebab-case；CJK slug 保留可读字符，不强制转拼音。
 
-**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.4 生成时应用 `_` 替代 `/`。参见 `known-issues.md` 中的详细记录。
+**macOS 限制**：slug 中不得包含 `/`（macOS / Linux 会将 `/` 解释为目录分隔符，无法在文件名中创建）。如果源页 wikilink 引用了含 `/` 的名称（如 `[[热仿真(Cauer/Foster模型)]]`），Stage 2.4 生成时应用 `_` 替代 `/`。
 
 **冲突处理**：同名 slug 加数字后缀，如 `impedance-matching-2.md`。
 
@@ -141,7 +141,7 @@ wiki/overview.md
 wiki/log.md
 ```
 
-**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件由 Stage 3.5 在每次 ingest 时维护（见 `_stage_3_write.py::stage_3_5_aggregate_repair`），**不应由用户手写**：
+**来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件由 Stage 3.3 在每次 ingest 时维护（见 `_stage_3_write.py::stage_3_3_aggregate_repair`），**不应由用户手写**：
 
 - `log.md`：**程序化追加**变更日志条目（确定性，从不调用 LLM）。
 - `index.md` / `overview.md`：默认由 **LLM 整页重写**（喂入磁盘上的权威页面清单 / 内容综合），LLM 调用失败或超出体量上限时回退到确定性追加。
@@ -257,9 +257,11 @@ wiki/media/<raw_subpath>/<source_stem>/
 p<NNNN>-mineru_<md5前8>.<ext>
 ```
 
-- `NNNN`：PDF 页码（zero-padded，4 位）
+- `NNNN`：PDF 的 0-based 内部页索引（zero-padded，4 位）
 - `mineru_<md5前8>`：minerU 提取，图片内容 md5 前 8 位
 - 示例：`p0007-mineru_a1b2c3d4.png`
+
+source 页 `## Embedded Images` 中的 `### Page N` 是面向读者的 1-based 页码，因此 `p0007-*` 对应 `### Page 8`；不得把内部索引直接展示为 `Page 0`。
 
 **去重**：按 `page+md5前8` 命名，**不做跨页 sha256 全局去重**（同一图重复出现在不同页会各存一份）。**过滤**：`MINERU_IMG_MIN_WIDTH/HEIGHT` 默认 20px（故意设低，只过滤 1×1/2×2 噪声，保留公式截图）。
 
@@ -295,7 +297,7 @@ wiki/media/<slug>/_manifest.json
 ├── ingest-queue.json           # 待处理队列
 ├── ingest-progress/            # <hash[:16]>.json 检查点
 ├── extract-tmp/<slug>/         # 文本抽取临时文件
-├── review-suggestions.json     # Stage 3.4 产物（`_stage_3_4_review.py`）
+├── review-suggestions.json     # Stage 3.5 产物（`_stage_3_review.py`）
 ├── review.json                 # review store（LLM Wiki app 维护，NashSU review-store.ts）
 ├── lint-cache.json             # lint 结果缓存
 ├── lint-semantic.json          # 语义 lint 结果
@@ -312,7 +314,7 @@ wiki/media/<slug>/_manifest.json
       "hash": "<sha256>",
       "timestamp": 1718300000000,
       "filesWritten": ["wiki/sources/xxx.md", "wiki/concepts/yyy.md", ...],
-      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "mineru-api",   // ocr/low-quality 变体已随质量门于 2026-07-08 移除，存量 cache 可能仍带旧值
+      "method": "plain-text" | "zipfile-pptx" | "zipfile-docx" | "document-xlsx" | "document-odt" | "document-epub" | "document-rtf" | "mineru-api",   // ocr/low-quality 变体已随质量门于 2026-07-08 移除，存量 cache 可能仍带旧值
       "template": "digest-book.md",
       "fileBlockCount": 15,
       "stages": {
@@ -390,15 +392,16 @@ N 为单调递增计数器（`review-store.ts:10`）。
 
 | 文件 | 来源 |
 |------|------|
-| `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 3.4 每项一个 md |
-| `<runtime>/review-suggestions.json` | Stage 3.4 汇总 JSON（`_stage_3_4_review.py`） |
+| `wiki/REVIEW/<type>/<date>-<source>-<short-slug>.md` | `ingest.py` Stage 3.5 每项一个 md |
+| `<runtime>/review-suggestions.json` | Stage 3.5 汇总 JSON（`_stage_3_review.py`） |
 | `<runtime>/review.json` | review store（LLM Wiki app 维护，NashSU review-store.ts；review 状态维护见 `sweep_reviews.py`） |
 | `wiki/REVIEW/_summaries/_audit_<scope>.md` | LLM 审计汇总报告（meta，非 review item） |
 
 **`_summaries/` 约定**：
 - 装**跨类审计汇总报告**（如 `_audit_report.md` 总报告、`_audit_<category>.md` 分类明细），是审计 agent 对一批 lint findings 的 verdict/action 统计表，**不是 per-finding review item**。
 - `_` 前缀目录 = meta 产物，review-sweep / lint 不当 finding 扫描。
-- **不要**写进 `wiki/REVIEW/audit/`——Stage 3.6 质量评分卡已于 2026-06-25 移除（NashSU 对齐），该目录不再自动生成，混入会污染扫描。
+- **不要**写进 `wiki/REVIEW/audit/`；该目录不是活跃 review
+  类型，混入会污染扫描。
 - **不要**散落 `wiki/REVIEW/` 根目录——保持根目录只有 `<type>/` 子目录 + `_summaries/`。
 
 ---

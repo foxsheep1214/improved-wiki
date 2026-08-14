@@ -1,4 +1,4 @@
-"""NashSU 0.6.6 schema-typed generation lifecycle regressions."""
+"""Tests for the schema-typed generation lifecycle."""
 from __future__ import annotations
 
 import sys
@@ -47,14 +47,6 @@ class TestUnifiedTypedLifecycle(unittest.TestCase):
             ("synthesis/combined.md", "s"),
         ]
         self.assertEqual(prepare._count_comparison_blocks(blocks), 2)
-
-    def test_dedicated_stage_2_9_is_not_wired_into_ingest(self):
-        self.assertFalse(
-            hasattr(prepare, "stage_2_9_comparison_generation"),
-        )
-        source = Path(prepare.__file__).read_text(encoding="utf-8")
-        self.assertNotIn("from _stage_2_9_comparison import", source)
-        self.assertNotIn("stage_2_9_comparison_generation(", source)
 
     def test_all_research_types_deduplicate_in_their_declared_route(self):
         cases = (

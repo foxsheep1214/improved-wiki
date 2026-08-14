@@ -1,6 +1,6 @@
 ---
 name: improved-wiki
-description: "Ingest, lint, graph, validate, or repair a Karpathy/NashSU-style LLM Wiki. Use for PDF/PPTX/DOCX ingestion, multi-book batches, conversation handoffs, OCR/caption troubleshooting, deep research, review processing, and wiki completeness audits. Text LLM work uses conversation-mode prompt files; Phase 1 uses minerU plus a configured caption VLM."
+description: "Ingest, lint, graph, validate, or repair a Karpathy/NashSU-style LLM Wiki. Use for PDF/PPTX/DOCX/XLSX/ODT/EPUB/RTF ingestion, multi-book batches, conversation handoffs, OCR/caption troubleshooting, deep research, review processing, and wiki completeness audits. Text LLM work uses conversation-mode prompt files; Phase 1 uses minerU plus a configured caption VLM."
 ---
 
 # improved-wiki
@@ -20,13 +20,47 @@ export SKILL_DIR="${SKILL_DIR:-$HOME/.agents/skills/improved-wiki}"
 | Ingest one source | `python3 "$SKILL_DIR/scripts/ingest.py" <file>` | None |
 | Ingest 2+ sources | same command with the complete ordered file list | Confirm list and target project |
 | Re-ingest | `ingest.py --delete <file>`, then ingest again | Confirm source and full redo vs `--keep-media` |
-| Deep research | `/improved-wiki deep-research <topic>` | Confirm one-topic scope; require web search |
+| Deep research | `/improved-wiki deep-research <topic>` | An explicit topic or Review choice is already confirmed; confirm only agent-derived suggestions. Source mode defaults to `web` |
 | Lint | `"$SKILL_DIR/scripts/wiki-lint.sh"` | Default maintenance is authorized; ask at exit 102 before delete-orphans |
 | Graph | `python3 "$SKILL_DIR/scripts/graph.py"` | None |
 | Validate | `python3 "$SKILL_DIR/scripts/validate_ingest.py" --root "$WIKI_ROOT" --source "<source stem>"` | Read-only |
 
 Do not assume a particular vendor agent, browser, MCP server, or shell helper.
 If a required capability is missing, report it instead of silently degrading.
+
+## Deep Research contract (NashSU v0.6.8)
+
+- Select `web`, `anytxt`, or `both`; default to `web`. Direct topic research uses
+  exactly `[topic]`. Review-provided non-empty `search_queries` are passed
+  verbatim; graph-derived gaps use the context-aware one-topic/three-query
+  optimizer and require confirmation before search.
+- Web collection requests 5 results per query. The project-local AnyTXT analogue
+  rewrites to 1–3 compact keyword queries and returns at most 15 results via
+  `scripts/search_local.py`. In `both` mode collect the selected sources in
+  parallel when the runtime permits.
+- Deduplicate case-insensitively by URL, falling back to
+  `source:title:snippet`, and keep at most 20 sources globally. Synthesize only
+  from numbered title/source/snippet records plus `wiki/index.md`; do not fetch
+  full result pages or local files in the parity path.
+- Preserve the v0.6.7 synthesis prompt and save the LLM body without editorial
+  rewriting. Use `scripts/write_research_page.py` to strip thinking blocks and
+  deterministically write one `wiki/queries/research-*.md` page with exact
+  frontmatter and code-generated References.
+- The writer gates on synthesis completeness (v0.6.8): a body under 120
+  meaningful characters, one with no block of 40+, or one citing none of the
+  collected sources exits `4` and writes nothing. Treat `4` as retryable —
+  re-synthesize from the same sources; never hand-patch the body to clear it.
+- **Do not call `ingest.py` on the result.** Do not create typed pages/reviews or
+  mutate index/log/overview. If embeddings are explicitly enabled, a page-only
+  `build_embeddings.py ... upsert --page <saved-page>` is optional and
+  non-critical. Resolve a source Review only after the page exists, with
+  `Research saved: <path>`.
+- Clean zero results complete without a page; zero results plus a source error
+  fail; partial source failures proceed with successful results and are reported.
+
+The exact prompts, source ordering, error semantics, writer invocation, and
+manual compatibility boundary are authoritative in
+`references/deep-research.md`.
 
 ## Lint contract
 
@@ -69,18 +103,17 @@ Active order:
 1.1 text/OCR → 1.2 images → 1.3 captions
 2.2 serial chunk analysis + rolling digest
 → 2.3 existing-wiki association
-→ 2.4 one consolidated whole-source key/schema-typed generation
-  + in-source dedup
-→ 2.6 source page
-→ 3.4a pre-write review generation
-→ 3.1 write/merge → 3.5 aggregate repair → 3.2 media injection
-→ 3.4b review persistence → cache
+→ 2.4 one consolidated whole-source generation: mandatory source page
+  + key/schema-typed pages, then in-source dedup
+→ 3.1 pre-write review generation
+→ 3.2 write/merge → 3.3 aggregate repair → 3.4 media injection
+→ 3.5 review persistence → 3.6 cache
 → 3.7 touched-page embedding upsert → ingested marker
 ```
 
-Stage 2.7 query generation and the dedicated Stage 2.9 comparison generator are
-retired. Comparison/synthesis/finding/thesis/methodology use Stage 2.2→2.4's
-shared schema-typed lifecycle. Review suggestions are handled by
+Ingest does not create unanswered query pages. Comparison, synthesis, finding,
+thesis, and methodology pages use Stage 2.2→2.4's shared schema-typed
+lifecycle. Review suggestions are handled by
 `process-reviews`; Graph remains a separate explicit command. The authoritative
 stage gates are in `references/ingest-stages-mandatory.md`.
 
@@ -88,7 +121,7 @@ stage gates are in `references/ingest-stages-mandatory.md`.
 
 - Require `<project>/schema.md`; its scoped `## Page Types` table is the
   authoritative `frontmatter type → wiki directory` map.
-- Inject the semantic schema into Stage 2.2, 2.4, 2.6, and 3.4 prompts,
+- Inject the semantic schema into Stage 2.2, 2.4, and 3.1 prompts,
   matching NashSU. Exclude improved-wiki's machine-only raw naming YAML from
   LLM context while still enforcing it at Stage 0.1.
 - Load optional `<project>/purpose.md` into the same prompts: schema defines
@@ -116,17 +149,20 @@ stage gates are in `references/ingest-stages-mandatory.md`.
   confidence/status. A project schema may impose a stricter evidence gate.
 - A Stage 2.3 match in the candidate's own schema route is an exact **update
   target**, not a reason to skip the candidate: Stage 2.4 emits that existing
-  FILE path and Stage 3.1 merges it. A cross-type association remains link-only
+  FILE path and Stage 3.2 merges it. A cross-type association remains link-only
   so one subject is not duplicated into a second generic/type-specific page.
-- On corrected-source re-ingest, Stage 3.1 replaces the stale body of a page
+- On corrected-source re-ingest, Stage 3.2 replaces the stale body of a page
   owned solely by that source while preserving locked fields and array unions.
   Multi-source pages still use the semantic merger so other sources survive.
 - There is no per-type page quota or separate comparison cap. Stage 2.4 never
   invents supplementary foundational pages or automatically backfills every
   analyzed term.
-- Stage 2.6 writes one concise, free-form source summary. It links only
+- Stage 2.4 also emits the mandatory source page — one concise, free-form
+  summary in the SAME call (NashSU parity, merged 2026-08-01). It links only
   materially relevant pages and selects core claims; it does not dump all
-  generated pages/chunk claims or require a fixed H2 set.
+  generated pages/chunk claims or require a fixed H2 set. When the model
+  omits it, a deterministic fallback is written from the complete Stage 2
+  analysis — never a second LLM call.
 - An unclosed `FILE` block is dropped and gets one exact-path targeted repair
   call. Unrequested repair pages are rejected; an unrecovered recommended
   key/schema-typed page pauses instead of publishing partial content.
@@ -173,7 +209,7 @@ Continue until all confirmed sources exit `0`, the user explicitly pauses, or
 a real external blocker is reported. A pending prompt, cached answer, or
 source waiting behind the spine is not a terminal result.
 
-Stage 2.4 exposes at most one whole-source generation prompt. Answer it with
+Stage 2.4 exposes exactly one whole-source generation prompt (source page included). Answer it with
 one fresh worker, validate and atomically publish the result, then re-invoke.
 
 Policy and rationale: `references/delegate-mode.md`. Per-stage result formats:
@@ -220,6 +256,9 @@ There is no silent quality fallback:
   contract in which `ingested` means Markdown pages and their semantic index
   are synchronized. A failed upsert therefore pauses at 3.7 and resumes there
   instead of declaring a partially indexed source complete.
+- Deep Research is outside ingest: its optional page-scoped query-page upsert is
+  best-effort, matching v0.6.7, and cannot roll back an already saved research
+  page. This exception does not weaken the mandatory ingest Stage 3.7 gate.
 - LLM, merge, config, schema, and required-media failures pause the source.
 - Corrupt cache/checkpoint files may warn and rebuild because re-derivation is
   the correct recovery.
@@ -242,7 +281,9 @@ spine only after inspecting partial writes with `--abandon-spine <hash>`.
 - **Batch ingest:** confirm the complete ordered source list and target project.
 - **Re-ingest/delete:** confirm source identity and choose full redo or
   analysis-only `--keep-media`. See `references/re-ingest-comparison.md`.
-- **Deep research:** confirm one-topic scope before the web→wiki loop.
+- **Deep research:** an explicit topic or Review action is already confirmed.
+  Confirm only a topic/queries proposed from Graph, lint, or another agent-derived
+  knowledge gap before the selected source search begins.
 
 Single-source ingest, diagnostic-only lint/validate, Graph, and save-chat-to-wiki
 are not gated. Plain lint's first five maintenance actions are authorized by
@@ -254,7 +295,8 @@ default; its delete-orphans continuation is always human-gated at exit 102.
 - Embedding build/search/compact: `scripts/build_embeddings.py`
 - Queue scan/run: `scripts/wiki-monitor.sh`, `scripts/run-queue.sh`
 - Chat ingest: `references/chat-ingest.md`
-- Deep research: `references/deep-research.md`
+- Deep research: `references/deep-research.md`,
+  `scripts/search_local.py`, `scripts/write_research_page.py`
 - Save chat: `references/save-chat-to-wiki.md`
 - Review sweep/process: `references/review-sweep.md`,
   `references/process-reviews.md`
@@ -272,12 +314,10 @@ default; its delete-orphans continuation is always human-gated at exit 102.
 - Conventions: `naming-conventions.md`, `raw-naming-conventions.md`,
   `raw-layout-compat.md`, `review-file-naming.md`
 - Operations: `initial-setup.md`, `re-ingest-comparison.md`,
-  `maintenance-cleanup.md`, `known-issues.md`, `cron-installation.md`,
-  `scripting-pitfalls.md`
+  `maintenance-cleanup.md`, `known-issues.md`, `cron-installation.md`
 - Retrieval and search: `kb-retrieval.md`, `nashsu-search-architecture.md`
 - Background: `architecture-decisions.md`, `roadmap.md` (planned, not built),
-  `nashsu-lint-source-analysis.md`, `query-generation.md` (Stage 2.7
-  tombstone — the stage is removed)
+  `nashsu-lint-source-analysis.md`
 
 Templates live under `templates/`. Ingest templates are selected by source
 type; aggregate templates cover schema, index, log, and overview.

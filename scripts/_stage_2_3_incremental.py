@@ -19,6 +19,16 @@ from _stage_2_base import (
 # Cross-domain acronym guard: shared tokens no longer than this are treated as
 # bare acronyms ("ram", "mti") rather than full words.
 _STAGE_2_3_ACRONYM_MAX_LEN = 4
+# Same-route associations are destructive update targets downstream, so an
+# ASCII fuzzy-title match must be substantially closer than a mere majority.
+# A 0.8 floor still accepts spelling/order variants with the same content
+# words, while rejecting live collisions such as "Transmission Line RLGC
+# Model" vs "Patch Transmission Line Model" (3/5), "Transmission Line Wave
+# Parameters" vs "Transmission Line Loss Parameters" (3/5), and "Lange
+# Coupler" vs "Unfolded Lange Coupler" (2/3).  Exact slug matches remain
+# unconditional.  CJK bigrams keep their separate >0.5 threshold because one
+# suffix character commonly adds two bigrams to an otherwise identical term.
+_STAGE_2_3_ASCII_UPDATE_JACCARD = 0.8
 _STAGE_2_3_CJK_RE = re.compile("[\\u3400-\\u4dbf\\u4e00-\\u9fff]")
 
 
@@ -76,21 +86,10 @@ def _stage_2_3_bare_surname_mismatch(name: str, existing_title: str) -> bool:
     (zero disambiguating tokens) while the NEW name is strictly more
     specific (multiple parts, at least one single-letter initial).
 
-    Live failure (2026-07-09, Wiley ELINT re-ingest): existing page
-    entities/taylor.md is titled just "Taylor" (no initials in slug OR
-    title — the initials guard above requires BOTH sides to carry initials,
-    so it correctly declined to cover this). A new chunk's "J. W. Taylor"
-    (fully qualified) word-Jaccard-matched {taylor} == {taylor} → 1.0 →
-    ALREADY COVERED. Stage 2.4 generation caught the risk (per an explicit
-    prompt warning) and created a separate entities/j-w-taylor page anyway,
-    but Stage 2.6's source-page generation — a different subagent, same
-    buggy fact, no such warning — trusted the association and wikilinked
-    Key Entities to the WRONG [[taylor]] instead of the real
-    [[entities/j-w-taylor]]. A bare-surname existing page provides zero
-    evidence of being the SAME specific person as a fully-initialed new
-    name; blocking here is a one-directional refinement — a bare NEW name
-    against an initialed EXISTING page, or bare-vs-bare, are unaffected
-    (those need real semantic judgment, not a token heuristic).
+    A bare-surname page provides no evidence that it represents the same
+    specific person as a fully-initialed new name. The guard is intentionally
+    one-directional: a bare new name against an initialed existing page, or
+    bare-vs-bare, still requires semantic judgment.
     """
     existing_words = _stage_2_title_words(existing_title)
     if len(existing_words) != 1:
@@ -154,7 +153,8 @@ def _stage_2_3_matching_targets(
         if slug_form == stem.lower():
             matches.append(target)
         elif (words and name_words
-              and len(name_words & words) / len(name_words | words) > 0.5
+              and len(name_words & words) / len(name_words | words)
+              >= _STAGE_2_3_ASCII_UPDATE_JACCARD
               and not _stage_2_3_acronym_only_mismatch(
                   name, stem, name_words & words)
               and not _stage_2_3_initials_mismatch(name, stem)

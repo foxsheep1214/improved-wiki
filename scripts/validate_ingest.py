@@ -160,9 +160,9 @@ def _validate_find_media_dir(slug: str) -> Optional[Path]:
 def _validate_recorded_source_pages(entry: dict, project_root: Path) -> tuple[list[str], list[Path]]:
     """Return source-page paths recorded by this cache entry and those on disk.
 
-    Cache entries are not globally one-to-one with source pages: deep-research
-    entries intentionally write no source page, while older ingests may retain
-    pre-migration paths.  Per-source validation must therefore inspect the
+    Cache entries are not globally one-to-one with source pages: explicitly
+    ingested query-page entries intentionally write no source page, while older
+    ingests may retain pre-migration paths. Per-source validation must inspect the
     selected entry instead of comparing project-wide cache/page totals.
     """
     recorded: list[str] = []
@@ -221,7 +221,7 @@ def main(argv: Optional[list[str]] = None):
         print(f"  ⚪ {label}: {detail}")
 
     print("=" * 60)
-    print(f"13-stage ingest validation")
+    print("13-stage ingest validation")
     print(f"Project: {PROJECT_ROOT}")
     print(f"Source:  {SOURCE_SLUG}")
     print("=" * 60)
@@ -293,12 +293,12 @@ def main(argv: Optional[list[str]] = None):
         check("media dir found", False)
 
     # ═══════════════════════════════════════════════
-    # Global Digest (rolled up by Stage 2.2; standalone 2.1 removed 2026-07-08)
+    # Global Digest (rolled up by Stage 2.2)
     # ═══════════════════════════════════════════════
     print("\n[Stage 2.2] Global Digest (roll-up)")
     if entry:
         dk = stages.get("global_digest_keys", 0)
-        check(f"global digest complete", dk >= 1,
+        check("global digest complete", dk >= 1,
               f"{dk} top-level keys (ingest.py schema: book_meta/outline/key_entities/key_concepts/key_claims)")
     else:
         check("cache entry found", False)
@@ -310,7 +310,7 @@ def main(argv: Optional[list[str]] = None):
     if entry:
         chunks = stages.get("chunks_analyzed", 0)
         check(f"{chunks} chunk(s) analyzed", chunks >= 1,
-              f"ingest.py schema: entities_found + concepts_found + claims per chunk (NOT chunk_meta/local_*/etc.)")
+              "ingest.py schema: entities_found + concepts_found + claims per chunk (NOT chunk_meta/local_*/etc.)")
     else:
         check("cache entry found", False)
 
@@ -328,12 +328,9 @@ def main(argv: Optional[list[str]] = None):
         check(f"{fb} FILE blocks, {generated} concepts (core:{cov_core:.0%} supp:{cov_supp:.0%} "
               f"of {core}+{supp} targeted)",
               fb >= 1,
-              f"format: ---FILE:wiki/<path>---...---END FILE---")
+              "format: ---FILE:wiki/<path>---...---END FILE---")
     else:
         check("cache entry found", False)
-
-    # (Stage 2.7 query-generation check removed 2026-07-12 — NashSU parity:
-    # ingest no longer generates query pages.)
 
     # ═══════════════════════════════════════════════
     # Stage 2.4 typed pages: comparison is optional and schema-driven
@@ -361,7 +358,7 @@ def main(argv: Optional[list[str]] = None):
     # ═══════════════════════════════════════════════
     # Stage 3: Write files (+ source page coverage)
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.1] Write files")
+    print("\n[Stage 3.2] Write files")
     sources = list((WIKI / "sources").rglob("*.md")) if (WIKI / "sources").is_dir() else []
     entities = list((WIKI / "entities").glob("*.md")) if (WIKI / "entities").is_dir() else []
     concepts = list((WIKI / "concepts").glob("*.md")) if (WIKI / "concepts").is_dir() else []
@@ -400,12 +397,12 @@ def main(argv: Optional[list[str]] = None):
         )
 
     # ═══════════════════════════════════════════════
-    # Stage 3.2: Image injection
+    # Stage 3.4: Image injection
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.2] Image injection into source page")
-    img_ext_s35 = stages.get("images_extracted", 0)
-    if img_ext_s35 == 0:
-        note("no images extracted — Stage 3.2 not applicable", "text-only source")
+    print("\n[Stage 3.4] Image injection into source page")
+    images_extracted = stages.get("images_extracted", 0)
+    if images_extracted == 0:
+        note("no images extracted — Stage 3.4 not applicable", "text-only source")
     elif source_page:
         text = source_page.read_text()
         has_section = "## Embedded Images" in text
@@ -417,7 +414,7 @@ def main(argv: Optional[list[str]] = None):
         img_ext = stages.get("images_extracted", 0)
         img_inj = stages.get("images_injected", 0)
         if img_ext == 0:
-            note("no images — Stage 3.2 not applicable")
+            note("no images — Stage 3.4 not applicable")
         elif img_inj > 0:
             check("source page found", False, "cache says images injected but no source page on disk")
         else:
@@ -426,9 +423,9 @@ def main(argv: Optional[list[str]] = None):
         check("source page exists", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 3.4 (rev): Review suggestions + review items
+    # Stages 3.1/3.5: Review generation and persistence
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.4 rev] Review suggestions + items")
+    print("\n[Stages 3.1/3.5] Review suggestions + persisted items")
     rs_path = RUNTIME / "review-suggestions.json"
     if rs_path.exists():
         items = json.loads(rs_path.read_text()).get("items", [])
@@ -436,7 +433,7 @@ def main(argv: Optional[list[str]] = None):
     elif entry:
         ri = stages.get("review_items", -1)
         if ri == 0:
-            note("auto-skipped", "<4 FILE blocks — ingest.py skips Stage 3.4 rev")
+            note("zero review items", "review trigger may be false, or reviewer returned []")
         elif ri > 0:
             check("review-suggestions.json exists", False, f"cache says {ri} items but file not found")
         else:
@@ -448,7 +445,7 @@ def main(argv: Optional[list[str]] = None):
     review_files = list(reviews_dir.rglob("*.md")) if reviews_dir.is_dir() else []
     review_json = RUNTIME / "review.json"
     if review_files:
-        check(f"wiki/REVIEW/ has per-item .md files",
+        check("wiki/REVIEW/ has per-item .md files",
               len(review_files) >= 1,
               f"{len(review_files)} files")
     elif review_json.exists():
@@ -458,16 +455,16 @@ def main(argv: Optional[list[str]] = None):
     elif entry:
         ri = stages.get("review_items", -1)
         if ri <= 0:
-            note("no review items", "Stage 3.4 rev was auto-skipped")
+            note("no review items", "review trigger may be false, or reviewer returned []")
         else:
             check("review output found", False, f"cache says {ri} items but no review files on disk")
     else:
         check("review output found", False)
 
     # ═══════════════════════════════════════════════
-    # Stage 3.5: Aggregate pages + hash cache
+    # Stages 3.3/3.6: Aggregate pages + hash cache
     # ═══════════════════════════════════════════════
-    print("\n[Stage 3.5] Aggregate pages + hash cache")
+    print("\n[Stages 3.3/3.6] Aggregate pages + hash cache")
     for name in ("index.md", "log.md", "overview.md"):
         p = WIKI / name
         check(f"wiki/{name} exists and non-empty",

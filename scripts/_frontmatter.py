@@ -177,10 +177,10 @@ BODY_SHRINK_THRESHOLD = 0.7
 def strip_embedded_images_section(body: str) -> str:
     """Remove the auto-injected ``## Embedded Images`` section from a page body.
 
-    Stage 3.2 appends this section (a table of potentially hundreds of image
-    links) to source pages AFTER 3.1 writes them. On re-ingest, the existing
+    Stage 3.4 appends this section (a table of potentially hundreds of image
+    links) to source pages after Stage 3.2 writes them. On re-ingest, the existing
     source page carries this section (often 50K+ chars for a 457-image book)
-    while the new (Stage 2.6) body does not. Leaving it in the merge body:
+    while the new Stage 2.4 body does not. Leaving it in the merge body:
       - inflates ``old_body`` so the merge length threshold (~0.7 * max) jumps
         to tens of KB, while the LLM merge prompt truncates each body to 3K —
         so the LLM output is always "below threshold" and the no-fallback
@@ -190,7 +190,7 @@ def strip_embedded_images_section(body: str) -> str:
         differs).
 
     Stripping it before comparison/threshold makes same-book re-ingests hit
-    the identical-body fast path (no LLM merge), and 3.2 re-injects images
+    the identical-body fast path (no LLM merge), and Stage 3.4 re-injects images
     afterward regardless. The section is an artifact, not author content.
     """
     marker = "## Embedded Images"
@@ -284,7 +284,7 @@ def merge_page_content(
 
     # Fast path 3: bodies identical (only frontmatter arrays differed)
     # Strip the auto-injected ## Embedded Images section first: it is an
-    # artifact appended by Stage 3.2 (not author content) and re-injected
+    # artifact appended by Stage 3.4 (not author content) and re-injected
     # after this merge. Without stripping, a same-book re-ingest never hits
     # this fast path (the existing page has the section, the new does not)
     # and falls through to an LLM merge whose truncated output fails the

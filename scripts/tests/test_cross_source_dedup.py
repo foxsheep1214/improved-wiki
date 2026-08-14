@@ -254,8 +254,6 @@ class TestIncrementalEmbedCache(unittest.TestCase):
         pages = ds.collect_wiki_pages(wiki)
         summaries = [s for s in (
             _dedup.extract_entity_summary(p, c) for p, c in pages) if s]
-        import hashlib
-
         def fake_bounded(emb_pages):
             monkey_embed_calls.append([pg["id"] for pg in emb_pages])
             return {pg["id"]: [1.0, 0.0] for pg in emb_pages}

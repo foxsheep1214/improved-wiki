@@ -101,6 +101,51 @@ class TestRewriteWikilinkTarget(unittest.TestCase):
         self.assertIn("[[foo-bar]]", out)
 
 
+class TestRewriteRedirectFrontmatterTarget(unittest.TestCase):
+    def test_rewrites_only_redirect_scalar(self):
+        content = (
+            "---\ntype: redirect\ntitle: Legacy\n"
+            "redirect: 'entities/canoncal.md'\n---\n\n"
+            "# Legacy\n\nSee [[entities/canoncal]].\n"
+        )
+        out = f.rewrite_redirect_frontmatter_target(
+            content, "entities/canoncal.md", "entities/canonical.md")
+        self.assertIn('redirect: "entities/canonical"', out)
+        self.assertIn("[[entities/canoncal]]", out)
+        self.assertIn("title: Legacy", out)
+
+    def test_noop_when_current_target_differs(self):
+        content = "---\ntype: redirect\nredirect: entities/other\n---\n"
+        self.assertEqual(
+            f.rewrite_redirect_frontmatter_target(
+                content, "entities/missing", "entities/canonical.md"),
+            content,
+        )
+
+    def test_rewrites_top_level_not_nested_redirect_key(self):
+        content = (
+            "---\ntype: redirect\nmetadata:\n"
+            "  redirect: entities/canoncal\n"
+            "redirect: entities/canoncal\n---\n"
+        )
+        out = f.rewrite_redirect_frontmatter_target(
+            content, "entities/canoncal", "entities/canonical")
+        self.assertIn("  redirect: entities/canoncal", out)
+        self.assertIn('redirect: "entities/canonical"', out)
+        self.assertEqual(out.count('redirect: "entities/canonical"'), 1)
+
+    def test_nested_only_redirect_is_not_rewritten(self):
+        content = (
+            "---\ntype: redirect\nmetadata:\n"
+            "  redirect: entities/canoncal\n---\n"
+        )
+        self.assertEqual(
+            f.rewrite_redirect_frontmatter_target(
+                content, "entities/canoncal", "entities/canonical"),
+            content,
+        )
+
+
 class TestStub(unittest.TestCase):
     def test_relative_path_simple(self):
         self.assertEqual(

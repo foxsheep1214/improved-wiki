@@ -16,6 +16,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 import _core  # noqa: E402
 import ingest  # noqa: E402
+import _stage_1_1_scanned as scanned  # noqa: E402
 from _batch_coordination import (  # noqa: E402
     SpineReservationConflict,
     batch_coordinator_slot,
@@ -210,6 +211,49 @@ class WorkerHealthTests(unittest.TestCase):
             patch.object(ingest, "_pid_probe", return_value="alive"),
         ):
             self.assertEqual(ingest._worker_entry_state(entry), "dead")
+
+
+class MinerULockWaitTests(unittest.TestCase):
+    def test_default_wait_survives_more_than_one_hour(self):
+        with tempfile.TemporaryDirectory() as d:
+            lock_file = Path(d) / ".mineru.lock"
+            with (
+                patch.object(scanned, "MINERU_LOCK_FILE", lock_file),
+                patch.object(
+                    scanned.fcntl,
+                    "flock",
+                    side_effect=[BlockingIOError(), None],
+                ),
+                patch.object(scanned.time, "time", side_effect=[0.0, 3601.0]),
+                patch.object(scanned.time, "sleep") as sleep,
+                patch.object(scanned, "update_worker_phase"),
+            ):
+                fd = scanned._stage_1_1_acquire_mineru_lock()
+            try:
+                sleep.assert_called_once_with(5)
+            finally:
+                scanned.os.close(fd)
+
+    def test_explicit_timeout_still_fails_controlled_call(self):
+        with tempfile.TemporaryDirectory() as d:
+            lock_file = Path(d) / ".mineru.lock"
+            with (
+                patch.object(scanned, "MINERU_LOCK_FILE", lock_file),
+                patch.object(
+                    scanned.fcntl,
+                    "flock",
+                    side_effect=BlockingIOError(),
+                ),
+                patch.object(scanned.time, "time", side_effect=[0.0, 2.0]),
+                patch.object(scanned.time, "sleep") as sleep,
+                patch.object(scanned, "update_worker_phase"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "minerU lock timeout after 2s",
+                ):
+                    scanned._stage_1_1_acquire_mineru_lock(timeout=1)
+            sleep.assert_not_called()
 
 
 class WorkerReporterTests(unittest.TestCase):

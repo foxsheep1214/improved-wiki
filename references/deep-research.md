@@ -1,342 +1,321 @@
-# Deep Research — Closed-Loop Research → Wiki Pipeline
+# Deep Research — NashSU v0.6.7 搜寻 → 融合 → 单页写入
 
-参考 NashSU `deep-research.ts` + `web-search.ts` closed-loop research system. **Strict NashSU minimal implementation** — verbatim synthesis, code-generated References, fixed `tags: [research]`, no review-derived auto-chain.
+本流程以 NashSU v0.6.7 的实际源码 `src/lib/deep-research.ts`、
+`anytxt-search.ts`、`optimize-research-topic.ts` 和 `wiki-filename.ts` 为行为基线。
+仓库根目录的 `llm-wiki.md` 是抽象模板，不覆盖这些实现细节。
 
-## Core Idea
+默认链路只有：
 
-Auto-ingest is "消化已有源" — you give the wiki source files and it builds pages from them. Deep research is "主动寻找未知" — the wiki identifies knowledge gaps and fills them from the internet.
-
-The **closed loop** is what makes this powerful:
-
-```
-Research topic → web search → LLM synthesis → query page → auto-ingest
-    → entity/concept pages → review items → new research topics → loop
-```
-
-Each cycle expands the knowledge base without needing new raw source files. The wiki grows itself.
-
-## NashSU Alignment
-
-| NashSU | improved-wiki (calling agent) |
-|--------|---------------------------|
-| Search via Tavily / SerpAPI / SearXNG / Ollama / Brave / Firecrawl (6 providers; `deepResearchSource` = web / anytxt / both) | Use the runtime's available web-search capability; dedup by URL, cap 20, and synthesize from snippets. |
-| `collectResearchSources()` — multi-query, **5 results/query**, **snippet-only**, dedup by URL, cap 20 | The calling agent runs targeted queries, dedups by URL, cap 20 — synthesize from snippets (like NashSU) |
-| AnyTXT local-file source mode (`deepResearchSource: anytxt`/`both`) | `search_local.py` — CLI analog of AnyTXT mode: `keyword_search` on wiki/ + `mdfind`/ripgrep on raw/ (not byte-identical to AnyTXT) |
-| `executeResearch()` — LLM synthesis, reads `wiki/index.md` for cross-ref | The calling agent synthesizes from sources + `wiki/index.md` |
-| Save to `wiki/queries/<slug>-<date>-<HHMMSS>.md` | Same filename rule (Step 4) |
-| `autoIngest()` on research result | `ingest.py` on the new query page |
-| `queueResearch()` — concurrency queue (maxConcurrent=3) | Serial (conversation-based, one at a time) — CLI adaptation, no persistent queue |
-| `onTaskFinished()` → process next **already-queued** task | One topic per invocation (NashSU does NOT derive new topics from reviews) |
-
-## Workflow
-
-### Step 0: Invocation
-
-```
-User: /improved-wiki deep-research <topic>
-
-# Or from a review item:
-User: deep research this review item about <topic>
+```text
+已确认 topic / queries
+  → 按 source mode 收集 web / AnyTXT 摘要
+  → URL 优先去重并全局截到 20 条
+  → 仅用摘要 + wiki/index.md 融合
+  → 原子写一个 wiki/queries/research-*.md
+  → 可选、非阻断地只更新该页 embedding
+  → 完成
 ```
 
-Or triggered by the user asking a question that the wiki can't answer:
+**Deep Research 结果不再送进 source ingest。** 不自动生成 concept/entity/
+synthesis/thesis 页，不自动生成 review，不修改 index/log/overview，也不复制到
+`raw/queries/`。这样可避免研究页被二次总结，以及它自身的 gaps/references
+形成 review 放大回路。
 
+## 与 v0.6.7 的对齐表
+
+| NashSU v0.6.7 | improved-wiki 调用代理 |
+|---|---|
+| `deepResearchSource = web \| anytxt \| both`，默认 `web` | 使用同名三种模式；未指定时只搜 web |
+| 直接输入 topic 时 queries = `[topic]` | 不擅自扩成固定 3–5 个查询 |
+| Review 的 `searchQueries` 原样传入 | 非空时逐条原样用于 web；空时回退到 topic |
+| Web 每个 query 请求 5 条 | 每个 query 最多保留 5 条 provider 结果 |
+| AnyTXT 先改写为 1–3 个关键词查询，最后共取 15 条 | 调用代理先做同样改写，再用 `search_local.py ... --max-results 15` |
+| `both` 的各来源并发，以 `Promise.allSettled` 收集 | 可用并行工具同时发起；个别来源失败不丢弃其他成功结果 |
+| URL 优先、否则 `source:title:snippet` 去重；忽略大小写；全局最多 20 | 相同 |
+| 只把 `[N] title (source) + snippet` 给 LLM | 不读网页正文，不把 URL 放进融合上下文 |
+| 只读 `wiki/index.md` 做 wikilink grounding | 相同；缺失时使用空 index |
+| 固定系统提示词，正文由 LLM 自由组织 | 相同；不强制固定章节模板 |
+| 代码写 frontmatter、H1 和 References | `write_research_page.py` 确定性完成 |
+| 研究页不再 `autoIngest` | 默认绝不调用 `ingest.py` |
+| embedding 开启时仅 upsert 该页，失败只告警 | 可选运行 page-scoped upsert；失败不撤销研究页 |
+| 内存队列最大并发 3 | CLI/对话适配为每个 topic 独立完成；批量时串行写入 |
+
+## 1. 触发与确认
+
+触发语句包括：
+
+- `/improved-wiki deep-research <topic>`
+- `deep research <topic>` / `deep-research <topic>`
+- `深度研究 <主题>`
+- `研究 <主题> 并写入 wiki`
+
+确认规则：
+
+- 用户在命令或自然语言中明确给出 topic，已经构成确认；不要重复追问。
+- 用户在 Process Reviews 中选择 **Deep Research**，已经确认该 review 的研究范围。
+- 如果 topic 是由 Graph gap、lint finding 或代理主动建议而来，先展示拟定 topic
+  和 queries，等用户确认后才开始外部检索与写入。
+- v0.6.7 对直接输入的宽泛 topic 不插入澄清步骤。除非用户的意图本身无法
+  确定，否则按原 topic 搜索。
+
+来源模式：用户明确指定时服从 `web`、`anytxt` 或 `both`；未指定时使用
+v0.6.7 默认值 `web`。不要把“先本地、再网络”设成强制前置流程。
+`web`/`anytxt` 分别要求对应能力；`both` 只要其中一项已配置即可启动，并且
+只调度已配置的分支——缺少的另一分支本身不算 source error。这与 v0.6.7 的
+`hasConfiguredDeepResearchSources`/`collectResearchSources` 一致。
+
+## 2. 确定搜索 queries
+
+### 2.1 直接研究
+
+使用且只使用：
+
+```text
+[<topic>]
 ```
-User: wiki 里有没有关于 GaN 驱动电路的资料？
-Agent: [searches wiki] 没有找到。要我 deep research 这个主题并消化到 wiki 里吗？
+
+不要自动生成“原理 / 应用 / 挑战 / 对比 / 最新进展”等固定 3–5 查询。
+
+### 2.2 来自 Review
+
+- topic = review 标题，去掉 `Save to Wiki:`、`Create:`、`Research:` 前缀。
+- `search_queries` 非空：按存储顺序原样使用。
+- `search_queries` 为空：使用 `[topic]`。
+- 记录 source review 的路径或 ID，供成功写盘后回填；此时不要提前 resolve。
+
+### 2.3 来自 Graph knowledge gap
+
+读取 `purpose.md` 和 `wiki/overview.md`（缺失即空），将 gap type/title/
+description 一起交给 LLM。要求严格输出 4 行：
+
+```text
+TOPIC: <一个精确研究主题>
+QUERY: <关键词丰富、面向搜索引擎的 query 1>
+QUERY: <query 2>
+QUERY: <query 3>
 ```
 
-### Step 1: Ground in Wiki Context
+解析一个 topic 和最多三个 queries；没有有效 query 时回退到 `[topic]`。
+展示优化结果并等用户确认。这是 v0.6.7 的 gap 专用优化，不应用到直接输入 topic。
 
-NashSU's `executeResearch` reads `wiki/index.md` (only) to ground cross-references. Do the same:
+### 2.4 AnyTXT 查询改写
 
-1. Read `wiki/index.md` — what pages exist, what terms to `[[link]]` to.
+只有 source mode 含 `anytxt` 时执行。把当前 topic/queries 改写为总共 1–3 个
+本地全文检索关键词短语：保留专有名词、文件名、技术词、日期、缩写和非英语词；
+不要用完整问句；去空、忽略大小写去重、最多三条。改写失败则使用原 queries
+按同样规则清理后的结果。
 
-The topic then goes straight to search — NashSU does **not** insert a clarifying-question step. (If a topic is genuinely too broad, see the "Research Topic Too Broad" edge case, which mirrors NashSU's pre-search scope guard.)
+## 3. 收集来源
 
-### Step 2: Search for Sources
+所有结果统一为：
 
-#### Step 2a: Local source search (CLI analog of NashSU's AnyTXT source mode)
+```json
+{
+  "title": "...",
+  "url": "https://... 或 file:///...",
+  "snippet": "...",
+  "source": "provider host 或 AnyTXT"
+}
+```
 
-**Before hitting the web**, search the project's own `wiki/` + `raw/` for existing
-material. Personal knowledge bases often hold un-ingested PDFs or partially-related
-pages that should ground — not be rediscovered from the web.
+### 3.1 Web mode
+
+对第 2 节确定的每个 query 调用当前可用的 web search provider，**每个 query
+请求 5 条**。只保存 provider 返回的 title、URL、snippet、source。
+
+不要打开搜索结果网页、下载论文/PDF 或用页面正文替换 snippet；v0.6.7 的
+Deep Research 融合路径只消费搜索摘要。需要全文研究属于另一个显式工作流，
+不能悄悄混入“对齐 NashSU”的结果。
+
+### 3.2 AnyTXT mode（本地 CLI 适配）
+
+`search_local.py` 用项目内 `wiki/` 的 NashSU-style keyword scorer，以及
+`raw/` 的 Spotlight/ripgrep sidecar 作为 AnyTXT 的 CLI 替代后端。它返回
+相同四字段，source 固定为 `AnyTXT`，URL 为 `file://`：
 
 ```bash
-python3 "$SKILL_DIR/scripts/search_local.py" "<topic>" --project <project-path> --top 10
+python3 "$SKILL_DIR/scripts/search_local.py" \
+  "<prepared query 1>" "<prepared query 2>" "<prepared query 3>" \
+  --project <wiki-root> --max-results 15 --json
 ```
 
-`search_local.py` reuses `_wiki_keyword.keyword_search` over `wiki/*.md` (curated
-knowledge, ranks higher) and searches `raw/` PDF content via macOS Spotlight
-(`mdfind`, with ripgrep fallback over text sidecars). Output format:
+它按 query 顺序搜索、URL 优先去重，并对全部本地结果执行一个 15 条全局上限。
+本地 helper 已负责生成匹配摘要；调用代理不要再打开原文件扩写上下文。
 
-```
-[N] **<title>** (local:wiki)
+### 3.3 Both mode、顺序、错误与全局去重
+
+- Web query 调用与 AnyTXT 调用可并发发起。
+- 合并顺序保持 v0.6.7 的调用数组顺序：各 web query 结果在前，AnyTXT
+  结果在后；不是按完成先后排序。
+- 对每个结果计算 key：有 URL 时用 `url.lower()`；URL 为空时用
+  `(source + ":" + title + ":" + snippet).lower()`。
+- 首次出现者保留，所有来源合计最多 **20** 条。不要按来源另设 20 条上限。
+- 某个调用失败但仍有结果：保留成功结果并继续融合，同时在最终报告中列出错误。
+- 所有调用得到 0 条且至少一个调用失败：任务失败，不写页面。
+- 所有调用干净地得到 0 条：任务完成为 `No research sources found.`，不写页面。
+
+## 4. 融合
+
+只读取 `wiki/index.md` 作为现有 wiki grounding；不要把整库正文、overview、
+raw 文件或网页正文加入默认融合上下文。
+
+按最终去重顺序构造：
+
+```text
+[1] **<title>** (<source>)
 <snippet>
-path: <absolute path>
 
-[N] **<filename>** (local:raw)
-<PDF context snippet or fallback>
-path: <absolute path>
+[2] **<title>** (<source>)
+<snippet>
 ```
 
-These local hits are **first-class sources** — merge them with web results in Step 3.
-For `local:raw` hits, if the snippet is a PDF content match, Read the file (or
-`pdftotext` it) to extract fuller context before synthesis. Local wiki hits that
-already cover the topic may narrow the research scope (skip what the wiki already knows).
+注意：这里不含 URL。URL 只在写入时由代码生成 References。
 
-#### Step 2b: Web search
+系统提示词保持 v0.6.7 的内容和顺序；在第二行空行后加入基于 topic 的
+mandatory output-language directive：
 
-The calling agent runs **3-5 targeted web queries** (not one broad query). Each query should approach the topic from a different angle:
+```text
+You are a research assistant. Synthesize the collected research sources into a comprehensive wiki page.
 
-```
-Query 1: <topic> 技术原理 最新进展
-Query 2: <topic> 行业应用 实际案例
-Query 3: <topic> 挑战 局限性 瓶颈
-Query 4: <topic> 对比 选型 方案
-Query 5: <topic> 最新研究 2025 2026
-```
+<output-language directive>
 
-Use the runtime's available web-search and page-reading tools. Deduplicate results by URL.
-If no web-search capability is available, **pause before Step 3** and ask the user to
-enable it or provide sources; never present local-only work as web research.
+## Cross-referencing (IMPORTANT)
+- The wiki already has existing pages listed in the Wiki Index below.
+- When your synthesis mentions an entity or concept that exists in the wiki, ALWAYS use [[wikilink]] syntax to link to it.
+- For example, if the wiki has an entity 'anthropic', write [[anthropic]] when mentioning it.
+- This is critical for connecting new research to existing knowledge in the graph.
 
-Deduplicate results by URL. Cap at 20 sources (NashSU `MAX_RESEARCH_SOURCES`). Prefer recent, authoritative sources.
+## Writing Rules
+- Organize into clear sections with headings
+- Cite sources using [N] notation
+- Note contradictions or gaps
+- Suggest additional sources worth finding
+- Neutral, encyclopedic tone
 
-Synthesize from the search **snippets** — NashSU's `collectResearchSources` passes snippet text only and never fetches full page bodies. Only read a full page when a snippet is too thin to use and the current runtime provides a page-reading capability; treat that as a CLI extra, not NashSU behavior.
-
-### Step 3: Synthesize
-
-The calling agent synthesizes the research into one wiki page from the collected sources
-(local Step 2a + web Step 2b). NashSU writes the LLM's synthesis **verbatim**
-(stripping only `<think>` blocks) and appends a **code-generated** References list
-— so follow these writing rules rather than forcing a fixed section template:
-
-Synthesis prompt (matches NashSU's `executeResearch`):
-
-```
-Synthesize a wiki page from the following research sources. Sources include local
-knowledge-base hits (local:wiki / local:raw) and web results — treat them
-uniformly, preferring local:wiki for claims already in the knowledge base.
-
-## Cross-referencing
-- When you mention an entity/concept that exists in the Wiki Index below (or in a
-  local:wiki hit), use a [[wikilink]] to connect new research to existing knowledge.
-
-## Writing rules (NashSU)
-- Organize into clear sections with ## headings — let the content shape them; do
-  NOT force a fixed Overview / Key Findings / Thematic / Contradictions skeleton.
-- Cite sources with [N] notation matching the References list.
-- Note contradictions between sources (don't paper over them); flag agreement.
-- Flag open questions and areas needing further research.
-- Neutral, encyclopedic tone. Output language: match the wiki's primary language.
-- Do NOT write the frontmatter or the References list yourself — they are added
-  deterministically by the steps below.
+## Existing Wiki Index (link to these pages with [[wikilink]])
+<wiki/index.md，若存在>
 ```
 
-Then assemble the page (NashSU builds this in code, not via the LLM):
+用户消息严格按以下形状：
 
+```text
+Research topic: **<topic>**
+
+## Research Sources
+
+<search context>
+
+Synthesize into a wiki page.
 ```
+
+保存 LLM synthesis 原文；不要让调用代理另行重写、强制 Overview/Key
+Findings 等固定章节，或替 LLM 添加 References/frontmatter。只允许写入器移除
+`<think>...</think>`、`<thinking>...</thinking>` 及未闭合 thinking 尾段。
+
+## 5. 确定性写入
+
+把 synthesis 和最终 20 条以内的来源 JSON 暂存在
+`/tmp/codex-work/<task>/`，再调用：
+
+```bash
+python3 "$SKILL_DIR/scripts/write_research_page.py" \
+  --project <wiki-root> \
+  --topic "<confirmed topic>" \
+  --synthesis-file /tmp/codex-work/<task>/synthesis.txt \
+  --sources-file /tmp/codex-work/<task>/sources.json
+```
+
+helper 再执行一次 URL/fallback-key 去重和 20 条上限作为写入门禁，并原子写到
+`wiki/queries/`。输出唯一的项目相对路径。零来源时返回 3 且不写文件。
+
+### 融合完整性门禁（v0.6.8）
+
+写入前 helper 还会校验 synthesis 本身。清理 thinking 块后满足以下任一条即判失败，
+返回 **4** 且不写文件：
+
+- 有意义字符（Unicode 字母/数字）少于 120；
+- 不存在任何有意义字符 ≥ 40 的段落（按空行切分，先剥离标题标记）；
+- 来源数 > 0 但正文没有引用任何一条（`[N]` / `[N,M]` / `[N-M]`，越界索引不计）。
+
+校验对象与落盘文本是同一份清理后的字符串，避免"过了校验、存盘变空"。
+
+退出码 4 是**可重试**状态，不是硬错误：用同一批来源重新融合即可。**不要**为了
+通过门禁而手工补写正文或补插引用标记——那正是这道门禁要拦住的伪成功。一次成功
+的流式返回也可能只包含 reasoning 而没有正文，NashSU 0.6.8 之前会把它存成
+只有 References 的空壳页。
+
+页面格式严格为：
+
+```markdown
 ---
 type: query
-title: "Research: <topic, with any \" escaped as \\\">"
-created: <today, UTC>
+title: "Research: <topic；双引号转义>"
+created: <当前本地日历日期 YYYY-MM-DD>
 origin: deep-research
 tags: [research]
 ---
 
 # Research: <topic>
 
-<the LLM synthesis, verbatim except <think> blocks stripped>
+<synthesis 原文，仅去 thinking blocks>
 
 ## References
+
 1. [<title>](<url>) — <source>
 2. ...
 ```
 
-Frontmatter is exactly these five keys. **No** `<topic-tags>` (NashSU hardcodes
-`tags: [research]`); **no** `sources` field (source URLs live in the code-generated
-References list, not in frontmatter). Escape any `"` in the title. The
-`origin: deep-research` field mirrors NashSU's marker for research pages (NashSU
-sets it; ingest-generated source/concept/entity pages carry no `origin`).
+文件名是 `makeQueryFileName("research-" + topic)` 的移植：topic 先 NFKC；
+空白转 `-`；只留 Unicode 字母/数字和 ASCII `-`；合并/修剪连字符；小写；
+截到 50 个 Unicode code points；空则 `query`。后缀使用 UTC
+`-YYYY-MM-DD-HHMMSS.md`，而 frontmatter `created` 使用本地日历日期。
 
-### Step 4: Write to Wiki
+写入成功前不得修改 review 状态。写入成功即是 Deep Research 的核心完成点。
 
-Write the synthesized page to `wiki/queries/<slug>-<YYYY-MM-DD>-<HHMMSS>.md`
-(port of NashSU `makeDeepResearchFileName` → `makeQueryFileName("research-" + topic)`):
+## 6. 可选的单页 embedding
 
-```python
-from _core import slugify           # CJK-aware slug
-import subprocess
-slug = slugify(f"research-{topic}")
-ts = subprocess.check_output(["date", "-u", "+%Y-%m-%d-%H%M%S"]).decode().strip()
-path = f"wiki/queries/{slug}-{ts}.md"
-```
-
-The UTC timestamp suffix guarantees that repeated research on the same topic never
-collides — no `-2` versioning needed, matching NashSU.
-
-### Step 5: Auto-Ingest (THE CLOSED LOOP) ⭐
-
-This is the critical step that makes it a closed loop. Immediately after writing the research page, trigger ingest on it:
+只有项目已明确启用并配置 embedding 时，才对刚写页面做一次：
 
 ```bash
-python3 "$SKILL_DIR/scripts/ingest.py" wiki/queries/<slug>.md
+python3 "$SKILL_DIR/scripts/build_embeddings.py" \
+  --project <wiki-root> upsert --page wiki/queries/<saved-file>.md
 ```
 
-The ingest entry-point accepts a `wiki/queries/` path directly (NashSU `autoIngest` parity, path-agnostic): the pipeline ingests `wiki/queries/<slug>.md` in place — no `raw/queries/` copy step (removed 2026-07-16; the ~20 `relative_to(raw_root)` source-identity call sites now route through `_core.canonical_source_path`/`source_cache_key`, which resolve a `wiki/queries/` path to `wiki/queries/<rel>` directly instead of faking a `raw/` path). `is_query_bridge_source` still recognizes a pre-2026-07-16 `raw/queries/<slug>.md` bridge copy for backward compatibility with older wikis, but no new ones are created.
+这是非阻断增强：失败时保留已成功写入的研究页，记录 warning，并在结果中说明。
+它与 ingest Stage 3.7 的强制完成门禁不是同一个契约。
 
-The ingest pipeline will:
-1. **Stage 2.2**: Analyze the research page → extract key entities/concepts and genuinely supported schema-typed candidates
-2. **Stage 2.4**: Generate the recommended key/schema-typed pages, including comparison or multi-source synthesis when the research evidence supports them
-3. **Stage 3.4 (review)**: Generate review items — some may become new research topics (process via process-reviews)
-4. **Stage 3.5**: Update index/log/overview
-5. **Stage 3.7**: Embed the new pages
+## 7. Review 回填与结果报告
 
-This is what turns "a saved search result" into "integrated knowledge."
+如果任务来自 review，仅在研究页写入成功、且路径已确定后，把原 review 设为
+resolved，reason 精确写为：
 
-### Step 6: Present Results
-
-```
-## ✅ Deep Research 完成：《<topic>》
-
-**研究页面**: wiki/queries/research-<topic>.md
-
-**本地来源**: N 条 (wiki: M, raw: K)
-**网络来源**: 12 个网页（去重后 8 个）
-
-**消化的新知识** (auto-ingest 产出):
-- wiki/entities/<新实体1>.md
-- wiki/entities/<新实体2>.md
-- wiki/concepts/<新概念1>.md
-- wiki/concepts/<新概念2>.md
-- wiki/comparisons/<对比页>.md
-
-**后续研究方向** (review items):
-- ⚠️ <review item 1>
-- 🔗 <review item 2>
+```text
+Research saved: wiki/queries/<saved-file>.md
 ```
 
-### One Topic Per Invocation (no review-derived chaining)
+搜索失败、融合失败、完整性门禁拒绝（退出码 4）或写入失败时 review 保持 pending。
 
-NashSU's `onTaskFinished()` only advances the **already-queued** research tasks
-(`processQueue` pulls the next *queued* task); it does **not** read review items or
-derive new topics from them. There is no persistent queue store in conversation
-mode, so each invocation researches one topic and stops. The review items produced
-by Step 5's ingest are surfaced to the user (Step 6) as candidate next topics — but
-auto-chaining onto them is **not** NashSU behavior and is not done here. The user
-can start a new deep-research invocation on any surfaced topic.
+最终只报告事实：
 
-## Trigger Phrases
+- 研究页相对路径；
+- 实际采用的 source mode 和 queries；
+- web / AnyTXT / 去重后总来源数；
+- 被保留的 partial source errors；
+- 单页 embedding 是成功、跳过还是告警；
+- source review 是否在写盘后 resolved。
 
-- `deep research <topic>` / `deep-research <topic>`
-- `深度研究 <主题>`
-- `研究一下 <主题> 并写入 wiki`
-- `wiki 里缺了 <topic>，帮我研究一下`
-- `调查 <topic> 并消化`
+不要报告“消化出的新 concept/entity/synthesis 页面”或“新生成 reviews”，因为
+v0.6.7 默认 Deep Research 不产生这些工件。
 
-## When the calling agent should proactively suggest Deep Research
+## 8. 边界与兼容能力
 
-The calling agent should suggest deep research when:
-
-1. **Wiki query returns nothing**: "wiki 里没有这个主题，要我 deep research 吗？"
-2. **Review item is a knowledge gap**: "这个 review item 可以通过 deep research 填补"
-3. **Comparison page has one-sided info**: "对比的另一半信息不足，需要研究吗？"
-4. **Lint finds isolated/sparse nodes**: "这些孤立页面可能需要 deep research 来扩充连接"
-5. **User asks a question wiki can't fully answer**: "现有 wiki 只能部分回答这个问题，补充研究？"
-
-## Variants
-
-### Variant A: From Review Item
-
-```
-User: deep research the review item "缺少 GaN HEMT 驱动电路设计"
-Agent: [reads the review item → formulates search queries → ...]
-```
-
-The review item's `search_queries` field (populated by Stage 3.4 for `suggestion`/`missing-page` reviews — NashSU `searchQueries` parity) provides 2-3 keyword-rich web search queries that seed Step 2b directly, with no extra LLM round-trip. The review item's `affected_pages` field tells the calling agent which pages to read for context. (NashSU also has a separate `optimizeResearchTopic` LLM call that refines a gap into a topic + queries; the improved-wiki skips it — the pre-computed `search_queries` already cover that role. If a review item lacks `search_queries`, fall back to deriving queries from `title` + `affected_pages`.)
-
-### Variant B: From Comparison Gap
-
-```
-User: 这个对比页缺少 B 方的数据，研究一下
-Agent: [reads the comparison page → identifies what's missing → searches → synthesizes → re-generates comparison]
-```
-
-### Variant C: Batch Deep Research
-
-```
-User: deep research 这 5 个 review items 里的 missing-page 类型
-Agent: [processes each one sequentially, collecting results, presenting summary]
-```
-
-### Variant D: Targeted Deep Research (with user-provided URLs)
-
-```
-User: deep research GaN power supplies, 重点看这些链接:
-  - https://example.com/gan-article-1
-  - https://example.com/gan-paper-2
-Agent: [reads those URLs when the runtime allows it + complementary web search → synthesizes]
-```
-
-## Edge Cases
-
-### Research Topic Too Broad
-If the topic would produce >20 high-quality sources with divergent themes, the calling agent should ask the user to narrow scope BEFORE searching. Wasted search on an overbroad topic helps no one.
-
-### Zero Useful Results (NashSU `noResearchSourcesTaskPatch`)
-NashSU distinguishes two states — mirror them:
-1. **Search errors** → report the failure (task `error`); surface the errors and
-   suggest alternative query formulations or better search terms.
-2. **No errors but zero results** → write **no page** and run **no ingest**; report
-   "No research sources found." (task `done`).
-
-Either way, **never** fabricate a page from thin air.
-
-### Topic Already Well-Covered in Wiki
-If the wiki already has extensive coverage, the calling agent should:
-1. Point to existing pages
-2. Identify what's NEW that the research could add
-3. Only proceed if there's genuine incremental value
-4. If proceeding, focus on the delta (new info vs existing)
-
-### Source Paywalls
-If key sources are behind paywalls, note them in the research page as "References (behind paywall)" with URLs — the user might have institutional access.
-
-## Integration with Existing Pipeline
-
-Deep research is the **outward-facing** complement to auto-ingest's **inward-facing** pipeline:
-
-```
-                    ┌──────────────────┐
-                    │   Raw Sources    │
-                    │  (PDF/PPTX/DOCX) │
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │   Auto Ingest    │
-                    │  (inward: 消化)   │
-                    └────────┬─────────┘
-                             │
-                    ┌────────▼─────────┐
-                    │   Wiki Pages     │◄──────────┐
-                    │  (knowledge base) │            │
-                    └────────┬─────────┘            │
-                             │                      │
-              ┌──────────────┼──────────────┐       │
-              │              │              │       │
-     ┌────────▼─────┐ ┌──────▼──────┐ ┌─────▼──────┐│
-     │  Lint/Gaps   │ │ Review Items│ │   Queries  ││
-     │ (knowledge   │ │ (missing,   │ │ (user asks)││
-     │  gaps found) │ │  contradict)│ │            ││
-     └────────┬─────┘ └──────┬──────┘ └─────┬──────┘│
-              │              │              │       │
-              └──────────────┼──────────────┘       │
-                             │                      │
-                    ┌────────▼─────────┐            │
-                    │  Deep Research   │            │
-                    │ (outward: 扩展)   │────────────┘
-                    └──────────────────┘
-```
-
-Both auto-ingest and deep research write through the same `writeFileBlocks` → Stage 3.1 写盘 path. Both update `ingest-cache.json`. Both trigger aggregate repair (Stage 3.5). The wiki doesn't know or care where knowledge came from — only that it's structured, linked, and verified.
+- 一个显式 topic 对应一个独立研究页；不从 synthesis 或新 review 自动链式派生
+  下一轮研究。
+- improved-wiki 仍允许 `ingest.py wiki/queries/<file>.md`，用于历史数据和用户
+  **另行明确要求**把某个 query page 当作 source 再消化的兼容场景。它不是
+  v0.6.7 Deep Research 默认步骤，Deep Research 不得自行调用。
+- Save Chat to Wiki 有自己的 auto-ingest 契约；不要据此推断 Deep Research
+  也应 auto-ingest。
+- 如果运行环境没有该 source mode 可使用的任何能力，不要悄悄换 mode。报告
+  缺失配置，或让用户选择另一个模式；`both` 中仍有一个已配置分支时则按该分支
+  正常运行。

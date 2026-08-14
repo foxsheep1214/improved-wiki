@@ -24,9 +24,12 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
+import yaml
+
 from _frontmatter import (
     TITLE_LINE_RE as _TITLE_LINE_RE,
     WIKILINK_RE as _WIKILINK_RE_SHARED,
+    parse_frontmatter,
 )
 
 __all__ = [
@@ -71,6 +74,29 @@ STATE_FILES = {
     "review.json", "review-suggestions.json",
     "embed-cache.json", "dedup-report.json",
 }
+
+_YAML_FRONTMATTER_RE = re.compile(
+    r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)",
+    re.DOTALL,
+)
+
+
+def _lint_frontmatter(content: str) -> dict:
+    """Return YAML-aware frontmatter for structural edge semantics.
+
+    The shared lightweight parser is retained as a fallback for legacy files,
+    but PyYAML is required here so ``null`` means no redirect and inline
+    comments are not folded into a redirect target.
+    """
+    fallback, _ = parse_frontmatter(content)
+    match = _YAML_FRONTMATTER_RE.match(content)
+    if not match:
+        return fallback
+    try:
+        parsed = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError:
+        return fallback
+    return parsed if isinstance(parsed, dict) else fallback
 
 # Headless auto-rewrite gate (2026-07-10, user-approved lint hardening): only
 # exact (1.0) / same-basename (0.96) tier suggestions may be rewritten without
@@ -258,6 +284,8 @@ class _PageData:
     content: str
     outlinks: list[str] = field(default_factory=list)
     tokens: set[str] = field(default_factory=set)
+    page_type: str = ""
+    redirect_target: str = ""
 
 
 def _build_slug_map(pages: list[_PageData]) -> dict[str, int]:
@@ -280,7 +308,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
     pages: list of (short_name, content), short_name relative to wiki/.
     Returns a list of finding dicts:
         {type, severity, page, detail,
-         broken_target?, suggested_target?, suggested_source?}
+         broken_target?, suggested_target?, suggested_source?, link_origin?}
 
     with_suggestions=False skips the indexed candidate/scoring engine and the
     per-page tokenization that feeds it — detection (broken-link / orphan /
@@ -298,13 +326,26 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         slug = _relative_to_slug(short_name)
         title = _extract_title(content, short_name)
         outlinks = extract_wikilinks(content)
+        fm = _lint_frontmatter(content)
+        page_type = str(fm.get("type", "")).strip().lower()
+        raw_redirect = fm.get("redirect")
+        redirect_target = raw_redirect.strip() if isinstance(raw_redirect, str) else ""
+        if page_type == "redirect" and redirect_target:
+            # A redirect's frontmatter target is a real structural edge even
+            # when the compatibility page omits a prose wikilink. Keep it in
+            # broken-link validation, while suppressing orphan/no-outlinks
+            # noise for the redirect page itself below.
+            outlinks = list(dict.fromkeys([*outlinks, redirect_target]))
         slug_name = _get_file_name(slug)
         tokens = (
             tokenize_for_suggestion(
                 f"{title}\n{slug_name}\n{content[:SUGGESTION_TOKEN_WINDOW]}"
             ) if with_suggestions else set()
         )
-        data.append(_PageData(short_name, short_name, slug, title, content, outlinks, tokens))
+        data.append(_PageData(
+            short_name, short_name, slug, title, content, outlinks, tokens,
+            page_type, redirect_target,
+        ))
 
     slug_map = _build_slug_map(data)
     token_index: dict[str, list[int]] = {}
@@ -492,8 +533,12 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 ),
             })
 
-        # Orphan: no inbound links.
-        if page_index not in inbound_counts:
+        # Redirect pages are compatibility aliases. Once callers have migrated
+        # to the canonical target they are expected to have no inbound links,
+        # so reporting them as orphans invites unsafe deletion or a pointless
+        # canonical→legacy backlink. Their redirect target still participates
+        # in broken-link validation above.
+        if p.page_type != "redirect" and page_index not in inbound_counts:
             suggested_source = (
                 suggest_related_page(p, page_index, "source")
                 if with_suggestions else None
@@ -507,7 +552,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             })
 
         # No outbound links.
-        if len(p.outlinks) == 0:
+        if p.page_type != "redirect" and len(p.outlinks) == 0:
             suggested_target = (
                 suggest_related_page(p, page_index, "target")
                 if with_suggestions else None
@@ -531,12 +576,23 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             if target is not None:
                 continue
             suggestion = _cached_broken_target(link) if with_suggestions else None
+            link_origin = (
+                "redirect-frontmatter"
+                if p.page_type == "redirect"
+                and p.redirect_target
+                and normalize_link_target(link)
+                == normalize_link_target(p.redirect_target)
+                else "body"
+            )
             results.append({
                 "type": "broken-link",
                 "severity": "warning",
                 "page": short_name,
                 "detail": f"Broken link: [[{link}]] — target page not found.",
                 "broken_target": link,
+                # Preserve the edge source so a confident redirect suggestion
+                # is not planned as a body-only rewrite and silently skipped.
+                "link_origin": link_origin,
                 "suggested_target": suggestion[0].short_name if suggestion else None,
                 # improved-wiki extension (2026-07-10): the suggestion's
                 # similarity score, persisted so wiki-lint-fix.py can gate

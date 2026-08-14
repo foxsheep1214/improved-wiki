@@ -12,13 +12,8 @@ def call_with_retry(
     fn: Callable[[], Any],
     max_retries: int = 3,
     base_wait: float = 1.0,
-    label: str = "",
 ):
-    """Call ``fn`` with the pipeline's retryable-error and jitter policy.
-
-    ``label`` remains accepted for call-site compatibility.
-    """
-    del label
+    """Call ``fn`` with the pipeline's retryable-error and jitter policy."""
     last_error: Exception | None = None
     for attempt in range(max_retries):
         try:

@@ -1,7 +1,6 @@
-"""Stage 3.2: Image injection into the source page.
+"""Stage 3.4: Image injection into the source page.
 
-Extracted from ingest.py on 2026-06-21 for stage-module locality (was inline
-in the orchestrator). Appends an '## Embedded Images' section to the source
+Appends an '## Embedded Images' section to the source
 page, reading from the unified _manifest.json (Path A PyMuPDF + Path B minerU)
 with legacy _figures.json / cloud-OCR caption fallbacks.
 """
@@ -16,7 +15,7 @@ from _paths import media_slug, atomic_write
 from _wikilinks import WIKILINK_RE
 
 
-def _stage_3_2_language_sample(content: str) -> str:
+def _stage_3_4_language_sample(content: str) -> str:
     """Return page prose without metadata/link targets that can spoof script.
 
     A nested raw path such as ``Paper/01_反无人机探测与识别/...`` appears in
@@ -43,7 +42,7 @@ def _stage_3_2_language_sample(content: str) -> str:
     return sample[:4000]
 
 
-def _stage_3_2_source_kind(raw_file: Path, config: Config) -> str:
+def _stage_3_4_source_kind(raw_file: Path, config: Config) -> str:
     try:
         category = raw_file.relative_to(config.raw_root).parts[0].lower()
     except (ValueError, IndexError):
@@ -57,7 +56,7 @@ def _stage_3_2_source_kind(raw_file: Path, config: Config) -> str:
     }.get(category, "document")
 
 
-def _stage_3_2_count_line(
+def _stage_3_4_count_line(
     *, is_zh: bool, source_kind: str, count: int, is_mineru: bool,
 ) -> str:
     if is_zh:
@@ -87,8 +86,9 @@ def _stage_3_2_count_line(
     return f"{subject} contains {count} extracted {noun}."
 
 
-def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
-                            method: str = "") -> dict:
+def stage_3_4_inject_images(
+    config: Config, raw_file: Path, source_path: Path,
+) -> dict:
     """Append '## Embedded Images' section to the source page.
 
     Two paths:
@@ -108,8 +108,8 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
     # "### Page N") stay English in both cases, matching the rest of the
     # pipeline's FILE-block convention: only prose
     # vocabulary is localized, not structural markup).
-    is_zh = get_output_language(_stage_3_2_language_sample(content)) == "Chinese"
-    source_kind = _stage_3_2_source_kind(raw_file, config)
+    is_zh = get_output_language(_stage_3_4_language_sample(content)) == "Chinese"
+    source_kind = _stage_3_4_source_kind(raw_file, config)
 
     # Unified image injection: reads _manifest.json (the single source of truth
     # for both Path A PyMuPDF and Path B minerU).  Old ingests with full-page
@@ -133,30 +133,51 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
         for img in images:
             if "page" not in img or "filename" not in img:
                 raise RuntimeError(
-                    f"[stage 3.2] malformed image entry in {source_path_to_read}: "
+                    f"[stage 3.4] malformed image entry in {source_path_to_read}: "
                     f"missing 'page'/'filename' — entry: {img}")
+            page_index = img["page"]
+            if (page_index is not None
+                    and (not isinstance(page_index, int)
+                         or isinstance(page_index, bool) or page_index < 0)):
+                raise RuntimeError(
+                    f"[stage 3.4] malformed image entry in {source_path_to_read}: "
+                    f"'page' must be null or a non-negative integer — entry: {img}")
         if images:
             is_mineru = any("mineru_" in i.get("filename", "") for i in images[:10])
-            section = f"## Embedded Images\n\n"
-            section += _stage_3_2_count_line(
+            section = "## Embedded Images\n\n"
+            section += _stage_3_4_count_line(
                 is_zh=is_zh,
                 source_kind=source_kind,
                 count=len(images),
                 is_mineru=is_mineru,
             ) + "\n\n"
             # NashSU parity (extract-source-images.ts:buildImageMarkdownSection):
-            # group by page under `### Page N`, emit markdown image syntax
-            # ![caption](path) with the FULL caption as alt text (sanitized —
-            # no newlines, no `]`), not a truncated table cell. Path is resolved
+            # group numbered images under `### Page N` and unpaged DOCX/
+            # Markdown images under `### Document`. Emit markdown image syntax
+            # with 1-based source page numbers.  The manifest deliberately
+            # keeps minerU's zero-based page index (also encoded in pNNNN), so
+            # convert only at this presentation boundary. Emit ![caption](path)
+            # with the FULL caption as alt text (sanitized — no newlines, no
+            # `]`), not a truncated table cell. Path is resolved
             # relative to the source page so the image renders without a
             # markdown-image-resolver (which improved-wiki does not have).
             source_dir = source_path.parent
-            by_page: dict[int, list] = {}
-            for img in sorted(images, key=lambda x: (x["page"], x.get("img_idx_in_page", 0))):
-                by_page.setdefault(img["page"], []).append(img)
-            for page in sorted(by_page):
-                section += f"### Page {page}\n\n"
-                for img in by_page[page]:
+            by_page: dict[str, list] = {}
+            for img in images:
+                page_index = img["page"]
+                key = "Document" if page_index is None else f"Page {page_index + 1}"
+                by_page.setdefault(key, []).append(img)
+            for page_images in by_page.values():
+                page_images.sort(key=lambda x: x.get("img_idx_in_page", 0))
+
+            def page_order(key: str) -> tuple[int, int]:
+                if key == "Document":
+                    return (1, 0)
+                return (0, int(key.removeprefix("Page ")))
+
+            for key in sorted(by_page, key=page_order):
+                section += f"### {key}\n\n"
+                for img in by_page[key]:
                     cap_path = media_dir / (img["filename"] + ".caption.txt")
                     cap = cap_path.read_text(encoding="utf-8").strip() if cap_path.exists() else ""
                     cap = re.sub(r"[\r\n]+", " ", cap).replace("]", ")").strip()
@@ -172,7 +193,7 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
                 section += f"\n> Images extracted by {'minerU VLM' if is_mineru else 'PyMuPDF'}; captions generated by {config.caption_model}. Full manifest: `wiki/media/{slug}/`\n"
             content += section
             atomic_write(source_path, content)
-            print(f"[stage 3.2] Injected {len(images)} images into {source_path.name}")
+            print(f"[stage 3.4] Injected {len(images)} images into {source_path.name}")
             return {"injected": len(images)}
 
     # Last resort: old cloud OCR caption files (pre-manifest era)
@@ -196,8 +217,8 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
                     images_in_media.append((f"p{pn} (cloud OCR)", line.strip()[:80]))
 
     if images_in_media:
-        section = f"## Embedded Images\n\n"
-        section += _stage_3_2_count_line(
+        section = "## Embedded Images\n\n"
+        section += _stage_3_4_count_line(
             is_zh=is_zh,
             source_kind=source_kind,
             count=len(images_in_media),
@@ -218,8 +239,8 @@ def stage_3_2_inject_images(config: Config, raw_file: Path, source_path: Path,
             section += f"\n> Captions generated by {config.caption_model}. Image files: `wiki/media/{slug}/`\n"
         content += section
         atomic_write(source_path, content)
-        print(f"[stage 3.2] Injected {len(images_in_media)} images into {source_path.name}")
+        print(f"[stage 3.4] Injected {len(images_in_media)} images into {source_path.name}")
         return {"injected": len(images_in_media)}
 
-    print("[stage 3.2] No images or figures to inject — skipping")
+    print("[stage 3.4] No images or figures to inject — skipping")
     return {"injected": 0}

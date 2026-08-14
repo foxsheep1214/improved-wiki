@@ -11,7 +11,6 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 import _core  # noqa: E402
-import _ingest_chunks as chunks  # noqa: E402
 import _stage_2_analyze as analyze  # noqa: E402
 import _stage_2_4_generation as generation  # noqa: E402
 
@@ -122,39 +121,20 @@ class TestGenerationSelection(unittest.TestCase):
             cfg = _config(tmp)
             cfg.wiki_dir.mkdir(parents=True)
             cfg.raw_root.mkdir(parents=True)
-            prompt = generation._stage_2_4_build_prompt(
-                self.ANALYSIS,
-                "source text",
-                0,
+            prompt = generation._stage_2_4_build_all_prompt(
+                [self.ANALYSIS],
                 cfg.raw_root / "book.pdf",
                 cfg,
+                source_context="source text",
             )
         self.assertIn("Key Method", prompt)
         self.assertIn("Key System", prompt)
         self.assertNotIn("Background Term", prompt)
         self.assertIn("There is no page-count target", prompt)
         self.assertIn("NO_KEY_PAGES", prompt)
-        self.assertIn("mandatory source page separately", prompt)
+        self.assertIn("mandatory source page", prompt.lower())
         self.assertNotIn("Supplementary foundational pages", prompt)
         self.assertNotIn("EVERY concept", prompt)
-
-    def test_inventory_does_not_reserve_mentioned_slug(self):
-        analyses = [
-            self.ANALYSIS,
-            {
-                "concepts_found": [{
-                    "name": "Background Term",
-                    "importance": "core",
-                    "definition": "Materially developed later.",
-                    "key_details": [],
-                }],
-                "entities_found": [],
-                "schema_typed_candidates": [],
-            },
-        ]
-        meta = [(0, "a", "", ""), (1, "b", "", "")]
-        inventory = chunks._build_gen_inventory(meta, analyses)
-        self.assertEqual(inventory[_core.slugify("Background Term")], 1)
 
     def test_stats_extract_only_page_eligible_concepts(self):
         concepts, entities = generation._stage_2_4_extract_names([self.ANALYSIS])
@@ -162,24 +142,30 @@ class TestGenerationSelection(unittest.TestCase):
         self.assertEqual(entities, ["Key System"])
 
 
-class TestGenerationTruncationRepair(unittest.TestCase):
-    def test_chunk_generation_accepts_explicit_zero_key_pages(self):
-        analysis = {
-            "concepts_found": [{
-                "name": "Peripheral Topic",
-                "importance": "supporting",
-                "definition": "Real but not developed enough for a page.",
-                "key_details": [],
-            }],
-            "entities_found": [],
-            "schema_typed_candidates": [],
-            "formulas": [],
-        }
-        calls: list[str] = []
+class TestGenerationIntegrity(unittest.TestCase):
+    ANALYSIS = {
+        "concepts_found": [{
+            "name": "Key Method",
+            "importance": "core",
+            "definition": "Central method.",
+            "key_details": [],
+        }],
+        "entities_found": [],
+        "schema_typed_candidates": [],
+        "formulas": [],
+    }
 
+    @staticmethod
+    def _source_block() -> str:
+        return (
+            "---FILE:wiki/sources/book.md---\n"
+            "---\ntype: source\ntitle: Book\n---\n# Book\nsummary\n"
+            "---END FILE---\n"
+        )
+
+    def test_zero_optional_pages_still_requires_source_block(self):
         def _spy(prompt, config, max_tokens=None, label=None):
-            calls.append(prompt)
-            return "NO_KEY_PAGES\n", "end_turn"
+            return self._source_block() + "NO_KEY_PAGES\n", "end_turn"
 
         original = generation.call_anthropic_protocol
         generation.call_anthropic_protocol = _spy
@@ -189,34 +175,20 @@ class TestGenerationTruncationRepair(unittest.TestCase):
                 cfg = _config(tmp)
                 cfg.raw_root.mkdir(parents=True)
                 cfg.wiki_dir.mkdir(parents=True)
-                blocks = generation.stage_2_4_generate_chunk(
-                    analysis,
-                    0,
-                    [],
+                blocks, slugs, stop_reason = generation.stage_2_4_generate_all(
+                    [self.ANALYSIS],
                     cfg.raw_root / "book.pdf",
                     cfg,
-                    chunk_text="A passing treatment of the peripheral topic.",
+                    source_context="source text",
                 )
         finally:
             generation.call_anthropic_protocol = original
 
-        self.assertEqual(blocks, [])
-        self.assertEqual(len(calls), 1)
-        self.assertIn("NO_KEY_PAGES", calls[0])
+        self.assertEqual([path for path, _ in blocks], ["sources/book.md"])
+        self.assertEqual(slugs, ["book"])
+        self.assertEqual(stop_reason, "end_turn")
 
-    def test_single_shot_generation_accepts_explicit_zero_key_pages(self):
-        analysis = {
-            "concepts_found": [{
-                "name": "Peripheral Topic",
-                "importance": "supporting",
-                "definition": "Real but not developed enough for a page.",
-                "key_details": [],
-            }],
-            "entities_found": [],
-            "schema_typed_candidates": [],
-            "formulas": [],
-        }
-
+    def test_sentinel_without_source_block_fails(self):
         def _spy(prompt, config, max_tokens=None, label=None):
             return "NO_KEY_PAGES", "end_turn"
 
@@ -228,71 +200,22 @@ class TestGenerationTruncationRepair(unittest.TestCase):
                 cfg = _config(tmp)
                 cfg.raw_root.mkdir(parents=True)
                 cfg.wiki_dir.mkdir(parents=True)
-                blocks, slugs, stop_reason = generation.stage_2_4_generate_all(
-                    [analysis],
-                    cfg.raw_root / "book.pdf",
-                    cfg,
-                    source_context="A passing treatment of the peripheral topic.",
-                )
-        finally:
-            generation.call_anthropic_protocol = original
-
-        self.assertEqual(blocks, [])
-        self.assertEqual(slugs, [])
-        self.assertEqual(stop_reason, "end_turn")
-
-    def test_zero_blocks_without_sentinel_still_fails(self):
-        analysis = {
-            "concepts_found": [{
-                "name": "Key Method",
-                "importance": "core",
-                "definition": "Central method.",
-                "key_details": [],
-            }],
-            "entities_found": [],
-            "schema_typed_candidates": [],
-            "formulas": [],
-        }
-
-        def _spy(prompt, config, max_tokens=None, label=None):
-            return "I chose not to create anything.", "end_turn"
-
-        original = generation.call_anthropic_protocol
-        generation.call_anthropic_protocol = _spy
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                tmp = Path(d)
-                cfg = _config(tmp)
-                cfg.raw_root.mkdir(parents=True)
-                cfg.wiki_dir.mkdir(parents=True)
-                with self.assertRaisesRegex(RuntimeError, "NO_KEY_PAGES"):
-                    generation.stage_2_4_generate_chunk(
-                        analysis,
-                        0,
-                        [],
+                with self.assertRaisesRegex(RuntimeError, "mandatory source"):
+                    generation.stage_2_4_generate_all(
+                        [self.ANALYSIS],
                         cfg.raw_root / "book.pdf",
                         cfg,
-                        chunk_text="source text",
+                        source_context="source text",
                     )
         finally:
             generation.call_anthropic_protocol = original
 
     def test_same_type_existing_page_is_generated_at_exact_update_path(self):
-        analysis = {
-            "concepts_found": [{
-                "name": "Key Method",
-                "importance": "core",
-                "definition": "Materially expanded by this source.",
-                "key_details": [],
-            }],
-            "entities_found": [],
-            "schema_typed_candidates": [],
-            "formulas": [],
-        }
         response = (
             "---FILE:wiki/concepts/established-key-method.md---\n"
             "---\ntype: concept\ntitle: Key Method\n---\nupdated\n"
             "---END FILE---\n"
+            + self._source_block()
         )
         calls: list[str] = []
 
@@ -308,17 +231,13 @@ class TestGenerationTruncationRepair(unittest.TestCase):
                 cfg = _config(tmp)
                 cfg.raw_root.mkdir(parents=True)
                 cfg.wiki_dir.mkdir(parents=True)
-                blocks = generation.stage_2_4_generate_chunk(
-                    analysis,
-                    0,
-                    [],
+                blocks, _, _ = generation.stage_2_4_generate_all(
+                    [self.ANALYSIS],
                     cfg.raw_root / "book.pdf",
                     cfg,
-                    chunk_text="source text",
+                    source_context="source text",
                     existing_refs={
-                        "Key Method": [
-                            "concepts/established-key-method",
-                        ],
+                        "Key Method": ["concepts/established-key-method"],
                     },
                 )
         finally:
@@ -326,7 +245,7 @@ class TestGenerationTruncationRepair(unittest.TestCase):
 
         self.assertEqual(
             [path for path, _ in blocks],
-            ["concepts/established-key-method.md"],
+            ["concepts/established-key-method.md", "sources/book.md"],
         )
         self.assertEqual(len(calls), 1)
         self.assertIn(
@@ -335,94 +254,21 @@ class TestGenerationTruncationRepair(unittest.TestCase):
             calls[0],
         )
 
-    def test_cross_type_existing_page_is_link_only_without_llm_call(self):
-        analysis = {
-            "concepts_found": [{
-                "name": "Key Method",
-                "importance": "core",
-                "definition": "Central method.",
-                "key_details": [],
-            }],
-            "entities_found": [],
-            "schema_typed_candidates": [],
-            "formulas": [],
-        }
+    def test_cross_type_existing_page_is_link_only(self):
         with tempfile.TemporaryDirectory() as d:
             tmp = Path(d)
             cfg = _config(tmp)
             cfg.raw_root.mkdir(parents=True)
             cfg.wiki_dir.mkdir(parents=True)
-            blocks = generation.stage_2_4_generate_chunk(
-                analysis,
-                0,
-                [],
+            prompt = generation._stage_2_4_build_all_prompt(
+                [self.ANALYSIS],
                 cfg.raw_root / "book.pdf",
                 cfg,
-                chunk_text="source text",
-                existing_refs={
-                    "Key Method": ["entities/key-method"],
-                },
+                source_context="source text",
+                existing_refs={"Key Method": ["entities/key-method"]},
             )
-        self.assertEqual(blocks, [])
-
-    def test_chunk_generation_repairs_exact_unclosed_file(self):
-        analysis = {
-            "concepts_found": [{
-                "name": "Key Method",
-                "importance": "core",
-                "definition": "Central method.",
-                "key_details": [],
-            }],
-            "entities_found": [],
-            "schema_typed_candidates": [],
-            "formulas": [],
-        }
-        truncated = (
-            "---FILE:wiki/concepts/key-method.md---\n"
-            "---\ntype: concept\ntitle: Key Method\n---\npartial"
-        )
-        repaired = (
-            "---FILE:wiki/concepts/key-method.md---\n"
-            "---\ntype: concept\ntitle: Key Method\n---\ncomplete\n"
-            "---END FILE---\n"
-        )
-        calls: list[str] = []
-
-        def _spy(prompt, config, max_tokens=None, label=None):
-            index = len(calls)
-            calls.append(prompt)
-            return (
-                (truncated, "end_turn")
-                if index == 0
-                else (repaired, "end_turn")
-            )
-
-        original = generation.call_anthropic_protocol
-        generation.call_anthropic_protocol = _spy
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                tmp = Path(d)
-                cfg = _config(tmp)
-                cfg.raw_root.mkdir(parents=True)
-                cfg.wiki_dir.mkdir(parents=True)
-                blocks = generation.stage_2_4_generate_chunk(
-                    analysis,
-                    0,
-                    [],
-                    cfg.raw_root / "book.pdf",
-                    cfg,
-                    chunk_text="source text",
-                )
-        finally:
-            generation.call_anthropic_protocol = original
-
-        self.assertEqual(len(calls), 2)
-        self.assertEqual([path for path, _ in blocks], [
-            "concepts/key-method.md",
-        ])
-        self.assertIn("complete", blocks[0][1])
-        self.assertIn("- wiki/concepts/key-method.md", calls[1])
-        self.assertNotIn("per-concept", calls[1].lower())
+        self.assertIn("CROSS-TYPE ASSOCIATION [[entities/key-method]]", prompt)
+        self.assertIn("do NOT create a duplicate page", prompt)
 
 
 if __name__ == "__main__":

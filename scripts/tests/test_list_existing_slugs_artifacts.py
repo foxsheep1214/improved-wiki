@@ -3,9 +3,9 @@
 Regression: graph.py writes per-community hub pages to wiki/clusters/cluster-NNN.md
 (type: index) — derived graph output, not knowledge content. graph.py excludes
 clusters/ from its own input (GRAPH_SKIP_DIRS), but list_existing_slugs only
-skipped REVIEW + lint, so the cluster pages leaked into the Stage 2.1/2.2/2.3
-existing-pages context fed to the LLM (observed: cluster-000..015 in a book's
-linkable list). The fix mirrors GRAPH_SKIP_DIRS = {REVIEW, clusters, lint, media}.
+skipped REVIEW + lint, so cluster pages leaked into the Stage 2.2/2.3/2.4
+existing-pages context fed to the LLM. The filter mirrors
+GRAPH_SKIP_DIRS = {REVIEW, clusters, lint, media}.
 
 Stdlib unittest only.
 """

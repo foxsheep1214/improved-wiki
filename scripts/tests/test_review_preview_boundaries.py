@@ -1,4 +1,4 @@
-"""Regression tests for Stage 3.4 bounded page previews.
+"""Regression tests for Stage 3.1 bounded page previews.
 
 The old ``content[:1500]`` slice fabricated endings such as ``[[con`` and a
 half table cell.  The review model then reported intact wiki pages as
@@ -15,7 +15,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-import _stage_3_4_review as review  # noqa: E402
+import _stage_3_review as review  # noqa: E402
 
 
 class TestReviewPreviewBoundaries(unittest.TestCase):

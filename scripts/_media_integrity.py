@@ -17,17 +17,19 @@ from _progress import (
 )
 from _paths import media_slug
 from _page_ref import PageRef
-from _stage_1_extract import (
-    _stage_1_1_reharvest_media,
+from _stage_1_1_scanned import _stage_1_1_reharvest_media
+from _stage_1_2_images import (
     _stage_1_2_extract_from_mineru,
     stage_1_2_extract_images,
-    stage_1_3_caption_images,
+    validate_stage_1_2_artifact,
 )
-from _stage_1_2_images import validate_stage_1_2_artifact
-from _stage_1_3_caption import validate_stage_1_3_artifact
-from _stage_3_2_inject_images import stage_3_2_inject_images
+from _stage_1_3_caption import (
+    stage_1_3_caption_images,
+    validate_stage_1_3_artifact,
+)
+from _stage_3_4_inject_images import stage_3_4_inject_images
 from _stage_3_7_embed import stage_3_7_embed_new_pages
-from _stage_3_write import _stage_3_1_wiki_path_for_source
+from _stage_3_write import _stage_3_2_wiki_path_for_source
 
 
 def _cache_entry(raw_file: Path, config: Config) -> tuple[dict, dict]:
@@ -257,7 +259,7 @@ def repair_completed_media(raw_file: Path, config: Config) -> dict:
     if expected <= 0:
         expected = recoverable
 
-    source_path = _stage_3_1_wiki_path_for_source(raw_file, config)
+    source_path = _stage_3_2_wiki_path_for_source(raw_file, config)
     if not source_path.is_file():
         raise RuntimeError(
             f"Cannot repair media: source page missing: {source_path}")
@@ -295,12 +297,12 @@ def repair_completed_media(raw_file: Path, config: Config) -> dict:
         raise RuntimeError(f"Stage 1.3 repair validation failed: {reason}")
     stage_1_3.update(actual_captions)
 
-    injected = stage_3_2_inject_images(
-        config, raw_file, source_path, method).get("injected", 0)
+    injected = stage_3_4_inject_images(
+        config, raw_file, source_path).get("injected", 0)
     if (getattr(config, "media_policy", "required") == "required"
             and injected != stage_1_2["count"]):
         raise RuntimeError(
-            f"Stage 3.2 injected {injected}/{stage_1_2['count']} images")
+            f"Stage 3.4 injected {injected}/{stage_1_2['count']} images")
 
     # Image injection changes the source page's searchable content. Refresh its
     # local semantic embedding before any completion marker can be restored;

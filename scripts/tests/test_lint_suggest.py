@@ -217,6 +217,95 @@ class TestRunStructuralLint(unittest.TestCase):
             finding(results, type="orphan", page="concepts/transformer.md")
         )
 
+    def test_redirect_is_not_reported_as_orphan_or_no_outlinks(self):
+        pages = [
+            (
+                "entities/canonical.md",
+                "---\ntype: entity\ntitle: Canonical\n---\n# Canonical\n",
+            ),
+            (
+                "entities/legacy.md",
+                "---\ntype: redirect\ntitle: Legacy\n"
+                "redirect: entities/canonical\n---\n# Legacy\n",
+            ),
+        ]
+        results = ls.run_structural_lint(pages)
+        self.assertIsNone(
+            finding(results, type="orphan", page="entities/legacy.md")
+        )
+        self.assertIsNone(
+            finding(results, type="no-outlinks", page="entities/legacy.md")
+        )
+        self.assertIsNone(
+            finding(results, type="broken-link", page="entities/legacy.md")
+        )
+        self.assertIsNone(
+            finding(results, type="orphan", page="entities/canonical.md")
+        )
+
+    def test_redirect_frontmatter_target_is_checked_for_broken_link(self):
+        pages = [
+            (
+                "entities/legacy.md",
+                "---\ntype: redirect\ntitle: Legacy\n"
+                "redirect: entities/missing\n---\n# Legacy\n",
+            ),
+        ]
+        results = ls.run_structural_lint(pages)
+        broken = finding(
+            results,
+            type="broken-link",
+            page="entities/legacy.md",
+        )
+        self.assertIsNotNone(broken)
+        self.assertEqual(broken["broken_target"], "entities/missing")
+        self.assertEqual(broken["link_origin"], "redirect-frontmatter")
+
+    def test_empty_redirect_is_exempt_from_no_outlinks_without_suggestions(self):
+        pages = [
+            (
+                "entities/legacy.md",
+                "---\ntype: redirect\ntitle: Legacy\n---\n# Legacy\n",
+            ),
+        ]
+        results = ls.run_structural_lint(pages, with_suggestions=False)
+        self.assertIsNone(
+            finding(results, type="orphan", page="entities/legacy.md")
+        )
+        self.assertIsNone(
+            finding(results, type="no-outlinks", page="entities/legacy.md")
+        )
+
+    def test_null_redirect_is_not_a_target(self):
+        pages = [
+            (
+                "entities/legacy.md",
+                "---\ntype: redirect\ntitle: Legacy\nredirect: null\n---\n# Legacy\n",
+            ),
+        ]
+        results = ls.run_structural_lint(pages, with_suggestions=False)
+        self.assertFalse(any(item["type"] == "broken-link" for item in results))
+        self.assertFalse(any(item["type"] == "no-outlinks" for item in results))
+
+    def test_redirect_inline_comment_is_not_part_of_target(self):
+        pages = [
+            (
+                "entities/canonical.md",
+                "---\ntype: entity\ntitle: Canonical\n---\n# Canonical\n",
+            ),
+            (
+                "entities/legacy.md",
+                "---\ntype: redirect\ntitle: Legacy\n"
+                "redirect: entities/canonical # compatibility alias\n"
+                "---\n# Legacy\n",
+            ),
+        ]
+        results = ls.run_structural_lint(pages, with_suggestions=False)
+        self.assertFalse(any(item["type"] == "broken-link" for item in results))
+        self.assertIsNone(
+            finding(results, type="orphan", page="entities/canonical.md")
+        )
+
 
 class TestHeadlessApplySafety(unittest.TestCase):
     """The headless --fix-links applier must never auto-write a guessed/aggregate

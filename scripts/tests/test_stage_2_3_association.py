@@ -8,8 +8,9 @@ connective "and" and the qualifiers "series"/"parallel", so two concepts that
 differ only in the head noun (capacitors vs batteries) scored ≥0.5 and the
 distinct concept was suppressed (never generated) — worse than a missed link.
 
-Fix: drop stopwords from the title-word set and require Jaccard > 0.5 (strictly
-more shared than not), so a single differing head noun no longer collapses.
+Fixes: drop stopwords from the title-word set and require conservative ASCII
+Jaccard for an exact update target, so a differing head noun or defining
+qualifier no longer collapses a distinct page.
 
 Stdlib unittest only.
 """
@@ -84,6 +85,43 @@ class Stage23AssociationDetection(unittest.TestCase):
             self.assertIn(
                 "concepts/Thevenins-Theorem",
                 assoc["Thevenin's Theorem"],
+            )
+
+    def test_live_transmission_line_title_collisions_not_collapsed(self):
+        """Shared scaffolding words do not prove subject identity.
+
+        Live Volume-2 failures routed three new subjects onto broader,
+        narrower, or sibling existing pages.  Those same-route associations
+        become destructive update targets, so all three fuzzy matches must be
+        rejected.  A real exact Lange Coupler page must still win by slug.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            wiki = Path(d)
+            _write_concept(
+                wiki,
+                "patch-transmission-line-model",
+                "Patch Transmission Line Model",
+            )
+            _write_concept(
+                wiki,
+                "transmission-line-loss-parameters",
+                "Transmission Line Loss Parameters",
+            )
+            _write_concept(wiki, "unfolded-lange-coupler", "Unfolded Lange Coupler")
+            _write_concept(wiki, "lange-coupler", "Lange Coupler")
+            chunks = [{"concepts_found": [
+                {"name": "Transmission Line RLGC Model"},
+                {"name": "Transmission Line Wave Parameters"},
+                {"name": "Lange Coupler"},
+            ], "entities_found": []}]
+
+            assoc = s23.stage_2_3_detect_incremental_associations(wiki, chunks)
+
+            self.assertNotIn("Transmission Line RLGC Model", assoc)
+            self.assertNotIn("Transmission Line Wave Parameters", assoc)
+            self.assertEqual(
+                assoc.get("Lange Coupler"),
+                ["concepts/lange-coupler"],
             )
 
 

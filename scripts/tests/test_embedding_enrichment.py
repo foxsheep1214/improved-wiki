@@ -30,28 +30,6 @@ class TestEnrichForEmbedding(unittest.TestCase):
         self.assertEqual("body", be.enrich_for_embedding("", "   ", "body"))
 
 
-class TestHeadingPathAt(unittest.TestCase):
-    BODY = (
-        "# Range Resolution\n\nintro\n\n"
-        "## Theory\n\nt-body\n\n"
-        "### Derivation\n\nd-body\n\n"
-        "## Practice\n\np-body\n"
-    )
-
-    def test_breadcrumb_tracks_the_open_stack(self):
-        at = lambda needle: be.heading_path_at(  # noqa: E731
-            self.BODY, self.BODY.index(needle))
-        self.assertEqual("# Range Resolution", at("intro"))
-        self.assertEqual("# Range Resolution > ## Theory", at("t-body"))
-        self.assertEqual(
-            "# Range Resolution > ## Theory > ### Derivation", at("d-body"))
-        # A sibling H2 pops the deeper level rather than accumulating it.
-        self.assertEqual("# Range Resolution > ## Practice", at("p-body"))
-
-    def test_no_heading_yields_empty(self):
-        self.assertEqual("", be.heading_path_at("just prose\n", 3))
-
-
 class TestMarkdownChunker(unittest.TestCase):
     def test_short_page_is_one_chunk(self):
         text = "# Title\n\nshort body\n"

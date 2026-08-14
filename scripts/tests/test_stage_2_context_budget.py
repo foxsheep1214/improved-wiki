@@ -41,6 +41,12 @@ from _stage_2_context import (  # noqa: E402
 
 _CHUNK_HEADING = re.compile(r"^### (?:Chunk )?(\d+)/(\d+).*$", re.MULTILINE)
 
+# The budget is in TOKENS. Every fixture below is ASCII, where the shared
+# estimator measures ~4 chars/token, so this reproduces the same ~104,000-char
+# squeeze the degradation ladder was built for.
+_TIGHT_BUDGET_TOKENS = 26_000
+_ASCII_CHARS_PER_TOKEN = 4
+
 
 def _digest() -> dict:
     return {
@@ -126,10 +132,12 @@ class LongSourceDegradesStructurally(unittest.TestCase):
         self.analyses = [_analysis(i) for i in range(20)]
         self.metas = [_meta(i) for i in range(20)]
         self.context = build_consolidated_stage_2_context(
-            _digest(), self.analyses, self.metas, 104_000)
+            _digest(), self.analyses, self.metas, _TIGHT_BUDGET_TOKENS)
 
     def test_budget_is_respected(self):
-        self.assertLessEqual(len(self.context), 104_000)
+        self.assertLessEqual(
+            len(self.context),
+            _TIGHT_BUDGET_TOKENS * _ASCII_CHARS_PER_TOKEN)
 
     def test_every_chunk_analysis_stays_a_parseable_object(self):
         payloads = _analysis_payloads(self.context)
@@ -159,7 +167,7 @@ class LongSourceDegradesStructurally(unittest.TestCase):
 
     def test_deterministic(self):
         again = build_consolidated_stage_2_context(
-            _digest(), self.analyses, self.metas, 104_000)
+            _digest(), self.analyses, self.metas, _TIGHT_BUDGET_TOKENS)
         self.assertEqual(self.context, again)
 
 
@@ -173,7 +181,7 @@ class OversizedDigestStaysStructured(unittest.TestCase):
             digest,
             [_analysis(0), _analysis(1), _analysis(2)],
             [_meta(0), _meta(1), _meta(2)],
-            104_000,
+            _TIGHT_BUDGET_TOKENS,
         )
 
         rendered = _section(context, "## Final Global Digest").strip()
@@ -186,7 +194,8 @@ class OversizedDigestStaysStructured(unittest.TestCase):
 class ShortSourceKeepsFullDetail(unittest.TestCase):
     def test_single_chunk_keeps_every_analysis_field_and_all_raw_text(self):
         context = build_consolidated_stage_2_context(
-            _digest(), [_analysis(0)], [_meta(0, raw_chars=20_000)], 104_000)
+            _digest(), [_analysis(0)], [_meta(0, raw_chars=20_000)],
+            _TIGHT_BUDGET_TOKENS)
 
         payload = _analysis_payloads(context)[0]
         self.assertIn("source_quotes", payload)
@@ -203,7 +212,7 @@ class RawEvidenceGetsTheLeftoverBudget(unittest.TestCase):
         analyses = [_analysis(i) for i in range(3)]
         metas = [_meta(i, raw_chars=40_000) for i in range(3)]
         context = build_consolidated_stage_2_context(
-            _digest(), analyses, metas, 104_000)
+            _digest(), analyses, metas, _TIGHT_BUDGET_TOKENS)
 
         raw = _section(context, "## Bounded Raw Source Evidence")
         analysis_section = _section(context, "## Per-Chunk Analyses")
@@ -213,6 +222,39 @@ class RawEvidenceGetsTheLeftoverBudget(unittest.TestCase):
         for index in range(3):
             self.assertIn(f"RAW-HEAD-{index}", raw)
             self.assertIn(f"RAW-TAIL-{index}", raw)
+
+
+class BudgetIsTokensNotCharacters(unittest.TestCase):
+    """The budget must buy the same amount of MEANING in either script.
+
+    NashSU's `maxContextSize` is character-scale; improved-wiki probes tokens.
+    Copying NashSU's number onto a token context and spending it as characters
+    under-budgeted a Latin-script source ~4x — Stage 2.4 saw ~13% of the window
+    while each Stage 2.2 chunk prompt got 32%.
+    """
+
+    @staticmethod
+    def _context(body: str) -> str:
+        return build_consolidated_stage_2_context(
+            _digest(), [_analysis(0)], [(0, body, "", "Chapter 0")], 10_000)
+
+    def test_latin_budget_is_about_four_characters_per_token(self):
+        context = self._context("RAW-HEAD-0-" + ("r" * 200_000) + "-RAW-TAIL-0")
+        self.assertGreater(len(context), 30_000)
+        self.assertLessEqual(len(context), 10_000 * 4)
+
+    def test_cjk_budget_is_about_one_character_per_token(self):
+        context = self._context("RAW-HEAD-0-" + ("雷达散射截面积" * 30_000)
+                                + "-RAW-TAIL-0")
+        self.assertLessEqual(len(context), 10_000 * 2)
+
+    def test_same_token_budget_buys_more_characters_in_latin(self):
+        latin = self._context("RAW-HEAD-0-" + ("r" * 200_000) + "-RAW-TAIL-0")
+        cjk = self._context("RAW-HEAD-0-" + ("雷达散射截面积" * 30_000)
+                            + "-RAW-TAIL-0")
+        self.assertGreater(
+            len(latin), len(cjk) * 2,
+            "a character-scale budget would have made these nearly equal")
 
 
 class PolicyVersionInvalidatesOldGenerationCache(unittest.TestCase):

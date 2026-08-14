@@ -182,8 +182,8 @@ def build_language_directive(text: str) -> str:
 # — the failure this constant exists to prevent:
 #   * a foreign library ownership stamp OCR'd off a scanned English title page
 #     flipped the entire book's generation prompts to that language;
-#   * the pipeline's own Chinese boilerplate (据图 / 参见, injected by Stage
-#     2.4/2.6 into English pages) marked 346 all-English HardwareWiki pages as
+#   * the pipeline's own Chinese boilerplate (据图 / 参见, emitted by Stage
+#     2.4) marked all-English pages as
 #     Chinese;
 #   * a single foreign-language citation in an English reference list.
 # Measured on the real HardwareWiki corpus: incidental cases sit below 1%

@@ -1,8 +1,8 @@
-"""Stage 2.1 digest no longer requires the dead `chunk_plan` key.
+"""Stage 2.2 rolling digest does not require the dead ``chunk_plan`` key.
 
 chunk_plan was asked of the LLM and required by the validator, but nothing ever
 consumed it: only book_meta/outline/key_entities/key_concepts are forwarded
-downstream and chunking is pure char-count (_stage_2_1_chunk_text). Removed the
+downstream and chunking is pure char-count (_stage_2_2_chunk_text). Removed the
 wasted output; a digest without chunk_plan must now pass verification.
 """
 from __future__ import annotations
@@ -30,18 +30,18 @@ _DIGEST = {
 class DigestNoChunkPlan(unittest.TestCase):
     def test_digest_without_chunk_plan_passes(self):
         # Must not raise even though chunk_plan is absent.
-        v._verify_stage_2_1_digest(dict(_DIGEST), Path("book.pdf"))
+        v._verify_stage_2_2_digest(dict(_DIGEST), Path("book.pdf"))
 
     def test_still_fails_on_a_genuinely_required_key(self):
         broken = dict(_DIGEST)
         del broken["key_concepts"]
         with self.assertRaises(RuntimeError):
-            v._verify_stage_2_1_digest(broken, Path("book.pdf"))
+            v._verify_stage_2_2_digest(broken, Path("book.pdf"))
 
     def test_empty_key_concept_list_is_valid(self):
         sparse = dict(_DIGEST)
         sparse["key_concepts"] = []
-        v._verify_stage_2_1_digest(sparse, Path("book.pdf"))
+        v._verify_stage_2_2_digest(sparse, Path("book.pdf"))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
-"""Tests for the Stage 3.1 write-time link normalizer (audit 2026-07-02, A5/M6).
+"""Tests for the Stage 3.2 write-time link normalizer.
 
 One normalization pass applied to every non-listing FILE block right before
-stage_3_1_write_wiki_file:
+stage_3_2_write_wiki_file:
   1. related: entries → prefixed bare slugs (strip [[..]]/quotes, resolve the
      prefix against batch ∪ on-disk universe, drop unresolvable with a warn).
   2. Bare body wikilinks [[foo]] → prefixed when uniquely resolvable;
@@ -37,10 +37,10 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from _stage_3_write import (  # noqa: E402
-    stage_3_1_build_slug_dirs,
-    stage_3_1_normalize_page_links,
-    stage_3_1_write_wiki_file,
-    _stage_3_1_scan_wiki_slug_dirs,
+    stage_3_2_build_slug_dirs,
+    stage_3_2_normalize_page_links,
+    stage_3_2_write_wiki_file,
+    _stage_3_2_scan_wiki_slug_dirs,
 )
 import _stage_3_write as stage_write  # noqa: E402
 
@@ -79,7 +79,7 @@ def _run(rel_path: str, content: str, slug_dirs=None, **kwargs):
     """Run the normalizer, capturing stdout. Returns (new_content, printed)."""
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        out = stage_3_1_normalize_page_links(
+        out = stage_3_2_normalize_page_links(
             rel_path, content, slug_dirs or SLUG_DIRS, **kwargs)
     return out, buf.getvalue()
 
@@ -367,7 +367,7 @@ class TestFigureRefWrapping(unittest.TestCase):
     def _run_fig(self, content, rel_path=OWN, slug=SOURCE_SLUG):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            out = stage_3_1_normalize_page_links(
+            out = stage_3_2_normalize_page_links(
                 rel_path, content, SLUG_DIRS, source_page_slug=slug)
         return out, buf.getvalue()
 
@@ -520,10 +520,10 @@ class TestPostMergeNormalization(unittest.TestCase):
             )
             with patch.object(
                 stage_write,
-                "_stage_3_1_merge_page_content",
+                "_stage_3_2_merge_page_content",
                 return_value=merged,
             ):
-                stage_3_1_write_wiki_file(
+                stage_3_2_write_wiki_file(
                     path,
                     _page(),
                     config,
@@ -558,7 +558,7 @@ class TestUniverseBuilders(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             wiki = self._make_wiki(Path(td))
             config = SimpleNamespace(wiki_dir=wiki)
-            got = _stage_3_1_scan_wiki_slug_dirs(config)
+            got = _stage_3_2_scan_wiki_slug_dirs(config)
         self.assertEqual(got, {
             "alpha": {"concepts"},
             "beta": {"entities"},
@@ -580,7 +580,7 @@ class TestUniverseBuilders(unittest.TestCase):
             config = SimpleNamespace(wiki_dir=wiki)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                got = stage_3_1_build_slug_dirs(blocks, config, valid, {})
+                got = stage_3_2_build_slug_dirs(blocks, config, valid, {})
         self.assertEqual(got.get("new-concept"), {"concepts"})
         self.assertEqual(got.get("Some Entity"), {"entities"})
         self.assertEqual(got.get("other"), {"concepts"})

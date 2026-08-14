@@ -211,8 +211,9 @@ def _stage_0_1_surname_warnings(author: str) -> List[str]:
     return warns
 
 
-def _stage_0_1_check_rule(filepath: Path, rule: dict, vendors: List[str],
-                prefix_map: Dict[str, str]) -> List[Tuple[str, str]]:
+def _stage_0_1_check_rule(
+    filepath: Path, rule: dict, vendors: List[str],
+) -> List[Tuple[str, str]]:
     """Check a file against its folder's naming rule.
 
     Returns a list of (severity, message) tuples. ``severity`` is ``'error'``
@@ -290,8 +291,10 @@ def _stage_0_1_fix_file(filepath: Path, rule: dict, vendors: List[str],
 
 # ── Scanner ─────────────────────────────────────────────────────
 
-def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: bool = False,
-             verbose: bool = False, recent_minutes: Optional[int] = None) -> Dict:
+def stage_0_1_scan_raw(
+    raw_root: Path, rules: dict, fix: bool = False,
+    verbose: bool = False, recent_minutes: Optional[int] = None,
+) -> Dict:
     """Scan raw/ files against parsed rules from schema.md."""
     results = {"ok": 0, "issues": 0, "warns": 0, "fixed": 0, "unfixable": 0}
     cutoff = _time.time() - (recent_minutes * 60) if recent_minutes else 0
@@ -329,7 +332,7 @@ def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: boo
                     continue
 
             rel = filepath.relative_to(raw_root)
-            issues = _stage_0_1_check_rule(filepath, rule, vendors, prefix_map)
+            issues = _stage_0_1_check_rule(filepath, rule, vendors)
             for ch in forbidden_chars:
                 if ch and ch in filepath.stem:
                     issues.append(("error",
@@ -361,7 +364,7 @@ def stage_0_1_scan_raw(raw_root: Path, rules: dict, check: bool = True, fix: boo
                     print(f"      → {new_path.relative_to(raw_root)}  ({reason})")
                     results["fixed"] += 1
                 else:
-                    print(f"      ⚠️  无法自动修正")
+                    print("      ⚠️  无法自动修正")
                     results["unfixable"] += 1
 
     if recent_minutes and files_skipped > 0:
@@ -375,9 +378,9 @@ def stage_0_1_check_file(raw_file: Path, project_root: Path) -> List[str]:
 
     Returns error strings (empty = compliant or out of scope). Scope mirrors
     ``stage_0_1_scan_raw``: only ``.pdf`` files under a folder that declares a
-    rule are checked — so e.g. ``.md`` deep-research pages (``wiki/queries/*.md``,
-    ingested directly since 2026-07-16, or a pre-2026-07-16 ``raw/queries/*.md``
-    bridge copy) always pass. Warn-level heuristics do not block.
+    rule are checked — so e.g. ``.md`` query pages (explicitly ingested from
+    ``wiki/queries/*.md``, or a pre-2026-07-16 ``raw/queries/*.md`` bridge copy)
+    always pass. Warn-level heuristics do not block.
 
     Raises ``RuntimeError`` when the project has no parseable naming rules
     (``schema.md`` missing or lacking the ```yaml rules block) — the documented
@@ -413,8 +416,7 @@ def stage_0_1_check_file(raw_file: Path, project_root: Path) -> List[str]:
             rules['vendor_prefixes'] = vdata['vendor_prefixes']
 
     rule = _stage_0_1_resolve_rule(rules['rules'], rel.parts[0])
-    prefix_map = _stage_0_1_flatten_prefixes(rules.get('vendor_prefixes', {}))
-    issues = _stage_0_1_check_rule(raw_file, rule, rules.get('vendors', []), prefix_map)
+    issues = _stage_0_1_check_rule(raw_file, rule, rules.get('vendors', []))
     forbidden_chars = rules.get('forbidden_chars') or [',', '，']
     if isinstance(forbidden_chars, str):
         forbidden_chars = [forbidden_chars]
@@ -481,10 +483,10 @@ def main():
     scope = f"（最近 {args.recent} 分钟内修改的文件）" if args.recent else ""
     print(f"{mode}模式{scope} — {project_root.name}\n")
 
-    results = stage_0_1_scan_raw(raw_root, rules, check=True, fix=args.fix,
+    results = stage_0_1_scan_raw(raw_root, rules, fix=args.fix,
                        verbose=args.verbose, recent_minutes=args.recent)
 
-    print(f"\n── 结果 ──")
+    print("\n── 结果 ──")
     print(f"  ✅ 符合规范: {results['ok']}")
     print(f"  ❌ 不符合:   {results['issues']}")
     print(f"  ⚠️  启发式警告: {results['warns']}")

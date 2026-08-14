@@ -11,9 +11,9 @@ from _progress import (
     mark_stage_done,
     unmark_stage_done,
 )
-from _stage_3_write import _stage_3_1_wiki_path_for_source
+from _stage_3_write import _stage_3_2_wiki_path_for_source
 
-def _should_stop_after(config: Config, stage: str, result: dict) -> bool:
+def _should_stop_after(config: Config, stage: str) -> bool:
     """Check if we should stop after completing `stage`. Progress already saved before call."""
     if config.stop_after_stage == stage:
         print(f"\n[stop-after-stage] Stage {stage} complete — clean exit (--stop-after-stage={stage})")
@@ -24,12 +24,11 @@ def _should_stop_after(config: Config, stage: str, result: dict) -> bool:
 def _stop_after_stage(config, stage: str) -> bool:
     """Pure check: True iff ``config.stop_after_stage == stage`` (exact match).
 
-    Used inside ``_do_prepare`` to gate Stage-0..2 boundaries so
-    ``--stop-after-stage`` actually halts at the requested point (0=extract,
-    1=global digest, 2=generation) instead of running all of Stage 0-2 before
-    the post-prepare check. ``stop_after_stage`` is set dynamically on Config
-    (ingest.py arg parsing) and may be absent on Config instances built
-    elsewhere, so read it via getattr. Does NOT print — the raise site prints.
+    Used inside ``_do_prepare`` to gate the supported boundaries (0=Phase 1,
+    1.5=Stage 2.2 analysis, 2/2.0=generation) before the post-prepare check.
+    ``stop_after_stage`` is set dynamically on Config by CLI parsing and may be
+    absent on Config instances built elsewhere, so read it via ``getattr``.
+    Does not print; the raise site owns the user-facing message.
     """
     return getattr(config, "stop_after_stage", None) == stage
 
@@ -53,19 +52,18 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
     completeness signal.
     """
     h = file_sha256(raw_file)
-    # Deep-research pages (wiki/queries/*.md, or a pre-2026-07-16 raw/queries/
-    # bridge copy) deliberately have no Stage 2.6 source page — the `ingested`
-    # marker alone is authoritative for them, skipping the source-page-existence
-    # staleness check below (which would otherwise see "no source page" on
-    # every call and force an endless re-ingest).
+    # Explicitly ingested query pages (wiki/queries/*.md, or a legacy
+    # raw/queries/ bridge copy) deliberately have no Stage 2.4 source page.
+    # The `ingested` marker alone is authoritative for this compatibility path;
+    # current Deep Research does not invoke it automatically.
     if is_query_bridge_source(raw_file, config):
         if is_stage_done(config, h, "ingested"):
-            print(f"  [skip] Ingest complete (ingested marker present)")
+            print("  [skip] Ingest complete (ingested marker present)")
             return True
         return False
 
     if is_stage_done(config, h, "ingested"):
-        if not _stage_3_1_wiki_path_for_source(raw_file, config).exists():
+        if not _stage_3_2_wiki_path_for_source(raw_file, config).exists():
             # Stale marker (source page deleted externally) — clear and re-ingest.
             from _progress import stages_path as _sp
             _sp(config, h).unlink(missing_ok=True)
@@ -88,15 +86,15 @@ def _stage_0_2_should_skip(raw_file: Path, config: Config) -> bool:
             assert_cached_media_complete(raw_file, config)
             mark_stage_done(config, h, "ingested")
             print("  [skip] Media repaired and re-verified")
-        print(f"  [skip] Ingest complete (ingested marker present)")
+        print("  [skip] Ingest complete (ingested marker present)")
         return True
 
-    source_page = _stage_3_1_wiki_path_for_source(raw_file, config)
+    source_page = _stage_3_2_wiki_path_for_source(raw_file, config)
     if not source_page.exists():
         return False
 
     # Source page exists but ingested not done → mid-flight resume.  Do NOT
     # skip: post-write stages may still be pending.  The write_phase marker
     # inside _do_write handles skipping the non-idempotent 3.1 loop.
-    print(f"  [skip:resume] Source page exists, ingested not done — resuming")
+    print("  [skip:resume] Source page exists, ingested not done — resuming")
     return False

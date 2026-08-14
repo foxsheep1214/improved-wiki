@@ -5,12 +5,17 @@ generation call with the final rolling digest and the complete set of chunk
 analyses.  improved-wiki additionally keeps bounded raw evidence from every
 chunk so exact formulas, identifiers, and late-source details remain grounded.
 
-The builder below is deterministic and hard-bounded by ``source_budget``.
+The builder below is deterministic and hard-bounded by ``source_budget``, which
+is a TOKEN budget (the context probe reports tokens).  It is converted to a
+character bound here using the source's own measured chars-per-token, the same
+idiom the Stage 2.2 chunker uses to size its window — a fixed character number
+would under-budget Latin-script sources ~4x and over-budget CJK ones.
+
 Every chunk stays represented in both sections.  When the analyses do not all
 fit, whole low-value FIELDS are dropped in a fixed priority order rather than
 character-slicing each payload: an even split plus a balanced excerpt handed the
 generation model 20-40 fragments cut through the middle of a JSON object
-(measured at source_budget=104,000: 20 chunks needed 198,130 analysis chars and
+(measured at a 26,000-token budget: 20 chunks needed 198,130 analysis chars and
 received ~60,000).  Raw evidence takes the leftover budget instead of a fixed
 share, so a short source keeps its full text and a long source spends the room
 on cross-chunk analyses.  Whatever is dropped is stated in the context itself.
@@ -19,8 +24,10 @@ from __future__ import annotations
 
 import json
 
+from _stage_2_analyze import _estimate_tokens
 
-STAGE_2_CONTEXT_POLICY_VERSION = "nashsu-0.6.6-consolidated-v3"
+
+STAGE_2_CONTEXT_POLICY_VERSION = "nashsu-0.6.6-consolidated-v5-token-budget"
 _TRUNCATION_MARKER = "\n... [middle omitted to fit context budget] ...\n"
 
 # Analysis detail levels, most detailed first. Each level names the fields it
@@ -318,13 +325,27 @@ def _select_detail_level(
     return level, payloads, rendered
 
 
+def _token_budget_to_chars(budget_tokens: int, samples: list[str]) -> int:
+    """Convert a token budget to a character bound for THIS source's language.
+
+    Mirrors the Stage 2.2 chunker: measure chars-per-token on the actual source
+    text with the shared estimator, then scale. English lands near 4.0, CJK near
+    1.0, so the same token budget yields the right character bound for either.
+    """
+    sample = "".join(samples)
+    if not sample:
+        return max(1, budget_tokens * 4)
+    chars_per_token = len(sample) / max(1, _estimate_tokens(sample))
+    return max(1, int(budget_tokens * chars_per_token))
+
+
 def build_consolidated_stage_2_context(
     global_digest: dict,
     chunk_analyses: list[dict],
     chunk_meta: list,
     source_budget: int,
 ) -> str:
-    """Build the shared Stage 2.4/2.6 whole-source context.
+    """Build the Stage 2.4 whole-source context.
 
     Layout:
       1. what the budget forced out (never a silent cap);
@@ -332,7 +353,8 @@ def build_consolidated_stage_2_context(
       3. every validated chunk analysis, at the most detailed level that fits;
       4. raw evidence from every source chunk, using the leftover budget.
 
-    The returned string never exceeds ``source_budget``.
+    ``source_budget`` is in TOKENS; the returned string never exceeds its
+    character equivalent for this source's language mix.
     """
     if len(chunk_analyses) != len(chunk_meta):
         raise RuntimeError(
@@ -341,7 +363,14 @@ def build_consolidated_stage_2_context(
             f"{len(chunk_analyses)} analyses."
         )
 
-    budget = max(1, int(source_budget or 8_000))
+    raw_payloads: list[str] = []
+    headings: list[str] = []
+    for meta in chunk_meta:
+        raw_payloads.append(str(meta[1] or ""))
+        headings.append(str(meta[3] or ""))
+
+    budget = _token_budget_to_chars(
+        max(1, int(source_budget or 8_000)), raw_payloads)
     header = (
         "# Consolidated Stage 2 Context\n"
         "Final rolling digest, all chunk analyses, and bounded raw evidence "
@@ -356,11 +385,6 @@ def build_consolidated_stage_2_context(
         indent=2,
         default=str,
     )
-    raw_payloads: list[str] = []
-    headings: list[str] = []
-    for meta in chunk_meta:
-        raw_payloads.append(str(meta[1] or ""))
-        headings.append(str(meta[3] or ""))
 
     remaining = budget - len(header) - 2
     digest_budget = min(

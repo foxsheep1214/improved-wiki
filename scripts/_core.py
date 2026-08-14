@@ -50,13 +50,6 @@ def stage_begin(name: str) -> None:
     print(f"\n{'─'*40}\n{tag}[{name}] Starting...\n{'─'*40}", flush=True)
 
 
-def heartbeat(msg: str = "") -> None:
-    ts = time.strftime("%H:%M:%S")
-    tag = file_tag()
-    suffix = f" — {msg}" if msg else ""
-    print(f"  {ts}  {tag}… {suffix}", flush=True)
-
-
 # Rate-limit tracking (shared across workers)
 _RATE_LIMIT_HIT_AT = 0.0
 _RLOCK = threading.Lock()
@@ -80,20 +73,12 @@ class ConversationPending(BaseException):
 
 
 class PrepareStopAfter(BaseException):
-    """Raised inside ``_do_prepare`` when ``--stop-after-stage`` matches a
-    Stage-0..2 boundary that has just completed (0=extract, 1=global digest,
-    2=generation). Subclasses BaseException so the broad ``except Exception``
-    in ``_do_prepare`` (which prints FAILED + traceback and re-raises) does
-    not noisy-up a clean, intentional stop. Caught in ``ingest_one`` and
-    converted to ``{"status": "ok", "stopped_after": stage}``.
+    """Signal a clean, cached ``--stop-after-stage`` boundary.
 
-    Without this, ``--stop-after-stage 0`` could not actually halt after OCR:
-    the stop check lived AFTER ``_do_prepare`` returned, but ``_do_prepare``
-    runs all of Stage 0-2 (pausing at the 2.1/2.2/2.4 LLM handoffs) before
-    that check — so the flag was effectively dead on a fresh run. Raising at
-    the in-prepare boundary makes the documented "OCR-only then re-run" split
-    work. Boundaries 1.5/2.3 (inside the chunk pipeline, no clean resume
-    marker) remain best-effort and are not intercepted here.
+    Supported values are 0 (Phase 1), 1.5 (Stage 2.2 analysis), and 2/2.0
+    (generation). Subclassing ``BaseException`` prevents broad stage-level
+    retry handlers from treating this intentional stop as a failure.
+    ``ingest_one`` converts it to an ``ok`` result with ``stopped_after``.
     """
 
     def __init__(self, stage: str):
@@ -177,15 +162,16 @@ def detect_template_type(raw_file: Path, raw_root: Path, override: str | None) -
 
 
 def is_query_bridge_source(raw_file: Path, config: "Config") -> bool:
-    """True iff raw_file is a deep-research research page — ingested directly
-    from ``wiki/queries/<slug>.md`` (2026-07-16: the ``raw/queries/`` copy
-    step was removed, NashSU ``autoIngest`` parity — query pages are no
-    longer duplicated into raw/) or, for pre-2026-07-16 data, a legacy bridge
+    """True iff raw_file is a query page accepted by explicit/manual ingest.
+
+    The current Deep Research default never calls ingest on its saved page.
+    This historical compatibility route accepts ``wiki/queries/<slug>.md``
+    without duplicating it under raw/, or recognizes a pre-2026-07-16 bridge
     copy still sitting under ``raw/queries/``.
 
     These are not real source documents — the ``wiki/queries/<slug>.md``
     page is the canonical human-readable artifact, so it should not get its
-    own ``wiki/sources/queries/`` digest page (Stage 2.6).
+    own ``wiki/sources/queries/`` digest page from Stage 2.4.
     """
     for base in (config.wiki_dir, config.raw_root):
         try:
@@ -201,17 +187,17 @@ def canonical_source_path(raw_file: Path, config: "Config") -> str:
     """The authoritative ``sources:`` frontmatter value for ``raw_file``.
 
     ``raw/<rel>`` for a normal source under ``config.raw_root``; ``wiki/queries/<rel>``
-    for a deep-research page ingested directly from ``wiki/queries/`` (2026-07-16:
-    no more ``raw/queries/`` bridge copy — see ``is_query_bridge_source``). Falls
+    for a query page explicitly ingested from ``wiki/queries/`` (no
+    ``raw/queries/`` bridge copy — see ``is_query_bridge_source``). Falls
     back to the bare filename for any other path (should not normally happen —
     ``ingest.py``'s CLI gate only accepts these two roots).
 
     Single source of truth: every place that writes a ``sources:`` field
     (canonical write in ``_ingest_write.py``, the per-page prompt hints in
-    Stage 2.4/2.6, the log.md line in Stage 3.5) must call this — not
+    Stage 2.4, the log.md line in Stage 3.3) must call this — not
     hand-roll an ``f"raw/{rel}"`` string — so they can never drift out of
     sync with each other. A drift would silently defeat
-    ``_stage_3_1_canonicalize_sources_field``'s basename-based "already
+    ``_stage_3_2_canonicalize_sources_field``'s basename-based "already
     present" check (two differently-prefixed strings for the same file both
     have the same basename, so the stale one never gets overwritten).
     """
@@ -232,7 +218,7 @@ def source_cache_key(raw_file: Path, config: "Config") -> str:
     re-ingest skip logic — this key never affects whether a source gets
     re-ingested, only ``--delete``/``validate_ingest.py`` bookkeeping).
 
-    A deep-research page ingested from ``wiki/queries/<rel>`` gets the SAME
+    An explicitly ingested query page from ``wiki/queries/<rel>`` gets the SAME
     key (``queries/<rel>``) a pre-2026-07-16 ``raw/queries/<rel>`` bridge
     copy of the same file would have gotten — this is deliberate, so
     ``--delete`` on a query source ingested before/after the bridge removal
@@ -367,15 +353,3 @@ def slugify(text: str) -> str:
 
 
 # (atomic_write lives in _paths.py; re-exported near the top of this module.)
-
-
-def call_with_retry(fn, max_retries: int = 3, base_wait: float = 1.0, label: str = ""):
-    """Compatibility export; new call sites import :mod:`_retry` directly."""
-    from _retry import call_with_retry as _call_with_retry
-
-    return _call_with_retry(
-        fn,
-        max_retries=max_retries,
-        base_wait=base_wait,
-        label=label,
-    )
