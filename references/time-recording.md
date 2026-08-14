@@ -93,8 +93,13 @@ python3 "$SKILL_DIR/scripts/ingest_history.py" \
 ```
 
 迁移从两类现有证据恢复：旧 `wiki/log.md` 的 `— INGEST` block（可能只有日期
-精度）和当前 task 对应 `.stages.json` 的精确 `ingested` marker。同 source/hash
-同日时只保留精度更高的 marker，避免把一次完成计为两次。
+精度）和所有 `.stages.json` 的精确 `ingested` marker。marker 优先从 task manifest
+恢复 source/run 身份；早于 task manifest 的 marker 从 `ingest-cache.json` 的 hash、
+source 和 `filesWritten` 恢复。任何已完成 marker 若无法唯一映射，迁移硬失败，不能
+静默漏记。同 source/hash 同日时只保留精度更高的 marker，避免把一次完成计为两次。
+
+迁移还会以现存 `raw/`、source 页及 cache hash 统一历史路径的大小写和已确认改名
+（例如 `raw/book`→`raw/Book`）；只有唯一证据才会归并，hash 映射有歧义时不猜测。
 
 旧 Stage 3.3 在整条流水线完成前就写日志，且当时没有 `run_id`；因此同
 source/hash、相邻不超过 1 小时的旧 block 按 retry artifact 合并，保留较晚时间，
