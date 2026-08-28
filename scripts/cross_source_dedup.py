@@ -197,11 +197,11 @@ def check_embedding_endpoint(timeout: float = EMBED_PROBE_TIMEOUT_S) -> str | No
     when the server answers (any HTTP status counts as reachable), else a short
     error string — so main() can fail in <15s with an actionable message
     instead of grinding through per-batch retries against a dead endpoint."""
-    base_url, _model, _api_key = _embed_config()
-    probe_url = base_url.rstrip("/")
+    endpoint, _model, _api_key = _embed_config()
+    probe_url = endpoint.rstrip("/")
     if probe_url.endswith("/v1"):
         # Ollama answers "Ollama is running" at the server root.
-        probe_url = probe_url[: -len("/v1")] or base_url
+        probe_url = probe_url[: -len("/v1")] or endpoint
     try:
         with urllib.request.urlopen(probe_url, timeout=timeout):
             return None
@@ -217,8 +217,12 @@ def _embed_pages_bounded(emb_pages: list[dict]) -> dict[str, list[float] | None]
     skipped with a warning (members → None) so one bad batch can't kill or
     stall the run; overall None-coverage is still enforced downstream by
     candidate_pairs (DuplicatePrefilterError → graceful fallback/skip)."""
-    base_url, model, api_key = _embed_config()
-    url = f"{base_url.rstrip('/')}/embeddings"
+    # ``_embed_config`` returns the exact request endpoint (for example,
+    # ``http://127.0.0.1:11434/v1/embeddings``).  Do not append another
+    # ``/embeddings`` here: doing so produces an invalid
+    # ``.../embeddings/embeddings`` URL for both the default Ollama config and
+    # explicitly configured OpenAI-compatible endpoints.
+    url, model, api_key = _embed_config()
     out: dict[str, list[float] | None] = {}
     total = len(emb_pages)
     consecutive_failures = 0

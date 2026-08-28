@@ -829,6 +829,23 @@ class TestBoundedEmbedding(unittest.TestCase):
         self.assertEqual(len(out), 3)
         self.assertTrue(all(v == [1.0, 0.0] for v in out.values()))
 
+    def test_exact_configured_endpoint_is_not_extended(self):
+        seen = {}
+        endpoint = "https://example.test/custom/embeddings"
+
+        def fake_urlopen(req, timeout=None):
+            seen["url"] = req.full_url
+            body = json.loads(req.data.decode("utf-8"))
+            return _FakeResp(len(body["input"]))
+
+        with mock.patch.object(
+            ds, "_embed_config", return_value=(endpoint, "embed-model", "")
+        ), mock.patch.object(ds.urllib.request, "urlopen", fake_urlopen):
+            out = ds._embed_pages_bounded(self._pages(1))
+
+        self.assertEqual(seen["url"], endpoint)
+        self.assertEqual(out["p0"], [1.0, 0.0])
+
     def test_failed_batch_skipped_run_continues(self):
         calls = {"n": 0}
 
