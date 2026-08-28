@@ -12,21 +12,15 @@ Private names remain available here for existing automation and tests.
 """
 from __future__ import annotations
 
-import argparse
-import fcntl
-import json
-import os
-import signal
-import subprocess
 import sys
-import threading
-import time
-import traceback
-import uuid
-from pathlib import Path
 from types import ModuleType
 
-from _config import Config
+# `os` and `time` are re-exported deliberately: tests reach the supervisor's
+# sleep/killpg through this facade (patch.object(ingest.os, "killpg")), so the
+# attributes must exist here even though this module never calls them.
+import os
+import time
+
 from _core import (
     BATCH_MAX_CONCURRENT,
     ConversationPending,
@@ -40,7 +34,6 @@ from _progress import (
     is_stage_done,
     mark_stage_done,
 )
-from _paths import atomic_write
 from _batch_coordination import (
     BatchCoordinatorBusy,
     SpineReservationConflict,
@@ -54,22 +47,19 @@ from _batch_coordination import (
     reserve_spine,
     write_prefetch_pause_marker,
 )
-from _batch_worker_status import BatchWorkerReporter, worker_lease_path
-from _context_probe import resolve_context
 from _conversation_router import (
     _load_task_manifest,
     call_anthropic_protocol,
 )
+
+# Re-exported for the monkeypatch surface described above: tests swap
+# `ingest.Config.from_env`, `ingest._do_prepare`,
+# `ingest._do_write` and `ingest.stage_3_7_embed_new_pages`, and
+# `_sync_compat_module` propagates the swap into the implementation modules.
+from _config import Config
 from _ingest_prepare import _do_prepare
-from _ingest_skip import _should_stop_after
 from _ingest_write import _do_write
-from _media_integrity import assert_cached_media_complete
-from _source_filter import is_sensitive_config_source_file
-from _stage_1_extract import _stage_1_1_detect_pdf_type
-from _stage_1_1_scanned import MINERU_CHUNK_SIZE
 from _stage_3_7_embed import stage_3_7_embed_new_pages
-from _task_manifest import assert_task_ready_for_completion
-from _watch import ingest_watch
 
 import _batch_status
 import _batch_supervisor

@@ -32,7 +32,7 @@
 #   $ ./wiki-lint.sh --emit-review   # route semantic warnings to wiki/REVIEW/ (default)
 #   $ ./wiki-lint.sh --fix           # auto-fix missing-frontmatter (default)
 #   $ ./wiki-lint.sh --fix-links     # auto-fix broken-link/orphan/no-outlinks (default)
-#                                     (--no-stub mode: broken→review, no bulk stubs;
+#                                     (stub-off is the default: broken→review, no bulk stubs;
 #                                      2026-07-10: rewrites need score>=0.9, lower
 #                                      scores → REVIEW/suggestion items instead)
 #   $ ./wiki-lint.sh --sweep         # resolve satisfied review items (default)
@@ -634,7 +634,7 @@ if [ "$FIX_LINKS" = true ]; then
   else
     CACHE_DIRTY_AFTER_SCAN=true
     echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
-    python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply --no-stub \
+    python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply \
       --from-cache "$LINT_CACHE" \
       --project-root "$WIKI_ROOT"
     fixlinks_rc=$?

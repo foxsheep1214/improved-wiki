@@ -23,13 +23,13 @@ from __future__ import annotations
 
 import os
 import re
-import unicodedata
 
 from _frontmatter import (
     TITLE_LINE_RE as _TITLE_RE,
     WIKILINK_RE as _WIKILINK_BODY_RE,
 )
 from _paths import atomic_write as _atomic_write
+from _wiki_filename import make_query_slug as _make_query_slug
 from pathlib import Path
 
 __all__ = [
@@ -57,23 +57,12 @@ __all__ = [
 # \w would KEEP '_' (it includes the connector-punctuation class), so we must not
 # use \w here. We approximate \p{L}\p{N} with str.isalnum() per-character below,
 # because Python's `re` has no \p{…} property escapes.
-def _is_slug_char(ch: str) -> bool:
-    return ch == "-" or ch.isalnum()
-
-
-def make_query_slug(title: str) -> str:
-    """Unicode-aware kebab slug. Keeps letters/digits across all scripts
-    (Latin, CJK, Cyrillic …) plus ASCII hyphen. Underscores are stripped
-    (matching NashSU ``/[^\\p{L}\\p{N}-]/gu``). NFKC-normalized, lowercased,
-    whitespace→hyphen, runs collapsed, trimmed, truncated to 50 chars (by
-    codepoint). Falls back to ``"query"`` when nothing usable remains.
-    """
-    slug = unicodedata.normalize("NFKC", title).strip()
-    slug = re.sub(r"\s+", "-", slug)
-    slug = "".join(ch for ch in slug if _is_slug_char(ch))
-    slug = re.sub(r"-+", "-", slug).strip("-").lower()
-    truncated = slug[:50]
-    return truncated if truncated else "query"
+# Re-exported, not reimplemented. This module and _wiki_filename each used to
+# carry their own port of NashSU makeQuerySlug — one spec, two implementations,
+# and any future edit to one silently changes only half the slugs (a lint stub
+# and the query page it points at would then disagree). _wiki_filename is a
+# leaf module with no local imports, so it is the safe single home.
+make_query_slug = _make_query_slug
 
 
 # ── link target normalization ────────────────────────────────────────────────

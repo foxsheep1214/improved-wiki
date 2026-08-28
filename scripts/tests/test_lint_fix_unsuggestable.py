@@ -4,8 +4,8 @@ Regression for audit M4 (2026-07-07): plan_fixes silently dropped orphan (no
 suggested_source) and no-outlinks (no suggested_target) findings — no stub or
 append action is possible without a suggestion, so they vanished. NashSU
 handleFix routes unsuggestable findings to the Review store; the port now
-matches via _emit_review_for_unsuggestable (called in --no-stub mode, which
-wiki-lint.sh passes during its default fix-links stage unless disabled).
+matches via _emit_review_for_unsuggestable (called on the default stub-off
+path, which wiki-lint.sh's fix-links stage uses).
 
 Stdlib unittest only.
 """

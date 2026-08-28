@@ -42,7 +42,7 @@ from _embedding_chunker import (  # noqa: E402
     DEFAULT_TARGET_CHARS,
     chunk_markdown,
 )
-from _embedding_store import remove_page_embeddings  # noqa: E402
+from _embedding_store import _page_filter, remove_page_embeddings  # noqa: E402
 from _frontmatter import (  # noqa: E402
     extract_frontmatter_title,
     strip_operational_time_fields,
@@ -744,10 +744,6 @@ def _table_vector_dimension(table) -> int | None:
         return int(vector_type.list_size)
     except Exception:
         return None
-
-
-def _page_filter(page_id: str) -> str:
-    return "page_id = '" + page_id.replace("'", "''") + "'"
 
 
 def _replace_page_rows(db, page_id: str, rows: list[dict]):

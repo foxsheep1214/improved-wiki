@@ -19,17 +19,19 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import datetime, timezone, tzinfo
+from datetime import datetime, tzinfo
 import json
 from pathlib import Path
 import re
 import sys
-import unicodedata
 
 from _paths import atomic_write
 # Shared with the review Create Page / save: paths, as NashSU routes all three
-# query-page writers through wiki-filename.ts.
-from _wiki_filename import make_query_file_name, make_query_slug
+# query-page writers through wiki-filename.ts. `make_query_slug` is unused in
+# this module's own body on purpose: it is re-exported so callers and tests can
+# assert the three writers slug identically (test_review_actions.py pins
+# `write_research_page.make_query_slug is _wiki_filename.make_query_slug`).
+from _wiki_filename import make_query_file_name, make_query_slug  # noqa: F401
 
 
 MAX_RESEARCH_SOURCES = 20

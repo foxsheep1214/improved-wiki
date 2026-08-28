@@ -495,14 +495,15 @@ def _emit_review_for_unsuggestable(
     suggestion and so produced no fix action.
 
     NashSU parity (audit M4, 2026-07-07): broken-link-no-suggestion already
-    routes to review via ``--no-stub`` + ``_emit_review_for_broken``. But
+    routes to review via the default stub-off path + ``_emit_review_for_broken``. But
     orphan (no ``suggested_source``) and no-outlinks (no ``suggested_target``)
     findings are dropped silently by ``plan_fixes`` — there is no stub/append
     action to take when no suggestion exists. Emit one review .md per affected
     page into ``wiki/REVIEW/suggestion/`` so the human can decide: link
-    from/to where, deep-research, or ignore. Only called in ``--no-stub`` mode
-    (the review-routing mode ``wiki-lint.sh`` uses by default for
-    ``--fix-links``). Findings WITH a suggestion became append actions and were
+    from/to where, deep-research, or ignore. Only called on the review-routing
+    path, which is the DEFAULT since 2026-07-12 (``--stub`` opts back into bulk
+    stub creation; ``--no-stub`` is a no-op kept for old callers). Findings WITH
+    a suggestion became append actions and were
     applied; they are not emitted here.
     """
     review_dir = wiki_dir / "REVIEW" / "suggestion"
@@ -551,7 +552,7 @@ affected_pages:
 
 This page is {label}. Structural lint's suggestion engine offered no link
 target/source, so ``--fix-links`` could not auto-fix it. Routed to review
-(``--no-stub`` mode) so a human can decide: add a link manually, deep-research
+(the default stub-off path) so a human can decide: add a link manually, deep-research
 a related concept, or ignore.
 
 **Options:** Add link manually | Deep Research | Skip
