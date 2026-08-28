@@ -50,6 +50,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from _config import Config  # noqa: E402
+from _language import get_output_language  # noqa: E402
 from _batch_worker_status import update_worker_phase  # noqa: E402
 from _paths import atomic_write  # noqa: E402
 from _review_utils import (  # noqa: E402
@@ -128,11 +129,11 @@ CAPTION_SYSTEM_PROMPT = (
     "hardware / radar / natural sciences / etc.). Be factual and do not speculate: "
     "describe only what is actually visible in the image and what the provided "
     "context explicitly states; do not invent details not present in the image."
-    "\n\nLanguage (NashSU parity — language-NEUTRAL): describe the image in the "
-    "SAME language as the surrounding source text (an English source → English "
-    "caption; a Chinese source → Chinese caption). Capture any text printed "
-    "inside the image VERBATIM in its original language — do NOT translate it. "
-    "Keep technical terms, axis labels, and unit symbols in their original form."
+    "\n\nLanguage (NashSU 0.6.10 parity): the caller states which language the "
+    "description itself must be written in — follow it. Independently of that, "
+    "capture any text printed inside the image VERBATIM in its original "
+    "language — do NOT translate it. Keep technical terms, axis labels, and "
+    "unit symbols in their original form."
     "\n\nFocus on: 1) image type (circuit / waveform / block-diagram / PCB / plot / "
     "parameter-table / formula / photo / schematic / geometry, etc.); 2) key "
     "content and structure (geometric relations, connection paths, module "
@@ -633,9 +634,80 @@ def _stage_1_3_inline_captions(text: str, config: Config, media_dir: Path) -> st
     return _MINERU_IMG_REF_RE.sub(_repl, text)
 
 
-def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
+# Marker recording which output language a media directory's captions were
+# written in (NashSU 0.6.10 folds the language into its caption cache key;
+# improved-wiki's cache is a per-image .caption.txt sidecar, so the language
+# dimension lives here instead). A directory captioned before this marker
+# existed has none — that is NOT treated as stale, or every already-captioned
+# image in the installed corpora would re-caption for nothing.
+_CAPTION_LANGUAGE_MARKER = ".caption-language"
+
+# How much surrounding source text to sample when auto-detecting the output
+# language. The context map holds a 150-char window per figure; a few dozen
+# windows is a far more representative sample of the source's prose than any
+# single one, and detection is O(chars).
+_CAPTION_LANGUAGE_SAMPLE_CHARS = 4000
+
+
+def _stage_1_3_caption_language(ctx_map: dict[str, dict]) -> str:
+    """The output language captions must be written in.
+
+    Honors IMPROVED_WIKI_OUTPUT_LANGUAGE; otherwise detects from the source
+    text already collected around the figures and collapses to Chinese or
+    English exactly as page generation does — that is the point of the change:
+    caption and body must not disagree.
+    """
+    parts: list[str] = []
+    size = 0
+    for ctx in (ctx_map or {}).values():
+        if not isinstance(ctx, dict):
+            continue
+        for key in ("mineru_caption", "context_before", "context_after"):
+            piece = str(ctx.get(key) or "").strip()
+            if not piece:
+                continue
+            parts.append(piece)
+            size += len(piece)
+        if size >= _CAPTION_LANGUAGE_SAMPLE_CHARS:
+            break
+    sample = "\n".join(parts)[:_CAPTION_LANGUAGE_SAMPLE_CHARS]
+    return get_output_language(sample)
+
+
+def _stage_1_3_read_caption_language(media_dir: Path) -> str | None:
+    """Language recorded for this media directory, or None when unmarked."""
+    try:
+        value = (Path(media_dir) / _CAPTION_LANGUAGE_MARKER).read_text(
+            encoding="utf-8").strip()
+    except Exception:
+        return None
+    return value or None
+
+
+def _stage_1_3_write_caption_language(media_dir: Path, language: str) -> None:
+    """Record the language this directory's captions are written in."""
+    path = Path(media_dir) / _CAPTION_LANGUAGE_MARKER
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, f"{str(language).strip()}\n")
+
+
+def _stage_1_3_language_instruction(language: str) -> str:
+    """The per-call output-language directive (NashSU captionLanguageInstruction)."""
+    lang = str(language or "").strip()
+    if not lang or lang.lower() == "auto":
+        return ""
+    return (f"Write the description in {lang}. Text printed inside the image "
+            "stays verbatim in its original language — do not translate it.")
+
+
+def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None,
+                                 language: str = "") -> str:
     """Build the per-image user prompt. Context-aware when surrounding text or
     a minerU figure caption is available; otherwise the no-context fallback.
+
+    ``language`` is the wiki's output language for the description itself
+    (NashSU 0.6.10). Empty keeps the caller's provider default and emits no
+    directive.
 
     Mirrors NashSU's buildCaptionPromptWithContext framing: the surrounding
     text MAY identify the figure (and should be anchored to) or MAY be
@@ -645,14 +717,16 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
 
     has_ctx = bool(ctx and (ctx.get("context_before") or ctx.get("context_after")
                             or ctx.get("mineru_caption")))
+    lang_line = _stage_1_3_language_instruction(language)
     if not has_ctx:
-        return (
+        return "\n\n".join(part for part in (
             f"Describe this image factually{page_hint} for a knowledge-base index. "
             "Include: any visible text verbatim (in its original language — do not "
             "translate), chart axes and values, diagram structure (boxes/arrows/labels), "
-            "key visual elements. Describe in the language of the surrounding source "
-            "text. Do not speculate. 2 to 4 sentences, plain text, no markdown."
-        )
+            "key visual elements. Do not speculate. 2 to 4 sentences, plain text, "
+            "no markdown.",
+            lang_line,
+        ) if part)
 
     before = (ctx or {}).get("context_before", "")
     after = (ctx or {}).get("context_after", "")
@@ -676,9 +750,10 @@ def _stage_1_3_build_user_prompt(img: dict, ctx: dict | None) -> str:
         "visual elements. If the surrounding text/caption explains what the figure "
         "shows, use it to convey the figure's meaning — but do NOT output the figure "
         "label or figure number as the caption. Do not invent details not visible in "
-        "the image. Describe in the language of the surrounding source text. "
-        "2 to 4 sentences, plain text, no markdown."
+        "the image. 2 to 4 sentences, plain text, no markdown."
     )
+    if lang_line:
+        parts.append(lang_line)
     return "\n\n".join(parts)
 
 
@@ -716,7 +791,8 @@ def _stage_1_3_vlm_post_json(url: str, body: bytes, headers: dict,
 
 
 def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
-                                 ctx_map: dict[str, dict]) -> tuple[str | None, str | None]:
+                                 ctx_map: dict[str, dict],
+                                 language: str = "") -> tuple[str | None, str | None]:
     """Caption a single image against ONE provider with one VLM call.
 
     ``provider`` is a flat bundle (api_key/base_url/model/protocol) — see
@@ -752,7 +828,7 @@ def _stage_1_3_caption_one_image(img: dict, provider: dict, media_dir: Path,
         ctx = ctx_map.get(_stage_1_3_md5_8(img_path))
     except Exception:
         ctx = None
-    prompt_text = _stage_1_3_build_user_prompt(img, ctx)
+    prompt_text = _stage_1_3_build_user_prompt(img, ctx, language)
 
     # ── Protocol dispatch: anthropic vs openai ──
     protocol = (provider["protocol"] or "anthropic").lower()
@@ -848,6 +924,7 @@ def _stage_1_3_resolve_timeout(configured: int) -> int:
 
 def _stage_1_3_caption_one_image_with_failover(
     img: dict, config: Config, media_dir: Path, ctx_map: dict[str, dict],
+    language: str = "",
 ) -> tuple[str | None, str | None, str]:
     """Try the primary provider, then the fallback (if configured) on primary
     exhaustion. Returns (caption, error, provider_label) — label is whichever
@@ -893,12 +970,22 @@ def _stage_1_3_caption_one_image_with_failover(
 # Parallel per-image dispatch
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _stage_1_3_pending_images(images: list[dict], media_dir: Path) -> list[dict]:
+def _stage_1_3_pending_images(images: list[dict], media_dir: Path,
+                              language: str = "") -> list[dict]:
     """Return images that still need a VLM caption.
 
     An image is pending if it has no .caption.txt, or the existing sidecar is
     a VLM-failure placeholder / undersized (so transient failures get retried
-    on the next run)."""
+    on the next run).
+
+    ``language`` adds NashSU 0.6.10's language dimension: when the directory
+    records a DIFFERENT output language, its captions are stale prose in the
+    wrong language and every image is pending again. An UNMARKED directory is
+    left alone — pre-marker corpora must not re-caption wholesale."""
+    if language:
+        recorded = _stage_1_3_read_caption_language(media_dir)
+        if recorded and recorded != language:
+            return list(images)
     pending = []
     for img in images:
         cap_path = media_dir / (img["filename"] + ".caption.txt")
@@ -985,6 +1072,7 @@ def _stage_1_3_caption_one_round(
     media_dir: Path,
     ctx_map: dict,
     max_workers: int = CAPTION_MAX_WORKERS,
+    language: str = "",
 ) -> int:
     """One parallel pass over `pending`. Returns captioned count.
 
@@ -1001,7 +1089,7 @@ def _stage_1_3_caption_one_round(
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_img = {
             executor.submit(_stage_1_3_caption_one_image_with_failover,
-                            img, config, media_dir, ctx_map): img
+                            img, config, media_dir, ctx_map, language): img
             for img in pending
         }
         done = 0
@@ -1097,12 +1185,20 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
         return 0  # unreachable — _caption_no_key_pause always raises
 
     label = f" [{source_label}]" if source_label else ""
-    first_pending = _stage_1_3_pending_images(images, media_dir)
+    # The context map is needed to detect the output language, so it is
+    # built before the pending scan (it is cached per media dir anyway).
+    ctx_map = _stage_1_3_build_context_map(config, media_dir)
+    language = _stage_1_3_caption_language(ctx_map)
+    first_pending = _stage_1_3_pending_images(images, media_dir, language)
     if not first_pending:
         print(f"[caption]{label} (cached) All {len(images)} images already captioned")
+        _stage_1_3_write_caption_language(media_dir, language)
         return 0
 
-    ctx_map = _stage_1_3_build_context_map(config, media_dir)
+    recorded = _stage_1_3_read_caption_language(media_dir)
+    if recorded and recorded != language:
+        print(f"[caption]{label} output language changed "
+              f"{recorded} → {language}: re-captioning all {len(images)} images")
     total_captioned = 0
     pending = first_pending
     for round_idx in range(_MAX_CAPTION_ROUNDS):
@@ -1129,8 +1225,12 @@ def _stage_1_3_caption_images_batch(images: list[dict], config: Config, media_di
                 media_dir,
                 ctx_map,
                 max_workers=max_workers,
+                language=language,
             )
-        pending = _stage_1_3_pending_images(images, media_dir)
+        # The marker is rewritten before the next scan so the just-written
+        # captions are not re-flagged as stale by their own language switch.
+        _stage_1_3_write_caption_language(media_dir, language)
+        pending = _stage_1_3_pending_images(images, media_dir, language)
         if not pending:
             break
 

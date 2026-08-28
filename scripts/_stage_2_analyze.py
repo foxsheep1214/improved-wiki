@@ -747,7 +747,9 @@ Analyze THIS CHUNK of the source. Extract:
    or datasets that are central or materially discussed, not every proper noun.
    A named theoretical/statistical model, method, or technique (e.g. Swerling
    model, matched filter) is a CONCEPT, not an entity.
-3. Core claims/findings, their evidence, formulas, and material data points
+3. Core claims/findings, their evidence, formulas, material data points, and
+   any **structured data** the chunk states verbatim (tables, register/bit-field
+   maps, pinouts, schema/DDL definitions, API signatures, configuration blocks)
 4. Connections to existing wiki pages (if any)
 5. An **Updated Global Digest** — a COMPACT document-level digest that
    incorporates this chunk and preserves prior cross-chunk context. This is a
@@ -851,6 +853,24 @@ formulas:
     meaning: '...'
     table_ref: "Table N"      # cite source table/figure when available
 
+# ⚠️  STRUCTURED DATA — transcribe, do not summarize (NashSU 0.6.9 parity):
+#   When this chunk states data in a structured form, copy it VERBATIM here and
+#   never paraphrase it into prose. Exact field names, types, units, limits,
+#   constraints, keys, indexes, bit positions, and pin numbers are the reason
+#   the source was ingested — a prose retelling loses all of them.
+#   Shapes that qualify: Markdown/plain tables (parameter, pinout, ordering,
+#   comparison), register and bit-field maps, SQL DDL / CREATE TABLE, schema
+#   definitions, API signatures, and configuration blocks.
+#   `content` is a block scalar (|) holding the rows/lines exactly as written.
+#   Omit the key entirely (or leave `[]`) when the chunk has no such data —
+#   never invent or reformat one. Do NOT put formulas here; they go above.
+structured_data:
+  - label: "Table 3 Pin functions — p.12"   # what it is + its source anchor
+    content: |
+      | Pin | Name | Type | Function |
+      |-----|------|------|----------|
+      | 1   | VDD  | P    | Supply   |
+
 connections_to_existing_wiki:
   - existing_page: "..."
     relationship: "extends" | "contrasts" | "applies" | "cites"
@@ -918,6 +938,7 @@ _CHUNK_ANALYSIS_LIST_FIELDS = (
     "concepts_found",
     "claims",
     "formulas",
+    "structured_data",
     "connections_to_existing_wiki",
     "schema_typed_candidates",
 )
@@ -1019,6 +1040,19 @@ def normalize_and_validate_chunk_analysis(
             formula.get("formula"), f"{prefix}.formula")
         formula["meaning"] = _analysis_nonempty_string(
             formula.get("meaning"), f"{prefix}.meaning")
+
+    for position, block in enumerate(normalized["structured_data"], 1):
+        prefix = f"structured_data[{position}]"
+        block["label"] = _analysis_nonempty_string(
+            block.get("label"), f"{prefix}.label")
+        # `content` keeps its interior whitespace: table alignment and code
+        # indentation ARE the verbatim payload. Only the outer blank lines a
+        # YAML block scalar adds are stripped.
+        content = block.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise ChunkAnalysisValidationError(
+                f"{prefix}.content must be a non-empty string")
+        block["content"] = content.strip("\n")
 
     for position, connection in enumerate(
             normalized["connections_to_existing_wiki"], 1):

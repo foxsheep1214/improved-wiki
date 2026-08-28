@@ -253,7 +253,7 @@ class TestCorruptImageRoundClassification(unittest.TestCase):
         cap._stage_1_3_caption_one_image_with_failover = self._orig
 
     def test_corrupt_images_do_not_trip_circuit_breaker(self):
-        def fake_failover(img, config, media_dir, ctx_map):
+        def fake_failover(img, config, media_dir, ctx_map, language=""):
             return None, "corrupt-image: OSError: image file is truncated", "primary"
         cap._stage_1_3_caption_one_image_with_failover = fake_failover
 
@@ -285,7 +285,7 @@ class TestInvalidCaptionRoundClassification(unittest.TestCase):
         cap._stage_1_3_caption_one_image_with_failover = self._orig
 
     def test_invalid_caption_is_pending_not_counted_or_logged_success(self):
-        def fake_failover(img, config, media_dir, ctx_map):
+        def fake_failover(img, config, media_dir, ctx_map, language=""):
             return "Sorry, I cannot describe this image.", None, "primary"
 
         cap._stage_1_3_caption_one_image_with_failover = fake_failover

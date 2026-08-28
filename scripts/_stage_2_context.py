@@ -33,8 +33,10 @@ _TRUNCATION_MARKER = "\n... [middle omitted to fit context budget] ...\n"
 # Analysis detail levels, most detailed first. Each level names the fields it
 # gives up; the builder picks the FIRST level whose rendered analyses fit.
 # Ordering rationale: source_quotes duplicate raw evidence; connections are
-# re-derived by Stage 2.3; formulas are separately fed verbatim to Stage 2.4 by
-# _collect_formulas_block; key_details elaborate a definition that survives.
+# re-derived by Stage 2.3; formulas and structured_data are separately fed
+# verbatim to Stage 2.4 by _collect_formulas_block /
+# _collect_structured_data_block; key_details elaborate a definition that
+# survives.
 # Names, definitions, claims and schema-typed candidates are what generation
 # selects pages from, so they are the last things to go.
 _DETAIL_LEVELS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -44,18 +46,19 @@ _DETAIL_LEVELS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "core-fields",
         ("source_quotes", "connections_to_existing_wiki", "formulas",
-         "key_details"),
+         "structured_data", "key_details"),
     ),
     (
         "names-claims-only",
         ("source_quotes", "connections_to_existing_wiki", "formulas",
-         "key_details", "definition", "significance", "evidence", "rationale"),
+         "structured_data", "key_details", "definition", "significance",
+         "evidence", "rationale"),
     ),
     (
         "names-only",
         ("source_quotes", "connections_to_existing_wiki", "formulas",
-         "key_details", "definition", "significance", "evidence", "rationale",
-         "claims"),
+         "structured_data", "key_details", "definition", "significance",
+         "evidence", "rationale", "claims"),
     ),
 )
 

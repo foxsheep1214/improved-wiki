@@ -70,6 +70,7 @@ def _valid_analysis(name: str = "soc", *, index: int = 1, total: int = 1) -> dic
         "entities_found": [],
         "claims": [],
         "formulas": [],
+        "structured_data": [],
         "connections_to_existing_wiki": [],
         "schema_typed_candidates": [],
         "updated_global_digest": _valid_digest(name),

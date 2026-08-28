@@ -4,6 +4,21 @@
 
 现行**唯一** OCR 路径：**hybrid-engine via local API server**（`mineru.cli.fast_api` 启动本地服务，管线调 `/file_parse` 接口）。`mineru -b pipeline` CLI 路径已于 2026-06-24 移除（3.4.0 的 pipeline CLI 存在 502 bug）。
 
+## Backend 名称随 MinerU 版本变化（NashSU 0.6.10 parity）
+
+MinerU **3.0.x–3.2.x** 用的是带 `-auto-` 的 backend 名，3.3+ 改回不带的：
+
+| 本管线使用 | MinerU 3.0–3.2 需改成 |
+|---|---|
+| `hybrid-engine` | `hybrid-auto-engine` |
+| `vlm-engine` | `vlm-auto-engine` |
+
+当前锁定 3.4.0，用 `hybrid-engine` **正确，无需改动**。仅在降级到 3.0–3.2、
+或换到装了旧 MinerU 的机器时才需要换名——届时 `/file_parse` 会因未知 backend
+报错，不是静默降级。NashSU 在 `src/lib/mineru.ts:676` 用
+`localMineruBackendForVersion()` 按版本号自动映射；本管线不做自动映射（单一
+固定版本，加映射属于投机性代码），只在此备案。
+
 ## Current (2026-06-23)
 
 | Component | Version | Notes |

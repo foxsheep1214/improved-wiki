@@ -307,7 +307,9 @@ default; its delete-orphans continuation is always human-gated at exit 102.
 - Queue scan/run: `scripts/wiki-monitor.sh`, `scripts/run-queue.sh`
 - Chat ingest: `references/chat-ingest.md`
 - Deep research: `references/deep-research.md`,
-  `scripts/search_local.py`, `scripts/write_research_page.py`
+  `scripts/search_local.py`, `scripts/write_research_page.py`,
+  `scripts/batch_research_reviews.py` (selects a review backlog for research;
+  never researches — the flow's gates still run per topic)
 - Save chat: `references/save-chat-to-wiki.md`
 - Review sweep/process: `references/review-sweep.md`,
   `references/process-reviews.md`

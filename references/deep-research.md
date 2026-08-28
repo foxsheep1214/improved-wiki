@@ -39,6 +39,7 @@ synthesis/thesis 页，不自动生成 review，不修改 index/log/overview，�
 | 研究页不再 `autoIngest` | 默认绝不调用 `ingest.py` |
 | embedding 开启时仅 upsert 该页，失败只告警 | 可选运行 page-scoped upsert；失败不撤销研究页 |
 | 内存队列最大并发 3 | CLI/对话适配为每个 topic 独立完成；批量时串行写入 |
+| 0.6.10 面板全选 → 批量 Deep Research、可重跑已完成/失败任务 | `batch_research_reviews.py` 只做**选取**（预览 → `--apply` 写工作单），研究本身仍逐条走本文档全部门禁；`--rerun` 对齐重跑已完成 |
 
 ## 1. 触发与确认
 
@@ -53,6 +54,7 @@ synthesis/thesis 页，不自动生成 review，不修改 index/log/overview，�
 
 - 用户在命令或自然语言中明确给出 topic，已经构成确认；不要重复追问。
 - 用户在 Process Reviews 中选择 **Deep Research**，已经确认该 review 的研究范围。
+- 用户对 `batch_research_reviews.py` 的工作单执行 `--apply`，等同于对其中**每一个** topic 都做了上述确认（NashSU 0.6.10 面板全选语义）；逐条执行时不要再问同一个范围问题。工作单由人给过滤条件、人敲 `--apply`，代理不得自行选定或执行。
 - 如果 topic 是由 Graph gap、lint finding 或代理主动建议而来，先展示拟定 topic
   和 queries，等用户确认后才开始外部检索与写入。
 - v0.6.7 对直接输入的宽泛 topic 不插入澄清步骤。除非用户的意图本身无法

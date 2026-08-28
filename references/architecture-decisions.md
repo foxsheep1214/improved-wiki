@@ -74,3 +74,63 @@ parallelism, recovery, and tests hard to reason about.
 
 **Consequences:** New code imports focused modules. Compatibility names remain,
 but internal private monkeypatching should migrate to the owning module.
+
+## ADR-006 — NashSU v0.6.11 sync: what was adopted and what was not
+
+**Decision:** The NashSU baseline moves from v0.6.8 to **v0.6.11**. Of the
+three intervening releases, exactly four things landed here; the rest were
+verified as already-covered, already-stronger, or application-only.
+
+**Adopted**
+
+- **Structured data verbatim (0.6.9)** — NashSU added one rule to three ingest
+  prompts (`ingest.ts:2196/2321/2833`). Because Stage 2.2 here emits YAML
+  rather than free-form markdown, the rule needed a slot: `structured_data`
+  is that slot, modelled on `formulas` (dedicated verbatim list, re-injected
+  into Stage 2.4 by its own collector with a REUSE-EXACTLY directive, dropped
+  at the same context-degradation tier). A bare prose rule would have had
+  nowhere to write, or would have landed in `source_quotes` — the first field
+  the budget ladder discards.
+- **Caption output language (0.6.10)** — captions now follow the wiki's output
+  language instead of the source's. The old behaviour was labelled "NashSU
+  parity — language-NEUTRAL"; that parity expired at 0.6.10. NashSU folds the
+  language into its caption cache key; the cache here is a `.caption.txt`
+  sidecar, so the language dimension lives in a per-media-dir
+  `.caption-language` marker. An **unmarked** directory is never invalidated —
+  the installed corpora hold thousands of pre-marker captions.
+- **Batch Deep Research over reviews (0.6.10)** — `batch_research_reviews.py`,
+  selection only. See `process-reviews.md` Step 3c.
+- **MinerU 3.0–3.2 backend aliases (0.6.10)** — recorded in
+  `mineru-version-tracking.md`, deliberately not auto-mapped (single pinned
+  version; a version-sniffing map would be speculative code).
+
+**Rejected as already covered or stronger here**
+
+- Language-detection fixes (0.6.10): `_language.py` already carries every
+  NashSU fix plus a non-Latin share floor, a Greek word-run test, a kana-share
+  ratio, and ≥2-function-word requirements. NashSU still decides a language on
+  two characters.
+- Wikilink consistency (0.6.10): `_enrich_wikilinks.py` already validates
+  targets against on-disk slugs, and adds heading/fence skips and alias
+  preservation.
+- Single-page vector index (0.6.9): `build_embeddings.py upsert --page`.
+- Large duplicate scans (0.6.10): `_dedup_embedding.py` is the same
+  prefilter + top-k + union-find shape.
+- Windows CRLF integrity (0.6.10): `_ingest_sanitize.py` rebuilds from capture
+  groups and never had the hard-coded-offset bug.
+- CJK filenames (0.6.9): filenames are generated deterministically in code and
+  never pass through the model.
+- Natural numeric ordering (0.6.11): every numeric name generated here is
+  `:04d` zero-padded, so lexicographic order already equals numeric order at
+  every enumeration site. The batch CLI's argv order is the caller's explicit
+  choice and is load-bearing for `_assert_batch_resume_order` — not sorted.
+
+**Not applicable**
+
+- Configurable ingest reasoning effort (0.6.11): NashSU hard-coded
+  `reasoning: off` on ingest calls and some providers answered 400. Structured
+  generation here runs through Claude Code subagents and sends no reasoning
+  field at all.
+- Everything application-layer: MCP tools and HTTP APIs, the answer-context
+  panel, streaming chat, file-history retention, scheduled-import filters,
+  source-filter UI, i18n, provider routing, desktop shell fixes.

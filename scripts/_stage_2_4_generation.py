@@ -258,6 +258,47 @@ def _collect_formulas_block(analyses: list[dict], cap: int = 60) -> str:
     )
 
 
+def _collect_structured_data_block(analyses: list[dict], cap: int = 20) -> str:
+    """Render the verbatim structured data Stage 2.2 transcribed (NashSU 0.6.9).
+
+    Same problem and same fix as ``_collect_formulas_block``: generation sees
+    concept definitions plus a budget-trimmed source excerpt, so a parameter
+    table, register map, or DDL block that falls outside that excerpt gets
+    reconstructed from memory — which for tabular data means quietly losing
+    exact field names, units, limits, and pin numbers. Feeding the exact rows
+    back keeps them anchored to the source.
+    """
+    lines: list[str] = []
+    seen: set[str] = set()
+    for ca in analyses:
+        if not isinstance(ca, dict):
+            continue
+        for block in ca.get("structured_data", []) or []:
+            if not isinstance(block, dict):
+                continue
+            content = str(block.get("content", "")).strip("\n")
+            if not content or content in seen:
+                continue
+            seen.add(content)
+            label = str(block.get("label", "")).strip() or "structured data"
+            lines.append(f"## {label}\n{content}")
+            if len(lines) >= cap:
+                break
+        if len(lines) >= cap:
+            break
+    if not lines:
+        return ""
+    return (
+        "\n# Structured data (transcribed verbatim from the source in Stage 2.2"
+        " — REUSE EXACTLY)\n"
+        "When a page covers one of these, reproduce it as a Markdown table or a\n"
+        "fenced code block with the SAME rows, field names, types, units, limits,\n"
+        "keys, and pin/bit numbers. Do NOT retell it as prose and do NOT drop\n"
+        "columns to make it shorter.\n\n"
+        + "\n\n".join(lines) + "\n"
+    )
+
+
 def _schema_routing_block(config: Config) -> str:
     """Inject NashSU's authoritative schema routing and optional purpose."""
     text = load_schema_md(config)
@@ -407,6 +448,11 @@ required. Emphasize only what is genuinely important:
 - key named things and key ideas that materially shape the source;
 - core arguments/findings and the evidence that supports them;
 - meaningful connections, contradictions, caveats, or open questions.
+
+Keep structured source data verbatim: when the summary reports a parameter
+table, pinout, register map, schema/DDL, API signature, or configuration block,
+render it as a Markdown table or fenced code block with the source's own field
+names, types, units, and limits — never flatten it into a sentence.
 
 Do not reproduce the analysis as an exhaustive inventory. Do not list every
 generated page, every chapter topic, every entity mention, or every per-chunk
@@ -888,6 +934,7 @@ def _stage_2_4_build_all_prompt(
         source_section = ""
 
     formulas_section = _collect_formulas_block(chunk_analyses)
+    structured_data_section = _collect_structured_data_block(chunk_analyses)
     schema_section = _schema_routing_block(config)
     tags_section = _tags_reuse_section(config)
     extra_rules = _extra_rules(_source_page_slug(file_path, config))
@@ -964,7 +1011,7 @@ marked UPDATE EXISTING PAGE.
 # Source
 Source: {file_path.stem}
 Chunks: {len(chunk_analyses)}
-{template_section}{source_section}{schema_context_section}{formulas_section}{schema_section}
+{template_section}{source_section}{schema_context_section}{formulas_section}{structured_data_section}{schema_section}
 # Existing wiki associations (Stage 2.3):
 # - same-type target → generate its exact FILE path as an UPDATE
 # - cross-type target → do not duplicate; wikilink only
@@ -1031,6 +1078,11 @@ Rules:
 8. Result-file integrity: every LaTeX command must retain a literal reverse-solidus
    (U+005C) before its command name in the final .txt file. Never emit C0 control
    characters in math (especially form-feed, carriage-return, or tab).
+9. Preserve structured source data verbatim: copy tables, register/bit-field maps,
+   pinouts, schema/DDL definitions, API signatures, and configuration into Markdown
+   tables or fenced code blocks. Exact field names, types, units, limits, constraints,
+   keys, indexes, and pin/bit numbers must survive — a prose-only retelling loses the
+   structure the source was ingested for.
 {extra_rules}
 {_CONCEPT_SKELETON_SECTION}{tags_section}
 # Output Format — EXACT

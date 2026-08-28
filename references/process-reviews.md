@@ -220,6 +220,44 @@ python3 "$SKILL_DIR/scripts/batch_resolve_reviews.py" --project <wiki-root> \
 - Run `sweep_reviews.py` first when the backlog predates later ingests — sweep
   is the automatic side and removes items that no longer need any human at all.
 
+### Step 3c: Batch Deep Research (NashSU 0.6.10 parity)
+
+0.6.10 wired the same select-all checkbox into Deep Research and added rerun of
+completed/failed tasks (`review-batch-research.ts`). The port splits NashSU's
+one click in two so the 🔴 gate survives — **the tool selects, it never
+researches**:
+
+```bash
+# 1. preview the exact worklist a filter selects — writes nothing, no network
+python3 "$SKILL_DIR/scripts/batch_research_reviews.py" --project <wiki-root> \
+    --type missing-page --created-before 2026-08-01 --limit 20
+# 2. the human authorizes that exact set
+... --apply          # writes .llm-wiki/research-batch.json only
+# 3. the agent runs deep-research.md for each entry, ONE TOPIC PER INVOCATION
+```
+
+- Eligible types are `suggestion` and `missing-page` only
+  (`reviewSupportsResearch`). Passing `--type contradiction` selects nothing
+  rather than widening.
+- topic = `reviewResearchTopic` (title, else the description's first line),
+  with the `[type]` marker and `Missing page:`-style prefix stripped. This is
+  NOT `derive_review_topic` — that one builds a 40-char hyphenated *filename*.
+- seed queries = `search_queries` **verbatim** (deep-research.md §2.2), falling
+  back to `[topic]`. Older items sometimes carry a page slug
+  (`concepts/a-d-conversion-and-quantization`) rather than a search phrase;
+  that is passed through unchanged, matching NashSU — the preview shows it so
+  the human can narrow the filter or fix the item first.
+- `--apply` **is** the confirmation for every topic in the worklist — the same
+  authority as choosing Deep Research per item. Do not re-ask per topic.
+- `--rerun` reopens only items a previous run resolved with
+  `Research saved: …`. Research that FAILED left its item pending and is
+  already in the default set. A human `Skip` is never reopened.
+- The agent must not pick the filter and must not fire `--apply` on its own —
+  same boundary as `batch_resolve_reviews.py`.
+- Every per-item rule in Step 3 still applies to each entry: no auto-ingest,
+  no index/log writes, and resolve only after the page is saved
+  (`resolved_reason: "Research saved: wiki/queries/<file>.md"`).
+
 ### Step 4: Report
 
 Summary table: N processed — X research pages saved, Y pages created, Z skipped,
