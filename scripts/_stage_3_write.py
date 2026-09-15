@@ -31,7 +31,7 @@ __all__ = [
     "stage_3_2_build_slug_dirs",
     "stage_3_2_normalize_page_links",
     "stage_3_3_aggregate_repair",
-    "rebuild_index_deterministic",     # standalone recovery tool (rebuild_index.py)
+    "rebuild_index_deterministic",     # Stage 3.3 index + rebuild_index.py
 ]
 
 # Fallback per-side cap on body text shown to the LLM page-merge prompt, used
@@ -47,7 +47,7 @@ __all__ = [
 # sections for the part it never received.
 MERGE_PROMPT_BODY_CAP = 24000
 
-# Size above which index.md / overview.md is too large to hand the LLM for a
+# Size above which overview.md is too large to hand the LLM for a
 # whole-page rewrite (it would truncate mid-page). A CHARACTER cap: it bounds
 # an existing wiki page against the model's OUTPUT capacity, which is why it is
 # no longer derived from config.source_budget — that became an explicit token
@@ -1113,52 +1113,6 @@ def stage_3_2_write_wiki_file(
     atomic_write(path, content)
 
 
-# Category subdir → bilingual index.md section header (NashSU index parity).
-_INDEX_CATEGORIES: list[tuple[str, str]] = [
-    ("sources", "Sources（来源）"),
-    ("concepts", "Concepts（概念）"),
-    ("entities", "Entities（实体）"),
-    ("queries", "Queries（查询）"),
-    ("comparisons", "Comparisons（对比）"),
-    ("synthesis", "Synthesis（综合）"),
-    ("findings", "Findings（发现）"),
-    ("thesis", "Thesis（论题）"),
-    ("methodology", "Methodology（方法论）"),
-]
-
-
-def _scan_wiki_inventory(wiki_dir: Path) -> dict[str, list[tuple[str, str]]]:
-    """Scan category subdirs for (stem, title) — authoritative on-disk page list.
-
-    Used by Stage 3.3 index.md rewrite so the LLM gets the real page inventory
-    instead of trusting the current index text (which drifts: only Sources was
-    ever appended, Concepts/Entities/etc. went stale)."""
-    inventory: dict[str, list[tuple[str, str]]] = {}
-    for subdir, _header in _INDEX_CATEGORIES:
-        d = wiki_dir / subdir
-        if not d.is_dir():
-            continue
-        pages: list[tuple[str, str]] = []
-        for f in sorted(d.rglob("*.md")):
-            try:
-                content = f.read_text(encoding="utf-8", errors="ignore")
-                fm, _ = parse_frontmatter(content)
-                title = ""
-                if isinstance(fm, dict):
-                    t = fm.get("title")
-                    if isinstance(t, str):
-                        title = t.strip().strip('"').strip("'")
-                if not title:
-                    m = re.search(r"^#\s+(.+)$", content, re.MULTILINE)
-                    title = m.group(1).strip() if m else f.stem
-                pages.append((f.stem, title))
-            except (OSError, UnicodeDecodeError):
-                pages.append((f.stem, f.stem))
-        if pages:
-            inventory[subdir] = pages
-    return inventory
-
-
 def rebuild_index_deterministic(wiki_dir: Path) -> str:
     """Rebuild index.md in NashSU 0.6.6's application-owned format.
 
@@ -1281,126 +1235,32 @@ def stage_3_3_aggregate_repair(
     files_written.append(PageRef.parse(
         log_path, config.wiki_root, config.wiki_dir).project_relative)
 
-    # index.md — LLM whole-page rewrite (NashSU parity, option A: every ingest).
-    # Fed by an authoritative on-disk page inventory so ALL categories stay in
-    # sync, not just Sources. Deterministic single-line append is the hard
-    # fallback when the LLM call fails or the index exceeds the size cap.
+    # index.md — deterministic full rebuild from the on-disk inventory on every
+    # ingest, whatever the wiki size; the model never writes it.
+    #
+    # Decision 2026-09-15: the LLM whole-page rewrite (wikis ≤250 pages) and
+    # its single-line source append (>250 pages, index over
+    # AGGREGATE_REPAIR_MAX_CHARS, or a failed rewrite) are both retired. The
+    # rewrite followed NashSU's earlier model-written aggregate repair, which
+    # the v0.6.11 baseline no longer has: ingest.ts tells the model "Do not
+    # generate wiki/index.md or wiki/overview.md" (:2270) and updates the
+    # index in code after the FILE writes (updateWikiIndexDeterministically,
+    # :1291/:1572). The append added only the source line, so on a large wiki
+    # (every ingest) the typed pages the same ingest wrote never reached the
+    # index — HardwareWiki 2026-09-14: 316 missing, 13 unsorted source lines.
+    #
+    # Deliberate divergence: NashSU's per-ingest update prepends new links to
+    # a "## Recently Updated" section capped at 200 lines (:1613) and leaves
+    # regrouping to its manual rebuild_wiki_index command. Stage 3.3 runs the
+    # port of that full rebuild every time, so the index stays complete,
+    # type-grouped and title-sorted and nothing falls off a capped list.
+    # stage_3_2_write_wiki_file skips byte-identical content, so a handoff
+    # replay of this stage adds no page-history snapshot.
     index_path = config.wiki_dir / "index.md"
-    current_index = index_path.read_text(encoding="utf-8") if index_path.exists() else ""
-
-    def _index_append_fallback() -> None:
-        source_target = source_path.relative_to(config.wiki_dir).with_suffix(
-            ""
-        ).as_posix()
-        source_content = source_path.read_text(
-            encoding="utf-8",
-            errors="ignore",
-        )
-        source_fm, _ = parse_frontmatter(source_content)
-        source_title = str(
-            source_fm.get("title") or source_path.stem
-        ).strip().strip('"').strip("'")
-        new_link = f"- [[{source_target}|{source_title}]]"
-        if not current_index:
-            # Fresh wiki: write the skeleton WITH the new source link, not an
-            # empty skeleton (the latter silently dropped the first ingest).
-            stage_3_2_write_wiki_file(
-                index_path,
-                f"# Wiki Index\n\n## source\n\n{new_link}\n",
-                config,
-            )
-            files_written.append(str(index_path.relative_to(config.wiki_root)))
-            return
-        if (
-            f"[[{source_target}|" in current_index
-            or f"[[{source_target}]]" in current_index
-        ):
-            return
-        # Accept both the 0.6.6 type header and legacy bilingual headers.
-        m = re.search(
-            r"(?mi)^##\s+(?:source|Sources(?:（来源）)?)\s*$",
-            current_index,
-        )
-        if m:
-            insert_at = m.end()
-            updated = current_index[:insert_at] + f"\n\n{new_link}" + current_index[insert_at:]
-        else:
-            print("[stage 3.3] ⚠️ index.md has no source section — "
-                  "appending one at end of file")
-            updated = (
-                current_index.rstrip("\n")
-                + f"\n\n## source\n\n{new_link}\n"
-            )
-        stage_3_2_write_wiki_file(index_path, updated, config)
-        files_written.append(str(index_path.relative_to(config.wiki_root)))
-
-    INDEX_MAX_CHARS = AGGREGATE_REPAIR_MAX_CHARS
-    # LLM whole-page rewrite can only produce ~250 bullets within the 4096-token
-    # output cap. For larger wikis the LLM cannot emit a complete index, so we
-    # fall back to the deterministic append (which at least keeps Sources fresh).
-    # A deterministic full-rebuild for large wikis is future work.
-    INDEX_REWRITE_MAX_PAGES = 250
-    inventory = _scan_wiki_inventory(config.wiki_dir)
-    total_pages = sum(len(v) for v in inventory.values())
-    skip_reason = ""
-    if len(current_index) > INDEX_MAX_CHARS:
-        skip_reason = f"index too large ({len(current_index)} > {INDEX_MAX_CHARS})"
-    elif total_pages > INDEX_REWRITE_MAX_PAGES:
-        skip_reason = (f"wiki has {total_pages} pages (> {INDEX_REWRITE_MAX_PAGES}), "
-                       f"LLM cannot emit a complete index")
-
-    if skip_reason:
-        print(f"[stage 3.3] {skip_reason} — LLM rewrite skipped, using append fallback")
-        _index_append_fallback()
-    else:
-        inv_lines: list[str] = []
-        for subdir, header in _INDEX_CATEGORIES:
-            for stem, title in inventory.get(subdir, []):
-                inv_lines.append(f"- [[{stem}]] — {title}")
-        inventory_text = "\n".join(inv_lines) or "(no pages found)"
-
-        prompt = f"""You maintain the index of a knowledge-base wiki. Below is the
-CURRENT index.md, followed by the AUTHORITATIVE on-disk page inventory (scanned
-from the filesystem — the ground truth of what pages exist now).
-
-Rewrite the COMPLETE index.md so every category lists exactly its inventory
-pages, under these bilingual section headers in this order (omit empty ones):
-Sources（来源）, Concepts（概念）, Entities（实体）, Queries（查询）,
-Comparisons（对比）, Synthesis（综合）, Findings（发现）, Thesis（论题）,
-Methodology（方法论）.
-
-Rules:
-- Preserve existing entries' descriptions verbatim where the stem matches.
-- For new entries (in inventory but not in current index), use the inventory
-  "— title" as the description.
-- One bullet per page: `- [[<stem>]] — <description>`. Sort within each section
-  alphabetically by stem.
-- Keep the existing frontmatter and top-level `# ` title unchanged.
-
-# CURRENT index.md
-{current_index or "(empty)"}
-
-# ON-DISK INVENTORY (authoritative)
-{inventory_text}
-
-# Task
-Output ONLY the complete new index.md. No commentary.
-"""
-        try:
-            response, _ = call_anthropic_protocol(prompt, config, max_tokens=4096)
-            if "---FILE:" in response:
-                print("[stage 3.3] Index LLM response contained FILE blocks — falling back")
-                _index_append_fallback()
-            elif "## " in response and "[[" in response:
-                stage_3_2_write_wiki_file(index_path, response.strip() + "\n", config)
-                files_written.append(str(index_path.relative_to(config.wiki_root)))
-                print(f"[stage 3.3] Index rewritten via LLM ({len(response)} chars)")
-            else:
-                print("[stage 3.3] Index LLM response missing sections/links — falling back")
-                _index_append_fallback()
-        except Exception as e:
-            print(f"[stage 3.3] Index LLM rewrite failed ({e}) — using append fallback")
-            _index_append_fallback()
+    index_text = rebuild_index_deterministic(config.wiki_dir)
+    stage_3_2_write_wiki_file(index_path, index_text, config)
+    entry_count = index_text.count("\n- [[")
+    print(f"[stage 3.3] Index rebuilt from on-disk pages ({entry_count} entries)")
     files_written.append(PageRef.parse(
         index_path, config.wiki_root, config.wiki_dir).project_relative)
 

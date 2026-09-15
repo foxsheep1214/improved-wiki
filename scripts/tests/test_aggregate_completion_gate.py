@@ -54,11 +54,6 @@ class TestAggregateCompletionGate(unittest.TestCase):
             source.write_text("# x\n", encoding="utf-8")
 
             def _llm(prompt, config, max_tokens):
-                if "# CURRENT index.md" in prompt:
-                    return (
-                        "# Index\n\n## Sources（来源）\n\n- [[x]] — x\n",
-                        "end_turn",
-                    )
                 return ("# Overview\n\nTopic synthesis.\n", "end_turn")
 
             stage3.call_anthropic_protocol = _llm

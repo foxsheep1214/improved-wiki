@@ -144,9 +144,10 @@ wiki/log.md
 **来源**：`ingest.ts:44` — `AGGREGATE_WIKI_PATHS`。这三个文件由 Stage 3.3 在每次 ingest 时维护（见 `_stage_3_write.py::stage_3_3_aggregate_repair`），**不应由用户手写**：
 
 - `log.md`：完成事件的人类可读投影（确定性，从不调用 LLM）；只在 Stage 3.7 成功后的 finalization 按 `run_id` 追加，历史权威是 `.llm-wiki/ingest-events.jsonl`。
-- `index.md` / `overview.md`：默认由 **LLM 整页重写**（喂入磁盘上的权威页面清单 / 内容综合），LLM 调用失败或超出体量上限时回退到确定性追加。
+- `index.md`：每次 ingest 按磁盘页面**确定性全量重建**（`rebuild_index_deterministic`：按 frontmatter `type` 分组、组内按标题排序、写完整相对路径），不调 LLM，无页数上限。
+- `overview.md`：由 **LLM 整页重写**（内容综合）；超出 `AGGREGATE_REPAIR_MAX_CHARS` 时跳过，LLM 调用失败时保留原文。
 
-> 注意：与早期文档「纯程序化 append，LLM 永远不应生成」的表述不同——index.md/overview.md 现在确实经过 LLM 重写，需留意内容漂移风险（重写 prompt 已要求逐字保留已有条目描述与 frontmatter）。
+> 注意：index.md 自 2026-09-15 起不再经过 LLM（原 ≤250 页的 LLM 整页重写与 >250 页的 Sources 单行 append 均已移除，理由见 `ingest-stages-mandatory.md` Stage 3.3）；overview.md 仍由 LLM 重写，需留意内容漂移风险。
 
 ---
 

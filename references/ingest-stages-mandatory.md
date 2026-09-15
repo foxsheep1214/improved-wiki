@@ -142,7 +142,8 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
 
 ### Stage 3.3 · Aggregate Repair
-- **作用**：紧接 3.2 写盘后执行：保证 log.md 聚合文件存在 + index.md LLM 整页重写（失败/超容量/>250 页时 Sources 单行 append）+ overview.md 尽力重写。此时尚未过 Stage 3.7，**不得**写完成记录。
+- **作用**：紧接 3.2 写盘后执行：保证 log.md 聚合文件存在 + index.md 按磁盘页面确定性全量重建（`rebuild_index_deterministic`，与 `rebuild_index.py` 同一函数：按 frontmatter `type` 分组、组内按标题排序、写完整相对路径；不调 LLM，无页数上限，内容不变时不重写）+ overview.md 尽力重写。此时尚未过 Stage 3.7，**不得**写完成记录。
+- **index 不走 LLM（2026-09-15）**：旧的 LLM 整页重写（≤250 页）与 Sources 单行 append（>250 页/超容量/失败）已移除。单行 append 只补 source 一行，大 wiki 每次都走它，同次 ingest 写出的 concept/entity 等页从不入 index（HardwareWiki 缺 316 页）。NashSU v0.6.11 同样不让模型写 index（`ingest.ts:2270`，写盘后代码更新）；刻意差异：NashSU 每次只往封顶 200 行的 `## Recently Updated` 段追加，本项目每次全量重建。
 - **go/no-go**：log.md 必须存在，index.md 必须含 source link；两页以 `aggregate_done` 绑定。overview 是可选修复，不作为完成硬门禁。`ingest-cache.json` 不在本 stage 内写；它在 3.4 与 3.5 之后更新，并与 task manifest 的完整 page refs 一致。`wiki/log.md` 的 `INGEST COMPLETED` 由 finalization 按 run_id 投影。
 
 ### Stage 3.4 · 图片注入

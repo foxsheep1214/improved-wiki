@@ -164,7 +164,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
 | Scanned PDF detected | Normal — all PDFs take the unified minerU hybrid-engine/auto path; the PyMuPDF type sample only labels the `--dry-run` estimate | No action needed |
-| `wiki/index.md` is missing the new source link | Stage 3.3 normally rewrites index.md via the LLM; the deterministic fallback (`_index_append_fallback` in `_stage_3_write.py`) inserts after the `## Sources` header line via regex `^##\s+Sources.*$`, so a bilingual `## Sources（来源）` header works. The link is only skipped if there is no `## Sources` header at all | Make sure your `index.md` has a `## Sources` (or `## Sources（来源）`) header line |
+| `wiki/index.md` is missing pages or lists deleted ones | Stage 3.3 rebuilds index.md from the pages on disk on every ingest (`rebuild_index_deterministic` in `_stage_3_write.py`: grouped by frontmatter `type`, title-sorted, no LLM, no page limit), so drift only appears after pages are added, moved, or deleted outside an ingest. `Stage 3.3 index does not contain a link to <stem>` means the source page's filename stem is `index`, `overview`, or `log` (any case), which the rebuild skips | Run `python3 scripts/rebuild_index.py --project-root <wiki-root>` to preview the diff, then add `--apply`; rename a raw file whose stem collides with an aggregate page |
 
 ---
 

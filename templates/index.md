@@ -1,6 +1,6 @@
 # Index
 
-The LLM updates this on every Ingest. Do not edit by hand unless merging two wikis.
+Rebuilt from the pages on disk by every Ingest (Stage 3.3) and by `scripts/rebuild_index.py`; hand edits are overwritten.
 
 ## Sources
 
