@@ -20,8 +20,10 @@ measurable ways (audited 2026-08-05 against llm_wiki-0.6.7):
    (review-view.tsx:72-75) but the heuristic research branch does exactly the
    opposite — it falls through to create a page (:171-177).
 
-These tests pin the real behaviour so the routing cannot silently drift back
-into prose. Stdlib unittest only — no pytest, no network, no LLM calls.
+The original NashSU routing remains pinned except for one deliberate
+improved-wiki policy: confirm items use Fix / Skip because Approve closes an
+item without repairing its affected page. Stdlib unittest only — no pytest,
+no network, no LLM calls.
 """
 from __future__ import annotations
 
@@ -59,12 +61,10 @@ class OptionsComeFromTheType(unittest.TestCase):
             self.assertEqual(ra.default_options_for(rtype),
                              ["Create Page", "Skip"], rtype)
 
-    def test_confirm_falls_back_to_approve_skip(self):
-        """confirm is NashSU's unrecognized-type bucket (ingest.ts:2016-2020);
-        the prompt never asks for an OPTIONS line for it, so the parser's
-        `Approve | Skip` default is what a confirm item actually carries."""
+    def test_confirm_uses_repair_first_options(self):
+        """Deliberate divergence: confirm must fix before it can close."""
         self.assertEqual(ra.default_options_for("confirm"),
-                         ["Approve", "Skip"])
+                         ["Fix", "Skip"])
 
     def test_deep_research_button_is_gated_to_two_types(self):
         self.assertTrue(ra.offers_deep_research("suggestion"))
@@ -81,7 +81,16 @@ class OptionsComeFromTheType(unittest.TestCase):
                          ["Create Page", "Skip"])
         self.assertEqual(ra.buttons_for("duplicate"),
                          ["Create Page", "Skip"])
-        self.assertEqual(ra.buttons_for("confirm"), ["Approve", "Skip"])
+        self.assertEqual(ra.buttons_for("confirm"), ["Fix", "Skip"])
+
+    def test_legacy_confirm_options_are_normalized(self):
+        item = _item("confirm", options=["Approve", "Skip"])
+        self.assertEqual(ra.buttons_for_item(item), ["Fix", "Skip"])
+
+    def test_non_confirm_explicit_options_are_preserved(self):
+        item = _item("suggestion", options=["Investigate", "Skip"])
+        self.assertEqual(
+            ra.buttons_for_item(item), ["Investigate", "Skip"])
 
 
 # ── ② Create Page type routing ───────────────────────────────────────────────
@@ -237,7 +246,7 @@ class DismissalActionsJustResolve(unittest.TestCase):
     def test_skip_and_approve_do_not_create_pages(self):
         for action in ("Skip", "skip", "Approve", "忽略", "keep existing",
                        "no"):
-            d = ra.route_review_action(_item(), action,
+            d = ra.route_review_action(_item("suggestion"), action,
                                        has_search_source=True)
             self.assertEqual(d["kind"], "resolve", action)
             self.assertEqual(d["resolve_reason"], action)
@@ -246,6 +255,30 @@ class DismissalActionsJustResolve(unittest.TestCase):
         d = ra.route_review_action(_item(), "Create Page",
                                    has_search_source=True)
         self.assertEqual(d["kind"], "create_page")
+
+
+class ConfirmRepairFirst(unittest.TestCase):
+    def test_fix_starts_repair_without_resolving(self):
+        d = ra.route_review_action(
+            _item("confirm", affected_pages=["concepts/foo.md"]),
+            "Fix", has_search_source=True)
+        self.assertEqual(d["kind"], "repair_pages")
+        self.assertFalse(d["resolves"])
+        self.assertEqual(d["targets"], ["concepts/foo.md"])
+
+    def test_chinese_fix_alias_starts_repair(self):
+        d = ra.route_review_action(
+            _item("confirm", affected_pages=["concepts/foo.md"]),
+            "修复", has_search_source=True)
+        self.assertEqual(d["kind"], "repair_pages")
+        self.assertFalse(d["resolves"])
+
+    def test_legacy_confirm_approve_is_blocked(self):
+        d = ra.route_review_action(
+            _item("confirm"), "Approve", has_search_source=True)
+        self.assertEqual(d["kind"], "legacy_approve_blocked")
+        self.assertFalse(d["resolves"])
+        self.assertEqual(d["replacement"], "Fix")
 
 
 # ── ⑤ the resolve reason must name a file, not a title ───────────────────────
@@ -375,11 +408,19 @@ class RenderedReviewCarriesItsOptions(unittest.TestCase):
             line = self._options_line(rtype)
             self.assertIn("Deep Research", line, rtype)
 
-    def test_confirm_records_approve_not_create_page(self):
+    def test_confirm_records_fix_not_approve(self):
         line = self._options_line("confirm")
-        self.assertIn("Approve", line)
+        self.assertIn("Fix", line)
+        self.assertNotIn("Approve", line)
         self.assertNotIn("Create Page", line)
         self.assertNotIn("Deep Research", line)
+
+    def test_confirm_resolution_text_requires_verified_repair(self):
+        md = self.render(
+            "confirm", "T", "D", ["concepts/t.md"], [], "high",
+            "2026-08-29", "src")
+        self.assertIn("选择 `Fix` 只启动修复", md)
+        self.assertIn("Fixed: ...; Verified: ...", md)
 
     def test_options_match_buttons_for(self):
         for rtype in ("confirm", "suggestion", "missing-page",

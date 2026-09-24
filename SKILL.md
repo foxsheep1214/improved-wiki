@@ -62,6 +62,27 @@ The exact prompts, source ordering, error semantics, writer invocation, and
 manual compatibility boundary are authoritative in
 `references/deep-research.md`.
 
+## Review repair contract
+
+- Run Sweep before human processing. For a full pass, repair high-severity
+  `confirm` items before research/page-creation backlogs.
+- `confirm` deliberately diverges from NashSU's close-only `Approve | Skip`:
+  its effective actions are `Fix | Skip`. Normalize legacy confirm files with
+  `review_actions.buttons_for_item`; direct confirm Approve stays pending.
+- Fix is not resolution. Read the local `source_ingest` evidence, snapshot only
+  declared `affected_pages` with `review_fix_guard.py --snapshot`, edit within
+  that scope, and run issue-specific checks plus lint. Insufficient evidence or
+  failed validation leaves the Review pending.
+- Close a repaired confirm only through `review_fix_guard.py --finalize` with
+  recorded verification. It requires an affected-page hash change and writes
+  `Fixed: ...; Verified: ...`. Temporary state belongs under
+  `/tmp/codex-work/<task>/`.
+- New/moved/deleted or undeclared pages require separately confirmed expanded
+  scope; never widen `affected_pages` merely to make the guard pass.
+
+The complete action routing and repair flow is authoritative in
+`references/process-reviews.md`.
+
 ## Lint contract
 
 - Plain `wiki-lint.sh` runs structural + semantic checks and, by default,
@@ -93,6 +114,9 @@ manual compatibility boundary are authoritative in
   filtering of false `missing-page` findings.
 - Graph is a peer command, not a lint phase. `wiki-lint.sh` never invokes
   `graph.py`; run Graph explicitly when graph artifacts are requested.
+- Graph writes its derived gap report to
+  `<project>/.llm-wiki/knowledge-gaps.md`, never under `wiki/REVIEW/`; it is
+  graph state, not a Review item.
 
 ## Ingest contract
 

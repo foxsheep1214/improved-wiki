@@ -22,7 +22,7 @@ Edge weight = ``calculateRelevance(a, b)`` (NashSU ``src/lib/graph-relevance.ts`
 Outputs (build mode):
   <runtime>/graph.json           — full graph (nodes/edges/communities/gaps/surprising)
   <runtime>/graph.html           — self-contained interactive force-directed graph
-  <wiki>/REVIEW/knowledge-gaps.md — isolated/sparse-community/bridge gaps
+  <root>/.llm-wiki/knowledge-gaps.md — isolated/sparse-community/bridge gaps
   <wiki>/clusters/cluster-NNN.md — per-community hub page
 
 The rendered graph (graph.json / graph.html) is emitted through NashSU's default
@@ -83,8 +83,8 @@ FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 HIDDEN_TYPES = frozenset({"query"})
 
 # Top-level wiki/ subdirs that hold DERIVED artifacts, not content pages — the
-# graph must not ingest its OWN output (REVIEW/knowledge-gaps.md, clusters/*) or
-# lint/media. Shared constant (_paths.WIKI_ARTIFACT_DIRS).
+# graph must not ingest review queues or its wiki-resident derived output
+# (clusters/*), nor lint/media. Shared constant (_paths.WIKI_ARTIFACT_DIRS).
 GRAPH_SKIP_DIRS = WIKI_ARTIFACT_DIRS
 
 # Structural pages (NashSU graph-filters.ts STRUCTURAL_IDS).
@@ -1153,9 +1153,13 @@ def run_build(wiki_root: Path, output: Optional[Path], dry_run: bool,
     write_graph_html(graph_html, rendered, pages, communities, gaps)
     print(f"🌐 Wrote {graph_html}")
     wiki_dir = wiki_root / "wiki"
-    gaps_md = wiki_dir / "REVIEW" / "knowledge-gaps.md"
+    gaps_md = wiki_root / ".llm-wiki" / "knowledge-gaps.md"
     write_knowledge_gaps(gaps_md, gaps, pages)
     print(f"📄 Wrote {gaps_md}")
+    legacy_gaps_md = wiki_dir / "REVIEW" / "knowledge-gaps.md"
+    if legacy_gaps_md.exists():
+        legacy_gaps_md.unlink()
+        print(f"🧹 Removed legacy graph artifact {legacy_gaps_md}")
     write_clusters(wiki_dir / "clusters", communities, pages)
     written = sum(1 for c in communities if len(c.nodes) >= 2)
     print(f"📂 Wrote {written} cluster pages to {wiki_dir / 'clusters'}/")

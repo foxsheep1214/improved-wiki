@@ -104,7 +104,7 @@ python3 "$SKILL_DIR/scripts/ingest.py" --pause-prefetch
 - `batch-coordinator.lock` / `ingest.lock` / `watch.lock` — advisory files whose
   kernel flocks, not file existence, indicate a live holder
 - `lint-cache.json` / `lint-lock` — lint state
-- `graph.json` — knowledge graph (Graph command output)
+- `graph.json` / `graph.html` / `knowledge-gaps.md` — Graph command outputs
 - `lancedb/` — vector database
 - `page-history/` — wiki page version backups (audit/rollback value; 18MB+ typical)
 - `review-suggestions.json` — pending review items
@@ -130,9 +130,10 @@ The command verifies that the live row count is unchanged. Do not replace this
 with `rm -rf .llm-wiki/lancedb`: compaction preserves the current semantic
 index while reclaiming old LanceDB snapshots.
 
-（注：graph 产物 `clusters/` 与 `REVIEW/knowledge-gaps.md` 实际由 `graph.py` 写在
-**`wiki/` 下**（`wiki/clusters/`、`wiki/REVIEW/knowledge-gaps.md`），不在 `.llm-wiki/`
-——同样不要删，但不属于本清单的 runtime 目录范围。）
+（注：`graph.py` 把 `graph.json`、`graph.html` 写到 runtime（默认 `.llm-wiki/`），
+并固定把 `knowledge-gaps.md` 写在 `.llm-wiki/`；只有社区 hub 页保留在
+`wiki/clusters/`。旧位置
+`wiki/REVIEW/knowledge-gaps.md` 会在下一次非 dry-run Graph 构建时清除。）
 
 ### Cleanup command
 

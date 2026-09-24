@@ -13,6 +13,13 @@ Prose cannot be tested, so it drifted silently. This module makes the routing
 executable and pinned. The agent driving ``process-reviews`` decides *which
 action a human chose*; this module decides *what that action means*.
 
+``confirm`` is one intentional improved-wiki divergence from NashSU. NashSU's
+parser fallback exposes ``Approve | Skip``, but Approve only closes the item;
+it does not repair the affected page. A confirm item represents a suspected
+content defect here, so its effective actions are ``Fix | Skip``. ``Fix``
+starts a guarded repair and deliberately leaves the item pending until the
+affected page changed and validation succeeded.
+
 Nothing here writes to disk: every function is pure and returns a decision the
 caller executes. That keeps the human gate where it belongs — an action is
 only ever routed after a person picked it.
@@ -35,14 +42,14 @@ from _wiki_filename import make_query_file_name
 # is the bucket for блоcks whose type wasn't recognised (ingest.ts:2016-2020)
 # and the prompt never asks for OPTIONS on it.
 #
-# The value is therefore fully determined by the type. improved-wiki's Stage
-# 3.1 uses a JSON schema rather than NashSU's `---REVIEW:` text blocks, so
-# asking the LLM to emit a field it can only fill one of two ways would add a
-# drift surface for zero information. Deriving it reproduces exactly what
-# NashSU's parser produces, and cannot disagree with it.
+# The value is fully determined by the type. improved-wiki's Stage 3.1 uses a
+# JSON schema rather than NashSU's `---REVIEW:` text blocks, so deriving the
+# options avoids an LLM-controlled drift surface. Four types retain NashSU's
+# result; confirm deliberately substitutes Fix for the close-only Approve.
 
 _CREATE_PAGE_OPTIONS = ["Create Page", "Skip"]
 _PARSER_FALLBACK_OPTIONS = ["Approve", "Skip"]
+_CONFIRM_OPTIONS = ["Fix", "Skip"]
 
 #: Types NashSU's ingest prompt lists an explicit OPTIONS line for.
 PROMPTED_REVIEW_TYPES = frozenset(
@@ -55,7 +62,9 @@ DEEP_RESEARCH_TYPES = frozenset({"suggestion", "missing-page"})
 
 
 def default_options_for(review_type: str) -> list[str]:
-    """The `options` a NashSU item of this type actually carries."""
+    """The effective options for a newly persisted item of this type."""
+    if review_type == "confirm":
+        return list(_CONFIRM_OPTIONS)
     if review_type in PROMPTED_REVIEW_TYPES:
         return list(_CREATE_PAGE_OPTIONS)
     return list(_PARSER_FALLBACK_OPTIONS)
@@ -70,6 +79,27 @@ def buttons_for(review_type: str) -> list[str]:
     """Every button a human actually sees for this type, in panel order."""
     buttons = ["Deep Research"] if offers_deep_research(review_type) else []
     return buttons + default_options_for(review_type)
+
+
+def buttons_for_item(item: dict) -> list[str]:
+    """Return effective buttons, normalizing legacy confirm items.
+
+    Review pages written before the repair-first policy carry
+    ``options: [\"Approve\", \"Skip\"]``. Honouring that stale field would keep
+    the unsafe close-without-fix path alive forever, so confirm items always
+    use the current type policy. Other item types retain explicit options when
+    present and fall back to :func:`buttons_for` otherwise.
+    """
+    review_type = item.get("review_type") or item.get("type") or ""
+    if review_type == "confirm":
+        return buttons_for("confirm")
+    options = item.get("options")
+    if isinstance(options, list):
+        cleaned = [str(option).strip() for option in options
+                   if str(option).strip()]
+        if cleaned:
+            return cleaned
+    return buttons_for(review_type)
 
 
 # ── ② Create Page: type routing and title extraction ─────────────────────────
@@ -237,6 +267,7 @@ _DISMISSAL_ACTIONS = frozenset({
 })
 _RESEARCH_NEEDLES = ("research", "investigate", "explore", "look into",
                      "研究", "调研", "探索")
+_FIX_ACTIONS = frozenset({"fix", "repair", "修复", "纠正"})
 
 _DEEP_RESEARCH_SENTINEL = "__deep_research__"
 _CREATE_PAGE_SENTINEL = "__create_page__:"
@@ -273,10 +304,29 @@ def route_review_action(item: dict, action: str, *,
     """What a chosen action means. Pure — the caller performs the effect.
 
     Returns a dict with a ``kind`` and a ``resolves`` flag. ``resolves`` is
-    False for the two branches that deliberately leave the item pending:
-    opening a page to look at it, and an explicit Deep Research with no
-    configured search source.
+    False for branches that deliberately leave the item pending, including a
+    confirm Fix. Repair completion is a separate guarded step; selecting Fix
+    is never itself evidence that the defect was corrected.
     """
+    review_type = item.get("review_type") or item.get("type") or ""
+
+    # improved-wiki repair-first divergence: legacy confirm Approve must not
+    # silently close an unfixed defect. Old files are normalized by
+    # buttons_for_item, and this route-level guard covers direct callers too.
+    if review_type == "confirm" and action.strip().lower() == "approve":
+        return {
+            "kind": "legacy_approve_blocked",
+            "resolves": False,
+            "replacement": "Fix",
+        }
+
+    if review_type == "confirm" and action.strip().lower() in _FIX_ACTIONS:
+        return {
+            "kind": "repair_pages",
+            "resolves": False,
+            "targets": list(item.get("affected_pages") or []),
+        }
+
     # 1. Explicit Deep Research button — checked first, before any fuzzy
     #    matching, and the ONLY branch that blocks on a missing search source.
     if action == _DEEP_RESEARCH_SENTINEL:

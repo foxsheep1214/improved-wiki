@@ -417,6 +417,9 @@ def test_build_writes_outputs(wiki, tmp_path):
     root, wiki_dir = wiki
     _write_page(wiki_dir, "a", body_links=["b"])
     _write_page(wiki_dir, "b", body_links=["a"])
+    legacy_gaps = wiki_dir / "REVIEW" / "knowledge-gaps.md"
+    legacy_gaps.parent.mkdir(parents=True)
+    legacy_gaps.write_text("legacy graph artifact\n", encoding="utf-8")
     out = tmp_path / "graph.json"
     rc = graph.run_build(root, out, dry_run=False, include_all=False)
     assert rc == 0
@@ -425,7 +428,10 @@ def test_build_writes_outputs(wiki, tmp_path):
     data = json.loads(out.read_text(encoding="utf-8"))
     assert "surprisingConnections" in data
     assert "gaps" in data
-    assert (wiki_dir / "REVIEW" / "knowledge-gaps.md").exists()
+    gaps = root / ".llm-wiki" / "knowledge-gaps.md"
+    assert gaps.exists()
+    assert gaps.read_text(encoding="utf-8").startswith("# Knowledge Gaps\n")
+    assert not legacy_gaps.exists()
 
 
 # --- write_clusters: stale cluster files cleared (2026-07-12) ----------------

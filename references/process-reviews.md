@@ -3,21 +3,25 @@
 参考 NashSU `review-view.tsx`（审核面板）: the CLI/agent counterpart of NashSU's
 review panel. Sweep（`review-sweep.md`）is the **automatic** side — it clears
 items already satisfied by later ingests. Process-reviews is the **human** side —
-the user decides what to do with each still-pending item, using the options
-that item actually carries.
+the user decides what to do with each still-pending item. ``confirm`` uses
+improved-wiki's repair-first policy: a suspected content defect is fixed and
+verified before its Review can close.
 
-**The routing and the writes are code, not prose.** Two modules port
+**The routing, repair gate, and writes are code, not prose.** Three modules port
 `review-view.tsx`'s `handleResolve` and `review-create-page.ts`. Consult them;
 do not re-derive behaviour from this document.
 
 - `scripts/review_actions.py` — **pure**, decides. Which buttons an item offers
-  (`buttons_for`), what a chosen action means (`route_review_action`), and
+  (`buttons_for_item`), what a chosen action means (`route_review_action`), and
   which page(s) a Create Page produces (`create_review_page_drafts`,
   `create_page_decision` — the latter also fixes each draft's filename and
   `created` date).
 - `scripts/_review_write.py` — **writes**. `write_created_pages` and
   `write_saved_query_page` create the page(s), add them to `wiki/index.md`,
   and append to `wiki/log.md`.
+- `scripts/review_fix_guard.py` — **guards confirm repairs**. Snapshot before
+  editing, enforce `affected_pages`, require a real page change, and finalize
+  only with recorded validation evidence.
 
 This file describes the *flow*; the modules own the *rules*. Everything moved
 out of prose because prose cannot be tested and this section had silently
@@ -46,9 +50,9 @@ carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答
 | NashSU review-view.tsx | improved-wiki |
 |---|---|
 | Review panel lists pending items | Calling agent scans `wiki/REVIEW/*/` for `resolved: false` |
-| `item.options` — per-item data, parsed from the ingest REVIEW block | `options:` in the review file's frontmatter, derived from the type by `review_actions.buttons_for` |
+| `item.options` — per-item data, parsed from the ingest REVIEW block | `options:` in frontmatter plus `review_actions.buttons_for_item`; legacy confirm options are normalized to repair-first policy |
 | Deep Research button is UI-added for `suggestion`/`missing-page` only | same gate — the other three types never offer it |
-| No OPTIONS line → parser default `Approve \| Skip` | `confirm` (NashSU's unrecognized-type bucket) offers `Approve \| Skip`, not `Create Page` |
+| No OPTIONS line → parser default `Approve \| Skip` | **deliberate divergence:** `confirm` is normalized to `Fix \| Skip`; legacy `Approve` is blocked because it closes without repairing |
 | `__deep_research__` → `queueResearch(topic, searchQueries)` | run the deep-research flow (`deep-research.md`) with the item's `search_queries` as seed queries |
 | Explicit Deep Research with no configured source → alert, leave unresolved | `blocked_no_search_source`: report the missing `web`/`anytxt` capability; keep pending |
 | Heuristic research action with no configured source → falls through to Create Page | same fallback — this path does **not** block (it is the opposite of the explicit button) |
@@ -68,10 +72,14 @@ carry answers, not bare questions — NashSU's `queries/ = 保存的聊天回答
 ### Step 1: Scan
 
 List pending items: `wiki/REVIEW/*/` files with `resolved: false`.
-Default focus: **suggestion** and **missing-page** (the two types that carry
-`search_queries` and map to actions). Include the other three types
-(confirm/contradiction/duplicate) only when the user asks for a full pass —
-those usually need judgment/editing rather than one of the three buttons.
+After Sweep, default full-pass order is:
+
+1. high-severity `confirm` repairs;
+2. high-severity `contradiction` / `duplicate` decisions;
+3. remaining `confirm` repairs;
+4. `missing-page` and `suggestion` research/page-creation queues.
+
+This order prevents a large research backlog from hiding known content defects.
 
 Present a short queue summary first (count by type). When the backlog is
 large, offer the batch route below before grinding item-by-item —
@@ -84,21 +92,56 @@ per call — one item per question).
 
 Show: title, description (trimmed), affected_pages, and its `search_queries`.
 
-Offer exactly the item's own options — read `options:` from its frontmatter,
-or call `review_actions.buttons_for(review_type)`. They are **not** the same
-for every type, and never invent a label outside that list:
+Call `review_actions.buttons_for_item(item)` for the effective options. It
+preserves explicit item options except that legacy confirm
+`["Approve", "Skip"]` is intentionally normalized to `["Fix", "Skip"]`.
+Never surface legacy Approve for a pending confirm:
 
 | review_type | buttons |
 |---|---|
 | `suggestion`, `missing-page` | Deep Research · Create Page · Skip |
 | `contradiction`, `duplicate` | Create Page · Skip |
-| `confirm` | Approve · Skip |
+| `confirm` | Fix · Skip |
 
 Deep Research is recommended when `search_queries` is non-empty and a search
-source is configured. Older review files predate the `options:` field; fall
-back to `buttons_for(review_type)` for those.
+source is configured. Older review files without `options:` also go through
+`buttons_for_item(item)`.
 
 ### Step 3: Execute the choice
+
+**Fix** (`confirm` only) → repair the affected content; selecting Fix does
+**not** resolve the Review:
+
+1. Read the complete Review, every `affected_pages` entry, and the local
+   `source_ingest` evidence. Recompute arithmetic/units and check page/entity/
+   provenance identity as applicable. If evidence is insufficient, leave the
+   Review pending and report the missing evidence; do not guess.
+2. Put temporary state under `/tmp/codex-work/<task>/` and snapshot the exact
+   pages before editing:
+
+   ```bash
+   python3 "$SKILL_DIR/scripts/review_fix_guard.py" \
+     --review <review.md> --snapshot <temp>/state.json <affected-page>...
+   ```
+
+3. Edit only the declared affected pages and only fields/content relevant to
+   the finding. If a real repair requires a new/moved/deleted page or another
+   undeclared page, stop and obtain the user's expanded scope first; do not
+   silently widen `affected_pages`.
+4. Run issue-specific verification plus structural lint. Use semantic lint
+   when the correction changes a claim rather than only metadata/path text.
+   A changed hash is necessary but not sufficient evidence of correctness.
+5. Finalize only after validation succeeds:
+
+   ```bash
+   python3 "$SKILL_DIR/scripts/review_fix_guard.py" \
+     --review <review.md> --finalize <temp>/state.json \
+     --verification "<what was checked; lint result>"
+   ```
+
+   The finalizer requires at least one declared page hash to change and writes
+   `resolved_reason: "Fixed: ...; Verified: ..."`. No change, failed lint,
+   missing evidence, or a concurrently changed Review leaves it pending.
 
 **Deep Research** → run the `deep-research.md` flow:
 - topic = item title (strip leading "Save to Wiki:"/"Create:"/"Research:" prefixes)
@@ -162,9 +205,10 @@ resolve 文案用 `decision["resolve_reason"]`，不要自拟：单页
 
 任何一页写失败即抛错：review 停在 pending，好过标成已解决却只写了一半。
 
-**Skip** / **Approve** → resolve only, recording the action verbatim as
-`resolved_reason`. Every dismissal label (skip / dismiss / ignore / approve /
-keep existing / no / 跳过 / 忽略) lands here; anything else creates a page.
+**Skip** → close as not accepted/not actionable, recording the action verbatim
+as `resolved_reason`. `Approve` remains a NashSU-compatible dismissal for
+non-confirm direct callers, but a confirm Approve routes to
+`legacy_approve_blocked` and stays pending.
 
 #### Other actions NashSU routes (previously undocumented)
 
@@ -217,6 +261,9 @@ python3 "$SKILL_DIR/scripts/batch_resolve_reviews.py" --project <wiki-root> \
 - This does not replace per-item adjudication for anything that needs judgment
   (Deep Research / Create Page). Use it for the stale tail; keep the three
   buttons for items with real research value.
+- Do not bulk-resolve pending confirm items as `Approve` or `Bulk resolved`.
+  Confirm closure must come from `review_fix_guard.py --finalize`, or an
+  explicit human Skip/false-positive decision.
 - Run `sweep_reviews.py` first when the backlog predates later ingests — sweep
   is the automatic side and removes items that no longer need any human at all.
 
@@ -260,9 +307,9 @@ python3 "$SKILL_DIR/scripts/batch_research_reviews.py" --project <wiki-root> \
 
 ### Step 4: Report
 
-Summary table: N processed — X research pages saved, Y pages created, Z skipped,
-W left pending. Separately report research attempts that failed and therefore
-left their reviews pending.
+Summary table: N processed — F confirms fixed+verified, X research pages saved,
+Y pages created, Z skipped, W left pending. Separately report repair/research
+attempts that lacked evidence or failed validation and therefore stayed pending.
 
 ## Boundaries
 
@@ -272,6 +319,9 @@ left their reviews pending.
   items (`scripts/batch_resolve_reviews.py`). What is forbidden is the agent
   picking the filter, or firing `--apply`, on its own — a bulk action needs the
   same explicit instruction a single one does.
+- A request to "fix/process these confirm issues" authorizes the Fix workflow
+  for the identified items, but not undeclared-page edits or destructive page
+  moves/deletions. Fix selection never authorizes premature resolution.
 - Resolved review files stay on disk (audit trail) — never delete them.
   Exception: `batch_resolve_reviews.py --dismiss` deletes on purpose, matching
   NashSU's `dismissItem`; that is the only sanctioned deletion path for a

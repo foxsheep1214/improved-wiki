@@ -32,7 +32,7 @@ improved-wiki 的 `graph.py` 参考 NashSU 最新版本（2026-06-29 重写；�
 - **calculateRelevance 逐行移植**：direct=(正+反)×3.0、source=共享源数×4.0、AA=Σ 1/log(max(deg,2))×1.5（无阈值）、type-affinity 用 0.5.3 原矩阵（默认 0.5）×1.0 无条件叠加。
 - **社区/洞察对齐**：cohesion = intra/(n(n-1)/2) 密度；`detectKnowledgeGaps`（isolated=linkCount≤1、稀疏社区、邻居跨≥3 社区的 bridge，无 betweenness）；`findSurprisingConnections` 已移植；`graph-filters` 默认隐藏结构页 + 删 query 类型。
 
-**有意的 CLI 偏离**（非缺口，已记录）：Louvain 固定 `seed=42`（NashSU 不设种子，CLI 需可复现）；`related:` 作链接来源（本 wiki 约定，NashSU 页面无此字段）；落盘产物 `graph.json` / 自包含 `graph.html` / `REVIEW/knowledge-gaps.md` / `clusters/*`（NashSU 仅 app 内渲染）；建图排除自身产出目录 `GRAPH_SKIP_DIRS={REVIEW,clusters,media,lint}`；`--mode query` 排除已链接页（“建议新链接”语义）。
+**有意的 CLI 偏离**（非缺口，已记录）：Louvain 固定 `seed=42`（NashSU 不设种子，CLI 需可复现）；`related:` 作链接来源（本 wiki 约定，NashSU 页面无此字段）；落盘产物 `<runtime>/graph.json` / 自包含 `<runtime>/graph.html` / `.llm-wiki/knowledge-gaps.md` / `wiki/clusters/*`（NashSU 仅 app 内渲染）；建图排除 wiki artifact 目录 `GRAPH_SKIP_DIRS={REVIEW,clusters,media,lint}`；`--mode query` 排除已链接页（“建议新链接”语义）。
 
 ### 路径 2：搜索检索（Rust 后端 search.rs）— 混合 keyword + vector
 

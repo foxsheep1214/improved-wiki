@@ -151,6 +151,38 @@ class DismissMatchesNashsuRemoval(unittest.TestCase):
         self.assertIn("resolved: true", self.a.read_text(encoding="utf-8"))
 
 
+class ConfirmRepairFirstGate(unittest.TestCase):
+    def setUp(self):
+        self._t = tempfile.TemporaryDirectory()
+        self.addCleanup(self._t.cleanup)
+        self.root = Path(self._t.name)
+        self.confirm = _item(self.root, "confirm", "needs-fix")
+
+    def test_preview_remains_available(self):
+        rc = br.main_with_args(
+            ["--project", str(self.root), "--type", "confirm"])
+        self.assertEqual(0, rc)
+        self.assertIn("resolved: false",
+                      self.confirm.read_text(encoding="utf-8"))
+
+    def test_default_bulk_apply_cannot_close_confirm(self):
+        rc = br.main_with_args(
+            ["--project", str(self.root), "--type", "confirm", "--apply"])
+        self.assertEqual(2, rc)
+        self.assertIn("resolved: false",
+                      self.confirm.read_text(encoding="utf-8"))
+
+    def test_explicit_skip_is_still_a_human_decision(self):
+        rc = br.main_with_args([
+            "--project", str(self.root), "--type", "confirm",
+            "--reason", "Skip", "--apply",
+        ])
+        self.assertEqual(0, rc)
+        text = self.confirm.read_text(encoding="utf-8")
+        self.assertIn("resolved: true", text)
+        self.assertIn('resolved_reason: "Skip"', text)
+
+
 class ClearResolvedMatchesNashsu(unittest.TestCase):
     """NashSU `clearResolved()` — items.filter(i => !i.resolved).
 

@@ -130,7 +130,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## Phase 3：Write & Enrich
 
 ### Stage 3.1 · Pre-write Review Generation
-- **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate）。写盘前审查 in-memory FILE generation，严格解析校验后把规范化 items 写入 `review_prepared` checkpoint；此阶段不写 REVIEW 文件。
+- **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate）。写盘前审查 in-memory FILE generation，严格解析校验后把规范化 items 写入 `review_prepared` checkpoint；此阶段不写 REVIEW 文件。`confirm` 在 improved-wiki 中表示“需核查并修复的疑似内容缺陷”，description 必须包含具体问题、可疑依据和修复判据；其持久化动作是 `Fix | Skip`，不是 NashSU 的 close-only `Approve | Skip`。
 - **审查输入 = 写盘投影**：3.1 拿到的不是原始生成块，而是 `project_write_result_blocks` 的**确定性投影**——与写循环共用 `resolve_ingest_write_path`（路径安全/聚合页丢弃/auto-correct/`.md`/schema 路由），再跑同一条 sanitize → canonicalize sources → stamp dates → `stage_3_2_normalize_page_links(strict_missing_targets=True)`。审原始草稿会让 reviewer 为随后会被写时去链的链接开 `missing-page`，并让 `affected_pages` 指向 schema 路由前的旧路径。投影**不做** page merge，合并进已有页的部分仍以本源贡献呈现。写循环、`slug_dirs` 与投影共用同一个 resolver。
 - **go/no-go**：review items 数量 ≥0（空数组 `[]` 合法）；非空 item 必须完整通过严格 schema：`type`/`severity` 枚举合法，title/description 非空，`affected_pages` 是 wiki 内安全 `.md` 路径，suggestion/missing-page 恰有 2–3 条搜索 query，其余类型 query 为空。整批先校验，任何非法 item 都 hard-fail。`review_prepared` 使写盘或后续 handoff 失败后恢复不会重复调用 reviewer。
 
@@ -243,7 +243,7 @@ Graph 不在 ingest 管线内。Ingest 管线不碰图——图建在 Graph 命�
 
 - **四信号图构建**：解析 wikilinks + `related:` + frontmatter，构建 networkx 加权无向图（direct link ×3.0 / source overlap ×4.0 / Adamic-Adar ×1.5 / type affinity ×1.0）。产物 `<runtime>/graph.json`。大书（>100 页/源）source-overlap 改用 star（成员↔source 页 hub）避免 N² clique；AA 丢弃 <0.2 的 hub 噪声对。
 - **Louvain 社区检测**：社区检测 + cohesion 评分（<0.15 标记低质量）；大图 betweenness 用采样近似。
-- **图谱洞察**：`wiki/REVIEW/knowledge-gaps.md`（孤立节点/桥接节点/建议缺失链接）+ `wiki/clusters/cluster-NNN.md`（社区 hub 页）。
+- **图谱洞察**：`.llm-wiki/knowledge-gaps.md`（孤立节点/桥接节点/建议缺失链接，不属于 Review）+ `wiki/clusters/cluster-NNN.md`（社区 hub 页）。旧 `wiki/REVIEW/knowledge-gaps.md` 在下一次非 dry-run Graph 构建时清除。
 
 ```bash
 python3 "$SKILL_DIR/scripts/graph.py" --wiki-root /path/to/wiki              # 全量

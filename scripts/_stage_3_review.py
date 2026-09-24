@@ -33,7 +33,10 @@ _REVIEW_SEVERITIES = {"high", "medium", "low"}
 _RESEARCH_REVIEW_TYPES = {"suggestion", "missing-page"}
 
 
-_REVIEW_SCOPE_VERSION = 1
+# v2 changes confirm semantics from close-only Approve to repair-first Fix.
+# Old prepared checkpoints must be regenerated so their descriptions and
+# persisted options follow the new lifecycle.
+_REVIEW_SCOPE_VERSION = 2
 
 
 def _review_preview(content: str, max_chars: int) -> str:
@@ -383,13 +386,23 @@ def _render_review_page(rtype: str, title: str, desc: str, affected: list[str],
     # FNV-1a over (type :: normalized-title). The same logical review keeps the
     # same id across re-ingest, so resolved state survives via field-union dedup.
     review_id = review_id_for(rtype, title)
-    # Actions available on this item (NashSU ReviewItem.options parity).
-    # NashSU carries them ON the item; this file is that item's persistent
-    # form, so it carries them too. Recording them here is what keeps the
-    # panel reconstructable — while they lived only in process-reviews.md
-    # prose they drifted into a fixed three-button triple that no NashSU item
-    # type actually has. Derived from the type: see review_actions.buttons_for.
+    # Actions available on this item. Four types retain NashSU
+    # ReviewItem.options parity; confirm deliberately uses repair-first Fix in
+    # place of close-only Approve. The file is the item's persistent form, so
+    # it carries the effective options. Derived from the type: see
+    # review_actions.buttons_for.
     options = ", ".join(f'"{b}"' for b in buttons_for(rtype))
+    if rtype == "confirm":
+        resolution_hint = (
+            "_待核查并修复。选择 `Fix` 只启动修复，不会立即关闭；必须先修改 "
+            "`affected_pages`、完成验证，再记录 `Fixed: ...; Verified: ...` "
+            "并设为 `resolved: true`。_"
+        )
+    else:
+        resolution_hint = (
+            "_待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 "
+            "`resolved: true`（已解决项会保留为审计记录，不会被删除）。_"
+        )
     return f"""---
 type: review
 review_id: {review_id}
@@ -411,7 +424,7 @@ source_ingest: "{source_stem}"
 {affected_links}
 {search_section}
 ## Resolution
-_待审核。处理完成后将 frontmatter 中 `resolved: false` 改为 `resolved: true`（已解决项会保留为审计记录，不会被删除）。_
+{resolution_hint}
 """
 
 
@@ -511,7 +524,7 @@ def stage_3_1_prepare_review_suggestions(
 """
 
     system_prompt = f"""你是 {config.wiki_root.name} 的 review agent。审阅当前 wiki 内容，找出 5 类可疑项：
-1. confirm（需要人工确认）：数字、术语、矛盾点
+1. confirm（需核查并修复）：数字、单位、公式、术语、来源身份、实体/路径错配等疑似内容缺陷
 2. suggestion（研究建议）：本源提出但未回答的研究问题、值得寻找的相关资料/来源、值得探索的连接或对比、内容不完整应补充（NashSU: "a research question, source type, or comparison that would materially improve the wiki"）
 3. missing-page（缺页）：[[wikilink]] 指向不存在的页面
 4. contradiction（页面间矛盾）
@@ -530,6 +543,9 @@ def stage_3_1_prepare_review_suggestions(
 对 suggestion 和 missing-page 类型，search_queries 必填：2-3 条关键词式 web 搜索查询
 （用于 Deep Research——关键词丰富、具体、面向搜索引擎，不是标题或整句）；
 其它类型用空数组 []。
+confirm 不是“批准后即可关闭”的提醒。description 必须写清：当前页面中的具体问题、为何可疑、
+应依据什么来源或可复算条件完成修复。不要生成“请确认是否正确”一类没有对象、证据或修复判据的
+空泛条目。若输入已足以确定算术、单位、路径或元数据错误，应明确指出可执行的纠正方向。
 输入中的页面可能是“开头 + REVIEW PREVIEW GAP + 文件真实结尾”的有界预览。
 PREVIEW GAP 是审查上下文主动省略的中间内容，不是磁盘文件的截断点；不得把预览开头的末尾、
 省略标记或其附近的半句话当成页面损坏。判断页面是否在结尾截断时，只能依据标记之后明确注明的

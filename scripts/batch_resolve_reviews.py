@@ -18,6 +18,11 @@ and without `--apply` the tool only previews. `sweep_reviews.py` remains the
 automatic side (it clears items later ingests already satisfied); this tool is
 the human side operating in bulk.
 
+Repair-first confirm items are a deliberate exception to generic bulk resolve:
+preview is allowed, but ``--apply`` refuses to close them as ``Bulk resolved``
+or ``Approve``. They close through ``review_fix_guard.py --finalize`` after a
+verified page change, or through an explicit human ``--reason Skip`` decision.
+
 `--dismiss` matches `dismissItem` exactly: the file is deleted.
 
 NashSU DOES persist review items — corrected 2026-08-05, an earlier note here
@@ -239,6 +244,12 @@ def main_with_args(argv: list[str] | None = None) -> int:
     reason = args.reason or BULK_RESOLVE_REASON
     verb = "delete" if (args.dismiss or args.clear_resolved) else "resolve"
     dry_run = not args.apply
+    confirm_items = [path for path in items if path.parent.name == "confirm"]
+    unsafe_confirm_bulk = (
+        bool(confirm_items)
+        and not (args.dismiss or args.clear_resolved)
+        and reason.strip().lower() != "skip"
+    )
 
     print(f"{len(items)} {state} item(s) selected to {verb}:")
     for path in items[:15]:
@@ -255,11 +266,20 @@ def main_with_args(argv: list[str] | None = None) -> int:
         print("dismiss = delete: these files will be removed, not marked resolved.")
     else:
         print(f'reason: "{reason}"')
+    if unsafe_confirm_bulk:
+        print("confirm repair-first gate: these items cannot be bulk-resolved "
+              "without fixing their affected pages. Use per-item Fix + "
+              "review_fix_guard.py --finalize, or explicitly --reason Skip.")
 
     if dry_run:
         print("\nPREVIEW ONLY — nothing was written. Re-run with --apply "
               "to act on exactly this set.")
         return 0
+
+    if unsafe_confirm_bulk:
+        print("Refusing --apply: pending confirm items require repair-first "
+              "finalization.", file=sys.stderr)
+        return 2
 
     if args.clear_resolved:
         done = bulk_clear_resolved(items, dry_run=False)
