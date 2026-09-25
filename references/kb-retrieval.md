@@ -119,7 +119,21 @@ python3 "$SKILL_DIR/scripts/build_embeddings.py" --project ~/Documents/知识库
 ```
 未建索引时 hybrid 会报警并自动返回 keyword 结果；也可用 `--keyword-only` 主动避免 vector 探测。
 
-### 5.2 补充：Read 精读
+### 5.2 出处回查：evidence_lookup.py
+
+wiki 页只在 frontmatter 记 `sources:`（页面级），一页可能合并多本书。要引用到章节/图表/
+逐字数值时，用摄取时保存的出处账本回查：
+
+```bash
+python3 "$SKILL_DIR/scripts/evidence_lookup.py" --project <项目> \
+  --page concepts/closed-loop-comet-calibration.md --grep "phase error"
+```
+
+输出该页各来源的 claim（带 `§2.5.2 and Figure 2.20` 这类锚点和置信度）、带编号的公式、
+逐字表格（如器件规格表）。`--source <原文件名片段>` 按来源查；`--json` 供解析。
+账本只覆盖新出处账本上线后 ingest 的来源，更早的来源列在 `missing_sources`。
+
+### 5.3 补充：Read 精读
 
 搜索结果给出文件路径后，用文件读取工具（Read）按行号读具体段落：
 ```

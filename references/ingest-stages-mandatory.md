@@ -161,6 +161,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 3.6 · Cache
 - **作用**：在页面、聚合、媒体与 review 都完成后更新 `ingest-cache.json`，记录 source hash、实际页集合与 stage 统计。
 - **go/no-go**：cache 与 task manifest 的 page refs 必须一致；不一致时不能进入最终完成门禁。
+- **出处账本**（improved-wiki 扩展，不调 LLM）：写 cache、`clear_progress` 删除 progress 之前，把 Stage 2.2 各 chunk 的 `claims`（含 evidence 锚点与 confidence）、`source_quotes`、`formulas`、`structured_data` 连同本源写入的知识页清单存到 `.llm-wiki/evidence/<hash16>.json`（`source` = `canonical_source_path`，与页面 `sources:` 一致）。派生状态：写失败只告警、不中断 ingest；重新 ingest 覆盖；账本出现之前 ingest 的源没有账本。查询用 `evidence_lookup.py`。
 
 ### Stage 3.7 · Embeddings
 - **作用**：按 NashSU 0.6.6 的 ingest 生命周期，只把本次实际写入/更新的 knowledge pages 重新 chunk，并以 page 为单位替换其 LanceDB rows；不再为每本书隐式全库重建。

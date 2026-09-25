@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from _paths import atomic_write
+from _evidence_ledger import write_evidence_ledger
 from _page_ref import PageRef, canonical_page_refs
 from _task_manifest import bind_page_refs
 from _config import Config
@@ -994,6 +995,24 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # extraction artifact in memory. Preserve the authoritative original
         # method (notably mineru-*) for later media audit/repair.
         cache_method = _prev_entry["method"]
+    # Keep Stage 2.2's anchored evidence (claims, quotes, formulas, tables)
+    # before clear_progress below deletes the only copy. Derived state: a
+    # failure is reported and does not fail the ingest.
+    try:
+        ledger_path = write_evidence_ledger(
+            config,
+            canonical_source_path(raw_file, config),
+            h,
+            chunk_analyses
+            or (load_progress(config, h) or {}).get("chunk_analyses")
+            or [],
+            all_written_refs,
+        )
+        if ledger_path is not None:
+            print(f"  [evidence] ledger → {ledger_path.name}")
+    except OSError as e:
+        print(f"  [evidence] WARNING: ledger not written ({e})")
+
     cache["entries"][rel] = {
         "hash": h,
         "timestamp": int(time.time() * 1000),
