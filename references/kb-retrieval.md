@@ -104,6 +104,10 @@ python3 "$SKILL_DIR/scripts/search_wiki.py" "LC谐振导致振铃" \
 结果已替换为 `redirect:` 指向的正式页，并多一个 `redirected_from` 字段记录原跳转页；
 同一正式页只出现一次。只在正文写"见 [[…]]"、没有 `redirect:` 字段的旧跳转页保持原样。
 
+结果窗口的 15–30% 留给前 20 条结果的一跳链接邻居（NashSU 图扩展），这些条目带
+`graph_related_to`（由哪些结果连过来）；关键词/向量都没命中的邻居，snippet 为
+`Graph neighbor of …`，需要 Read 原文才知道内容。
+
 **Agent 标准工作流**：
 1. `search_wiki.py "query" --project <项目> --json` → 解析 JSON
 2. 取前 N 条的 `path` → `Read <项目>/wiki/<path>` 读全文

@@ -11,8 +11,12 @@ Port of NashSU ``search.rs`` hybrid retrieval (GAP-search):
     NashSU's optional-vector search behavior.
   - fusion: Reciprocal Rank Fusion (K=60) when both paths return; the richer
     keyword snippet wins on overlap.
+  - graph: one-hop link neighbours of the top results take 15–30 % of the
+    window (``_search_graph``, search.rs ``blend_graph_results``); they carry
+    ``graph_related_to``.
 
-Mode is reported: ``hybrid`` | ``keyword`` | ``vector``.
+Mode is reported: ``hybrid`` | ``keyword`` | ``vector`` (``hybrid`` whenever
+graph neighbours were added, as in search.rs).
 
 Usage:
   search_wiki.py "ADL8113" --project ~/Documents/知识库/HardwareWiki
@@ -31,6 +35,7 @@ if _SCRIPT_DIR not in sys.path:
 
 from _frontmatter import parse_frontmatter  # noqa: E402
 from _paths import detect_runtime_dir  # noqa: E402
+from _search_graph import GraphPages, blend_graph_results  # noqa: E402
 from _wiki_keyword import (  # noqa: E402
     extract_title,
     keyword_search,
@@ -203,8 +208,11 @@ def main() -> int:
     runtime = detect_runtime_dir(project)
     wiki_dir = project / "wiki"
 
-    # keyword path — always runs (offline, no deps)
-    kw_results = keyword_search(wiki_dir, args.query, max_results=args.top)
+    # keyword path — always runs (offline, no deps); the same walk collects
+    # the link graph for the one-hop expansion below
+    graph_pages = GraphPages()
+    kw_results = keyword_search(wiki_dir, args.query, max_results=args.top,
+                                on_page=graph_pages.add)
 
     vec_results: list[dict] = []
     vec_error = None
@@ -231,7 +239,11 @@ def main() -> int:
         else:
             print(f"No results for: {args.query}")
         return 1
-    results = _resolve_redirects(results, wiki_dir, args.query)[:args.top]
+    results = _resolve_redirects(results, wiki_dir, args.query)
+    results, graph_hits = blend_graph_results(
+        results, graph_pages, args.top, len(vec_results))
+    if graph_hits:
+        mode = "hybrid"
 
     if args.json:
         print(json.dumps(results, ensure_ascii=False))
@@ -246,6 +258,8 @@ def main() -> int:
         print(f"{i}. [{r['score']:.3f}{vscore_str}] wiki/{r['path']}{title_str}")
         if r.get("redirected_from"):
             print(f"   (via redirect wiki/{r['redirected_from']})")
+        if r.get("graph_related_to") and not r["snippet"].startswith("Graph neighbor"):
+            print(f"   (graph neighbor of {', '.join(r['graph_related_to'])})")
         snippet = str(r.get("snippet", ""))[:250].replace("\n", " ")
         if snippet:
             print(f"   {snippet}\n")

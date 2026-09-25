@@ -44,13 +44,31 @@ improved-wiki 用 Python + LanceDB 实现同一数据与排序契约；语言/�
 #### 搜索流程
 
 ```
-用户查询 → tokenize → [keyword 搜索 wiki/*.md] + [vector 搜索 LanceDB] → RRF 融合 → 排序返回
+用户查询 → tokenize → [keyword 搜索 wiki/*.md] + [vector 搜索 LanceDB] → RRF 融合 → 一跳图扩展 → 返回
 ```
 
 返回 `mode: "keyword" | "vector" | "hybrid"`：
 - vector 无结果或没配 embedding → mode="keyword"（纯关键词降级）
 - keyword 无结果但 vector 有 → mode="vector"
-- 两者都有 → mode="hybrid"
+- 两者都有，或图扩展加入了邻居 → mode="hybrid"
+
+#### 一跳图扩展（`blend_graph_results`，v0.6.6 起）
+
+> 2026-09-25 补记：07-29 的逐行核对漏了这一段（v0.6.0 无，v0.6.6/v0.6.11 有）。
+
+- 融合排序的前 `min(limit, 20)` 条作种子，在 wikilink 图（无向）上取一跳邻居；
+  邻居得分 = Σ 1/(种子名次)，按分数降序、路径升序。
+- 结果窗口留给图邻居的份额 = `ceil(limit × (0.30 − 0.15 × vector 覆盖率))`，
+  夹在 `[1, limit−1]`；无 vector 命中时 30%，vector 占满窗口时 15%。
+- 其余名额按原排名填入（跳过被选为邻居的页），图邻居追加在末尾。已在排名里的页
+  保留原结果；新页的 snippet 为 `Graph neighbor of <种子标题>`，score =
+  图分数 / (K+1)。结果带 `graph_related_to`（种子标题）。
+
+improved-wiki 在 `_search_graph.py` 移植，链接解析复用 `graph.py`（正文 wikilink +
+`related:`），与 Graph 命令一致。两处有意偏离：页面集合与 keyword 扫描一致（不含
+REVIEW/clusters/media/lint 与根目录 `index.md`/`log.md`——search.rs 会把链接全库的
+index.md 当成任何查询的头号邻居）；`type: redirect` 跳转页代表其目标页，无法解析
+目标的跳转页不作为邻居。
 
 #### keyword 搜索（Rust 实现）
 
@@ -130,7 +148,7 @@ vector-only 结果（keyword 没命中的页面）会被 materialize 进结果�
 improved-wiki 的 "NashSU parity" 声称主要覆盖：
 - ✅ ingest 流程（heading path, overlap, CJK slug, PPTX/DOCX, sources union merge, schema routing, aggregate repair, page merge, wikilink enrichment, source lifecycle）
 - ✅ graph 关联（4 信号 + 双图 retrieval/display + Louvain 社区 + gaps + surprising + filters）— 已对齐（2026-06-29），少数有意 CLI 偏离见上文
-- ✅ 搜索检索 — **已对齐**（hybrid keyword+vector+RRF K=60；vector 失败会明确报警并在本次查询继续 keyword-only，`--keyword-only` 可主动跳过 vector）
+- ✅ 搜索检索 — **已对齐**（hybrid keyword+vector+RRF K=60 + 一跳图扩展（2026-09-25 补齐）；vector 失败会明确报警并在本次查询继续 keyword-only，`--keyword-only` 可主动跳过 vector）
 
 ## 0.6.6 ingest embedding 的实际流程
 

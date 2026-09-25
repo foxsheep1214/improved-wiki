@@ -28,7 +28,7 @@ from pathlib import Path
 
 from _frontmatter import TITLE_LINE_RE as _FM_TITLE_RE, _FM_RE
 from _paths import WIKI_ARTIFACT_DIRS
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 __all__ = [
     "tokenize_query",
@@ -245,8 +245,13 @@ def keyword_search(
     max_results: int = 20,
     *,
     skip_dirs: Iterable[str] = WIKI_ARTIFACT_DIRS,
+    on_page: Optional[Callable[[str, str], None]] = None,
 ) -> list[dict]:
-    """Walk wiki/*.md, score each, return top-N by keyword score."""
+    """Walk wiki/*.md, score each, return top-N by keyword score.
+
+    ``on_page(rel_path, content)`` sees every scanned page, so a caller can
+    build the search link graph without reading the wiki twice.
+    """
     query_phrase = query.strip().lower()
     tokens = tokenize_query(query)
     if not query_phrase and not tokens:
@@ -261,6 +266,8 @@ def keyword_search(
             content = path.read_text(encoding="utf-8")
         except OSError:
             continue
+        if on_page is not None:
+            on_page(rel.as_posix(), content)
         hit = score_file(str(rel), path.name, content, tokens, query_phrase, query)
         if hit is not None:
             results.append(hit)
