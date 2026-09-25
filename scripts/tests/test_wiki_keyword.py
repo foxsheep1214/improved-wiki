@@ -110,6 +110,17 @@ class TestKeywordSearch(unittest.TestCase):
             self._wiki(td)
             self.assertEqual(k.keyword_search(Path(td, "wiki"), "zzzznotfound", 5), [])
 
+    def test_snippet_comes_from_body_not_frontmatter(self):
+        with tempfile.TemporaryDirectory() as td:
+            Path(td, "wiki", "concepts").mkdir(parents=True)
+            Path(td, "wiki/concepts/ringing.md").write_text(
+                "---\ntype: concept\ntitle: Ringing\ntags: [buck, ringing]\n---\n\n"
+                "# Ringing\n\nA buck switch node rings after each edge.\n",
+                encoding="utf-8")
+            hit = k.keyword_search(Path(td, "wiki"), "buck", 5)[0]
+            self.assertNotIn("type:", hit["snippet"])
+            self.assertIn("buck switch node", hit["snippet"])
+
     def test_artifact_dirs_are_not_searched(self):
         with tempfile.TemporaryDirectory() as td:
             self._wiki(td)
@@ -118,9 +129,15 @@ class TestKeywordSearch(unittest.TestCase):
                 Path(td, "wiki", sub, "adl8113-note.md").write_text(
                     "---\ntitle: ADL8113 artifact\n---\nADL8113\n",
                     encoding="utf-8")
+            for name in ("index.md", "log.md"):
+                Path(td, "wiki", name).write_text(
+                    "- [[entities/adl8113|ADL8113]]\n", encoding="utf-8")
+            Path(td, "wiki", "overview.md").write_text(
+                "ADL8113 overview\n", encoding="utf-8")
             paths = [r["path"] for r in
                      k.keyword_search(Path(td, "wiki"), "ADL8113", 20)]
-            self.assertEqual(paths, ["entities/adl8113.md"])
+            self.assertEqual(sorted(paths),
+                             ["entities/adl8113.md", "overview.md"])
 
     def test_no_file_cap_hides_late_sorting_pages(self):
         # HardwareWiki/RadarWiki exceed 10,000 Markdown files. A cap applied

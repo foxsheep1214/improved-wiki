@@ -29,8 +29,18 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+from _frontmatter import parse_frontmatter  # noqa: E402
 from _paths import detect_runtime_dir  # noqa: E402
-from _wiki_keyword import keyword_search, rrf_merge  # noqa: E402
+from _wiki_keyword import (  # noqa: E402
+    extract_title,
+    keyword_search,
+    page_snippet,
+    rrf_merge,
+    tokenize_query,
+)
+
+# A redirect pointing at another redirect is followed at most this far.
+_MAX_REDIRECT_HOPS = 3
 
 
 def _vector_search(query: str, runtime: Path, top: int):
@@ -90,6 +100,65 @@ def _vector_search(query: str, runtime: Path, top: int):
     return results, None
 
 
+def _redirect_target(wiki_dir: Path, content: str) -> tuple[str, str] | None:
+    """(wiki-relative path, content) of a ``type: redirect`` page's target.
+
+    Only the frontmatter ``redirect:`` field is honoured. A missing target,
+    or one outside wiki/, leaves the stub as the result.
+    """
+    fm, _body = parse_frontmatter(content)
+    target = str(fm.get("redirect") or "").strip() if fm.get("type") == "redirect" else ""
+    if not target:
+        return None
+    rel = target if target.endswith(".md") else f"{target}.md"
+    root = wiki_dir.resolve()
+    path = (root / rel).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        return None
+    return path.relative_to(root).as_posix(), path.read_text(encoding="utf-8")
+
+
+def _resolve_redirects(results: list[dict], wiki_dir: Path, query: str) -> list[dict]:
+    """Replace dedup redirect stubs with the page they point to.
+
+    A merged page leaves a one-line stub that still matches its old title,
+    and iCloud conflict copies can double it, so stubs crowded the canonical
+    page out of the window. Each stub becomes its target (first occurrence
+    keeps the rank); later duplicates of a path are dropped.
+    """
+    phrase = query.strip().lower()
+    tokens = tokenize_query(query)
+    resolved: list[dict] = []
+    seen: set[str] = set()
+    for result in results:
+        path = result["path"]
+        try:
+            content = (wiki_dir / path).read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        origin = None
+        for _ in range(_MAX_REDIRECT_HOPS):
+            target = _redirect_target(wiki_dir, content) if content else None
+            if target is None:
+                break
+            origin = origin or result["path"]
+            path, content = target
+        if origin is not None:
+            result = dict(result)
+            result.pop("matched_chunks", None)  # chunks of the stub, not the target
+            result.update(
+                path=path,
+                title=extract_title(content, Path(path).name),
+                snippet=page_snippet(content, phrase, tokens, query),
+                redirected_from=origin,
+            )
+        if path in seen:
+            continue
+        seen.add(path)
+        resolved.append(result)
+    return resolved
+
+
 def _warn_vector_unavailable(error: str, project: Path) -> None:
     """Surface vector failure before NashSU-style keyword-only continuation."""
     bar = "=" * 64
@@ -132,9 +201,10 @@ def main() -> int:
         if vec_error:
             _warn_vector_unavailable(vec_error, project)
 
-    # decide mode + fuse
+    # decide mode + fuse (untruncated: redirect collapse can drop entries)
     if kw_results and vec_results:
-        results = rrf_merge(kw_results, vec_results, top=args.top)
+        results = rrf_merge(kw_results, vec_results,
+                            top=len(kw_results) + len(vec_results))
         mode = "hybrid"
     elif kw_results:
         results = kw_results
@@ -148,6 +218,7 @@ def main() -> int:
         else:
             print(f"No results for: {args.query}")
         return 1
+    results = _resolve_redirects(results, wiki_dir, args.query)[:args.top]
 
     if args.json:
         print(json.dumps(results, ensure_ascii=False))
@@ -160,6 +231,8 @@ def main() -> int:
         vscore = r.get("vector_score")
         vscore_str = f" vec={vscore:.3f}" if vscore is not None else ""
         print(f"{i}. [{r['score']:.3f}{vscore_str}] wiki/{r['path']}{title_str}")
+        if r.get("redirected_from"):
+            print(f"   (via redirect wiki/{r['redirected_from']})")
         snippet = str(r.get("snippet", ""))[:250].replace("\n", " ")
         if snippet:
             print(f"   {snippet}\n")

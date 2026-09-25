@@ -100,6 +100,10 @@ python3 "$SKILL_DIR/scripts/search_wiki.py" "LC谐振导致振铃" \
 [{"path": "concepts/buck-converter.md", "title": "Buck 变换器", "snippet": "...", "score": 0.032, "vector_score": 0.891, "title_match": true}]
 ```
 
+`snippet` 取自正文（不含 frontmatter）。命中 dedup 留下的 `type: redirect` 跳转页时，
+结果已替换为 `redirect:` 指向的正式页，并多一个 `redirected_from` 字段记录原跳转页；
+同一正式页只出现一次。只在正文写"见 [[…]]"、没有 `redirect:` 字段的旧跳转页保持原样。
+
 **Agent 标准工作流**：
 1. `search_wiki.py "query" --project <项目> --json` → 解析 JSON
 2. 取前 N 条的 `path` → `Read <项目>/wiki/<path>` 读全文

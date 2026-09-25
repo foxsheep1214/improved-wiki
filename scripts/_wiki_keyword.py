@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from _frontmatter import TITLE_LINE_RE as _FM_TITLE_RE
+from _frontmatter import TITLE_LINE_RE as _FM_TITLE_RE, _FM_RE
 from _paths import WIKI_ARTIFACT_DIRS
 from typing import Iterable, Optional
 
@@ -36,6 +36,7 @@ __all__ = [
     "rrf_merge",
     "extract_title",
     "build_snippet",
+    "page_snippet",
     "score_file",
     "RRF_K",
 ]
@@ -52,6 +53,7 @@ RRF_K = 60.0
 # search.rs also stops after MAX_SEARCH_FILES = 10_000 Markdown files. This
 # port has no cap: HardwareWiki/RadarWiki exceed 12,000 pages, and a capped
 # sorted walk silently dropped every page in late-sorting directories.
+_NAVIGATION_FILES = frozenset({"index.md", "log.md"})
 
 _CJK_RE = re.compile(r"[㐀-鿿]")
 _HEADING_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
@@ -157,6 +159,25 @@ def build_snippet(content: str, anchor: str) -> str:
     return snippet
 
 
+def page_snippet(content: str, query_phrase: str, tokens: list[str],
+                 query: str) -> str:
+    """Snippet from the page body, anchored on the phrase or first token.
+
+    search.rs anchors the snippet in the raw file, so a token that first
+    occurs in ``title:``/``tags:`` yields a snippet of YAML. Scoring still
+    reads the whole file (NashSU parity); only the displayed text skips
+    the frontmatter.
+    """
+    fm = _FM_RE.match(content)
+    body = content[fm.end():] if fm else content
+    body_lower = body.lower()
+    if query_phrase and query_phrase in body_lower:
+        anchor = query_phrase
+    else:
+        anchor = next((t for t in tokens if t in body_lower), query)
+    return build_snippet(body, anchor)
+
+
 def score_file(
     rel_path: str,
     file_name: str,
@@ -190,15 +211,10 @@ def score_file(
              + title_token_score * TITLE_TOKEN_WEIGHT
              + content_token_score * CONTENT_TOKEN_WEIGHT)
 
-    if content_phrase_occ > 0:
-        anchor = query_phrase
-    else:
-        anchor = next((t for t in tokens if t in content_lower), query)
-
     return {
         "path": rel_path,
         "title": title,
-        "snippet": build_snippet(content, anchor),
+        "snippet": page_snippet(content, query_phrase, tokens, query),
         "title_match": title_token_score > 0 or title_has_phrase,
         "score": score,
         "vector_score": None,
@@ -209,14 +225,16 @@ def _walk_md_files(wiki_dir: Path, skip_dirs: Iterable[str]) -> list[Path]:
     """Every Markdown file outside the top-level ``skip_dirs``, sorted.
 
     Skipped directories are pruned before descending, so review queues and
-    media never cost a read.
+    media never cost a read. The root index.md and log.md list every page
+    title (~1 MB each here), so an exact-title query matched them ahead of
+    real pages; the vector index already leaves them out.
     """
     files: list[Path] = []
     for entry in wiki_dir.iterdir():
         if entry.is_dir():
             if entry.name not in skip_dirs:
                 files.extend(entry.rglob("*.md"))
-        elif entry.suffix == ".md":
+        elif entry.suffix == ".md" and entry.name not in _NAVIGATION_FILES:
             files.append(entry)
     return sorted(files)
 
