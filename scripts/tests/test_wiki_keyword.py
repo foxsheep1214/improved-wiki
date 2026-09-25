@@ -110,6 +110,36 @@ class TestKeywordSearch(unittest.TestCase):
             self._wiki(td)
             self.assertEqual(k.keyword_search(Path(td, "wiki"), "zzzznotfound", 5), [])
 
+    def test_artifact_dirs_are_not_searched(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._wiki(td)
+            for sub in ("REVIEW/confirm", "clusters", "media/book", "lint"):
+                Path(td, "wiki", sub).mkdir(parents=True)
+                Path(td, "wiki", sub, "adl8113-note.md").write_text(
+                    "---\ntitle: ADL8113 artifact\n---\nADL8113\n",
+                    encoding="utf-8")
+            paths = [r["path"] for r in
+                     k.keyword_search(Path(td, "wiki"), "ADL8113", 20)]
+            self.assertEqual(paths, ["entities/adl8113.md"])
+
+    def test_no_file_cap_hides_late_sorting_pages(self):
+        # HardwareWiki/RadarWiki exceed 10,000 Markdown files. A cap applied
+        # to the sorted walk dropped every page in late-sorting directories
+        # (sources/, synthesis/, thesis/), and REVIEW files used up slots
+        # before being skipped.
+        with tempfile.TemporaryDirectory() as td:
+            wiki = Path(td, "wiki")
+            review = wiki / "REVIEW" / "confirm"
+            review.mkdir(parents=True)
+            for i in range(10_001):
+                (review / f"r{i:05d}.md").write_text("x", encoding="utf-8")
+            (wiki / "thesis").mkdir()
+            (wiki / "thesis" / "late-page.md").write_text(
+                "---\ntitle: Late Page\n---\nzebracrossing\n", encoding="utf-8")
+            paths = [r["path"] for r in
+                     k.keyword_search(wiki, "zebracrossing", 5)]
+            self.assertEqual(paths, ["thesis/late-page.md"])
+
 
 class TestRrfMerge(unittest.TestCase):
     def test_both_rank_high_surfaces_top(self):

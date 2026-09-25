@@ -27,7 +27,8 @@ import re
 from pathlib import Path
 
 from _frontmatter import TITLE_LINE_RE as _FM_TITLE_RE
-from typing import Optional
+from _paths import WIKI_ARTIFACT_DIRS
+from typing import Iterable, Optional
 
 __all__ = [
     "tokenize_query",
@@ -48,7 +49,9 @@ TITLE_TOKEN_WEIGHT = 5.0
 CONTENT_TOKEN_WEIGHT = 1.0
 SNIPPET_CONTEXT = 80
 RRF_K = 60.0
-MAX_SEARCH_FILES = 10_000
+# search.rs also stops after MAX_SEARCH_FILES = 10_000 Markdown files. This
+# port has no cap: HardwareWiki/RadarWiki exceed 12,000 pages, and a capped
+# sorted walk silently dropped every page in late-sorting directories.
 
 _CJK_RE = re.compile(r"[㐀-鿿]")
 _HEADING_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
@@ -202,9 +205,20 @@ def score_file(
     }
 
 
-def _walk_md_files(wiki_dir: Path) -> list[Path]:
-    files = sorted(wiki_dir.rglob("*.md"))
-    return files[:MAX_SEARCH_FILES]
+def _walk_md_files(wiki_dir: Path, skip_dirs: Iterable[str]) -> list[Path]:
+    """Every Markdown file outside the top-level ``skip_dirs``, sorted.
+
+    Skipped directories are pruned before descending, so review queues and
+    media never cost a read.
+    """
+    files: list[Path] = []
+    for entry in wiki_dir.iterdir():
+        if entry.is_dir():
+            if entry.name not in skip_dirs:
+                files.extend(entry.rglob("*.md"))
+        elif entry.suffix == ".md":
+            files.append(entry)
+    return sorted(files)
 
 
 def keyword_search(
@@ -212,7 +226,7 @@ def keyword_search(
     query: str,
     max_results: int = 20,
     *,
-    skip_dirs: tuple[str, ...] = ("lint", "REVIEW", "media"),
+    skip_dirs: Iterable[str] = WIKI_ARTIFACT_DIRS,
 ) -> list[dict]:
     """Walk wiki/*.md, score each, return top-N by keyword score."""
     query_phrase = query.strip().lower()
@@ -223,10 +237,8 @@ def keyword_search(
     results: list[dict] = []
     if not wiki_dir.is_dir():
         return results
-    for path in _walk_md_files(wiki_dir):
+    for path in _walk_md_files(wiki_dir, frozenset(skip_dirs)):
         rel = path.relative_to(wiki_dir)
-        if rel.parts and rel.parts[0] in skip_dirs:
-            continue
         try:
             content = path.read_text(encoding="utf-8")
         except OSError:

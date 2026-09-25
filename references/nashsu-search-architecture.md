@@ -98,6 +98,7 @@ vector-only 结果（keyword 没命中的页面）会被 materialize 进结果�
 |------|--------|---------------|
 | 语言 | Rust (Tauri backend) | Python (search_wiki.py) |
 | keyword 搜索 | 有（CJK bigram + 加权评分） | 有（`_wiki_keyword.keyword_search`，CJK bigram + 加权评分） |
+| keyword 扫描范围 | 遍历 `wiki/` 全部 md，计满 10,000 个即停（REVIEW 也计数） | **有意偏离**：先剪掉 `WIKI_ARTIFACT_DIRS`（REVIEW/clusters/media/lint）再遍历，无文件数上限。两个库均超 1.2 万页，旧的"排序后截前 1 万"会静默丢掉 sources/synthesis/thesis 等整目录 |
 | vector 搜索 | 有（LanceDB chunk 级） | 有（LanceDB chunk 级，`wiki_chunks` 表） |
 | 融合策略 | RRF (K=60) | RRF (K=60)（`_wiki_keyword.rrf_merge`） |
 | embedding 默认 | disabled；用户配置 endpoint/model | 本地 Ollama bge-m3（CLI 有意默认） |
