@@ -113,7 +113,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **go/no-go**：`stages.chunks_analyzed ≥ 1`；2.2 完成后 `_verify_stage_2_2_digest` 始终校验滚动最终 digest 5 字段及类型，包含 fresh prefetch 与 cached prefetch resume，验证通过后才允许写 `stage_2_2_done`。
 
 ### Stage 2.3 · Existing-wiki Association
-- **作用**：在冻结的 Stage 2.2 分析与统一生成之间，把候选项与当前 wiki 的真实页面匹配。`stage_2_3_detect_incremental_associations` 保留 type-prefixed exact path；同类型命中是 **UPDATE EXISTING** 目标，跨类型命中只用于链接。`stage_2_3_resolve_proposed_connections` 另验证 2.2 自报连接。
+- **作用**：在冻结的 Stage 2.2 分析与统一生成之间，把候选项与当前 wiki 的真实页面匹配。`stage_2_3_detect_incremental_associations` 保留 type-prefixed exact path；同类型命中是 **UPDATE EXISTING** 目标，跨类型命中只用于链接。`stage_2_3_resolve_proposed_connections` 另验证 2.2 自报连接。`stage_2_3_semantic_candidates` 对词法未匹配、将作为新页列出的候选，用 "名称: 定义" 的向量在 LanceDB 同路由页面的首 chunk 中找最近邻（余弦 ≥0.65，至多 2 个），在 2.4 标为 `POSSIBLY ALREADY EXISTS` 并加入可链接列表——只是**提名**，由 2.4 模型判断：同一主题 → 写已有路径做 UPDATE；仅相关 → 新建并链接；不同主题绝不合并。依据：HardwareWiki 69 对未合并重复页中，搭档页排第 1 仅 52%、前 2 为 64%，重复对余弦（中位 0.68）与"最近的无关页"（中位 0.66）重叠，阈值无法判定同一性。纯中文名称对英文页的召回偏弱（带英文别名时明显改善）。无向量索引则跳过；embedding 调用失败即暂停（同 3.7），续跑从 2.3 恢复。
 - **边界**：这是 improved-wiki 的 wiki-dependent 扩展，必须走按书有序的 serial spine；不改变 Stage 2.4 只做一次整书 generation 的主顺序。
 - **go/no-go**：匹配路径必须在 wiki 内且符合 schema 路由；匹配不确定时保留为新候选，不得因弱词法相似而静默吞页。
 

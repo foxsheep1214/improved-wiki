@@ -3,7 +3,9 @@
 Detects overlap between a new source's concepts/entities/schema-typed
 candidates and existing wiki pages, so downstream stages can update same-type
 pages while avoiding cross-type duplicates. Deterministic: word-level title
-Jaccard + exact slug match. (LLM semantic match is a future enhancement.)
+Jaccard + exact slug match. ``stage_2_3_semantic_candidates`` adds vector
+nominations for the candidates this lexical pass leaves unmatched; Stage 2.4's
+model judges them.
 """
 from pathlib import Path
 import re
@@ -29,6 +31,12 @@ _STAGE_2_3_ACRONYM_MAX_LEN = 4
 # unconditional.  CJK bigrams keep their separate >0.5 threshold because one
 # suffix character commonly adds two bigrams to an otherwise identical term.
 _STAGE_2_3_ASCII_UPDATE_JACCARD = 0.8
+# Semantic nominations (see stage_2_3_semantic_candidates). The floor keeps
+# about three quarters of known duplicate partners (cosine quartiles
+# 0.65/0.68/0.73 on HardwareWiki's unmerged dedup pairs); two nominations
+# per candidate bound the prompt.
+_STAGE_2_3_SEMANTIC_MIN_COSINE = 0.65
+_STAGE_2_3_SEMANTIC_MAX_NOMINATIONS = 2
 _STAGE_2_3_CJK_RE = re.compile("[\\u3400-\\u4dbf\\u4e00-\\u9fff]")
 
 
@@ -226,6 +234,114 @@ def stage_2_3_detect_incremental_associations(
         if matches:
             associations[name] = matches
     return associations
+
+
+def _stage_2_3_semantic_queries(
+    chunk_analyses: list[dict],
+    associations: dict,
+    schema_text: str,
+) -> list[tuple[str, str, str]]:
+    """(name, route, "name: description") for each candidate Stage 2.4 would
+    list as a new page and the lexical pass did not associate."""
+    from _stage_2_4_generation import _is_key_concept_candidate
+
+    typed_routes = schema_candidate_routes(schema_text)
+    typed_names = {
+        str(c.get("name", "")).strip()
+        for chunk in chunk_analyses if isinstance(chunk, dict)
+        for c in chunk.get("schema_typed_candidates", []) or []
+        if isinstance(c, dict)
+    }
+    queries: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+
+    def add(name: str, route: str | None, description: str) -> None:
+        if name and route and name not in seen and name not in associations:
+            seen.add(name)
+            queries.append((name, route, f"{name}: {description}".strip()))
+
+    for chunk in chunk_analyses:
+        if not isinstance(chunk, dict) or "error" in chunk:
+            continue
+        for c in chunk.get("concepts_found", []) or []:
+            if isinstance(c, dict) and _is_key_concept_candidate(c):
+                name = str(c.get("name", "")).strip()
+                if name not in typed_names:
+                    add(name, "concepts", str(c.get("definition", "")))
+        for e in chunk.get("entities_found", []) or []:
+            if isinstance(e, dict):
+                name = str(e.get("name", "")).strip()
+                if name not in typed_names:
+                    add(name, "entities", str(e.get("significance", "")))
+        for c in chunk.get("schema_typed_candidates", []) or []:
+            if isinstance(c, dict):
+                add(str(c.get("name", "")).strip(),
+                    typed_routes.get(str(c.get("type", "")).strip()),
+                    str(c.get("rationale", "")))
+    return queries
+
+
+def stage_2_3_semantic_candidates(
+    config,
+    chunk_analyses: list[dict],
+    associations: dict,
+    schema_text: str = "",
+) -> dict[str, list[dict]]:
+    """Existing same-route pages close in meaning to an unmatched candidate.
+
+    The lexical pass only sees titles, so a paraphrase or another language
+    ("降压变换器" vs "Buck Converter") passes as new and is merged much later
+    by cross-source dedup. Each unmatched candidate's "name: description" is
+    embedded and compared with the first chunk (title + opening section) of
+    pages in the candidate's route in the vector index Stage 3.7 maintains.
+
+    These are nominations, not associations. On HardwareWiki's 69 unmerged
+    dedup pairs the partner page ranked first only 52 % of the time (top-3:
+    71 %), and its cosine (median 0.68) overlapped with the nearest unrelated
+    page's (median 0.66), so no threshold can decide identity. Stage 2.4
+    shows them as POSSIBLY ALREADY EXISTS and the model decides: same subject
+    → update the existing path; merely related → new page plus a wikilink.
+
+    No vector index yet → no nominations. An embedding failure raises: the
+    ingest pauses here as it would at Stage 3.7, and resumes cleanly.
+    """
+    lance_dir = Path(config.runtime_dir) / "lancedb"
+    if not lance_dir.is_dir():
+        print("  [stage 2.3] no vector index — semantic nominations skipped")
+        return {}
+    queries = _stage_2_3_semantic_queries(chunk_analyses, associations, schema_text)
+    if not queries:
+        return {}
+
+    import lancedb
+    from build_embeddings import embed_with_config, embedding_config_from_env
+
+    try:
+        table = lancedb.connect(str(lance_dir)).open_table("wiki_chunks")
+    except Exception as exc:
+        print(f"  [stage 2.3] vector index unreadable ({exc}) — "
+              "semantic nominations skipped")
+        return {}
+    vectors = embed_with_config([text for *_, text in queries],
+                                embedding_config_from_env())
+    nominations: dict[str, list[dict]] = {}
+    for (name, route, _text), vector in zip(queries, vectors):
+        frame = (table.search(vector)
+                 .where(f"chunk_index = 0 AND page_id LIKE '{route}/%'",
+                        prefilter=True)
+                 .limit(_STAGE_2_3_SEMANTIC_MAX_NOMINATIONS)
+                 .to_pandas())
+        picks = []
+        for row in frame.to_dict("records"):
+            # unit vectors, squared L2: cosine = 1 - d/2
+            cosine = round(1.0 - float(row["_distance"]) / 2.0, 2)
+            if cosine >= _STAGE_2_3_SEMANTIC_MIN_COSINE:
+                picks.append({"slug": str(row["page_id"]),
+                              "title": str(row.get("title") or ""),
+                              "cosine": cosine})
+        if picks:
+            nominations[name] = picks
+    return nominations
 
 
 def stage_2_3_resolve_proposed_connections(

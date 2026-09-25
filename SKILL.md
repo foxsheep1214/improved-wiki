@@ -176,6 +176,12 @@ stage gates are in `references/ingest-stages-mandatory.md`.
   target**, not a reason to skip the candidate: Stage 2.4 emits that existing
   FILE path and Stage 3.2 merges it. A cross-type association remains link-only
   so one subject is not duplicated into a second generic/type-specific page.
+- Candidates the lexical pass leaves unmatched get up to two same-route
+  vector nominations (cosine ≥ 0.65 against each page's first chunk), shown
+  as `POSSIBLY ALREADY EXISTS`. They are not associations: vector similarity
+  cannot tell a duplicate from a related page, so the Stage 2.4 model decides
+  update-existing vs new-page-plus-link. No vector index → skipped; an
+  embedding failure pauses at 2.3 like Stage 3.7.
 - On corrected-source re-ingest, Stage 3.2 replaces the stale body of a page
   owned solely by that source while preserving locked fields and array unions.
   Multi-source pages still use the semantic merger so other sources survive.

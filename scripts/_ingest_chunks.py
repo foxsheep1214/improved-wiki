@@ -379,6 +379,7 @@ def _generate_all_chunks(
     chunk_total: int, t_start: float, verbose: bool,
     related_pages: list[dict] | None = None,
     global_digest: dict | None = None,
+    semantic_matches: dict | None = None,
 ) -> tuple[list, list, str | None]:
     """Stage 2.4: one consolidated generation call for the whole source.
 
@@ -404,6 +405,7 @@ def _generate_all_chunks(
         existing_refs=existing_refs,
         related_pages=related_pages,
         consolidated_context=consolidated_context,
+        semantic_matches=semantic_matches,
     )
     print(
         f"  [generate] {chunk_total}/{chunk_total} "
@@ -708,6 +710,7 @@ def _generate_from_analyses(
     from _stage_2_3_incremental import (
         stage_2_3_detect_incremental_associations,
         stage_2_3_resolve_proposed_connections,
+        stage_2_3_semantic_candidates,
     )
     schema_text = load_schema_md(config)
     incremental_associations = stage_2_3_detect_incremental_associations(
@@ -724,6 +727,12 @@ def _generate_from_analyses(
         print(f"  [stage 2.3] {len(related_pages)} proposed connection(s) to "
               f"existing wiki resolved \u2192 fed into generation prompt")
 
+    semantic_matches = stage_2_3_semantic_candidates(
+        config, chunk_analyses, incremental_associations, schema_text=schema_text)
+    if semantic_matches:
+        print(f"  [stage 2.3] {len(semantic_matches)} unmatched candidate(s) have "
+              f"semantically close existing pages \u2192 nominated for Stage 2.4")
+
     # \u2500\u2500 Stage 2.4: one whole-source generation (NashSU 0.6.6 order) \u2500\u2500
     _stage_begin("Stage 2.4: Consolidated Generation")
     # All serial analyses are complete before this call. The shared context
@@ -735,6 +744,7 @@ def _generate_from_analyses(
         template_content, chunk_total, t_start, verbose,
         related_pages=related_pages,
         global_digest=global_digest,
+        semantic_matches=semantic_matches,
     )
 
     # Build combined analysis

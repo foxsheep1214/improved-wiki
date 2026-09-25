@@ -650,11 +650,22 @@ def _schema_candidate_targets_by_name(
     return targets
 
 
+def _semantic_nomination_lines(name: str, semantic_matches: dict | None) -> list[str]:
+    """Stage 2.3 vector nominations for a new-page candidate, for the model
+    to judge (see the POSSIBLY ALREADY EXISTS policy bullet)."""
+    return [
+        f"      ↳ POSSIBLY ALREADY EXISTS: [[{m['slug']}]] \"{m['title']}\" "
+        f"(cosine {float(m['cosine']):.2f})"
+        for m in (semantic_matches or {}).get(name, []) or []
+    ]
+
+
 def _schema_candidate_inventory(
     analyses: list[dict],
     config: Config,
     existing_refs: dict,
     generated_slugs: list[str],
+    semantic_matches: dict | None = None,
 ) -> tuple[list[str], list[tuple[str, str]]]:
     """Normalize Stage 2.2 candidates against the authoritative type→dir map."""
     routes = schema_candidate_routes(load_schema_md(config))
@@ -706,6 +717,7 @@ def _schema_candidate_inventory(
                 lines.append(
                     f"  - {name} (slug: {full_slug}) [{cand_type}]: {rationale}"
                 )
+                lines.extend(_semantic_nomination_lines(name, semantic_matches))
                 slugs.append((name, full_slug))
     return lines, slugs
 
@@ -719,6 +731,7 @@ def _stage_2_4_build_all_prompt(
     related_pages: list[dict] | None = None,
     source_context: str = "",
     consolidated_context: str = "",
+    semantic_matches: dict | None = None,
 ) -> str:
     """Build ONE generation prompt covering ALL chunks (NashSU single-shot parity).
 
@@ -735,7 +748,7 @@ def _stage_2_4_build_all_prompt(
     existing_slugs = list_existing_slugs(config)
 
     schema_candidate_lines, schema_candidate_slugs = _schema_candidate_inventory(
-        chunk_analyses, config, existing_refs, []
+        chunk_analyses, config, existing_refs, [], semantic_matches
     )
     schema_candidate_targets = _schema_candidate_targets_by_name(
         chunk_analyses, config)
@@ -795,6 +808,8 @@ def _stage_2_4_build_all_prompt(
                     concept_lines.append(
                         f"  - {name} (slug: concepts/{slug}) [{imp}]: {defn}"
                     )
+                    concept_lines.extend(
+                        _semantic_nomination_lines(name, semantic_matches))
                     concept_slugs.append((name, f"concepts/{slug}"))
                     concept_slug_stems.add(slug)
                     for d in details[:3]:
@@ -847,6 +862,8 @@ def _stage_2_4_build_all_prompt(
                     entity_lines.append(
                         f"  - {name} (slug: entities/{slug}): {sig}"
                     )
+                    entity_lines.extend(
+                        _semantic_nomination_lines(name, semantic_matches))
                     entity_slugs.append((name, f"entities/{slug}"))
 
     concept_str = "\n".join(concept_lines) if concept_lines else "(none)"
@@ -869,6 +886,8 @@ def _stage_2_4_build_all_prompt(
         slug = rp.get("slug") if isinstance(rp, dict) else None
         if slug:
             must_link.add(slug)
+    for nominations in (semantic_matches or {}).values():
+        must_link.update(m["slug"] for m in nominations or [])
     fill = sorted(s for s in set(existing_slugs) if s not in must_link)
     room = max(0, 300 - len(must_link))
     if len(fill) > room:
@@ -1034,6 +1053,12 @@ Chunks: {len(chunk_analyses)}
   new OR marked UPDATE EXISTING PAGE. The writer will merge update blocks into
   their exact existing paths.
 - Do not generate candidates marked ALREADY COVERED/SKIP or CROSS-TYPE.
+- A "POSSIBLY ALREADY EXISTS" line is a match by meaning, not by name, and is
+  often only a related page. Decide per candidate: if the existing page is the
+  same subject (another name, spelling, abbreviation or language for the same
+  thing), write that page's exact FILE path as an UPDATE instead of the new
+  slug; if it is only related, create the new page and wikilink the existing
+  one. Never merge two distinct subjects into one page.
 - A recommended synthesis/thesis candidate has already passed Stage 2.2's
   evidence-selection gate. Generate it unless it is marked SKIP/CROSS-TYPE or
   the authoritative project schema itself rejects it; do not silently drop it
@@ -1137,6 +1162,7 @@ def stage_2_4_generate_all(
     related_pages: list[dict] | None = None,
     source_context: str = "",
     consolidated_context: str = "",
+    semantic_matches: dict | None = None,
 ) -> tuple[list[tuple[str, str]], list[str], str | None]:
     """Single-shot generation: ONE LLM call for all chunks (NashSU parity, 2026-06-27).
 
@@ -1192,6 +1218,7 @@ def stage_2_4_generate_all(
         existing_refs=existing_refs, related_pages=related_pages,
         source_context=source_context,
         consolidated_context=consolidated_context,
+        semantic_matches=semantic_matches,
     )
     gen_tokens = _stage_2_4_generation_max_tokens(config)
 
