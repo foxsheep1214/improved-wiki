@@ -51,10 +51,10 @@ If a required capability is missing, report it instead of silently degrading.
   collected sources exits `4` and writes nothing. Treat `4` as retryable —
   re-synthesize from the same sources; never hand-patch the body to clear it.
 - **Do not call `ingest.py` on the result.** Do not create typed pages/reviews or
-  mutate index/log/overview. If embeddings are explicitly enabled, a page-only
-  `build_embeddings.py ... upsert --page <saved-page>` is optional and
-  non-critical. Resolve a source Review only after the page exists, with
-  `Research saved: <path>`.
+  mutate index/log/overview. When the project has a vector index, the writer
+  itself upserts only the saved page; failure is a stderr warning, never undoes
+  the page, and `build_embeddings.py ... sync` repairs it later. Resolve a
+  source Review only after the page exists, with `Research saved: <path>`.
 - Clean zero results complete without a page; zero results plus a source error
   fail; partial source failures proceed with successful results and are reported.
 

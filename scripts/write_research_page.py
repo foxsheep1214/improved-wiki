@@ -13,7 +13,9 @@ This helper owns the deterministic part of NashSU's ``deep-research.ts``:
 
 It deliberately does not auto-ingest the saved page, update aggregate files, or
 create reviews. Current NashSU keeps the research result as a directly
-searchable query page and only performs an optional page-scoped embedding.
+searchable query page and embeds only that page when embedding is on; here a
+project that already has a vector index counts as embedding-enabled, and the
+upsert is best-effort.
 """
 from __future__ import annotations
 
@@ -23,9 +25,10 @@ from datetime import datetime, tzinfo
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
-from _paths import atomic_write
+from _paths import atomic_write, detect_runtime_dir
 # Shared with the review Create Page / save: paths, as NashSU routes all three
 # query-page writers through wiki-filename.ts. `make_query_slug` is unused in
 # this module's own body on purpose: it is re-exported so callers and tests can
@@ -238,6 +241,35 @@ def _parse_now(raw: str | None) -> datetime | None:
     return value
 
 
+def embed_saved_page(project: Path, page: Path) -> None:
+    """Page-scoped upsert of a saved research page, reported on stderr.
+
+    stdout stays the saved path alone (callers parse it). A failure never
+    undoes the page: v0.6.7 treats this embedding as non-critical.
+    """
+    if not (detect_runtime_dir(project) / "lancedb").is_dir():
+        print("embedding: skipped (project has no vector index)", file=sys.stderr)
+        return
+    retry = f"build_embeddings.py --project {project} sync"
+    command = [
+        sys.executable, str(Path(__file__).with_name("build_embeddings.py")),
+        "--project", str(project), "upsert", "--page", str(page),
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True,
+                              timeout=180)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"embedding: WARNING {exc}; page kept. Retry: {retry}",
+              file=sys.stderr)
+        return
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip()[-500:]
+        print(f"embedding: WARNING upsert exit {proc.returncode}: {tail}\n"
+              f"page kept. Retry: {retry}", file=sys.stderr)
+        return
+    print("embedding: page indexed", file=sys.stderr)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Write a NashSU v0.6.8-compatible Deep Research query page",
@@ -297,6 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     print(output.relative_to(project).as_posix())
+    embed_saved_page(project, output)
     return 0
 
 

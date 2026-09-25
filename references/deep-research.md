@@ -12,7 +12,7 @@
   → URL 优先去重并全局截到 20 条
   → 仅用摘要 + wiki/index.md 融合
   → 原子写一个 wiki/queries/research-*.md
-  → 可选、非阻断地只更新该页 embedding
+  → 项目有向量索引时由 writer 非阻断地只更新该页 embedding
   → 完成
 ```
 
@@ -37,7 +37,7 @@ synthesis/thesis 页，不自动生成 review，不修改 index/log/overview，�
 | 固定系统提示词，正文由 LLM 自由组织 | 相同；不强制固定章节模板 |
 | 代码写 frontmatter、H1 和 References | `write_research_page.py` 确定性完成 |
 | 研究页不再 `autoIngest` | 默认绝不调用 `ingest.py` |
-| embedding 开启时仅 upsert 该页，失败只告警 | 可选运行 page-scoped upsert；失败不撤销研究页 |
+| embedding 开启时仅 upsert 该页，失败只告警 | 项目已有 `.llm-wiki/lancedb` 即视为开启，`write_research_page.py` 写页后自动 page-scoped upsert；失败只告警、不撤销研究页 |
 | 内存队列最大并发 3 | CLI/对话适配为每个 topic 独立完成；批量时串行写入 |
 | 0.6.10 面板全选 → 批量 Deep Research、可重跑已完成/失败任务 | `batch_research_reviews.py` 只做**选取**（预览 → `--apply` 写工作单），研究本身仍逐条走本文档全部门禁；`--rerun` 对齐重跑已完成 |
 
@@ -274,17 +274,17 @@ tags: [research]
 
 写入成功前不得修改 review 状态。写入成功即是 Deep Research 的核心完成点。
 
-## 6. 可选的单页 embedding
+## 6. 单页 embedding（writer 自动完成）
 
-只有项目已明确启用并配置 embedding 时，才对刚写页面做一次：
+项目已有向量索引（`.llm-wiki/lancedb`）时，`write_research_page.py` 在写页之后
+自己对该页做一次 page-scoped upsert，结果写在 stderr：`embedding: page indexed`、
+`embedding: skipped (project has no vector index)` 或 `embedding: WARNING …`。
+stdout 仍只有研究页路径，退出码不受影响。
 
-```bash
-python3 "$SKILL_DIR/scripts/build_embeddings.py" \
-  --project <wiki-root> upsert --page wiki/queries/<saved-file>.md
-```
-
-这是非阻断增强：失败时保留已成功写入的研究页，记录 warning，并在结果中说明。
-它与 ingest Stage 3.7 的强制完成门禁不是同一个契约。
+这是非阻断增强：失败时保留已成功写入的研究页，在结果中说明，之后用
+`build_embeddings.py --project <wiki-root> sync` 补齐。它与 ingest Stage 3.7 的
+强制完成门禁不是同一个契约。（此前这一步交给调用代理"可选"执行，实际一直被跳过：
+RadarWiki 有 2,035 个研究页从未进入向量索引。）
 
 ## 7. Review 回填与结果报告
 

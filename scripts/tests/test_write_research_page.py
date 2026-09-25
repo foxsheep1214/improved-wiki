@@ -8,7 +8,9 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -177,7 +179,59 @@ class TestWriterCli(unittest.TestCase):
             self.assertTrue((root / rel).is_file())
             wiki_markdown = sorted((root / "wiki").rglob("*.md"))
             self.assertEqual(wiki_markdown, [root / rel])
+            # No vector index → no upsert attempt and no runtime dir created.
             self.assertFalse((root / ".llm-wiki").exists())
+
+    def _write_with_index(self, root: Path, run_result):
+        (root / "wiki").mkdir()
+        (root / ".llm-wiki" / "lancedb").mkdir(parents=True)
+        synthesis_file = root / "synthesis.txt"
+        sources_file = root / "sources.json"
+        synthesis_file.write_text(_GOOD_SYNTHESIS, encoding="utf-8")
+        sources_file.write_text(json.dumps([{
+            "title": "One", "url": "https://example.com/one",
+            "snippet": "grounding snippet", "source": "example.com",
+        }]), encoding="utf-8")
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(writer.subprocess, "run",
+                              side_effect=run_result) as run,
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            status = writer.main([
+                "--project", str(root), "--topic", "Test Topic",
+                "--synthesis-file", str(synthesis_file),
+                "--sources-file", str(sources_file),
+                "--now", "2026-08-03T01:02:03Z",
+            ])
+        return status, stdout.getvalue().strip(), stderr.getvalue(), run
+
+    def test_saved_page_is_upserted_when_the_project_has_an_index(self):
+        # RadarWiki had 2,035 research pages the vector index never saw.
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            status, rel, err, run = self._write_with_index(
+                root, lambda *a, **k: SimpleNamespace(
+                    returncode=0, stdout="", stderr=""))
+            self.assertEqual(status, 0)
+            self.assertEqual(
+                rel, "wiki/queries/research-test-topic-2026-08-03-010203.md")
+            command = run.call_args.args[0]
+            self.assertEqual(
+                command[-3:], ["upsert", "--page", str(root.resolve() / rel)])
+            self.assertIn("indexed", err)
+
+    def test_upsert_failure_keeps_the_page_and_exit_zero(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            status, rel, err, _run = self._write_with_index(
+                root, lambda *a, **k: SimpleNamespace(
+                    returncode=1, stdout="", stderr="endpoint down"))
+            self.assertEqual(status, 0)
+            self.assertTrue((root / rel).is_file())
+            self.assertIn("endpoint down", err)
+            self.assertIn("sync", err)
 
     def test_zero_sources_writes_nothing(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
