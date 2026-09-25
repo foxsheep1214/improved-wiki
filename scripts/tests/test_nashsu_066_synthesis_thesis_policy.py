@@ -122,6 +122,65 @@ class TestNashSUIndexSnapshot(unittest.TestCase):
         self.assertIn("thesis/bandwidth-predicts-resolution", context)
         self.assertIn("Current Wiki Index (prefix)", context)
 
+    def _big_index(self, cfg) -> None:
+        filler = "\n".join(
+            f"- [[comparisons/aaa-{i:04d}|Alpha Beta {i:04d}]]" for i in range(3000)
+        )
+        (cfg.wiki_dir / "index.md").write_text(
+            "# Wiki Index\n\n## comparison\n"
+            f"{filler}\n\n"
+            "## concept\n"
+            "- [[concepts/pwm-modulation|PWM 调制方式]]\n"
+            "- [[concepts/zz-matched-filter|匹配滤波器]]\n\n"
+            "## entity\n"
+            "- [[entities/pulse-doppler-radar|Pulse Doppler Radar]]\n\n"
+            "## redirect\n"
+            "- [[concepts/old-matched-filter|匹配滤波器（旧）]]\n\n"
+            "## synthesis\n"
+            "- [[synthesis/unified-aperture-view|Unified Aperture View]]\n",
+            encoding="utf-8",
+        )
+
+    def test_relevance_text_replaces_the_alphabetical_prefix(self):
+        # HardwareWiki/RadarWiki: the 40K prefix after the priority block was
+        # ~440 alphabetical `comparison` entries, unrelated to the source;
+        # no concept/entity title was ever visible.
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _config(Path(d))
+            cfg.wiki_dir.mkdir(parents=True)
+            self._big_index(cfg)
+            context = _schema.load_wiki_index_context(
+                cfg,
+                relevance_text="本章推导匹配滤波器，并比较 pulse doppler radar 与 PWM 调制。",
+            )
+
+        self.assertLessEqual(len(context), 40_000)
+        self.assertIn("synthesis/unified-aperture-view", context)
+        self.assertIn("Current Wiki Index (entries most relevant to this source", context)
+        self.assertIn("concepts/zz-matched-filter", context)
+        self.assertIn("entities/pulse-doppler-radar", context)
+        self.assertIn("concepts/pwm-modulation", context)
+        self.assertNotIn("comparisons/aaa-0000", context)   # no shared tokens
+        self.assertNotIn("concepts/old-matched-filter", context)  # redirect stub
+        # entries stay grouped under their section, in index order
+        self.assertLess(context.index("## concept"), context.index("## entity"))
+        self.assertLess(context.index("pwm-modulation"),
+                        context.index("zz-matched-filter"))
+
+    def test_relevant_entries_are_capped_at_the_budget(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _config(Path(d))
+            cfg.wiki_dir.mkdir(parents=True)
+            self._big_index(cfg)
+            context = _schema.load_wiki_index_context(
+                cfg, relevance_text="alpha beta " + " ".join(
+                    f"{i:04d}" for i in range(3000)))
+
+        self.assertLessEqual(len(context), 40_000)
+        self.assertEqual(context.count("## comparison"), 1)
+        self.assertIn("comparisons/aaa-", context)
+        self.assertRegex(context, r"\d+ of \d+ index entries shown")
+
     def test_chunk_driver_forwards_same_frozen_index_to_analysis(self):
         seen: list[str] = []
 

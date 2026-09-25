@@ -99,7 +99,9 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
   `purpose.md` 同时注入，用于内容优先级而非改写事实。另把
   `wiki/index.md` 按 NashSU 的 40K 上限冻结为每源快照注入；超大 index
   优先保留 synthesis/thesis 分区，使分析能复用并更新既有 living pages，
-  但 index 标题/描述本身不当作事实证据。候选类型来自结构化
+  其余预算按与本源的相关度挑选条目（标题词在源文段落中的出现频次 × idf，
+  保持原分区与顺序，redirect 不入选，零相关不补位，头部注明"N of M shown"），
+  不再是按字母序截取的 index 开头；但 index 标题/描述本身不当作事实证据。候选类型来自结构化
   `type→dir` 表；仅排除 ingest 自管的 source/entity/concept、用户发起的
   query 与应用维护的 overview。comparison、synthesis、finding、thesis、
   methodology 和自定义 schema 类型都可作为 typed candidate。

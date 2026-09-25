@@ -1,11 +1,15 @@
 """Wiki schema routing, page discovery, and safe ingest paths."""
 from __future__ import annotations
 
+import math
 import re
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from _paths import WIKI_ARTIFACT_DIRS
+from _stage_2_base import _stage_2_title_cjk_bigrams, _stage_2_title_words
+from _wikilinks import WIKILINK_RE
 
 if TYPE_CHECKING:
     from _config import Config
@@ -102,6 +106,8 @@ BASE_TYPE_TO_DIR = {
 _SCHEMA_TYPE_RE = re.compile(r"^[a-z][a-z0-9_-]*$", re.IGNORECASE)
 _SCHEMA_PROMPT_MAX_CHARS = 12_000
 _WIKI_INDEX_PROMPT_MAX_CHARS = 40_000
+# Source-paragraph count at which an index-title token counts as half topical.
+_INDEX_PF_SATURATION = 3
 _SYNTHESIS_THESIS_INDEX_HEADINGS = {
     "synthesis",
     "synthesis（综合）",
@@ -261,14 +267,101 @@ def _priority_synthesis_thesis_sections(index_text: str) -> str:
     return "\n".join(selected).strip()
 
 
+def _index_entry_tokens(line: str) -> set:
+    """ASCII words ∪ CJK bigrams of an index line; a link path counts by stem."""
+    def _flatten(match: re.Match) -> str:
+        stem = match.group(1).rsplit("/", 1)[-1].replace("-", " ").replace("_", " ")
+        return f"{stem} {match.group(2) or ''}"
+
+    text = WIKILINK_RE.sub(_flatten, line)
+    return _stage_2_title_words(text) | _stage_2_title_cjk_bigrams(text)
+
+
+def _relevant_index_entries(index_text: str, relevance_text: str, budget: int) -> str:
+    """Index entries whose title words are topics of the source.
+
+    A whole book contains most title words at least once, so presence alone
+    does not separate topics. Each token instead counts the source
+    paragraphs it appears in (pf), saturated as pf/(pf+K); an entry scores
+    the idf-weighted mean of that over its tokens (ties: larger matched idf
+    mass, then index order). Entries are taken best first while they fit
+    ``budget`` and rendered in index order under their section headings.
+    synthesis/thesis (already in the priority block) and redirect stubs are
+    left out; entries sharing nothing with the source are never padding.
+    """
+    sections: list[tuple[str, list[str]]] = []
+    for line in index_text.splitlines():
+        if re.match(r"^##\s+(.+?)\s*#*\s*$", line.strip()):
+            sections.append((line.strip(), []))
+        elif sections and line.lstrip().startswith("- "):
+            sections[-1][1].append(line)
+
+    entries: list[tuple[int, int, str, set]] = []
+    for s_idx, (heading, lines) in enumerate(sections):
+        name = re.match(r"^##\s+(.+?)\s*#*\s*$", heading).group(1).strip().lower()
+        if name in _SYNTHESIS_THESIS_INDEX_HEADINGS or name.startswith("redirect"):
+            continue
+        for e_idx, line in enumerate(lines):
+            tokens = _index_entry_tokens(line)
+            if tokens:
+                entries.append((s_idx, e_idx, line, tokens))
+
+    pf: Counter = Counter()
+    for paragraph in re.split(r"\n\s*\n", relevance_text):
+        pf.update(_stage_2_title_words(paragraph)
+                  | _stage_2_title_cjk_bigrams(paragraph))
+    df = Counter(token for *_, tokens in entries for token in tokens)
+    idf = {token: math.log(1.0 + len(entries) / count) for token, count in df.items()}
+    ranked = []
+    for s_idx, e_idx, line, tokens in entries:
+        matched = sum(idf[t] for t in tokens if pf[t])
+        if matched > 0:
+            topical = sum(idf[t] * pf[t] / (pf[t] + _INDEX_PF_SATURATION)
+                          for t in tokens)
+            ranked.append((-topical / sum(idf[t] for t in tokens), -matched,
+                           s_idx, e_idx, line))
+    ranked.sort()
+
+    header_budget = len(
+        "# Current Wiki Index (entries most relevant to this source; "
+        f"{len(entries)} of {len(entries)} index entries shown)\n")
+    used = header_budget
+    chosen: dict[int, list[tuple[int, str]]] = {}
+    for _cov, _mass, s_idx, e_idx, line in ranked:
+        cost = len(line) + 1
+        if s_idx not in chosen:
+            cost += len(sections[s_idx][0]) + 2
+        if used + cost > budget:
+            continue
+        used += cost
+        chosen.setdefault(s_idx, []).append((e_idx, line))
+
+    shown = sum(len(lines) for lines in chosen.values())
+    parts = [
+        "# Current Wiki Index (entries most relevant to this source; "
+        f"{shown} of {len(entries)} index entries shown)"
+    ]
+    for s_idx in sorted(chosen):
+        parts.append(sections[s_idx][0])
+        parts.extend(line for _e, line in sorted(chosen[s_idx]))
+        parts.append("")
+    return "\n".join(parts)
+
+
 def load_wiki_index_context(
     config: Config,
     max_chars: int = _WIKI_INDEX_PROMPT_MAX_CHARS,
+    relevance_text: str = "",
 ) -> str:
     """Load a deterministic NashSU-style current-index prompt snapshot.
 
     The caller persists the returned text once per source before Stage 2.2 so
     concurrent batch writes cannot change prompt hashes across resumes.
+
+    An index over ``max_chars`` keeps its synthesis/thesis sections first.
+    With ``relevance_text`` (the source text) the rest of the budget goes to
+    the index entries most related to that source; without it, to the index
+    prefix — which on a 12,000-page wiki is ~440 alphabetical comparisons.
     """
     if max_chars <= 0:
         return ""
@@ -281,6 +374,14 @@ def load_wiki_index_context(
         return text
 
     priority = _priority_synthesis_thesis_sections(text)
+    if relevance_text.strip():
+        head = (
+            "# Priority Existing Synthesis/Thesis Index Sections\n"
+            f"{priority}\n\n"
+        ) if priority else ""
+        if len(head) < max_chars:
+            return (head + _relevant_index_entries(
+                text, relevance_text, max_chars - len(head))).rstrip()
     if priority:
         priority_block = (
             "# Priority Existing Synthesis/Thesis Index Sections\n"

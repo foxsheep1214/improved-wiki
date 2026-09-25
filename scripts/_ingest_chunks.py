@@ -612,7 +612,12 @@ def _run_chunk_pipeline(
         else (progress or {}).get("wiki_index_snapshot_2_2")
     )
     if not isinstance(wiki_index_snapshot, str):
-        wiki_index_snapshot = load_wiki_index_context(config)
+        # Rank the index entries against this source's own text so the
+        # snapshot shows related page titles, not an alphabetical prefix.
+        wiki_index_snapshot = load_wiki_index_context(
+            config,
+            relevance_text="\n".join(chunk for _i, chunk, _o, _h in chunk_meta),
+        )
         snapshot_update["wiki_index_snapshot_2_2"] = wiki_index_snapshot
     if snapshot_update:
         save_progress(config, _h, snapshot_update)
