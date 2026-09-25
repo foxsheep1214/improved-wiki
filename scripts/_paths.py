@@ -2,7 +2,7 @@
 _paths.py — Shared runtime directory detection + path-derivation utilities for
 improved-wiki scripts.
 
-Matches ingest.py Config.from_env() logic exactly:
+Shared by every CLI; detection never migrates data:
   - Default:     <root>/.llm-wiki/          (NashSU-aligned)
   - Back compat: <root>/.iwiki-runtime/     (existing improved-wiki projects)
   - Legacy:      <root>/wiki/               (when old state files exist inside wiki/)
@@ -28,114 +28,46 @@ if TYPE_CHECKING:
     from _config import Config
 
 
+RUNTIME_STATE_NAMES = (
+    "ingest-cache.json", "ingest-events.jsonl", "ingest-progress", "extract-tmp",
+    "lancedb", "embed-cache.json", "ingest-queue.json", "conversation",
+    "lint-cache.json", "lint-semantic.json", "lint-run-state.json", "lint",
+    "review.json", "review-suggestions.json", "spine-reservation.json",
+)
+LEGACY_STATE_ALIASES = {
+    ".ingest-cache.json": "ingest-cache.json",
+    ".ingest-progress": "ingest-progress",
+    ".extract-tmp": "extract-tmp",
+}
+
+
 def detect_runtime_dir(wiki_root: Path) -> Path:
-    """Return the runtime directory for this wiki project.
+    """Select the runtime without creating, moving or deleting anything.
 
-    Priority:
-      1. .iwiki-runtime/   auto-migrate to .llm-wiki/ if it still exists
-      2. .llm-wiki/        if it exists and has valid content (ingest-cache.json,
-                           ingest-progress/, or lancedb/) — preferred over
-                           legacy wiki/ even if old state files exist there
-      3. wiki/             if old state files exist there (legacy), and .llm-wiki/
-                           is empty or doesn't exist
-      4. .llm-wiki/        clean default (NashSU-aligned)
+    A populated .iwiki-runtime remains readable until explicitly migrated.
+    Two populated dedicated runtimes require operator reconciliation; they must
+    never silently choose different ingest.lock files.
     """
-    llm_wiki = wiki_root / ".llm-wiki"
-    iwiki = wiki_root / ".iwiki-runtime"
-
-    # Auto-migrate from .iwiki-runtime → .llm-wiki
-    if iwiki.exists():
-        _migrate_iwiki_runtime(iwiki, llm_wiki)
-        # After migration, use .llm-wiki
-        return llm_wiki
-
-    # If .llm-wiki/ exists and has valid content, use it regardless of legacy wiki/
-    llm_wiki_indicators = [
-        llm_wiki / "ingest-cache.json",
-        llm_wiki / "ingest-events.jsonl",
-        llm_wiki / "ingest-progress",
-        llm_wiki / "lancedb",
-        llm_wiki / "embed-cache.json",
-    ]
-    if any(p.exists() for p in llm_wiki_indicators):
-        return llm_wiki
-
-    # Legacy: old projects that put state inside wiki/
-    old_indicators = [
-        wiki_root / "wiki" / ".ingest-cache.json",
-        wiki_root / "wiki" / "ingest-cache.json",
-        wiki_root / "wiki" / ".ingest-progress",
-        wiki_root / "wiki" / "ingest-progress",
-        wiki_root / "wiki" / ".extract-tmp",
-        wiki_root / "wiki" / "extract-tmp",
-    ]
-    if any(p.exists() for p in old_indicators):
-        return wiki_root / "wiki"
-
-    # Auto-migrate: lint-cache.json / lint-lock in wiki/
-    _migrate_lint_cache_out_of_wiki(wiki_root)
-
-    # Default: NashSU-aligned
-    return llm_wiki
-
-
-def _migrate_iwiki_runtime(iwiki: Path, llm_wiki: Path) -> None:
-    """Migrate .iwiki-runtime/ contents → .llm-wiki/, then remove old dir."""
-    import sys
-    llm_wiki.mkdir(parents=True, exist_ok=True)
-    count = 0
-    for src in sorted(iwiki.iterdir()):
-        dst = llm_wiki / src.name
-        try:
-            if src.is_dir():
-                if dst.exists():
-                    # Merge: move individual files
-                    for f in src.iterdir():
-                        f.rename(dst / f.name)
-                        count += 1
-                    src.rmdir()
-                else:
-                    src.rename(dst)
-            else:
-                if dst.exists():
-                    src.unlink()  # already migrated elsewhere
-                else:
-                    src.rename(dst)
-            count += 1
-        except OSError as e:
-            print(f"[_paths] Failed to migrate {src} → .llm-wiki/ "
-                  f"({type(e).__name__}: {e}) — left in place.", file=sys.stderr)
-    # Remove old dir if empty (or force remove after migration attempt)
-    try:
-        iwiki.rmdir()
-    except OSError:
-        pass
-    if count:
-        print(f"[_paths] Migrated {count} items from .iwiki-runtime/ → .llm-wiki/", file=sys.stderr)
-
-
-def _migrate_lint_cache_out_of_wiki(wiki_root: Path) -> None:
-    """If lint-cache.json or lint-lock exists under wiki/, move to .llm-wiki/."""
-    wiki = wiki_root / "wiki"
-    runtime = wiki_root / ".llm-wiki"
-    migrated = 0
-    for name in ("lint-cache.json", "lint-lock"):
-        wiki_path = wiki / name
-        if wiki_path.exists():
-            runtime.mkdir(parents=True, exist_ok=True)
-            dest = runtime / name
-            wiki_path.rename(dest)
-            migrated += 1
-    # Also clean up stale numbered copies (concurrent-run artifacts)
-    for stale in sorted(wiki.glob("lint-cache [0-9]*.json")):
-        stale.unlink(missing_ok=True)
-        migrated += 1
-    for stale in sorted(wiki.glob("lint-lock [0-9]*")):
-        stale.unlink(missing_ok=True)
-        migrated += 1
-    if migrated:
-        import sys
-        print(f"[_paths] Migrated {migrated} lint state file(s) from wiki/ → .llm-wiki/", file=sys.stderr)
+    root = wiki_root.expanduser().resolve()
+    current, old, wiki = root / ".llm-wiki", root / ".iwiki-runtime", root / "wiki"
+    current_exists = any((current / name).exists() for name in RUNTIME_STATE_NAMES)
+    old_exists = any(p.is_file() and not p.name.endswith((".lock", ".lease"))
+                     for p in old.rglob("*")) if old.exists() else False
+    if old_exists and current_exists:
+        raise RuntimeError("Both .iwiki-runtime and .llm-wiki contain state; "
+                           "preview migrate_runtime.py before choosing a writer")
+    if old_exists:
+        if any((old / name).exists() for name in LEGACY_STATE_ALIASES):
+            raise RuntimeError("Legacy hidden state requires migrate_runtime.py --from .iwiki-runtime")
+        return old
+    if current_exists:
+        return current
+    if any((wiki / name).exists() for name in LEGACY_STATE_ALIASES):
+        raise RuntimeError("Legacy hidden state requires migrate_runtime.py --from wiki")
+    if any((wiki / name).exists() for name in
+           ("ingest-cache.json", "ingest-progress", "extract-tmp")):
+        return wiki
+    return current
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -31,10 +31,13 @@ from typing import Optional
 # explicit CLI arguments (preferred) or the matching environment variables.
 PROJECT_ROOT = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
 WIKI = PROJECT_ROOT / "wiki"
-# Use shared detection (_paths.py: .llm-wiki/ default, auto-migrates from .iwiki-runtime/)
+# Use shared detection (_paths.py: .llm-wiki/ default, reads legacy layouts without migration)
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
 from _paths import detect_runtime_dir, iter_wiki_pages
+from _source_identity import SourceResolver, normalize_source_ref, raw_source_refs
+from _frontmatter_array import parse_frontmatter_array
+from _schema import source_slug_from_raw_path
 from _lint_suggest import (
     run_structural_lint,
     ANCHOR_FILES as _LINT_ANCHOR_FILES,
@@ -68,12 +71,12 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--source",
         default=os.environ.get("SOURCE_SLUG", ""),
-        help="source page stem/cache-key substring (or set SOURCE_SLUG)",
+        help="full raw-relative source path, or a unique legacy basename/stem",
     )
     parser.add_argument(
         "--cache-key",
         default=os.environ.get("CACHE_KEY", ""),
-        help="exact ingest-cache key when substring matching would be ambiguous",
+        help="exact ingest-cache key (legacy automation override)",
     )
     args = parser.parse_args(argv)
     if not str(args.source).strip():
@@ -100,64 +103,41 @@ def _configure_runtime(
     SOURCES_DIR = WIKI / "sources"
 
 
-def _validate_find_cache_entry(slug: str) -> Optional[dict]:
-    """Find the cache entry whose key or filesWritten contains *slug*.
+def _validate_cache_source(key: str) -> str:
+    raw = normalize_source_ref("raw/" + key, PROJECT_ROOT)
+    if key.startswith("queries/"):
+        query = "wiki/" + key
+        if (PROJECT_ROOT / query).is_file():
+            if (PROJECT_ROOT / raw).is_file():
+                raise ValueError(f"Ambiguous legacy cache key {key}: {raw}, {query}")
+            return query
+    return raw
 
-    Matching strategy (in order):
-      1. Exact CACHE_KEY env var match (set manually when running validate_ingest.py standalone)
-      2. slug appears in cache key (substring)
-      3. slug appears in filesWritten paths
-      4. Normalized match: strip common prefixes (book/, paper/, datasheet/)
-         and suffixes (.pdf) from cache keys before comparing
-    """
+
+def _validate_find_cache_entry(slug: str) -> Optional[dict]:
+    """Resolve exact paths or a unique short alias; never choose a substring."""
     if not CACHE_PATH.exists():
         return None
-    cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-    entries = cache.get("entries", {})
-
-    # 1. Exact CACHE_KEY match
-    if CACHE_KEY and CACHE_KEY in entries:
-        return {"key": CACHE_KEY, **entries[CACHE_KEY]}
-
-    # 2. Substring match on key
-    for k, v in entries.items():
-        if slug in k:
-            return {"key": k, **v}
-
-    # 3. Substring match on filesWritten
-    for k, v in entries.items():
-        for fw in v.get("filesWritten", []):
-            if slug in fw:
-                return {"key": k, **v}
-
-    # 4. Normalized match: strip common patterns from cache keys
-    import re
-    slug_norm = slug.strip().lower().replace(" ", "")
-    for k, v in entries.items():
-        # Strip book/, paper/, etc. prefix and .pdf suffix
-        # Case-insensitive: handles both old lowercase and new Titlecase dir names
-        key_norm = re.sub(r'^(book|paper|datasheet|applicationnote|designexample|presentation|standard|news)/', '', k, flags=re.IGNORECASE)
-        key_norm = re.sub(r'\.(pdf|pptx|docx)$', '', key_norm)
-        key_norm = key_norm.strip().lower().replace(" ", "")
-        if slug_norm in key_norm or key_norm in slug_norm:
-            return {"key": k, **v}
-
-    return None
+    entries = json.loads(CACHE_PATH.read_text(encoding="utf-8")).get("entries", {})
+    identities = {key: _validate_cache_source(key)
+                  for key in entries}
+    resolver = SourceResolver(PROJECT_ROOT, set(identities.values()) | raw_source_refs(PROJECT_ROOT))
+    if CACHE_KEY:
+        return {**entries[CACHE_KEY], "key": CACHE_KEY} if CACHE_KEY in entries else None
+    identity = resolver.resolve(slug)
+    matches = [key for key, source in identities.items() if source == identity]
+    if len(matches) > 1:
+        raise ValueError(f"Multiple cache entries resolve to {identity}: {matches}")
+    return {**entries[matches[0]], "key": matches[0]} if matches else None
 
 
-def _validate_find_media_dir(slug: str) -> Optional[Path]:
-    """Find media directory matching slug (recursive search — media/ mirrors raw/)."""
-    if not MEDIA_DIR.is_dir():
+def _validate_find_media_dir(source: str) -> Optional[Path]:
+    """Derive media from an exact source identity, not a fuzzy directory scan."""
+    identity = normalize_source_ref(source, PROJECT_ROOT)
+    if not identity.startswith("raw/"):
         return None
-    # Recursive search: media/book/Foo, media/datasheet/05_AMP/Bar, etc.
-    for d in MEDIA_DIR.rglob(slug):
-        if d.is_dir():
-            return d
-    # Fallback: fuzzy match on slug substring
-    for d in MEDIA_DIR.rglob("*"):
-        if d.is_dir() and (slug in d.name or slug.replace(" ", "") in d.name.replace(" ", "")):
-            return d
-    return None
+    path = MEDIA_DIR / Path(identity[4:]).with_suffix("")
+    return path if path.is_dir() else None
 
 
 def _validate_recorded_source_pages(entry: dict, project_root: Path) -> tuple[list[str], list[Path]]:
@@ -194,7 +174,7 @@ def _validate_completion_history(
     cache_key = str(entry.get("key") or "").replace("\\", "/")
     if not source_hash or not cache_key:
         return False, "cache entry lacks key/hash"
-    source_identity = f"raw/{cache_key}"
+    source_identity = _validate_cache_source(cache_key)
     try:
         events = ingest_events_for_source(
             load_ingest_events(SimpleNamespace(runtime_dir=RUNTIME)),
@@ -275,16 +255,17 @@ def main(argv: Optional[list[str]] = None):
     print("=" * 60)
 
     # ── Resolve cache entry ──
-    entry = _validate_find_cache_entry(SOURCE_SLUG)
+    try:
+        entry = _validate_find_cache_entry(SOURCE_SLUG)
+    except (ValueError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     stages = entry.get("stages", {}) if entry else {}
-
-    media = _validate_find_media_dir(SOURCE_SLUG)
-    source_page = None
-    if SOURCES_DIR.is_dir():
-        for f in SOURCES_DIR.rglob("*.md"):
-            if SOURCE_SLUG in f.stem:
-                source_page = f
-                break
+    identity = _validate_cache_source(entry["key"]) if entry else None
+    media = _validate_find_media_dir(identity) if identity else None
+    source_page = source_slug_from_raw_path(PROJECT_ROOT / identity, PROJECT_ROOT) if identity else None
+    if source_page is not None and not source_page.is_file():
+        source_page = None
 
     # ═══════════════════════════════════════════════
     # Stage 0: Text extraction
@@ -387,7 +368,7 @@ def main(argv: Optional[list[str]] = None):
     comparisons_dir = WIKI / "comparisons"
     comp_pages = list(comparisons_dir.glob("*.md")) if comparisons_dir.is_dir() else []
     src_comp_pages = [p for p in comp_pages
-                      if SOURCE_SLUG in p.read_text(encoding="utf-8", errors="ignore")] if comp_pages else []
+                      if identity in parse_frontmatter_array(p.read_text(encoding="utf-8", errors="ignore"), "sources")] if comp_pages else []
     if entry:
         cg = stages.get("comparisons_generated", 0)
         check(
@@ -522,7 +503,7 @@ def main(argv: Optional[list[str]] = None):
     if entry:
         raw_root = PROJECT_ROOT / "raw"
         rel = entry.get("key", "")
-        raw_file = raw_root / rel
+        raw_file = PROJECT_ROOT / _validate_cache_source(rel)
         if raw_file.exists():
             actual = file_sha256(raw_file)
             expected = entry.get("hash", "")
@@ -656,4 +637,4 @@ def main(argv: Optional[list[str]] = None):
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

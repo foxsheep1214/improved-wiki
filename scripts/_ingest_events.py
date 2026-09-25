@@ -295,47 +295,43 @@ def load_ingest_events(config) -> list[dict]:
 
 
 def _project_source_reclassifications(events: list[dict]) -> list[dict]:
-    """Resolve audited path moves without rewriting completed-run history.
+    """Replay relocations in append order, preserving every event-time path.
 
-    A source_reclassification repair binds old/new raw paths to the same
-    content hash. The original events stay byte-for-byte in the ledger;
-    readers get current paths while retaining the paths at event time.
+    A path may be vacated, reused by a new ingest, or revisited by a reversal.
+    It is not a timeless graph edge. Each active (path, hash) owns a lineage
+    of event indexes; a move transfers that lineage to its new location.
     """
-    routes = {}
-    for event in events:
-        if (event.get("event") != REPAIR_COMPLETED
-                or event.get("repair_kind") != "source_reclassification"):
+    projected = [dict(event) for event in events]
+    active: dict[tuple[str, str], list[int]] = {}
+    vacated = set()
+    for index, event in enumerate(events):
+        source, sha = event['source'], event['source_hash']
+        if (event.get('event') != REPAIR_COMPLETED
+                or event.get('repair_kind') != 'source_reclassification'):
+            key = (source, sha)
+            active.setdefault(key, []).append(index)
+            vacated.discard(key)
             continue
-        old = event.get("previous_source", "")
-        new = event.get("source", "")
-        sha = event.get("source_hash", "")
-        page = event.get("source_page", "")
-        if (not isinstance(old, str) or not old.startswith("raw/")
-                or not isinstance(new, str) or not new.startswith("raw/")
-                or ".." in Path(old).parts or ".." in Path(new).parts
-                or old == new or not re.fullmatch(r"[0-9a-f]{64}", sha)
-                or page != "wiki/sources/" + str(Path(new[4:]).with_suffix(".md"))):
-            raise IngestEventError("invalid source_reclassification repair")
-        key, target = (old, sha), (new, page)
-        if key in routes and routes[key] != target:
-            raise IngestEventError(f"conflicting source relocation: {old}")
-        routes[key] = target
-    projected = []
-    for event in events:
-        source, sha = event["source"], event["source_hash"]
-        page = event.get("source_page", "")
-        seen = set()
-        while (source, sha) in routes:
-            if source in seen:
-                raise IngestEventError(f"cyclic source relocation: {source}")
-            seen.add(source)
-            source, page = routes[(source, sha)]
-        if source != event["source"]:
-            event = dict(event)
-            event.setdefault("source_at_event", event["source"])
-            event.setdefault("source_page_at_event", event.get("source_page", ""))
-            event.update(source=source, source_page=page)
-        projected.append(event)
+        old = event.get('previous_source', '')
+        page = event.get('source_page', '')
+        if (not isinstance(old, str) or not old.startswith('raw/')
+                or not source.startswith('raw/')
+                or '..' in Path(old).parts or '..' in Path(source).parts
+                or old == source or not re.fullmatch(r'[0-9a-f]{64}', sha)
+                or page != 'wiki/sources/' + str(Path(source[4:]).with_suffix('.md'))):
+            raise IngestEventError('invalid source_reclassification repair')
+        key, target = (old, sha), (source, sha)
+        if key in vacated or target in active:
+            raise IngestEventError(f'conflicting source relocation: {old} -> {source}')
+        lineage = active.pop(key, [])
+        for prior_index in lineage:
+            prior = projected[prior_index]
+            prior.setdefault('source_at_event', events[prior_index]['source'])
+            prior.setdefault('source_page_at_event', events[prior_index].get('source_page', ''))
+            prior.update(source=source, source_page=page)
+        active[target] = lineage + [index]
+        vacated.add(key)
+        vacated.discard(target)
     return projected
 
 
@@ -360,12 +356,14 @@ def append_ingest_event(config, event: dict) -> tuple[dict, bool]:
                         f"{candidate['event']} {candidate['run_id']}"
                     )
                 return existing, False
+        # Reject an unreadable candidate ledger before changing any bytes.
+        _project_source_reclassifications(events + [candidate])
         path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
-            json.dumps(value, ensure_ascii=False, sort_keys=True)
-            for value in events + [candidate]
-        ]
-        atomic_write(path, "\n".join(lines) + "\n")
+        prior = path.read_text(encoding='utf-8') if path.exists() else ''
+        if prior and not prior.endswith('\n'):
+            prior += '\n'
+        atomic_write(path, prior + json.dumps(
+            candidate, ensure_ascii=False, sort_keys=True) + '\n')
     return candidate, True
 
 

@@ -93,25 +93,16 @@ WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
 WIKI_DIR="$WIKI_ROOT/wiki"
 export WIKI_DIR
 
-# Detect runtime dir (aligned with _paths.py detect_runtime_dir())
-if [ -d "$WIKI_ROOT/.iwiki-runtime" ]; then
-    echo "[lint] Migrating .iwiki-runtime/ → .llm-wiki/" >&2
-    mkdir -p "$WIKI_ROOT/.llm-wiki"
-    mv "$WIKI_ROOT/.iwiki-runtime"/* "$WIKI_ROOT/.llm-wiki/" 2>/dev/null || true
-    rmdir "$WIKI_ROOT/.iwiki-runtime" 2>/dev/null || true
-    RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
-elif [ -f "$WIKI_ROOT/.llm-wiki/ingest-cache.json" ] || \
-     [ -d "$WIKI_ROOT/.llm-wiki/ingest-progress" ] || \
-     [ -d "$WIKI_ROOT/.llm-wiki/lancedb" ] || \
-     [ -f "$WIKI_ROOT/.llm-wiki/embed-cache.json" ]; then
-    RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
-elif [ -f "$WIKI_DIR/.ingest-cache.json" ] || [ -f "$WIKI_DIR/ingest-cache.json" ] || \
-     [ -d "$WIKI_DIR/.extract-tmp" ] || [ -d "$WIKI_DIR/extract-tmp" ] || \
-     [ -d "$WIKI_DIR/.ingest-progress" ] || [ -d "$WIKI_DIR/ingest-progress" ]; then
-    RUNTIME_DIR="$WIKI_DIR"
-else
-    RUNTIME_DIR="$WIKI_ROOT/.llm-wiki"
+# The Python launcher owns the project lock across exec, without a watcher or
+# FIFO. The private re-entry marker is never trusted without validating its fd.
+if [ "${1:-}" != "--internal-locked" ]; then
+    exec "${IMPROVED_WIKI_PYTHON:-python3}" "$SCRIPT_DIR/_maintenance_lock.py" \
+        "$WIKI_ROOT" bash "$0" --internal-locked "$@"
 fi
+shift
+python3 "$SCRIPT_DIR/_maintenance_lock.py" --check "$WIKI_ROOT" || exit 1
+RUNTIME_DIR=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+    'import sys; from pathlib import Path; from _paths import detect_runtime_dir; print(detect_runtime_dir(Path(sys.argv[1])))' "$WIKI_ROOT") || exit 1
 mkdir -p "$RUNTIME_DIR"
 
 LINT_PAGES_DIR="$RUNTIME_DIR/lint"
@@ -208,78 +199,6 @@ if [ ! -d "$WIKI_DIR" ]; then
   exit 2
 fi
 
-# ── Lock (mkdir-atomic, race-free; PID staleness reclaim) ──
-# mkdir is atomic — only one instance wins. The prior PID-file approach
-# (check→kill -0→rm→write) was non-atomic and racy: two lints could both pass
-# the existence check and both write. A hard-crashed process leaves a stale
-# lockdir; we reclaim it only after confirming the recorded PID is dead, so a
-# live process is never displaced.
-LINT_LOCKDIR="$RUNTIME_DIR/lint-lock.d"
-if ! mkdir "$LINT_LOCKDIR" 2>/dev/null; then
-  oldpid=$(cat "$LINT_LOCKDIR/pid" 2>/dev/null)
-  if [ -n "$oldpid" ] && kill -0 "$oldpid" 2>/dev/null; then
-    echo "[lint] Another instance (pid $oldpid) running, exiting." >&2
-    exit 0
-  fi
-  rm -rf "$LINT_LOCKDIR"
-  mkdir "$LINT_LOCKDIR" 2>/dev/null || { echo "[lint] Lock reclaim failed, exiting." >&2; exit 0; }
-fi
-# Install the cleanup trap IMMEDIATELY after winning the mkdir lock
-# (2026-07-12): any exit between winning the lock and a later trap install
-# used to orphan the lockdir. The trap is extended below as further
-# resources (flock holder, temp script) come into existence.
-trap "rm -rf '$LINT_LOCKDIR'" EXIT
-echo $$ > "$LINT_LOCKDIR/pid"
-
-# ── Ingest/lint mutual exclusion (2026-07-11) ──
-# Hold the SAME flock ingest.py uses (runtime/ingest.lock, see _core.ProjectLock)
-# for the duration of this lint run. This is real mutual exclusion, not a
-# check: if an ingest is mid-write, lint refuses to start (its fix/dedup/
-# delete stages write to wiki/); if lint is running, a new ingest's
-# lock.acquire() fails with its normal "another ingest may be running"
-# message. NashSU never needs this — it is a single-window desktop app whose
-# UI serializes everything. The holder process keeps the flock's fd open and
-# dies with this script: normally killed by the EXIT trap, and as a backstop
-# it watches for parent death itself (2026-07-12) — if this script is killed
-# hard (SIGKILL, no trap), the holder gets reparented, notices getppid()
-# changed, and exits, releasing the flock instead of sleeping on it forever.
-INGEST_LOCK_FILE="$RUNTIME_DIR/ingest.lock"
-LOCK_FIFO=$(mktemp -u -t wiki-lint-lockfifo-XXXXXX)
-mkfifo "$LOCK_FIFO"
-python3 - "$INGEST_LOCK_FILE" "$$" > "$LOCK_FIFO" <<'PYLOCK' &
-import fcntl, os, sys, time
-fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
-try:
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-except BlockingIOError:
-    print("BUSY", flush=True)
-    sys.exit(3)
-print("LOCKED", flush=True)
-# Parent-death watchdog: exit (auto-releasing the flock) as soon as the
-# launching lint script (pid passed as argv[2] — NOT getppid(), which races
-# with reparenting when the parent dies early) is gone. kill(pid, 0) only
-# probes existence.
-_parent = int(sys.argv[2])
-while True:
-    try:
-        os.kill(_parent, 0)
-    except OSError:
-        sys.exit(0)
-    time.sleep(2)
-PYLOCK
-LOCK_HOLDER_PID=$!
-# Drop the holder from the job table so the EXIT-trap kill doesn't emit a
-# noisy "Terminated" job notice (with the whole heredoc) on every clean exit.
-disown "$LOCK_HOLDER_PID" 2>/dev/null || true
-read -r LOCK_STATUS < "$LOCK_FIFO"
-rm -f "$LOCK_FIFO"
-# Extend the trap to also kill the holder (lockdir cleanup already trapped).
-trap "kill '$LOCK_HOLDER_PID' 2>/dev/null; rm -rf '$LINT_LOCKDIR'" EXIT
-if [ "$LOCK_STATUS" != "LOCKED" ]; then
-  echo "[lint] A Stage 2.3+ writer holds the project lock ($INGEST_LOCK_FILE) — refusing to run lint concurrently. Wait for that write spine to finish; ordinary background OCR does not hold this lock (see maintenance-cleanup.md)." >&2
-  exit 1
-fi
-
 # ── Logical lint-run checkpoint (survives exit 101) ──
 LINT_RUN_STATE="$RUNTIME_DIR/lint-run-state.json"
 LINT_RUN_ACTIVE=false
@@ -317,8 +236,9 @@ lint_finish_run() {
 }
 
 # ── Phase 1: Structural lint ──
-LINT_SCRIPT=$(mktemp -t wiki-lint-XXXXXX.py)
-trap "kill '$LOCK_HOLDER_PID' 2>/dev/null; rm -rf '$LINT_LOCKDIR'; rm -f '$LINT_SCRIPT' '$LINT_CACHE.tmp' '$LINT_CACHE.tmp.err'" EXIT
+mkdir -p /tmp/codex-work/improved-wiki-lint
+LINT_SCRIPT=$(mktemp /tmp/codex-work/improved-wiki-lint/lint-XXXXXX.py)
+trap 'rm -f "$LINT_SCRIPT" "$LINT_CACHE.tmp" "$LINT_CACHE.tmp.err"' EXIT
 
 cat > "$LINT_SCRIPT" <<'PYEOF'
 import json
@@ -689,7 +609,8 @@ if [ "$DEDUP" = true ]; then
       echo "[lint] --dedup: conversation handoff pending (exit 101) — answer the written prompt and re-run wiki-lint.sh to finish the same logical lint run." >&2
       exit 101
     elif [ "$dedup_rc" -ne 0 ]; then
-      echo "[lint] --dedup: sub-script exited $dedup_rc, continuing" >&2
+      echo "[lint] --dedup: sub-script exited $dedup_rc; lint remains incomplete" >&2
+      exit "$dedup_rc"
     elif ! lint_mark_done "dedup"; then
       echo "[lint] --dedup: failed to persist completion checkpoint." >&2
       lint_finish_run

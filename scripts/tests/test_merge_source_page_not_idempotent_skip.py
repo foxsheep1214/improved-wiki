@@ -85,7 +85,7 @@ class SourcePageAlwaysCallsMerger(unittest.TestCase):
         (ingest.ts:1938-1939).
         """
         existing = _page("concept", "## Definition\nStale wording from A and B.\n",
-                          sources='"raw/Book/A.pdf", "raw/Book/B.pdf"')
+                          sources='raw/Book/A.pdf", "raw/Book/B.pdf')
         new = _page("concept", "## Definition\nCorrected wording from B alone.\n",
                      sources="raw/Book/B.pdf")
 
@@ -95,7 +95,7 @@ class SourcePageAlwaysCallsMerger(unittest.TestCase):
             called.append(True)
             return _page("concept",
                           "## Definition\nStale wording from A, corrected by B.\n",
-                          sources='"raw/Book/A.pdf", "raw/Book/B.pdf"')
+                          sources='raw/Book/A.pdf", "raw/Book/B.pdf')
 
         result = merge_page_content(new, existing, merger_fn=merger)
         self.assertTrue(
@@ -108,7 +108,7 @@ class SourcePageAlwaysCallsMerger(unittest.TestCase):
         after a merge handoff and is replaying a block it already merged.
         The caller proves it with the per-page write ledger."""
         existing = _page("concept", "## Definition\nAlready-merged body from A and B.\n",
-                          sources='"raw/Book/A.pdf", "raw/Book/B.pdf"')
+                          sources='raw/Book/A.pdf", "raw/Book/B.pdf')
         new = _page("concept", "## Definition\nFresh-generation body from B alone.\n",
                      sources="raw/Book/B.pdf")
 

@@ -4,18 +4,40 @@ Full script inventory by category. Entry points (user-facing) are **bold**.
 
 | Category | Scripts |
 |----------|---------|
-| Core | `_config.py`, `_progress.py`, `_schema.py`, `_parse.py`, `_retry.py`, `_exit_codes.py`, `_paths.py`; `_core.py` is the compatibility facade |
+| Core | `_config.py`, `_progress.py`, `_schema.py`, `_parse.py`, `_retry.py`, `_exit_codes.py`, `_paths.py`, `_context_budget.py`, `_source_identity.py`, `_maintenance_lock.py`; `_core.py` is the compatibility facade |
 | Stage Modules (Phase 0-3) | `_stage_1_extract.py` (1.1 facade → `_stage_1_1_scanned.py` / `_stage_1_1_documents.py`（XLSX/ODT/EPUB/RTF 正文，stdlib，无图片） / `_stage_1_2_images.py` / `_stage_1_3_caption.py`), `_stage_2_analyze.py` (2.2 + chunker), `_stage_2_3_incremental.py` (2.3: existing-wiki association detect), `_stage_2_4_generation.py` (2.4 unified generation), `_dedup_intra_source.py` (2.4 dedup tail), `_source_page.py` (source-page validation/fallback helpers), `_stage_3_review.py` (3.1 + 3.5), `_stage_2_base.py` (shared Stage-2 domain helpers), `_stage_3_write.py` (3.2 + 3.3), `_stage_3_4_inject_images.py` (3.4), `_stage_3_7_embed.py` (3.7, final stage), `_stage_validators.py` (go/no-go checks) |
 | Ingest orchestration | **`ingest.py`** (compatibility facade) → `_ingest_cli.py` (CLI), `_ingest_runner.py` (single source), `_batch_supervisor.py` (prefetch + serial spine), `_batch_status.py` (read-only status), `_batch_coordination.py` (coordinator flock + durable reservation + prefetch pause), `_batch_worker_status.py` (heartbeat + lease), `_ingest_skip.py`, `_ingest_chunks.py`, `_ingest_prepare.py`, `_ingest_write.py`; `_ingest_events.py`（run 级 append-only 完成历史、source/log 投影）；**`ingest_history.py`**（first/last 查询与旧 log/marker 一次性迁移，默认预览） |
 | Merge/Enrich | `_enrich_wikilinks.py`, `_source_lifecycle.py` |
-| Lint | **`wiki-lint.sh`**（默认结构+语义+emit-review+fix+fix-links+sweep+一轮 dedup；exit 101 通过 `_lint_run_state.py` 续接同一次逻辑运行，语义完整扫描只做一次，Sweep 的 5 批上限跨续接累计；随后 exit 102 等用户确认 delete-orphans；确认后用 `--delete-orphans-only`；`--diagnostic-only`/`--structural-only` 为非修改模式）, `wiki-lint-fix.py`（修复/孤页删除执行器）, `wiki-lint-semantic.py`, `lint_verify_semantic.py`（improved-wiki 独有：对 severity=="warning" 语义发现用全文再核验一遍，非 NashSU parity，lint 后手动跑），**`validate_ingest.py`**, `normalize_raw_names.py` |
+| Lint | **`wiki-lint.sh`**, `wiki-lint-fix.py`, `wiki-lint-semantic.py`, `lint_verify_semantic.py`, **`validate_ingest.py`**, `normalize_raw_names.py`; behavior and gates: [Lint](lint.md) |
 | Graph | **`graph.py`**（独立命令；Lint 不调用；图谱 gap 报告写入 `.llm-wiki/knowledge-gaps.md`，不进入 `wiki/REVIEW/`） |
 | Queue | **`wiki-monitor.sh`**, **`run-queue.sh`** (thin launchers) → `queue_cli.py` (atomic scan/merge/run); `run-ingest.sh` maps exit 101 for task UIs |
 | Embeddings | **`build_embeddings.py`**（`embed` 全量重建 / `upsert`、`delete` 按页 / `sync [--dry-run]` 对账：只重嵌缺失与已变页、删已消失页 / `compact` / `search` / `stats`）, **`search_wiki.py`** |
 | Repair | `sweep_reviews.py`, `batch_research_reviews.py`（REVIEW 批量深度研究**选取** CLI，对齐 NashSU 0.6.10 的全选→Deep Research + 重跑；只选不研究：无 `--apply` 只预览，`--apply` 只写 `.llm-wiki/research-batch.json` 工作单，真正的检索/融合/写页仍逐条走 `deep-research.md` 全套门禁。`--rerun` 只重开「上次研究已存页」的条目，人工 Skip 永不重开）, `batch_resolve_reviews.py`（REVIEW 批量裁决 CLI，对齐 NashSU 面板的全选+批量按钮；无 `--apply` 只预览。`--clear-resolved` 对齐 `clearResolved()`：选中**已解决**集合并删除——注意已解决页在本项目中还承担抑制重生成与 sweep 去重的作用，删掉后同一条发现可能重新变成待办，CLI 会先把这点打出来）, `review_actions.py`（review 动作路由，移植 NashSU `handleResolve` + `createReviewPageDrafts`；纯函数不落盘，供 process-reviews 判定按钮集/动作含义/建页路由，并定死每页的文件名与 created 日期）, `_review_write.py`（review 写入侧：`write_created_pages`/`write_saved_query_page` 建页 + 更新 `index.md` + 追加 `log.md`，原子写；Deep Research 不走这里，它只读 index 不写）, `enrich_wikilinks_retroactive.py`, `repair_table_wikilinks.py`（回溯修复 Markdown 表格里未转义的 `[[target|alias]]` —— 未转义的 `|` 会造出假单元格边界；现管线在写入时已由 `_wikilinks.escape_markdown_table_wikilink_aliases` 拦截，此 CLI 只用于修早期写入的存量页；无 `--apply` 只扫描）, `cross_source_dedup.py`（跨源去重 CLI）, `rebuild_index.py`（index.md 确定性全量重建，不调 LLM，无页数上限；Stage 3.3 每次 ingest 调的就是同一个 `rebuild_index_deterministic`，此 CLI 供 ingest 之外手工重建；无 `--apply` 只预览 diff） |
-| Evidence | **`evidence_lookup.py`**（按页面 `sources:` 或来源名回查摄取时保存的出处账本：claim+锚点、公式、逐字表格；`--grep` 过滤）, `_evidence_ledger.py`（Stage 3.6 在清除 progress 前写 `.llm-wiki/evidence/<hash16>.json`，不调 LLM） |
+| Evidence | **`evidence_lookup.py`**（按页面 `sources:` 或来源名回查摄取时保存的出处账本：claim+锚点、公式、逐字表格；`--grep` 过滤）, `_evidence_ledger.py`（Stage 3.6 在清除 progress 前写 `.llm-wiki/evidence/<source-id>-<hash16>-<run-id>.json`，不调 LLM） |
 | Deep Research | `search_local.py`（v0.6.7 AnyTXT 的项目内 CLI analogue：1–3 queries、15 条全局上限、WebSearchResult JSON）, `write_research_page.py`（20 来源去重门禁、thinking 清理、v0.6.8 融合完整性门禁——不完整/未引用返回 4 且不写文件、确定性 query page 原子写入；不 auto-ingest） |
 | QC / Review guard | `qc_stage22.py` (Stage 2.2 响应离线质检), `review_fix_guard.py`（confirm 修复范围检查；`--snapshot` 记录修复前 hash，`--finalize` 要求页面确有变化及验证记录后才关闭 Review） |
 | Lint internals | `_lint_suggest.py`, `_lint_fixes.py` |
 | Dedup internals | `_dedup.py`, `_dedup_embedding.py`, `_dedup_storage.py` |
-| Other internals | `_conversation_router.py`, `_llm_call.py`, `_llm_api.py`（handoff/缓存底座）, `_frontmatter.py`（frontmatter 解析 + 三层 page merge）, `_frontmatter_array.py`, `_ingest_sanitize.py`, `_file_block_repair.py`（0.6.6 截断 FILE block 定向恢复）, `_media_integrity.py`（图片 sidecar 校验 + 定向重采集）, `_task_manifest.py`（任务清单同步）, `_page_ref.py`（页面引用归一）, `_queue_store.py`（队列持久化）, `_language.py`（语言检测 + 输出指令）, `_review_utils.py`, `_source_filter.py`, `_wiki_keyword.py`, `_context_probe.py`, `_watch.py` |
+| Other internals | `_conversation_router.py`, `_llm_call.py`, `_llm_api.py`（handoff/缓存底座）, `_frontmatter.py`（frontmatter 解析 + 三层 page merge）, `_frontmatter_array.py`, `_ingest_sanitize.py`, `_file_block_repair.py`（0.6.6 截断 FILE block 定向恢复）, `_media_integrity.py`（图片 sidecar 校验 + 定向重采集）, `_task_manifest.py`（任务清单同步）, `_page_ref.py`（页面引用归一）, `_queue_store.py`（队列持久化）, `_language.py`（语言检测 + 输出指令）, `_review_utils.py`, `_source_filter.py`, `_wiki_keyword.py`, `_context_budget.py`, `_watch.py` |
+
+## Runtime migration and regression checks
+
+`migrate_runtime.py --project <root> --from .iwiki-runtime` previews runtime
+migration; `--apply` locks both layouts and refuses conflicts. See
+[runtime layout](runtime-layout.md). `_frontmatter.py` owns YAML read semantics;
+array, Graph, Lint and Dedup readers use that contract. Array patches preserve
+unrelated formatting.
+
+From the skill root, use Python 3.10+ and pytest (unittest discovery omits the
+function-style tests). Put test artifacts outside the source repository:
+
+```bash
+mkdir -p /tmp/codex-work/improved-wiki-tests
+TMPDIR=/tmp/codex-work/improved-wiki-tests PYTHONDONTWRITEBYTECODE=1 \
+  python3 -m pytest -q -o cache_dir=/tmp/codex-work/improved-wiki-tests/pytest-cache
+git diff --check
+```
+
+`pytest.ini` defines the complete collection root and script import path.
+Tests patch implementation owners; `ingest.py` retains direct import aliases
+without synchronizing module globals.

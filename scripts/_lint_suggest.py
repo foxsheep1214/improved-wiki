@@ -24,7 +24,6 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 
-import yaml
 
 from _frontmatter import (
     TITLE_LINE_RE as _TITLE_LINE_RE,
@@ -75,28 +74,10 @@ STATE_FILES = {
     "embed-cache.json", "dedup-report.json",
 }
 
-_YAML_FRONTMATTER_RE = re.compile(
-    r"^---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|$)",
-    re.DOTALL,
-)
-
-
 def _lint_frontmatter(content: str) -> dict:
-    """Return YAML-aware frontmatter for structural edge semantics.
+    """Use the same YAML/null/array semantics as graph, dedup and writers."""
+    return parse_frontmatter(content)[0]
 
-    The shared lightweight parser is retained as a fallback for legacy files,
-    but PyYAML is required here so ``null`` means no redirect and inline
-    comments are not folded into a redirect target.
-    """
-    fallback, _ = parse_frontmatter(content)
-    match = _YAML_FRONTMATTER_RE.match(content)
-    if not match:
-        return fallback
-    try:
-        parsed = yaml.safe_load(match.group(1)) or {}
-    except yaml.YAMLError:
-        return fallback
-    return parsed if isinstance(parsed, dict) else fallback
 
 # Headless auto-rewrite gate (2026-07-10, user-approved lint hardening): only
 # exact (1.0) / same-basename (0.96) tier suggestions may be rewritten without

@@ -135,6 +135,9 @@ class TestDeleteSweepsQueriesAndComparisons(unittest.TestCase):
     def test_cleanup_reports_deleted_page_paths_for_embedding_cascade(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = _make_config(Path(tmp))
+            raw = cfg.wiki_root / 'raw' / 'Book.pdf'
+            raw.parent.mkdir(parents=True)
+            raw.write_bytes(b'book')
             page = cfg.wiki_root / "wiki" / "concepts" / "single.md"
             page.parent.mkdir(parents=True, exist_ok=True)
             page.write_text(

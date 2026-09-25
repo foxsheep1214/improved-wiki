@@ -142,7 +142,7 @@ python3 "$SKILL_DIR/scripts/ingest.py" --abandon-spine <status显示的8位hash>
 ## `--stop-after-stage` 防误用
 
 `--stop-after-stage` 仅允许单文件诊断/预取。多文件 batch 与它组合会在 context
-probe 和任何 OCR 之前直接报错，避免把整批任务误变成“OCR-only batch”。
+任何 handoff 和 OCR 之前直接报错，避免把整批任务误变成“OCR-only batch”。
 自动后台 worker 使用内部 `--batch-extract-worker` 模式，不依赖公开 stop flag。
 公开 `--no-project-lock` 也只允许和 `--stop-after-stage 0` 或 `1.5` 组合；它不能
 被误用于完整写入。

@@ -24,7 +24,6 @@ Usage:
 import json, re
 from pathlib import Path
 from _frontmatter import parse_frontmatter, write_frontmatter
-from _frontmatter_array import normalize_block_arrays
 from _llm_api import call_anthropic_protocol
 from _wikilinks import escape_markdown_table_wikilink_aliases
 
@@ -249,9 +248,6 @@ Pages with no suggestions may be omitted from the object.
         suggestions = suggestions_by_path.get(rel_path, [])
         if not suggestions:
             continue
-        # Normalize block-style frontmatter arrays before the naive
-        # parse→write round-trip below, which would silently empty them.
-        content = normalize_block_arrays(content)
         fm, body = parse_frontmatter(content)
         this_slug = Path(rel_path).stem
         changed = False

@@ -31,13 +31,9 @@ from _batch_coordination import (
 from _ingest_prepare import _do_prepare
 from _ingest_write import _do_write
 from _ingest_runner import _finalize_book, ingest_one
-from _context_probe import resolve_context
+from _context_budget import apply_context_budget
 
 _script_dir = Path(__file__).resolve().parent
-
-
-def _probe_and_apply_context(config: Config) -> None:
-    config.apply_context(resolve_context(config))
 
 
 def _bg_state_path(config: Config) -> Path:
@@ -593,13 +589,8 @@ def _run_background_extract_worker(
                 "batch/prefetch pause marker present at worker startup",
             )
             return BATCH_PAUSED
-        from _context_probe import load_cached
-        if load_cached(config) is None:
-            raise RuntimeError(
-                "context-probe cache miss in detached extract worker; "
-                "foreground coordinator must populate it first")
         config.stop_after_stage = "0"
-        _probe_and_apply_context(config)
+        apply_context_budget(config)
         result = ingest_one(
             raw_file,
             config,

@@ -448,6 +448,8 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     except ImportError:
         expected_lang = "unknown"
 
+    from _source_identity import SourceResolver, raw_source_refs
+    source_resolver = SourceResolver(config.wiki_root, raw_source_refs(config.wiki_root))
     canonical_source = canonical_source_path(raw_file, config)
     query_bridge = is_query_bridge_source(raw_file, config)
     today_str = time.strftime("%Y-%m-%d")
@@ -546,6 +548,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 _routing,
                 _slug_dirs,
                 canonical_source=canonical_source,
+                source_resolver=source_resolver,
                 today=today_str,
                 source_page_slug=_source_page_slug,
             )
@@ -613,7 +616,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
         # that needed repair. Sanitizing is idempotent; stage_3_2_write_wiki_file
         # still calls it for the callers that reach it directly.
         content = _stage_3_2_sanitize_ingested_content(content)
-        content = _stage_3_2_canonicalize_sources_field(content, canonical_source)
+        content = _stage_3_2_canonicalize_sources_field(content, canonical_source, source_resolver)
         content = _stage_3_2_stamp_frontmatter_dates(content, today_str)
 
         # A5 (audit M6): single write-time normalization pass — related →
@@ -662,6 +665,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 config,
                 merge=do_merge,
                 source_file=canonical_source,
+                source_resolver=source_resolver,
                 normalize_rel_path=rel_path if do_merge else "",
                 slug_dirs=_slug_dirs if do_merge else None,
                 source_page_slug=_source_page_slug,

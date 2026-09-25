@@ -157,7 +157,7 @@ def conversation_handoff(
     print(f"  Prompt:  {prompt_file}", flush=True)
     print(f"  Result:  {result_file}", flush=True)
     print("  Answer via a FRESH subagent (1 handoff, then exit) — the main", flush=True)
-    print("  conversation only orchestrates; sole exception: the context probe.", flush=True)
+    print("  conversation only orchestrates; each prompt needs a fresh worker.", flush=True)
     print("  Write <slug>.txt.tmp, validate it, then atomically rename to .txt;", flush=True)
     print("  never stream a partial answer directly into the final result path.", flush=True)
     print("  (NashSU per-call statelessness — see delegate-mode.md L4.)", flush=True)

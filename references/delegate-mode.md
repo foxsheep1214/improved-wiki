@@ -26,7 +26,7 @@ publishes the result, and immediately re-invokes the exact command.
 
 ## One-handoff isolation
 
-Except for the tiny context-window probe:
+For every conversation handoff:
 
 1. Dispatch one fresh worker/subagent per handoff.
 2. Give it exactly one prompt and forbid further delegation or background

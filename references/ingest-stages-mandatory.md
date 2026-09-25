@@ -13,7 +13,7 @@ schema-typed 页。Lint 与 Graph 是独立命令，不属于 ingest 管线。
 
 **执行由代码强制，不靠人工遵守**：全部 stage 由 `ingest.py` 调度，agent 只答 prompt、无法跳过任何 active stage。本清单是行为说明书（每 stage 作用/产物/go-no-go），不是纪律清单。唯一仍靠 agent 自觉的规则：不得绕过 `ingest.py` 手写 wiki 页冒充消化产物。Stage 0.1 在 0.2 去重前自动调用 `stage_0_1_check_file`，违规或项目缺少命名规则即暂停。
 
-> **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。完整政策见 SKILL.md「Quality and failure policy」。显式恢复路径只有：cache/stage-progress 状态损坏时告警+重置；未闭合 FILE 块的一次 exact-path 定向修复；缺失 source summary 时从完整 Stage 2 analysis 写确定性恢复页。后二者对齐 NashSU，都会打印日志，且绝不补 concept/entity 数量。
+> **无静默回退策略**：ingest 路径禁止任何静默回退（caption key 缺失、caption 批次重试耗尽、embedding stack 缺失、LLM page-merge 失败、config 解析失败 → 一律 `raise RuntimeError` 暂停，不降级）。本清单各阶段定义具体门禁。显式恢复路径只有：cache/stage-progress 状态损坏时告警+重置；未闭合 FILE 块的一次 exact-path 定向修复；缺失 source summary 时从完整 Stage 2 analysis 写确定性恢复页。后二者对齐 NashSU，都会打印日志，且绝不补 concept/entity 数量。
 
 ## 阶段编号 → 代码函数
 
@@ -56,21 +56,19 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
   3. `ingested` marker 不在 + 源页存在 → **resume**（已写盘但 post-write stages 未跑完；`write_phase` marker 让 3.2 写盘不重跑，resume 便宜且不重复合并已写页）。
   4. `ingested` marker 不在 + 源页不存在 → **fresh ingest**。
 - **go/no-go**：状态 1 跳过；其余进入/续跑 Stage 1.1。
-- **历史**：曾设想"源页引用的 concepts/entities 丢失 >80% → 重消化"的 wikilink-completeness 校验，但该块代码写在一个无条件 `return False` 之后、**从未执行**，已于 2026-06-25 作为 dead code 删除（commit `1dfd4f9`）。当前**没有引用页完整性校验**；`ingested` marker 是唯一完整性信号。
 
 ---
 
 ## Phase 1：Extraction
 
 ### Stage 1.1 · 文本提取
-- **作用**：所有 PDF（文本版/扫描版/混合版）统一走本地持久化 minerU API 服务器（`mineru.cli.fast_api`，端口 19999），按 32 页/chunk（`MINERU_CHUNK_SIZE`）调 `/file_parse`，`backend=hybrid-engine`、`parse_method=auto`（按页自动判 txt vs VLM OCR），保留表格/公式/图片。method 标签恒为 `mineru-api`。fitz 仅用于 `--dry-run` 的 PDF 类型诊断（text/mixed/scanned），不参与提取决策。
+- **作用**：所有 PDF（文本版/扫描版/混合版）统一走本地持久化 minerU API 服务器（`mineru.cli.fast_api`，端口 19999），按 32 页/chunk（`MINERU_CHUNK_SIZE`）调 `/file_parse`，`backend=hybrid-engine`、`parse_method=auto`（按页自动判 txt vs VLM OCR），保留表格/公式/图片。method 标签恒为 `mineru-api`。fitz 仅用于 `--dry-run` 的平均文本密度诊断，不参与提取决策。
 - **NashSU 对齐**：NashSU 用 minerU **云** API（mineru.net，需 token，pipeline/vlm，200 页上限）；improved-wiki 用**本地**免费服务器（hybrid-engine/auto，无 token，无页数上限）——有意偏离。garbled-font 预检测与提取质量门已于 2026-07-08 移除（NashSU 二者皆无；minerU 3.4.0 上 OCR 影响有限）。`verify_stage_0` 的 ≥100 字符基本非空校验是唯一提取门。
 - **为什么不用 PyMuPDF 直抽**：在数据手册/图表密集型 PDF 上漏检表格/公式/图（实测 73 表格/7 公式/157 图 vs 0/0/2）。
 - **并发限制**：系统级最多 1 个 minerU 任务，`fcntl.flock` 文件锁（默认持续等待；不得因大型前序书超过一小时而重启等待 worker），等待时打印 `[mineru] Waiting for lock...`。免费、无需 API key。详见 `scanned-pdf-ocr-pipeline.md`。
 - **chunk 粒度**：`MINERU_CHUNK_SIZE=32` 页/次。本地 /file_parse 同步端点无硬超时，chunk 化只为崩溃恢复粒度（每 chunk 完成缓存 stats.json）+ 控制单次等待。总提取时间由 minerU 处理瓶颈决定、与 chunk 数无关，故选较小 chunk：单次等待短（~32 页）、崩溃恢复粒度细（丢 ≤32 页），代价仅是 fitz 切分+HTTP overhead 略增（每 chunk 几秒，相对总时间微小）。
 - **产物**：每页一个 `p<NNN>.txt`（页号 1:1）。
 - **go/no-go**：`verify_stage_0` ≥100 字符（基本非空，防空提取浪费下游 LLM）。
-- **已知坑**：`mineru -b pipeline` CLI 在 3.4.0 有 502 bug，不可用；API path（hybrid-engine/auto）是唯一提取后端。
 
 ### Stage 1.2 · 图片提取
 - **作用**：图片存盘（harvest）融进 Stage 1.1 chunk 循环——每个 chunk 调 `/file_parse` 后，`_stage_1_2_harvest_images()` 从响应 `images`（base64）+ `content_list`（页码映射）存图到 `wiki/media/<type>/<pdf-stem>/`，文件名 `p<NNN>-mineru_<md5前8>.<ext>`。manifest 汇总（`_stage_1_2_extract_from_mineru`）+ PPTX/DOCX 提取（`_stage_1_2_extract_images_office`，从 zip 内 `ppt/media`/`word/media` 取图）+ Markdown 提取（`_stage_1_2_extract_markdown_images`，解析 `![[ref]]`/`![alt](ref)` 复制本地图片，NashSU `extractAndSaveMarkdownImages` parity）仍为独立 1.2 阶段（`stage_1_2_done` marker）。全本跑完汇总 `_manifest.json`，并直接调 Stage 1.3 配文字。
@@ -81,7 +79,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **注意**：API 路径按 `page+md5前8` 命名，不做跨页 sha256 全局去重（同一图重复出现在不同页会各存一份）。
 
 ### Stage 1.3 · 图片 captioning
-- **作用**：对每张图用 VLM 生成 2-4 句描述（与源文本同语言，NashSU `captionImage` parity）。**一图一调用** + 上下文感知 prompt（NashSU `buildCaptionPromptWithContext` parity）。
+- **作用**：对每张图用 VLM 生成 2-4 句描述（遵循配置的输出语言，auto 时跟随源文本）。**一图一调用** + 上下文感知 prompt（NashSU `buildCaptionPromptWithContext` parity）。
 - **依赖**：`~/.agents/config.json` 配置 caption_provider（primary，无 env-var 替代路径）+ 可选 caption_fallback_provider（2026-07-08）。
 - **产物**：每图一个 `.caption.txt`。
 - **go/no-go**：每张图有 caption 文件且长度 ≥20 字符。
@@ -92,7 +90,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ## Phase 2：Analysis & Generation
 
 ### Stage 2.2 · Chunk Analysis
-- **作用**：对源文本切块分析。chunk 大小由 context probe 动态决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-probe.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`source_quotes`/`formulas`/`connections_to_existing_wiki`/`schema_typed_candidates`/`updated_global_digest`。
+- **作用**：对源文本切块分析。chunk 大小由 显式 context-token 预算决定（`target_tokens = min(64K, ctx×0.33)`，见 `references/context-budget.md`）：短源 1 块；长源按 chunk 预算切分。每 chunk 输出 `entities_found`/`concepts_found`/`claims`/`source_quotes`/`formulas`/`connections_to_existing_wiki`/`schema_typed_candidates`/`updated_global_digest`。
 - **Schema/Purpose 上下文（NashSU 0.6.6 parity）**：把根目录
   `schema.md` 的语义部分作为 AUTHORITATIVE 路由/Frontmatter 契约注入每个
   chunk；机器命名 YAML 仅供 Stage 0.1，不进入 LLM 上下文。可选
@@ -120,7 +118,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 2.4 · Generation（single whole-source pass）
 - **作用**：2.2 **分析完所有 chunk** 且 2.3 完成关联后，对整本来源执行**一次**统一 generation，生成分析推荐的 key 概念/实体与项目 schema-typed 页。prompt 使用与 NashSU 0.6.6 同序的最终滚动 digest + 全部 chunk analyses，并额外保留每个 chunk 的有界原文证据；不能回退为按 chunk 分波/串行生成。comparison、synthesis、finding、thesis、methodology 不再有旁路或专门 stage。完整语义 schema 以 AUTHORITATIVE 形式注入；每个 genuinely supported 的 `schema_typed_candidate` 在生成前按结构化 `type→dir` 重新解析，忽略 LLM 自报的 folder。`mentioned`、passing/background 项不允许生成“补充基础页”。
 - **schema 语义与数量**：每类候选都必须满足项目 schema 的语义门（例如 finding 要证据锚点、methodology 要可复用条件/步骤、thesis 要可证伪、comparison 要真实多维对比）。按 NashSU bundled schema，当前来源可建立 speculative working thesis，也可建立区别于 source summary 的 cross-cutting synthesis；后续来源经同路径合并/更新。项目 schema 若声明更严格门槛则服从项目 schema。不设各类型条数目标、下限或上限，也不再截断 typed candidate 清单（旧 per-chunk 40 / all-chunks 120 展示上限已移除）。2.2 推荐只是候选，不预先承诺建页；但 synthesis/thesis 不得仅因仍是单来源初稿或 speculative 而在 2.4 被二次静默拒绝。某次 2.4 调用若没有任何候选达到该门槛，必须只返回精确哨兵 `NO_KEY_PAGES`；普通空白、解释性文字或损坏输出仍是硬失败。source 页不受该哨兵影响：它在同一次 2.4 调用中强制产出，模型遗漏时写确定性 fallback。
-- **整书上下文与预算**：`build_consolidated_stage_2_context` 在 `source_budget` 内确定性构建共享上下文，每个 chunk 在 analyses 与 raw 两段都必须有代表。**`source_budget` 的单位是 token**（探针报的就是 token），进函数后按该源实测的 chars/token 折算成字符上限（`_token_budget_to_chars`，与 2.2 分块器同一套估算口径）——2026-08-13 修正：此前直接把 token 数当字符花，拉丁文源的 2.4 上下文只拿到窗口 ~13%，而每个 2.2 chunk 提示词拿 32%，优先级是反的；中日韩源因 ~1 char/token 基本未受影响，所以一直没暴露。详见 `references/context-probe.md`。**降级方式是按字段整体丢弃，不是切 JSON**（2026-07-30）：analyses 装不下时按固定优先级逐级丢整字段（`source_quotes` → `connections_to_existing_wiki` → `formulas`/`key_details` → `definition`/`significance`/`evidence`/`rationale` → `claims`），选第一个能**完整**渲染每个 chunk payload 的档位，使每份分析始终是可解析对象。若最终 digest 或最低明细档位仍超限，则用可解析的 JSON head/tail envelope 明示截断，绝不从字符串中部切断语法。旧实现按 chunk 均分后用 balanced excerpt 切，实测 20 chunk（当时等效 26,000 token 预算）需 198,130 字符只给 ~60,000，等于把 20 份从 JSON 中间切断的碎片喂给生成模型。raw 证据改为**吃剩余预算**（不再按固定 0.28/0.68 份额预切）：短源保留全文，长源把预算让给跨 chunk analyses（实测 20 chunk raw 从 ~28K 升到 ~42K）。被丢弃的字段与档位写进上下文自身的 `## Context Budget` 段并打印一行——不静默截断。改档位表或份额必须同步 `STAGE_2_CONTEXT_POLICY_VERSION`（= `GENERATION_POLICY_VERSION`，尚未跨写盘边界的 2.3+ 缓存会失效重跑）。Stage 2.4 的 generation token ceiling 由 `compute_max_tokens` 按探针 context 分档（120K/250K/500K → 8K/16K/32K）。注意这**不是** NashSU 的等价档位——NashSU 的 128K/256K/512K 阈值走的是字符尺度的 `maxContextSize`，同名数字不同单位。会话模式下 `max_tokens` 只写进 `tasks.json` 备查，不构成对答题 subagent 的真实约束，所以这个偏差目前不影响产出。
+- **整书上下文与预算**：`build_consolidated_stage_2_context` 使用 token 单位的 `source_budget`，按实测 chars/token 转换字符预算。每个 chunk 都保留完整可解析的 analysis；超限时依固定优先级整体舍弃低价值字段，最低档或最终 digest 仍超限则用合法 JSON head/tail envelope，禁止切断 JSON。raw evidence 使用剩余预算且覆盖每个 chunk。删减档位写入 `Context Budget` 段并打印；改变规则须更新 `STAGE_2_CONTEXT_POLICY_VERSION`。上下文配置、响应预算和恢复契约见 `context-budget.md`。
 - **生成后去重**：Stage 2.4 的收尾子步使用 embedding 初筛（cosine ≥0.82）+ LLM 确认；embedding 不可用则暂停，不回退 Jaccard。这是 improved-wiki 扩展，不会分裂单次整书 generation。
 - **强制源页**：源页是本次 generation 必须给出的一个 FILE 块（`_source_page_guidance_section` / `_source_page_output_section` 提供正文要求与 frontmatter 模板）。简洁、自由结构；只选核心论点/证据和最相关 wikilink；不列出全部生成页、全部章节主题或全部 chunk claims；无固定 H2/条目数量。`NO_KEY_PAGES` 哨兵**不豁免**源页。写盘前由 `_ensure_source_page` 收口：对生成的源块跑结构门（`_validate_source_file_block`：恰好一个、路径为 `wiki/sources/<stem>.md`、frontmatter/END 完整、正文非空）与 frontmatter 修复（`_normalize_source_frontmatter` 用 digest 补齐留空的 authors/year/url/venue）；块缺失或不合规时改写 NashSU deterministic fallback（完整 Stage 2 analysis，不截断、**不另调 LLM**）。未闭合 FILE 块由 2.4 自身的 targeted repair 处理。
 - **产物**：FILE blocks（`---FILE:wiki/<path>---...---END FILE---`）。
@@ -161,7 +159,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 ### Stage 3.6 · Cache
 - **作用**：在页面、聚合、媒体与 review 都完成后更新 `ingest-cache.json`，记录 source hash、实际页集合与 stage 统计。
 - **go/no-go**：cache 与 task manifest 的 page refs 必须一致；不一致时不能进入最终完成门禁。
-- **出处账本**（improved-wiki 扩展，不调 LLM）：写 cache、`clear_progress` 删除 progress 之前，把 Stage 2.2 各 chunk 的 `claims`（含 evidence 锚点与 confidence）、`source_quotes`、`formulas`、`structured_data` 连同本源写入的知识页清单存到 `.llm-wiki/evidence/<hash16>.json`（`source` = `canonical_source_path`，与页面 `sources:` 一致）。派生状态：写失败只告警、不中断 ingest；重新 ingest 覆盖；账本出现之前 ingest 的源没有账本。查询用 `evidence_lookup.py`。
+- **出处账本**（improved-wiki 扩展，不调 LLM）：写 cache、`clear_progress` 删除 progress 之前，把 Stage 2.2 各 chunk 的 `claims`（含 evidence 锚点与 confidence）、`source_quotes`、`formulas`、`structured_data` 连同本源写入的知识页清单存到 `.llm-wiki/evidence/<source-id>-<hash16>-<run-id>.json`（`source` = `canonical_source_path`，与页面 `sources:` 一致）。派生状态：写失败只告警、不中断 ingest；同一来源/版本/批次重放幂等，新批次保留旧账本；账本出现之前 ingest 的源没有账本。默认查询核对 raw hash、完成事件和 ingested marker 的 run_id；旧版和未完成证据仅由 `evidence_lookup.py --history` 返回。
 
 ### Stage 3.7 · Embeddings
 - **作用**：按 NashSU 0.6.6 的 ingest 生命周期，只把本次实际写入/更新的 knowledge pages 重新 chunk，并以 page 为单位替换其 LanceDB rows；不再为每本书隐式全库重建。

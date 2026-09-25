@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
 import json
 import os
 import sys
@@ -43,6 +42,7 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -58,6 +58,7 @@ from _core import ConversationPending  # noqa: E402
 from _exit_codes import HANDOFF_PENDING  # noqa: E402
 from _paths import detect_runtime_dir, iter_wiki_pages, atomic_write  # noqa: E402
 from _embedding_store import remove_page_embeddings  # noqa: E402
+from _maintenance_lock import maintenance_write_lock  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
 from _dedup_embedding import (  # noqa: E402
     candidate_pairs,
@@ -582,6 +583,20 @@ def _detect_groups(summaries, pages, llm_call, not_duplicates, embedding_prefilt
 def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
                today=None, apply_low_confidence=False,
                embedding_prefilter=True, token_only=False, no_llm=False) -> dict:
+    config = SimpleNamespace(runtime_dir=detect_runtime_dir(project_root))
+    context = (maintenance_write_lock(config) if apply and not no_llm
+               else contextlib.nullcontext())
+    with context:
+        return _run_phase2(
+            project_root, llm_call, apply=apply, whitelist_pairs=whitelist_pairs,
+            today=today, apply_low_confidence=apply_low_confidence,
+            embedding_prefilter=embedding_prefilter, token_only=token_only,
+            no_llm=no_llm)
+
+
+def _run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
+                today=None, apply_low_confidence=False,
+                embedding_prefilter=True, token_only=False, no_llm=False) -> dict:
     wiki_dir = project_root / "wiki"
     runtime = detect_runtime_dir(project_root)
     pages = collect_wiki_pages(wiki_dir)
@@ -623,14 +638,8 @@ def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
 
     applied: list[dict] = []
     if apply and groups:
-        # Serialize the merge+persist phase with a file lock so two concurrent
-        # cross_source_dedup invocations can't interleave cross-reference
-        # rewrites (last-write-wins data loss). This is the one-shot-CLI
-        # equivalent of NashSU's persistent dedup-queue.ts: we port the
-        # serialization GUARANTEE, not the persistent Zustand task queue (YAGNI).
-        with _merge_lock(runtime):
-            applied = _apply_merges(project_root, runtime, groups, pages,
-                                    llm_call, today, apply_low_confidence)
+        applied = _apply_merges(project_root, runtime, groups, pages,
+                                llm_call, today, apply_low_confidence)
 
     _write_report(runtime / "dedup-report.json", {
         "generatedAt": datetime.now().isoformat(timespec="seconds"),
@@ -638,26 +647,9 @@ def run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
     return {"groups": groups, "applied": applied}
 
 
-@contextlib.contextmanager
-def _merge_lock(runtime: Path):
-    """Exclusive file lock (fcntl.flock) around the merge+persist phase. The
-    CLI equivalent of dedup-queue.ts serialization — see _apply_merges caller."""
-    runtime.mkdir(parents=True, exist_ok=True)
-    lock_path = runtime / "dedup-merge.lock"
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-
-
 def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
                   apply_low_confidence) -> list:
-    """Merge each detected group and persist. Must run under _merge_lock.
+    """Merge each detected group and persist. Internal to the project-locked run_phase2 entry point.
 
     Snapshot freshness (2026-07-10): the in-memory page snapshot is updated
     after every merge (canonical content replaced, rewrites applied, deleted
@@ -728,6 +720,11 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
         except ConversationPending:
             pending_merges += 1
             continue
+        # Editors need not honor our lock. Reject a stale snapshot (including
+        # newly created referring pages) before any backup/write/delete.
+        current = dict(collect_wiki_pages(project_root / 'wiki'))
+        if current != content_by_path:
+            raise RuntimeError('Wiki changed during dedup; no stale merge applied. Re-run dedup.')
         _persist_merge(project_root, result, backup_dir)
         # Sync the in-memory snapshot with what _persist_merge just wrote.
         for p in result.pages_to_delete:
@@ -738,6 +735,12 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
         removed = {_slug_from_path(p) for p in result.pages_to_delete}
         applied.append({"canonical": canonical_slug, "merged_away": sorted(removed),
                         "rewrites": [r["path"] for r in result.rewrites]})
+        # A later group can hit a snapshot conflict or handoff. Preserve the
+        # audit record for groups already applied before returning any error.
+        _write_report(runtime / 'dedup-report.json', {
+            'generatedAt': datetime.now().isoformat(timespec='seconds'),
+            'apply': True, 'partial': True, 'pendingMerges': pending_merges,
+            'phase2': {'groups': groups, 'applied': applied}})
         print(f"[dedup] merged → {canonical_slug} "
               f"(removed {sorted(removed)}, {len(result.rewrites)} rewrite(s))")
     if pending_merges:
@@ -759,6 +762,10 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
 
 
 def _persist_merge(project_root, result, backup_dir) -> None:
+    for b in result.backup:
+        path = project_root / b['path']
+        if not path.is_file() or path.read_text(encoding='utf-8') != b['content']:
+            raise RuntimeError(f"Page changed before dedup write: {b['path']}; re-run dedup")
     for b in result.backup:
         bpath = backup_dir / b["path"]
         bpath.parent.mkdir(parents=True, exist_ok=True)
@@ -889,6 +896,9 @@ def main(argv: list[str] | None = None) -> int:
         print("[dedup] conversation handoff — answer prompt under "
               "<runtime>/conversation/dedup/ and re-invoke.", file=sys.stderr)
         return HANDOFF_PENDING
+    except (RuntimeError, OSError, ValueError) as exc:
+        print(f'ERROR: {exc}', file=sys.stderr)
+        return 2
 
     print("[dedup] done.")
     return 0

@@ -52,7 +52,7 @@ $SKILL_DIR/scripts/ingest.py raw/Book/My\ Book\ -\ 2024\ -\ Author.pdf
 
 # 8. Inspect the output
 ls wiki/sources/
-cat wiki/sources/My\ Book\ -\ 2024\ -\ Author.md
+cat wiki/sources/Book/My\ Book\ -\ 2024\ -\ Author.md
 cat wiki/log.md
 ```
 
@@ -73,37 +73,15 @@ artifact.
 
 If you already have a project at e.g. `~/Documents/知识库/MyWiki/` with files in `raw/sources/` (the LLM Wiki app's convention), and you want to use `improved-wiki`'s scripts:
 
-**Two paths**:
+Keep the existing raw layout; supported variants are documented in
+`raw-layout-compat.md`. `raw/sources/<type>/` is recognized; a flat
+`raw/sources/<file>` defaults to book and can use an explicit `--type paper`.
 
-### B1. Move sources to the new layout (recommended)
-
-```bash
-cd ~/Documents/知识库/MyWiki
-
-# Move sources into the new layout (per references/naming-conventions.md §1.2)
-mkdir -p raw
-mv raw/sources/book/*  raw/Book/
-mv raw/sources/paper/* raw/Paper/
-mv raw/sources/*/*.pdf raw/Book/  # top-level PDFs
-rm -rf raw/sources
-# ... adjust per your situation
-```
-
-After this, the layout matches what `improved-wiki` expects, and `wiki/` stays untouched (the LLM Wiki app's wiki/ structure is compatible with NashSU's, which is what `improved-wiki` follows).
-
-### B2. Override the type per file (workaround, no restructure)
-
-If you want to keep `raw/sources/` flat (e.g. legacy layout):
-
-```bash
-# Process each file with explicit --type
-$SKILL_DIR/scripts/ingest.py raw/sources/X.pdf --type book
-$SKILL_DIR/scripts/ingest.py raw/sources/Y.pdf --type paper
-```
-
-This works for the script but the **folder-detection auto-classification breaks**. You'll need to write your own queue generator that hardcodes the type per file.
-
----
+Do not move raw files and delete the old tree as a setup shortcut: source paths
+are persistent identities in page frontmatter, cache and completion history.
+If reclassification is required, use the coordinated workflow in
+`maintenance-cleanup.md`. Runtime layout changes are independent; preview with
+`migrate_runtime.py` as described in `runtime-layout.md`.
 
 ## Scenario C: existing personal KB (Obsidian, Notion, Apple Notes, etc.)
 
@@ -163,7 +141,7 @@ export IMPROVED_WIKI_ROOT=/Users/skyfend/Documents/知识库/MyNewWiki
 | `LLM API HTTP 401` (caption only) | Wrong caption key or endpoint | Check the caption provider key/endpoint used by Stage 1.3 |
 | `Template not found: ...` | Skill not installed in expected path | Verify `SKILL_DIR` points to the actual improved-wiki installation |
 | `mineru CLI not found` | minerU not installed | Re-install minerU per the `mineru-document-parsing` skill |
-| Scanned PDF detected | Normal — all PDFs take the unified minerU hybrid-engine/auto path; the PyMuPDF type sample only labels the `--dry-run` estimate | No action needed |
+| Low PDF text density | All PDFs take the unified minerU hybrid-engine/auto path; the dry-run sample is diagnostic only | No action needed |
 | `wiki/index.md` is missing pages or lists deleted ones | Stage 3.3 rebuilds index.md from the pages on disk on every ingest (`rebuild_index_deterministic` in `_stage_3_write.py`: grouped by frontmatter `type`, title-sorted, no LLM, no page limit), so drift only appears after pages are added, moved, or deleted outside an ingest. `Stage 3.3 index does not contain a link to <stem>` means the source page's filename stem is `index`, `overview`, or `log` (any case), which the rebuild skips | Run `python3 scripts/rebuild_index.py --project-root <wiki-root>` to preview the diff, then add `--apply`; rename a raw file whose stem collides with an aggregate page |
 
 ---
@@ -181,7 +159,7 @@ Current-magnitude expectations (实测口径见 `references/batch-parallel-prefe
 | File writes | <1s |
 | **Total** | ~10-30+ min per book typical; long or scanned books run to multiple hours |
 
-Plan accordingly. The cron at 02:00 daily will only have time to process 1-2 scanned books per night.
+Plan accordingly. A scheduled scan does not complete conversation-mode ingestion; provide an agent handoff driver.
 
 ---
 

@@ -5,7 +5,7 @@ this file instead of repeating incident histories.
 
 ## ADR-001 — One fresh worker per conversation handoff
 
-**Decision:** Except for the context probe, each prompt is answered by one
+**Decision:** Each prompt is answered by one
 fresh worker/subagent that handles exactly one handoff. The main conversation
 only orchestrates.
 
@@ -73,7 +73,7 @@ compatibility facades.
 parallelism, recovery, and tests hard to reason about.
 
 **Consequences:** New code imports focused modules. Compatibility names remain,
-but internal private monkeypatching should migrate to the owning module.
+but private test patches must target the owning module; no global synchronization wrapper remains.
 
 ## ADR-006 — NashSU v0.6.11 sync: what was adopted and what was not
 
@@ -101,8 +101,7 @@ verified as already-covered, already-stronger, or application-only.
 - **Batch Deep Research over reviews (0.6.10)** — `batch_research_reviews.py`,
   selection only. See `process-reviews.md` Step 3c.
 - **MinerU 3.0–3.2 backend aliases (0.6.10)** — recorded in
-  `mineru-version-tracking.md`, deliberately not auto-mapped (single pinned
-  version; a version-sniffing map would be speculative code).
+  `mineru-version-tracking.md`, deliberately not auto-mapped (explicit service configuration; runtime checks are documented there).
 
 **Rejected as already covered or stronger here**
 
@@ -129,7 +128,7 @@ verified as already-covered, already-stronger, or application-only.
 
 - Configurable ingest reasoning effort (0.6.11): NashSU hard-coded
   `reasoning: off` on ingest calls and some providers answered 400. Structured
-  generation here runs through Claude Code subagents and sends no reasoning
+  generation here runs through fresh conversation-mode workers and sends no reasoning
   field at all.
 - Everything application-layer: MCP tools and HTTP APIs, the answer-context
   panel, streaming chat, file-history retention, scheduled-import filters,

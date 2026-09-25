@@ -9,7 +9,7 @@ public Stage 1.2 image and Stage 1.3 caption entry points:
   - _stage_1_3_caption.py  — VLM image captioning
 
 Pipeline stages:
-  Phase 1 Stage 1.1: Extract text from PDF/PPTX/DOCX/XLSX/ODT/EPUB/RTF (minerU pipeline for text PDFs, minerU VLM for scanned)
+  Phase 1 Stage 1.1: Extract text from PDF/PPTX/DOCX/XLSX/ODT/EPUB/RTF (all PDFs use minerU hybrid-engine/auto)
   Phase 1 Stage 1.2: Extract embedded images from PDF
   Phase 1 Stage 1.3: Generate image captions via VLM
 
@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import hashlib
 import random
-import re
 from pathlib import Path
 
 from _config import Config
@@ -174,92 +173,16 @@ def stage_1_1_extract_text(file_path: Path, config: Config) -> tuple[str, str]:
     return text, "mineru-api"
 
 
-# ---------- Stage 0: PDF type detection ----------
-
-def _stage_1_1_sample_pdf(file_path: Path, sample_pages: int = 15) -> tuple[float, bool, float]:
-    """Sample N pages (skipping first+last) via fitz — detection only, NOT extraction.
-
-    Returns (avg_chars, is_garbled, img_ratio):
-      - avg_chars: mean chars/page over sampled pages with ≥10 chars (0 if none).
-      - is_garbled: True if >1% of sampled chars are C0 control chars (0x00-0x1F),
-        indicating custom font encoding PyMuPDF cannot decode (e.g. Fuqua book:
-        500+ chars/page but all garbage). Informational only since 2026-07-08
-        (garbled pre-detection removed from the extraction path for NashSU
-        alignment) — now consumed only by the --dry-run type estimate.
-      - img_ratio: fraction of sampled text-pages with a >50%-page image.
-
-    Sampling is deterministic per file (seeded by file path) so the same PDF
-    always samples the same way across runs (uses hashlib, not built-in hash(),
-    which is randomized per process). Page 0 (cover) and last page are skipped;
-    N pages are picked from the middle. Returns (0.0, False, 0.0) if fitz is
-    unavailable or no sampled page has ≥10 chars.
-    """
+def sample_pdf_text_density(file_path: Path, sample_pages: int = 15) -> float:
+    """Deterministic lightweight chars/page estimate for dry-run only."""
     try:
         import fitz
     except ImportError:
-        return (0.0, False, 0.0)
-
-    _C0_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
-    _seed = int(hashlib.md5(str(file_path).encode("utf-8")).hexdigest()[:8], 16)
-    rng = random.Random(_seed)
-
-    doc = fitz.open(file_path)
-    try:
-        total_chars = 0
-        text_pages = 0
-        img_pages = 0
-        garbled_chars = 0
-        middle_pages = max(0, len(doc) - 2)  # skip page 0 and last page
-        n = min(sample_pages, middle_pages)
-        if middle_pages <= 0:
-            sample_indices = list(range(len(doc)))  # too short, take all
-        else:
-            pool = list(range(1, len(doc) - 1))    # pages between first and last
-            sample_indices = rng.sample(pool, n) if n < len(pool) else pool
-
-        for idx in sample_indices:
-            page = doc[idx]
-            text = page.get_text()
-            chars = len(text)
-            if chars < 10:
-                continue
-            total_chars += chars
-            text_pages += 1
-            garbled_chars += len(_C0_RE.findall(text))
-            rect = page.rect
-            page_area = rect.width * rect.height
-            for img in page.get_images():
-                pix = fitz.Pixmap(doc, img[0])
-                img_area = pix.width * pix.height
-                if img_area > page_area * 0.5:
-                    img_pages += 1
-                    break
-
-        if text_pages == 0:
-            return (0.0, False, 0.0)
-        avg = total_chars / text_pages
-        img_ratio = img_pages / text_pages
-        is_garbled = (garbled_chars / max(total_chars, 1)) > 0.01
-        return (avg, is_garbled, img_ratio)
-    finally:
-        doc.close()
-
-
-def _stage_1_1_detect_pdf_type(file_path: Path, sample_pages: int = 15) -> tuple[str, float]:
-    """Backward-compat text/scanned/mixed classifier — used ONLY by the --dry-run
-    cost estimate in ingest.py.
-
-    The active extraction path (stage_1_1_extract_text) no longer branches on
-    any fitz detection: hybrid-engine/auto routes per-page internally (garbled
-    pre-detection removed 2026-07-08). This classifier is kept only so
-    `--dry-run` can print a human-readable type. Delegates to
-    _stage_1_1_sample_pdf.
-    """
-    avg, is_garbled, img_ratio = _stage_1_1_sample_pdf(file_path, sample_pages)
-    if is_garbled:
-        return ("scanned", avg)  # garbled → needs OCR
-    if avg > 500:
-        return ("mixed" if img_ratio > 0.3 else "text", avg)
-    if avg < 50:
-        return ("scanned", avg)
-    return ("mixed", avg)
+        return 0.0
+    seed = int(hashlib.md5(str(file_path).encode()).hexdigest()[:8], 16)
+    with fitz.open(file_path) as doc:
+        pool = list(range(1, len(doc) - 1)) if len(doc) > 2 else list(range(len(doc)))
+        indices = random.Random(seed).sample(pool, min(sample_pages, len(pool)))
+        lengths = [len(doc[i].get_text()) for i in indices]
+        readable = [n for n in lengths if n >= 10]
+        return sum(readable) / len(readable) if readable else 0.0

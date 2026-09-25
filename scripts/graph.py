@@ -55,7 +55,6 @@ from pathlib import Path
 from typing import Optional
 
 import networkx as nx
-import yaml
 from networkx.algorithms.community import louvain_communities
 
 _script_dir = Path(__file__).resolve().parent
@@ -137,18 +136,7 @@ class Page:
     path: Path
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
-    m = FRONTMATTER_RE.match(text)
-    if not m:
-        return {}, text
-    raw = m.group(1)
-    try:
-        fm = yaml.safe_load(raw) or {}
-    except yaml.YAMLError:
-        fm = {}
-    if not isinstance(fm, dict):
-        fm = {}
-    return fm, text[m.end():]
+from _frontmatter import parse_frontmatter as _parse_frontmatter
 
 
 def _as_list(value) -> list[str]:

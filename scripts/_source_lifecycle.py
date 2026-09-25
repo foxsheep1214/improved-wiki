@@ -12,7 +12,7 @@ import json, shutil, time
 from pathlib import Path
 
 from _paths import detect_runtime_dir, media_slug
-from _core import source_cache_key
+from _core import source_cache_key, canonical_source_path
 from _schema import (
     source_slug_from_raw_path,
     load_schema_md,
@@ -23,9 +23,22 @@ from _frontmatter_array import parse_frontmatter_array
 from _embedding_store import remove_page_embeddings
 from _progress import file_sha256, stages_path
 from _ingest_events import snapshot_source_page_times
+from _maintenance_lock import maintenance_write_lock
+from _source_identity import SourceResolver, raw_source_refs
 
 
 def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: bool = False) -> int:
+    """Delete one source's derived data under the shared project writer lock."""
+    if not any(raw_file.resolve().is_relative_to(root.resolve())
+               for root in (config.raw_root, config.wiki_dir / 'queries')):
+        raise ValueError(f'Source is outside this project: {raw_file}')
+    if dry_run:
+        return _delete_source(raw_file, config, dry_run=True, keep_media=keep_media)
+    with maintenance_write_lock(config):
+        return _delete_source(raw_file, config, keep_media=keep_media)
+
+
+def _delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: bool = False) -> int:
     """Delete a source and its derived content. Returns count of files removed.
 
     When ``dry_run`` is True, NOTHING is written or deleted — each action is
@@ -55,6 +68,10 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
     # (source_cache_key) exactly, or a write uses one key and a delete looks
     # up another.
     rel = source_cache_key(raw_file, config)
+    identity = canonical_source_path(raw_file, config)
+    # Resolve every prospective deletion before touching source/cache/media.
+    # An ambiguous legacy reference must not cause a partially applied delete.
+    derived_pages = _derived_pages_for_source(wiki_root, identity, config)
 
     removed = 0
     deleted_embedding_pages: list[str] = []
@@ -93,18 +110,14 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
         print(f"{tag} Deleted source page: {rel}")
 
     # 2. Remove from ingest cache.
-    # Match the cache key case-INSENSITIVELY: the key is stored from whatever
-    # casing the raw path had at ingest time (e.g. "paper/..."), but a later
-    # rename of the raw dir (e.g. to "Paper/...") makes the exact compare miss,
-    # leaving a stale entry that makes the next re-ingest a cache hit (skip).
+    # Cache keys preserve exact path identity. A casing-only source rename
+    # needs coordinated reclassification; it must not delete another key.
     cache_path = runtime_dir / "ingest-cache.json"
     if cache_path.exists():
         cache = json.loads(cache_path.read_text())
         entries = cache.get("entries", {})
         cache_key = rel.replace("\\", "/")
-        match_key = cache_key if cache_key in entries else next(
-            (k for k in entries if k.lower() == cache_key.lower()), None
-        )
+        match_key = cache_key if cache_key in entries else None
         if match_key is not None:
             matched_entry = entries.get(match_key)
             if isinstance(matched_entry, dict):
@@ -132,13 +145,13 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
             print(f"{tag} Cleared current completion markers: {stage_file.name}")
 
     # 3. Clean up derived pages (concepts/entities whose ONLY source is this file)
-    source_stem = raw_file.stem
     derived_count = _cleanup_orphan_pages(
         wiki_root,
-        source_stem,
+        identity,
         config,
         dry_run=dry_run,
         deleted_page_paths=deleted_embedding_pages,
+        planned_pages=derived_pages,
     )
     removed += derived_count
     if derived_count:
@@ -189,13 +202,7 @@ def delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: boo
 _NON_PAGE_DIRS = {"media", "raw", "page-history", "chats"}
 
 
-def _cleanup_orphan_pages(
-    wiki_root: Path,
-    source_stem: str,
-    config,
-    dry_run: bool = False,
-    deleted_page_paths: list[str] | None = None,
-) -> int:
+def _derived_pages_for_source(wiki_root: Path, source: str, config) -> list[tuple[Path, str]]:
     """Remove derived pages whose ONLY source reference is this book.
 
     Covers concepts, entities, queries, comparisons, findings, methodologies,
@@ -215,8 +222,10 @@ def _cleanup_orphan_pages(
     extra = schema_folders(load_schema_md(config)) - BASE_PAGE_DIRS - _NON_PAGE_DIRS
     page_types = base_types + tuple(sorted(extra))
 
-    removed = 0
-    history_dir = wiki_root / "page-history"
+    candidates = []
+    identities = raw_source_refs(wiki_root)
+    if '/' in source:
+        identities.add(source)
     for page_type in page_types:
         page_dir = wiki_root / "wiki" / page_type
         if not page_dir.exists():
@@ -238,24 +247,49 @@ def _cleanup_orphan_pages(
             # itself contains a comma — use the shared frontmatter-array
             # parser (same fix already applied in _stage_3_write.py).
             sources = parse_frontmatter_array(text, "sources")
-            if not sources:
-                continue
-            # Exact basename-stem match, not substring — "LM2596" must not
-            # match a sibling source like "raw/.../LM25960.pdf".
-            if len(sources) == 1 and Path(sources[0]).stem == source_stem:
-                tag = "[lifecycle][dry-run]" if dry_run else "[lifecycle]"
-                if not dry_run:
-                    history_dir.mkdir(parents=True, exist_ok=True)
-                    ts = time.strftime("%Y%m%d-%H%M%S")
-                    # Flatten the nested path into the snapshot name so two
-                    # same-stem pages from different subfolders cannot collide.
-                    snapshot = page_label.replace("/", "_")
-                    shutil.copy2(page, history_dir / f"{ts}_{snapshot}")
-                    page.unlink()
-                    if deleted_page_paths is not None:
-                        deleted_page_paths.append(
-                            page.relative_to(wiki_root / "wiki").as_posix()
-                        )
-                print(f"{tag} Deleted orphan page: {page_label}")
-                removed += 1
+            identities.update(s for s in sources if '/' in s.replace('\\', '/'))
+            candidates.append((page, page_label, sources))
+    resolver = SourceResolver(wiki_root, identities)
+    target = resolver.resolve(source)
+    if target is None:
+        return []
+    result = []
+    for page, label, sources in candidates:
+        if len(sources) != 1:
+            continue
+        # An unrelated ambiguous legacy basename cannot be this target.
+        ref = sources[0].replace('\\', '/')
+        if '/' not in ref and ref not in {Path(target).name, Path(target).stem}:
+            continue
+        if resolver.resolve(ref) == target:
+            result.append((page, label))
+    return result
+
+
+def _cleanup_orphan_pages(
+    wiki_root: Path, source: str, config, dry_run: bool = False,
+    deleted_page_paths: list[str] | None = None,
+    planned_pages: list[tuple[Path, str]] | None = None,
+) -> int:
+    pages = (_derived_pages_for_source(wiki_root, source, config)
+             if planned_pages is None else planned_pages)
+    removed = 0
+    history_dir = wiki_root / 'page-history'
+    for page, page_label in pages:
+        # The plan matched a full identity or a unique legacy alias.
+        tag = "[lifecycle][dry-run]" if dry_run else "[lifecycle]"
+        if not dry_run:
+            history_dir.mkdir(parents=True, exist_ok=True)
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            # Flatten the nested path into the snapshot name so two
+            # same-stem pages from different subfolders cannot collide.
+            snapshot = page_label.replace("/", "_")
+            shutil.copy2(page, history_dir / f"{ts}_{snapshot}")
+            page.unlink()
+            if deleted_page_paths is not None:
+                deleted_page_paths.append(
+                    page.relative_to(wiki_root / "wiki").as_posix()
+                )
+        print(f"{tag} Deleted orphan page: {page_label} (source: {source})")
+        removed += 1
     return removed

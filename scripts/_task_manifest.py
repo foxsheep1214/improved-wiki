@@ -431,6 +431,17 @@ def ensure_task_manifest(raw_file: Path, config) -> dict:
                 f"{current['source']['identity']!r}. Progress is keyed by "
                 "source hash and cannot be reused across identities.")
 
+    old_context = manifest.get("contract", {}).get("analysis", {}).get("context_size")
+    stages = load_stages(config, source_hash)
+    writing = (
+        any(key in stages for key in ("write_loop_done", "write_phase", "review_done", "aggregate_done"))
+        or (config.runtime_dir / f"write-ledger-{source_hash[:16]}.json").exists()
+    )
+    if writing and not stages.get("ingested") and old_context and old_context != config.context_size:
+        raise TaskManifestError(
+            f"Context budget changed during a partial write; resume with "
+            f"--context-tokens {old_context} after verifying worker capacity")
+
     prior_contract_hash = manifest.get("contract_sha256", "")
     if prior_contract_hash != current["contract_sha256"]:
         history = list(manifest.get("contract_history", []))

@@ -26,7 +26,7 @@ NashSU 把"找关联页面"拆成两个完全独立的系统：
 
 **无 LLM、无 embedding、无模型调用**。纯文件读写 + 数学计算。
 
-improved-wiki 的 `graph.py` 参考 NashSU 最新版本（2026-06-29 重写；早期版本把四信号都拿来造边，是当时最大偏离，已修正）：
+improved-wiki 的 `graph.py` 参考当时的 NashSU 实现（2026-06-29 重写；早期版本把四信号都拿来造边，是当时最大偏离，已修正）：
 - **边 = 链接关系**（`[[wikilinks]]` + 本 wiki 的 `related:` frontmatter 约定）；source-overlap / Adamic-Adar **只作边权重**，不再造边。
 - **双图**（NashSU 实际架构）：retrieval graph（含 query 页）供 `calculateRelevance` 的 Adamic-Adar 邻居/度数打分；display graph（删 query 页）供节点/边/社区/渲染。
 - **calculateRelevance 逐行移植**：direct=(正+反)×3.0、source=共享源数×4.0、AA=Σ 1/log(max(deg,2))×1.5（无阈值）、type-affinity 用 0.5.3 原矩阵（默认 0.5）×1.0 无条件叠加。

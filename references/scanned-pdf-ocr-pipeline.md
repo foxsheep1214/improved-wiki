@@ -4,7 +4,7 @@
 
 ## 何时使用这条 pipeline
 
-- 任意类型的 PDF（text/scanned/mixed 不再分流）：统一交给这条 pipeline，hybrid-engine/auto 内部按页判 txt vs VLM OCR。method 标签统一为 `mineru-api`。（garbled 字体预检测与提取质量门已于 2026-07-08 移除，对齐 NashSU——`_stage_1_1_sample_pdf` 的 fitz 采样现仅供 `--dry-run` 类型估算，不再影响提取路径。）
+- 任意类型的 PDF（text/scanned/mixed 不再分流）：统一交给这条 pipeline，hybrid-engine/auto 内部按页判 txt vs VLM OCR。method 标签统一为 `mineru-api`。（garbled 字体预检测与提取质量门已于 2026-07-08 移除，对齐 NashSU——`sample_pdf_text_density` 的 fitz 采样仅供 `--dry-run` 平均文本密度估算，不再影响提取路径。）
 - 不适用：`.txt`/`.md`（直接读文件）、`.pptx`/`.docx`（zipfile/XML 解析，完全不碰 minerU）、`.xlsx`/`.odt`/`.epub`/`.rtf`（`_stage_1_1_documents.py`，stdlib 解析，仅正文无图片）。
 
 ## 完整流程

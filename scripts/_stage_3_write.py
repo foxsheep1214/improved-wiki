@@ -20,6 +20,7 @@ from _schema import (
 )
 from _llm_api import call_anthropic_protocol
 from _frontmatter_array import parse_frontmatter_array, write_frontmatter_array
+from _source_identity import SourceResolver, raw_source_refs
 from _stage_1_1_scanned import _decode_html_entities
 from _wikilinks import (
     escape_markdown_table_wikilink_aliases,
@@ -36,7 +37,7 @@ __all__ = [
 
 # Fallback per-side cap on body text shown to the LLM page-merge prompt, used
 # only when config has no target_chars (e.g. minimal test configs). The real
-# cap is config.target_chars (see llm_merger below) — the same live-probed,
+# cap is config.target_chars (see llm_merger below) — the same configured,
 # context-aware budget the rest of the pipeline uses for "how much text is
 # safe in one prompt". A fixed 24K (raised from a hardcoded 3000 that
 # truncated normal pages mid-content) was itself found too small 2026-07-09:
@@ -344,7 +345,7 @@ def _stage_3_2_merge_page_content(
         # merge below 0.7 * max(full old, full new); truncating the prompt too
         # aggressively meant the LLM could not reproduce ≥70% of the full body
         # and the no-fallback policy raised RuntimeError on a legitimate merge
-        # (2026-06-30 ohms-law, re-ingesting 无源器件篇). Use the live-probed,
+        # (2026-06-30 ohms-law, re-ingesting 无源器件篇). Use the configured,
         # context-aware target_chars budget already computed for this session's
         # model (same one chunking uses) rather than a stale fixed number — a
         # fixed 24K silently truncated large source pages (2026-07-09).
@@ -410,106 +411,27 @@ with duplicates consolidated and new information integrated, and must:
     )
 
 
-def _stage_3_2_source_reference_identity(value: str) -> str:
-    """Normalize source frontmatter references for ownership comparison."""
-    ref = str(value or "").strip().replace("\\", "/").strip("/").lower()
-    for marker in ("/raw/sources/", "/raw/"):
-        if marker in f"/{ref}":
-            ref = f"/{ref}".split(marker, 1)[1]
-            break
-    for prefix in ("raw/sources/", "raw/"):
-        if ref.startswith(prefix):
-            ref = ref[len(prefix):]
-            break
-    return ref.strip("/")
-
-
 def _stage_3_2_is_owned_only_by_source(
-    content: str,
-    canonical_source: str,
+    content: str, canonical_source: str, resolver: SourceResolver | None = None,
 ) -> bool:
-    """Whether every non-empty ``sources`` entry is the current source.
-
-    This is deliberately identity-based, not basename-based: two books in
-    different raw subdirectories may share a filename and must not be treated
-    as the same owner.
-    """
+    """Replace a body only when every source resolves to the same identity."""
+    resolver = resolver or SourceResolver(None)
     sources = parse_frontmatter_array(content, "sources")
-    if not sources:
-        return False
-    expected = _stage_3_2_source_reference_identity(canonical_source)
-    return bool(expected) and all(
-        _stage_3_2_source_reference_identity(source) == expected
-        for source in sources
-    )
+    expected = resolver.resolve(canonical_source)
+    return bool(sources and expected) and all(
+        resolver.resolve(source) == expected for source in sources)
 
 
-def _stage_3_2_canonicalize_sources_field(content: str, canonical_source: str) -> str:
-    """NashSU parity (ingest.ts L1298-1324): union-merge sources[] with dedup.
-
-    Preserves existing sources from prior ingests. Only adds the canonical
-    source if it's not already present (matched by full path or basename).
-    Removes duplicate entries.
-    """
+def _stage_3_2_canonicalize_sources_field(
+    content: str, canonical_source: str, resolver: SourceResolver | None = None,
+) -> str:
+    """Union exact identities; resolve short aliases only with a full catalog."""
     if not content.startswith("---"):
         return content
-    end = content.find("\n---", 3)
-    if end == -1:
-        return content
-    # content[3] is the '\n' after the opening '---'; slicing from 3 (not 4)
-    # carries that newline into fm, and re-serializing below then produces
-    # '---\n\ntype:...' — a blank line after the fence that breaks YAML
-    # parsing. Mirrors the fix already applied to
-    # _stage_3_2_stamp_frontmatter_dates for the same off-by-one.
-    fm = content[4:end]
-    body = content[end + 4:]
-
-    # Parse existing sources (quote-aware: a filename containing commas must
-    # stay one element, not split on every comma). The old naive src_text.split(",")
-    # broke sources like "raw/Book/Flexible Electronics, Volume 1...pdf" into
-    # fragments and then re-appended the full path → a 4-item corrupted array.
-    existing_sources: list[str] = parse_frontmatter_array(content, "sources")
-
-    # Normalize canonical source for comparison
-    canon_norm = canonical_source.lower().replace("\\", "/").rstrip("/")
-    canon_base = Path(canon_norm).name.lower()
-
-    # Check if canonical source already present (full path or basename match)
-    already_present = False
-    for s in existing_sources:
-        sn = s.lower().replace("\\", "/").rstrip("/")
-        if sn == canon_norm or Path(sn).name == canon_base:
-            already_present = True
-            break
-
-    if not already_present:
-        existing_sources.append(canonical_source)
-
-    # Dedup (keep order, remove case-duplicates)
-    seen: set[str] = set()
-    deduped: list[str] = []
-    for s in existing_sources:
-        key = s.lower().replace("\\", "/").rstrip("/")
-        if key not in seen:
-            seen.add(key)
-            deduped.append(s)
-
-    # Rebuild sources line
-    items = ", ".join(f'"{s}"' for s in deduped)
-    lines = fm.split("\n")
-    new_lines = []
-    replaced = False
-    for line in lines:
-        if line.strip().startswith("sources:"):
-            new_lines.append(f"sources: [{items}]")
-            replaced = True
-        else:
-            new_lines.append(line)
-    if not replaced:
-        # Frontmatter has no sources: line — append the computed list instead
-        # of silently dropping it (the page would otherwise lose provenance).
-        new_lines.append(f"sources: [{items}]")
-    return "---\n" + "\n".join(new_lines) + "\n---" + body
+    resolver = resolver or SourceResolver(None)
+    values = parse_frontmatter_array(content, "sources") + [canonical_source]
+    canonical = list(dict.fromkeys(resolver.resolve(value) or value for value in values))
+    return write_frontmatter_array(content, "sources", canonical)
 
 
 def _stage_3_2_stamp_frontmatter_dates(content: str, today: str) -> str:
@@ -749,6 +671,7 @@ def project_write_result_blocks(
     canonical_source: str,
     today: str,
     source_page_slug: str,
+    source_resolver: SourceResolver | None = None,
 ) -> list[tuple[str, str]]:
     """Project the in-memory generation onto its post-write paths and links.
 
@@ -774,7 +697,7 @@ def project_write_result_blocks(
             continue
         content = _stage_3_2_sanitize_ingested_content(content)
         content = _stage_3_2_canonicalize_sources_field(
-            content, canonical_source)
+            content, canonical_source, source_resolver)
         content = _stage_3_2_stamp_frontmatter_dates(content, today)
         content = stage_3_2_normalize_page_links(
             resolved,
@@ -1060,6 +983,7 @@ def stage_3_2_write_wiki_file(
     source_page_slug: str | None = None,
     already_merged: bool = False,
     same_run_collision: bool = False,
+    source_resolver: SourceResolver | None = None,
 ) -> None:
     content = _stage_3_2_sanitize_ingested_content(content)
     existing: str | None = None
@@ -1077,7 +1001,8 @@ def stage_3_2_write_wiki_file(
                 source_file
                 and not same_run_collision
                 and _stage_3_2_is_owned_only_by_source(
-                    existing, source_file)
+                    existing, source_file, source_resolver or SourceResolver(
+                        config.wiki_root, raw_source_refs(config.wiki_root)))
             )
             content = _stage_3_2_merge_page_content(
                 existing,

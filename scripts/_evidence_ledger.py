@@ -5,21 +5,22 @@ Figure 2.31") and confidence, anchored source quotes, formulas, and verbatim
 tables. Stage 2.4 folds them into pages whose only provenance is the
 page-level ``sources:`` list, and Stage 3.6 deletes the progress file that
 held them. This module writes those fields to
-``<runtime>/evidence/<source_hash[:16]>.json`` just before that deletion, so
+``<runtime>/evidence/<source-id>-<hash16>-<run-id>.json`` just before that deletion, so
 retrieval can cite the section/figure/table a statement came from.
 
 No LLM call: the ledger is a projection of analysis the ingest already paid
-for. It is derived state — re-ingest rewrites it; sources ingested before the
+for. It is derived state — each source version/run keeps its own record; sources ingested before the
 ledger existed have none.
 """
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 from _paths import atomic_write
 
-LEDGER_SCHEMA_VERSION = 1
+LEDGER_SCHEMA_VERSION = 2
 EVIDENCE_FIELDS = ("claims", "source_quotes", "formulas", "structured_data")
 _NON_KNOWLEDGE_REFS = ("wiki/REVIEW/",)
 _NON_KNOWLEDGE_FILES = {"wiki/index.md", "wiki/log.md", "wiki/overview.md"}
@@ -35,6 +36,8 @@ def write_evidence_ledger(
     source_hash: str,
     chunk_analyses: list[dict],
     written_refs: list[str],
+    *,
+    run_id: str | None = None,
 ) -> Path | None:
     """Write the ledger for one source; return its path.
 
@@ -58,15 +61,25 @@ def write_evidence_ledger(
         if ref.startswith("wiki/") and ref not in _NON_KNOWLEDGE_FILES
         and not ref.startswith(_NON_KNOWLEDGE_REFS)
     )
+    if run_id is None:
+        manifest_path = (Path(getattr(config, 'progress_dir',
+                                     Path(config.runtime_dir) / 'ingest-progress'))
+                         / f'{source_hash[:16]}.task.json')
+        manifest = (json.loads(manifest_path.read_text(encoding='utf-8'))
+                    if manifest_path.exists() else {})
+        run_id = str((manifest.get('run') or {}).get('run_id') or '')
     record = {
         "schema_version": LEDGER_SCHEMA_VERSION,
         "source": source,
         "source_hash": source_hash,
+        "run_id": run_id,
         "source_page": next((p for p in pages if p.startswith("wiki/sources/")), ""),
         "pages": pages,
         "chunks": chunks,
     }
-    out = evidence_dir(config) / f"{source_hash[:16]}.json"
+    identity = hashlib.sha256(source.encode('utf-8')).hexdigest()[:16]
+    run_key = hashlib.sha256(run_id.encode('utf-8')).hexdigest()[:16]
+    out = evidence_dir(config) / f"{identity}-{source_hash[:16]}-{run_key}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(out, json.dumps(record, ensure_ascii=False, indent=1))
     return out

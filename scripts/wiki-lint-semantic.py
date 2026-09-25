@@ -86,7 +86,7 @@ LANG_SAMPLE_CHARS = 2000
 # replacing the former fixed SEMANTIC_BATCH_PAGES=200 page-count split. A
 # single concatenated call over a 7594-page wiki blows the conversation
 # model's context, so summaries are still split into batches — but the split
-# point now scales with the probed model's context window (same formula
+# point now scales with the configured worker context budget (same formula
 # ingest.py uses for chunk sizing: _core._compute_chunk_targets, target_tokens
 # = min(hard_ceil, max(12K floor, context_size * 0.33))), with a larger hard
 # ceiling than ingest's own 64K. Lint's "skim short summaries and compare"
@@ -119,29 +119,11 @@ from _lint_suggest import STATE_FILES, _extract_title  # noqa: E402
 from _review_utils import normalize_review_title, resolve_review_path  # noqa: E402
 
 
-def _probe_context_size(state_dir: Path) -> int:
-    """Read ingest's cached context-window probe (.llm-wiki/probed-context.json)
-    if present and fresh; otherwise fall back to _core's conservative default.
-
-    Lint is a standalone tool with no conversation-router registered (that
-    machinery lives in ingest.py), so it cannot itself trigger a fresh probe
-    handoff — it only ever reads the cache ingest already populated. In
-    practice lint is always run after (or alongside) an ingest of the same
-    project, so this is a cache hit in the common case."""
-    from _context_probe import load_cached
-
-    class _ConfigShim:
-        runtime_dir = state_dir
-        llm_model = os.environ.get("ANTHROPIC_MODEL", "")
-
-    cached = load_cached(_ConfigShim())
-    return cached if cached is not None else _CONTEXT_SIZE_DEFAULT
-
-
 def resolve_batch_target_chars(state_dir: Path) -> int:
-    """Per-batch char budget for chunk_batches(), derived from the probed (or
-    cached/default) context window via the shared _core formula."""
-    context_size = _probe_context_size(state_dir)
+    """Per-batch char budget for chunk_batches(), derived from the explicit/default
+    context budget via the shared _core formula."""
+    from _context_budget import context_tokens
+    context_size = context_tokens()
     ceil_env = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", "").strip()
     hard_ceil = int(ceil_env) if ceil_env.isdigit() else _LINT_TARGET_TOKENS_HARD_CEIL
     _, target_chars = _compute_chunk_targets(context_size, hard_ceil=hard_ceil)
@@ -363,7 +345,7 @@ def main() -> int:
         return 2
 
     # State dir resolution (matches ingest.py + validate_ingest.py)
-    # Uses _paths.detect_runtime_dir() — .llm-wiki/ default, auto-migrates from .iwiki-runtime/
+    # Uses _paths.detect_runtime_dir() — .llm-wiki/ default, reads legacy layouts without migration
     _script_root = Path(__file__).resolve().parent
     sys.path.insert(0, str(_script_root))
     from _paths import detect_runtime_dir  # noqa: E402

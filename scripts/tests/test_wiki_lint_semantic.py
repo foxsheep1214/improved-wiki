@@ -419,66 +419,23 @@ class TestParseLintBlocksHyphenatedTitle(unittest.TestCase):
 
 
 class TestResolveBatchTargetChars(unittest.TestCase):
-    """2026-07-10: batch sizing is now context-derived instead of a fixed
-    SEMANTIC_BATCH_PAGES=200. Covers cache-hit, cache-miss/default, and the
-    lint-specific env override."""
-
-    def _write_cache(self, runtime_dir: Path, model_env: str, context: int, age_s: int = 0):
-        import time
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        (runtime_dir / "probed-context.json").write_text(json.dumps({
-            "model_env": model_env, "context": context,
-            "probed_at": int(time.time()) - age_s,
-        }), encoding="utf-8")
-
-    def test_uses_cached_probe_when_fresh_and_model_matches(self):
+    def test_explicit_context_and_ceiling(self):
+        from unittest.mock import patch
         wls = _load_module()
-        with tempfile.TemporaryDirectory() as t:
-            runtime = Path(t) / ".llm-wiki"
-            self._write_cache(runtime, model_env="", context=1_000_000)
-            old = os.environ.get("ANTHROPIC_MODEL")
-            os.environ.pop("ANTHROPIC_MODEL", None)
-            try:
-                target_chars = wls.resolve_batch_target_chars(runtime)
-                # 1M context x 0.33 = 330K tokens, capped at the 256K lint
-                # ceiling -> target_chars = min(768_000, 256_000*4) = 768_000.
-                self.assertEqual(target_chars, 768_000)
-            finally:
-                if old is not None:
-                    os.environ["ANTHROPIC_MODEL"] = old
+        with patch.dict(os.environ, {"IMPROVED_WIKI_CONTEXT_TOKENS": "1000000"}):
+            self.assertEqual(wls.resolve_batch_target_chars(Path("unused")), 768000)
+            with patch.dict(os.environ, {"IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL": "40000"}):
+                self.assertEqual(wls.resolve_batch_target_chars(Path("unused")), 160000)
 
-    def test_falls_back_to_default_context_when_no_cache(self):
+    def test_ignores_old_self_report_cache(self):
+        from unittest.mock import patch
         wls = _load_module()
-        with tempfile.TemporaryDirectory() as t:
-            runtime = Path(t) / ".llm-wiki"
-            runtime.mkdir(parents=True)
-            target_chars = wls.resolve_batch_target_chars(runtime)
+        with tempfile.TemporaryDirectory() as t, patch.dict(os.environ, {}, clear=True):
+            runtime = Path(t)
+            (runtime / "probed-context.json").write_text('{"context":1000000}')
             from _core import _CONTEXT_SIZE_DEFAULT, _compute_chunk_targets
-            _, expected = _compute_chunk_targets(
-                _CONTEXT_SIZE_DEFAULT,
-                hard_ceil=wls._LINT_TARGET_TOKENS_HARD_CEIL,
-            )
-            self.assertEqual(target_chars, expected)
-
-    def test_env_override_changes_ceiling(self):
-        wls = _load_module()
-        with tempfile.TemporaryDirectory() as t:
-            runtime = Path(t) / ".llm-wiki"
-            self._write_cache(runtime, model_env="", context=1_000_000)
-            old_model = os.environ.get("ANTHROPIC_MODEL")
-            old_ceil = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL")
-            os.environ.pop("ANTHROPIC_MODEL", None)
-            os.environ["IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL"] = "40000"
-            try:
-                target_chars = wls.resolve_batch_target_chars(runtime)
-                self.assertEqual(target_chars, 160_000)  # 40_000 * 4 chars/token
-            finally:
-                if old_model is not None:
-                    os.environ["ANTHROPIC_MODEL"] = old_model
-                if old_ceil is None:
-                    os.environ.pop("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", None)
-                else:
-                    os.environ["IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL"] = old_ceil
+            _, expected = _compute_chunk_targets(_CONTEXT_SIZE_DEFAULT, hard_ceil=wls._LINT_TARGET_TOKENS_HARD_CEIL)
+            self.assertEqual(wls.resolve_batch_target_chars(runtime), expected)
 
 
 class TestEmitReviewForWarnings(unittest.TestCase):

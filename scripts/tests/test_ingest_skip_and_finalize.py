@@ -35,7 +35,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _core  # noqa: E402
-import ingest  # noqa: E402
+import _ingest_cli as cli
+import _batch_status as status
+import _ingest_runner as ingest  # noqa: E402
 import _media_integrity  # noqa: E402
 from _frontmatter import parse_frontmatter  # noqa: E402
 from _ingest_events import load_ingest_events  # noqa: E402

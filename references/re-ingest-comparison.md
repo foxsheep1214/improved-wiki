@@ -5,8 +5,7 @@ weak digestion, or to compare old vs new pipeline results):
 
 ## 🔴 Ask first: full redo, or analysis-only?
 
-**Before touching anything**, ask the user which of the two flows below they
-want. Do not default to a full `--delete` wipe — the two flows are not
+Establish which flow the user authorized; ask only when the choice is missing. Do not default to a full `--delete` wipe — the two flows are not
 interchangeable and one of them is only partially reversible:
 
 | | Full redo | Analysis-only (`--keep-media`) |
@@ -61,13 +60,14 @@ comparison in Step 4, not for reading during re-generation.
 BOOK="从零开始学散热 - 2014 - 陈继良"
 PROJECT="$HOME/Documents/知识库/HardwareWiki"
 
-# Backup source page
-cp "$PROJECT/wiki/sources/Book/$BOOK.md" /tmp/wiki-compare-backup/source-old.md
+# Choose a unique task directory, then back up the source page.
+BACKUP="/tmp/codex-work/wiki-compare-$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$BACKUP/concepts"
+cp "$PROJECT/wiki/sources/Book/$BOOK.md" "$BACKUP/source-old.md"
 
 # Backup concepts (grep for book name in sources field)
-mkdir -p /tmp/wiki-compare-backup/concepts
 find "$PROJECT/wiki/concepts" -name "*.md" -exec grep -l "$BOOK" {} \; | \
-  while read f; do cp "$f" /tmp/wiki-compare-backup/concepts/; done
+  while read f; do cp "$f" "$BACKUP/concepts/"; done
 
 # Backup entities, queries, comparisons, reviews similarly
 ```

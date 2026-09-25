@@ -118,20 +118,19 @@ def load_caption_provider() -> dict:
     return empty
 
 
-_CONTEXT_SIZE_DEFAULT = 200_000
+_CONTEXT_SIZE_DEFAULT = 64_000
 _RESPONSE_RESERVE_FRAC = 0.15
 _STABLE_RESERVE_MIN = 12_000
 _STABLE_RESERVE_FRAC = 0.25
 _INSTRUCTION_RESERVE_MIN = 12_000
 _INSTRUCTION_RESERVE_FRAC = 0.08
-# source_budget is a TOKEN budget (the probe reports tokens). NashSU's
+# source_budget is a TOKEN budget (the explicit context setting is in tokens). NashSU's
 # equivalent constants are CHARACTER-scale because its `maxContextSize` is
 # documented in characters (context-budget.ts) — copying its numbers onto a
 # token-scale context under-budgets a Latin-script source by ~4x. The ceiling
 # is 2x the largest chunk (_TARGET_TOKENS_HARD_CEIL): the consolidated context
 # must hold every chunk analysis plus raw evidence, but must not regress into a
-# second whole-book dump — the A/B behind the 64K chunk cap (references/
-# context-probe.md) showed oversized single prompts analyze worse, not better.
+# second whole-book dump. Chunk sizing and resume rules: references/context-budget.md.
 _SOURCE_BUDGET_MIN = 8_000
 _SOURCE_BUDGET_MAX = 128_000
 _SOURCE_BUDGET_FRAC = 0.6
@@ -234,7 +233,7 @@ class Config:
     def from_env(cls) -> "Config":
         wiki_root = Path(
             os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd())
-        ).expanduser()
+        ).expanduser().resolve()
         provider = load_provider_config()
         caption = load_caption_provider()
         runtime_dir = detect_runtime_dir(wiki_root)
@@ -290,7 +289,7 @@ class Config:
             context_size,
         )
         print(
-            f"[config] probed context={context_size:,} tok → "
+            f"[config] configured context={context_size:,} tok → "
             f"source_budget={self.source_budget:,} tok "
             f"target_tokens={self.target_tokens:,} "
             f"target_chars≤{self.target_chars:,}"
@@ -307,22 +306,7 @@ class Config:
             return base_tokens
         if context_size >= 120_000:
             return max(base_tokens // 2, 8192)
-        model = self.llm_model.lower()
-        if any(
-            pattern in model
-            for pattern in (
-                "512k",
-                "1m",
-                "deepseek-v4",
-                "deepseek-chat",
-            )
-        ):
-            return min(base_tokens * 2, 32768)
-        if "256k" in model or "200k" in model:
-            return base_tokens
-        if "128k" in model or "100k" in model:
-            return max(base_tokens // 2, 8192)
-        return base_tokens
+        return min(base_tokens, max(1024, int((context_size or _CONTEXT_SIZE_DEFAULT) * 0.15)))
 
 
 __all__ = [

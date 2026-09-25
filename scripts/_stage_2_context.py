@@ -6,7 +6,7 @@ analyses.  improved-wiki additionally keeps bounded raw evidence from every
 chunk so exact formulas, identifiers, and late-source details remain grounded.
 
 The builder below is deterministic and hard-bounded by ``source_budget``, which
-is a TOKEN budget (the context probe reports tokens).  It is converted to a
+is a TOKEN budget (the explicit context setting is in tokens).  It is converted to a
 character bound here using the source's own measured chars-per-token, the same
 idiom the Stage 2.2 chunker uses to size its window — a fixed character number
 would under-budget Latin-script sources ~4x and over-budget CJK ones.

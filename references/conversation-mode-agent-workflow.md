@@ -17,7 +17,6 @@ publication, and completion lifecycle are authoritative in `delegate-mode.md`.
 
 | Stage | Prompt pattern | Required answer |
 |---|---|---|
-| Context probe | `ctxprobe*.md` | Plausible integer context size; only main-conversation exception |
 | 2.2 | `Stage-2-2-Chunk-N-*.md` | Valid YAML containing chunk index, entities, concepts, claims, formulas, existing-wiki connections, schema-typed candidates, and the rolling `updated_global_digest` |
 | 2.4 | `Stage-2-4-Generation-*.md` | Exact requested key/schema-typed `---FILE:wiki/<path>--- … ---END FILE---` blocks |
 | FILE repair | `Stage-2-TruncatedFileRepair-*.md` | Exactly one complete FILE block for every requested path and no unrequested paths |

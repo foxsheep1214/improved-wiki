@@ -51,11 +51,41 @@ class ReclassificationHistory(unittest.TestCase):
         self.assertEqual(result[1]["source"], "raw/Paper/A/x.pdf")
         self.assertEqual(records[0]["source"], "raw/Paper/A/x.pdf")
 
-    def test_rejects_conflicts_and_cycles(self):
+    def test_rejects_conflicting_move_from_vacated_path(self):
         with self.assertRaises(IngestEventError):
             _project_source_reclassifications([event(), move(), move(new="raw/Paper/C/x.pdf")])
-        with self.assertRaises(IngestEventError):
-            _project_source_reclassifications([event(), move(), move("raw/Paper/B/x.pdf", "raw/Paper/A/x.pdf")])
+
+    def test_round_trip_and_another_move_are_valid(self):
+        records = [event(), move(), move('raw/Paper/B/x.pdf', 'raw/Paper/A/x.pdf'),
+                   move('raw/Paper/A/x.pdf', 'raw/Paper/C/x.pdf')]
+        result = _project_source_reclassifications(records)
+        self.assertTrue(all(e['source'] == 'raw/Paper/C/x.pdf' for e in result))
+        self.assertEqual(result[0]['source_at_event'], 'raw/Paper/A/x.pdf')
+
+    def test_new_ingest_at_reused_path_is_a_separate_lineage(self):
+        new = event()
+        new['run_id'] = 'second-incarnation'
+        result = _project_source_reclassifications([
+            event(), move(), new, move(new='raw/Paper/C/x.pdf')])
+        self.assertEqual(result[0]['source'], 'raw/Paper/B/x.pdf')
+        self.assertEqual(result[2]['source'], 'raw/Paper/C/x.pdf')
+
+    def test_append_preflights_projection_without_rewriting_old_bytes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cfg = SimpleNamespace(runtime_dir=Path(temp))
+            path = cfg.runtime_dir / 'ingest-events.jsonl'
+            original_bytes = (json.dumps(event(), separators=(',', ':')) + '\n').encode()
+            path.write_bytes(original_bytes)
+            append_ingest_event(cfg, move())
+            self.assertTrue(path.read_bytes().startswith(original_bytes))
+            before = path.read_bytes()
+            conflict = move(new='raw/Paper/C/x.pdf')
+            conflict['run_id'] = 'conflicting-second-move'
+            with self.assertRaises(IngestEventError):
+                append_ingest_event(cfg, conflict)
+            self.assertEqual(path.read_bytes(), before)
+            append_ingest_event(cfg, move('raw/Paper/B/x.pdf','raw/Paper/A/x.pdf'))
+            self.assertEqual(load_ingest_events(cfg)[0]['source'], 'raw/Paper/A/x.pdf')
 
     def test_rejects_invalid_paths(self):
         invalid = move(old="raw/../outside.pdf")

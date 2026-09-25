@@ -61,6 +61,16 @@ complete/skip 会清 reservation。失败时保留它是安全闸门，不是死
 `--abandon-spine <status显示的8位hash>`；不要手删 JSON。
 该命令还会先取得 `ingest.lock`，有 live writer 时拒绝放弃。
 
+`ingest.py --delete` 和独立 `cross_source_dedup.py` 的 apply 路径也取得同一
+项目锁，并在有逻辑 reservation 时拒绝写入。lint 通过真实继承的文件描述符
+把它持有的锁交给 dedup 子进程；不能用环境变量声称“已经持锁”来跳过互斥。
+去重会在落盘前复核扫描快照；页面新增、移除或内容变化时停止该次合并，重新运行
+以生成新快照。lint 的 dedup 失败会保留未完成状态并返回失败，不再继续宣称成功。
+
+来源删除按完整路径匹配派生页，并在第一次写入之前解析待删集合。旧 basename
+出现多个候选时先纠正来源引用；不要绕过歧义检查。同名不同目录、不同扩展名的
+来源不是同一个删除目标。
+
 若需要有意暂停批量任务，使用：
 
 ```bash

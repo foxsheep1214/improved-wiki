@@ -44,11 +44,11 @@ from _batch_supervisor import (
     _run_background_extract_worker,
     batch_ingest,
 )
-from _context_probe import resolve_context
+from _context_budget import apply_context_budget, context_tokens, CONTEXT_ENV
 from _ingest_prepare import _do_prepare
 from _ingest_runner import _is_ingestable_source_path, ingest_one
 from _source_filter import is_sensitive_config_source_file
-from _stage_1_extract import _stage_1_1_detect_pdf_type
+from _stage_1_extract import sample_pdf_text_density
 from _stage_1_1_scanned import MINERU_CHUNK_SIZE
 from _watch import ingest_watch
 
@@ -68,14 +68,6 @@ def _configure_line_buffered_output() -> None:
             # StringIO/test doubles and already-closed streams may not support
             # TextIOWrapper.reconfigure. Output remains usable in those cases.
             pass
-
-
-def _probe_and_apply_context(config) -> None:
-    """Probe the live conversation model's context window (or reuse cache) and
-    apply it to ``config``. Raises ``ConversationPending`` on the first pass
-    (normal handoff); the caller returns 101 so the agent answers and re-invokes.
-    Delete-only paths never call this."""
-    config.apply_context(resolve_context(config))
 
 
 def main() -> int:
@@ -183,14 +175,18 @@ def main() -> int:
         "--batch-worker-status",
         help=argparse.SUPPRESS,
     )
-    parser.add_argument(
-        "--reprobe", action="store_true",
-        help="Force a fresh context-window probe: clear BOTH cache layers "
-             "(probed-context.json + conversation/ctxprobe*) and exit. The next "
-             "ingest then probes the live model once. Deleting probed-context.json "
-             "alone does NOT re-probe — the conversation router replays the old answer.",
-    )
+    parser.add_argument("--context-tokens", type=int,
+                        help="Verified worker context capacity; default 64000, or IMPROVED_WIKI_CONTEXT_TOKENS")
+    parser.add_argument("--reprobe", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.reprobe:
+        parser.error("--reprobe was retired; use --context-tokens with verified runtime capacity")
+    try:
+        budget = context_tokens(args.context_tokens)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.context_tokens is not None:
+        os.environ[CONTEXT_ENV] = str(budget)
 
     if args.parallel < 0:
         parser.error("--parallel must be >= 0")
@@ -199,7 +195,7 @@ def main() -> int:
     if args.abandon_spine and args.file:
         parser.error("--abandon-spine is standalone; omit source files")
 
-    # ── First-class batch controls: no source list/context probe required ──
+    # ── First-class batch controls: no source list required ──
     if args.batch_status:
         _print_batch_status(Config.from_env())
         return OK
@@ -282,17 +278,6 @@ def main() -> int:
         if not args.file and not args.watch:
             return OK
 
-    # ── Force-reprobe: one-shot maintenance action (clear caches, exit) ──
-    # Standalone like --delete so the handoff re-invocation never re-clears the
-    # in-flight answer (which would loop). The subsequent normal ingest re-probes.
-    if args.reprobe:
-        from _context_probe import clear_probe_cache
-        config = Config.from_env()
-        clear_probe_cache(config)
-        print("[context-probe] caches cleared (probed-context.json + conversation/ctxprobe*) "
-              "— next ingest will probe the live model.")
-        return OK
-
     # ── Watch mode: continuous queue consumer ──
     if args.watch:
         config = Config.from_env()
@@ -306,10 +291,7 @@ def main() -> int:
             print("ERROR: watch batch is paused; restart with "
                   "--watch --resume-batch.", file=sys.stderr)
             return BATCH_PAUSED
-        try:
-            _probe_and_apply_context(config)
-        except ConversationPending:
-            return HANDOFF_PENDING
+        apply_context_budget(config)
         max_conc = args.parallel if args.parallel > 0 else BATCH_MAX_CONCURRENT
         try:
             ingest_watch(
@@ -348,19 +330,22 @@ def main() -> int:
     if args.delete:
         config = Config.from_env()
         from _source_lifecycle import delete_source
-        for f in args.file:
-            rf = Path(f).expanduser().resolve()
-            delete_source(rf, config, dry_run=args.dry_run, keep_media=args.keep_media)
+        try:
+            for f in args.file:
+                rf = Path(f).expanduser().resolve()
+                if not _is_ingestable_source_path(rf, config):
+                    raise ValueError(f'Source is outside this project: {rf}')
+                delete_source(rf, config, dry_run=args.dry_run, keep_media=args.keep_media)
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f'ERROR: {exc}', file=sys.stderr)
+            return ERROR
         return OK
 
     config = Config.from_env()
     config.enrich_enabled = args.enrich_wikilinks and not args.no_enrich
     config.stop_after_stage = args.stop_after_stage
 
-    # Validate raw files BEFORE probing context. A wrong cwd / missing file must
-    # error immediately instead of triggering a fresh context-probe handoff —
-    # otherwise the probe (which runs before this check) caches into the wrong
-    # project's .llm-wiki and the actual file-not-found is never reached.
+    # Validate source paths before preparation or any conversation handoff.
     raw_files = []
     for f in args.file:
         rf = Path(f).expanduser().resolve()
@@ -443,19 +428,7 @@ def main() -> int:
         )
         return BATCH_PAUSED
 
-    if args.no_project_lock:
-        # Explicit single-source read-only prefetch: do not emit a context probe
-        # handoff that an unattended caller may never answer.
-        from _context_probe import load_cached
-        if load_cached(config) is None:
-            print("ERROR: context-probe cache miss with --no-project-lock; "
-                  "run a normal foreground ingest once first.", file=sys.stderr)
-            return ERROR
-
-    try:
-        _probe_and_apply_context(config)
-    except ConversationPending:
-        return HANDOFF_PENDING
+    apply_context_budget(config)
 
 
     # Batch mode: multiple files.
@@ -503,7 +476,7 @@ def main() -> int:
                 doc = fitz.open(raw_file)
                 pages = len(doc)
                 doc.close()
-                _pdf_type, avg_chars = _stage_1_1_detect_pdf_type(raw_file)
+                avg_chars = sample_pdf_text_density(raw_file)
                 mineru_chunks = max(1, (pages + MINERU_CHUNK_SIZE - 1) // MINERU_CHUNK_SIZE)
                 print(f"  PDF: {pages} pages, avg {avg_chars:.0f} chars/page (sampled)")
                 print(f"  minerU extraction: ~{mineru_chunks} chunk(s) ({MINERU_CHUNK_SIZE} pages/chunk, hybrid-engine)")

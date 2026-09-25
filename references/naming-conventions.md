@@ -1,6 +1,6 @@
 # Naming Conventions — NashSU-aligned
 
-> **权威来源**：NashSU LLM Wiki app 最新版本（`src/lib/ingest.ts`, `lint.ts`, `wiki-page-types.ts`, `wiki-schema.ts`, `graph-filters.ts`）+ improved-wiki `scripts/ingest.py`。
+> **权威来源**：NashSU LLM Wiki app 已记录的同步基线（见 architecture-decisions.md）（`src/lib/ingest.ts`, `lint.ts`, `wiki-page-types.ts`, `wiki-schema.ts`, `graph-filters.ts`）+ improved-wiki `scripts/ingest.py`。
 > 旧 karpathy-llm-wiki / HardwareWiki / RadarWiki 的历史惯例不作为参考。
 
 ---

@@ -25,7 +25,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _core  # noqa: E402
-import ingest  # noqa: E402
+import _ingest_cli as cli
+import _batch_status as status
+import _ingest_runner as ingest  # noqa: E402
 
 
 def _make_config(tmp: Path) -> _core.Config:

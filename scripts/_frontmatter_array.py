@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """_frontmatter_array.py — frontmatter array-field parse / write / union.
 
-Faithful port of NashSU `src/lib/sources-merge.ts`. The skill's
-existing `_frontmatter.parse_frontmatter` only understands the INLINE array
-form (`name: [a, b]`); this module also handles the BLOCK form
-(`name:\n  - a\n  - b`), which the dedup subsystem (`_dedup.py`) and the
-`related:` rewrite path depend on.
+Reads use the shared YAML frontmatter parser. Writes patch only the selected
+array field so unrelated frontmatter formatting and body bytes survive.
 
 Public API mirrors sources-merge.ts:
   - parse_frontmatter_array(content, field)        -> list[str]
@@ -38,76 +35,13 @@ def _escape(name: str) -> str:
 
 
 def parse_frontmatter_array(content: str, field_name: str) -> list[str]:
-    """Extract a frontmatter array field. Handles inline (`name: [a, b]`) and
-    block (`name:\n  - a`) forms; strips quotes. Returns [] when absent,
-    malformed, or the content has no frontmatter.
-    """
-    fm_match = _FM_RE.match(content)
-    if not fm_match:
+    """Read an array through the shared YAML reader; malformed values are empty."""
+    from _frontmatter import parse_frontmatter
+    value = parse_frontmatter(content)[0].get(field_name)
+    if not isinstance(value, list):
         return []
-    fm = fm_match.group(1)
-    escaped = _escape(field_name)
-
-    block_re = re.compile(
-        rf"^{escaped}:\s*\n((?:[ \t]+-\s+.+\n?)+)",
-        re.MULTILINE,
-    )
-    block = block_re.search(fm)
-    if block:
-        out: list[str] = []
-        for line in block.group(1).split("\n"):
-            m = re.match(r"^\s+-\s+[\"']?(.+?)[\"']?\s*$", line)
-            if m and m.group(1):
-                out.append(m.group(1).strip())
-        return out
-
-    # Match the whole inline-array line (greedy `.*` to the last `]`), then
-    # quote-aware split via _split_inline_array. A `[^\]]*` class can't span
-    # a `]` inside a quoted item, so `["[[a]]"]` would truncate to `[[a`.
-    inline_re = re.compile(rf"^{escaped}:\s*\[(.*)\]\s*$", re.MULTILINE)
-    inline = inline_re.search(fm)
-    if not inline:
-        return []
-    body = inline.group(1).strip()
-    if body == "":
-        return []
-    return _split_inline_array(body)
-
-
-def _split_inline_array(body: str) -> list[str]:
-    """Comma-split that respects single/double quotes (and backslash escapes
-    inside double quotes), matching sources-merge.ts splitInlineArray."""
-    out: list[str] = []
-    current = ""
-    quote: str | None = None
-    escaped = False
-
-    for ch in body:
-        if escaped:
-            current += ch
-            escaped = False
-            continue
-        if quote == '"' and ch == "\\":
-            escaped = True
-            continue
-        if ch in ('"', "'") and quote is None:
-            quote = ch
-            continue
-        if quote == ch:
-            quote = None
-            continue
-        if ch == "," and quote is None:
-            value = current.strip()
-            if value:
-                out.append(value)
-            current = ""
-            continue
-        current += ch
-
-    value = current.strip()
-    if value:
-        out.append(value)
-    return out
+    return [str(item).strip() for item in value
+            if isinstance(item, (str, int, float)) and str(item).strip()]
 
 
 def _quote_inline_array_value(value: str) -> str:
@@ -159,12 +93,12 @@ def write_frontmatter_array(content: str, field_name: str, values: list[str]) ->
     return f"{open_delim}{rewritten}{close_delim}{rest}"
 
 
-def merge_lists(existing: list[str], incoming: list[str]) -> list[str]:
-    """Union two lists, case-insensitive dedup, first-seen casing wins."""
+def merge_lists(existing: list[str], incoming: list[str], *, case_sensitive: bool = False) -> list[str]:
+    """Stable union; source paths require case-sensitive identity."""
     seen: set[str] = set()
     out: list[str] = []
     for s in list(existing) + list(incoming):
-        key = s.lower()
+        key = s if case_sensitive else s.lower()
         if key in seen:
             continue
         seen.add(key)
@@ -193,7 +127,7 @@ def merge_array_fields_into_content(
         if len(old_values) == 0:
             continue  # field absent in existing → nothing to preserve
         new_values = parse_frontmatter_array(result, field)
-        merged = merge_lists(old_values, new_values)
+        merged = merge_lists(old_values, new_values, case_sensitive=field == "sources")
         if len(merged) == len(new_values) and all(
             s == new_values[i] for i, s in enumerate(merged)
         ):
@@ -212,9 +146,7 @@ def normalize_block_arrays(content: str) -> str:
     """Rewrite block-style frontmatter arrays (``related:\\n  - a``) for
     tags/related/sources into the inline form (``related: ["a"]``).
 
-    The naive ``_frontmatter.parse_frontmatter`` only understands the inline
-    form: a parse→write round-trip over a page with block-style arrays would
-    silently empty them. Callers that do such round-trips normalize first.
+    Compatibility formatting helper; parsing supports both forms directly.
     Content without frontmatter, or with all-inline arrays, passes through
     unchanged.
     """

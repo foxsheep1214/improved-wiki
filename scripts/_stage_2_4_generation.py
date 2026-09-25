@@ -902,7 +902,7 @@ def _stage_2_4_build_all_prompt(
 
     template_section = ""
     if template:
-        template_section = f"\n# Document Type\n<template>\n{template[:1500]}\n</template>\n"
+        template_section = f"\n# Document Type\n<template>\n{template}\n</template>\n"
 
     if existing_refs:
         ref_lines = []

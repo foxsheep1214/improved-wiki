@@ -1,127 +1,29 @@
-# Cron installation
+# Scheduled scans and conversation-mode ingestion
 
-The `improved-wiki` pipeline is meant to run unattended. The cron entry is one line, pointing at the `wiki-monitor.sh` script (which exits 0 fast when there's no work to do).
+A scheduler can run deterministic scans and structural diagnostics without an
+agent. Full ingestion, semantic lint, sweep and dedup need an agent to consume
+conversation prompts, publish validated answers and resume after exit 101.
+A shell cron entry alone cannot finish these workflows.
 
----
-
-## Install on macOS / Linux
-
-```bash
-# Open the crontab editor
-crontab -e
-
-# Add this line (one shot per day at 02:00 — monitor only; the queue worker has its own line below)
-0 2 * * * $SKILL_DIR/scripts/wiki-monitor.sh
-
-# Save and exit. Verify the crontab took:
-crontab -l | grep wiki-monitor
-```
-
-The script:
-- Diffs `raw/` against `.llm-wiki/ingest-cache.json`
-- For each new file, adds it to `.llm-wiki/ingest-queue.json`
-- Then exits
-
-`wiki-monitor.sh` does NOT itself run the queue. To process the queue, you need a separate cron entry for `run-queue.sh`. The reason for the split: the monitor is fast (just a hash diff) and can run frequently; the queue worker is slow (conversation-mode LLM handoffs) and runs on its own schedule.
-
-Standard 2-cron setup:
-
-```cron
-# 02:00 — scan for new files (fast, idempotent)
-0 2 * * * $SKILL_DIR/scripts/wiki-monitor.sh
-
-# 02:30 — process the queue (slow, may take hours)
-30 2 * * * $SKILL_DIR/scripts/run-queue.sh
-```
-
-Both scripts are no-op when there's no work, so running the crons daily is essentially free.
-
----
-
-## Verify the cron is firing
+For a scheduled scan, configure the actual project, interpreter and skill path:
 
 ```bash
-# Check the system log for the last cron run
-log show --predicate 'process == "cron"' --last 1d 2>&1 | grep wiki-monitor | tail -5
+export SKILL_DIR="$HOME/.agents/skills/improved-wiki"
+export IMPROVED_WIKI_ROOT="$HOME/Documents/知识库/MyWiki"
+bash "$SKILL_DIR/scripts/wiki-monitor.sh"
+# Independent deterministic diagnostic:
+bash "$SKILL_DIR/scripts/wiki-lint.sh" --structural-only
 ```
 
-If the cron is firing, you'll see a line per day. If not, check:
-- `crontab -l` — is the entry there?
-- The script has `chmod +x` permissions
-- The user account has permission to write to `wiki/`
+`wiki-monitor.sh` scans/merges the queue; it does not answer LLM prompts.
+`run-queue.sh` consumes work until completion, a pending handoff or an error.
+Before consuming, establish the authorized source list/project and an agent
+handoff driver following `delegate-mode.md`. Preserve the same context budget
+on every resume. Do not interpret a queued job or exit 101 as a completed ingest.
 
----
-
-## Adjusting the schedule
-
-The default is once per day at 02:00 (low-activity hours). Adjust based on your volume:
-
-| Pattern | Cron line | Use case |
-|---|---|---|
-| Daily at 02:00 | `0 2 * * * ...` | Default; handles 1-5 new files/day |
-| Every 6 hours | `0 */6 * * * ...` | Active knowledge worker adding multiple files/day |
-| Hourly | `0 * * * * ...` | Power user; runs frequently but each run is a no-op when empty |
-| Weekly (Sunday 03:00) | `0 3 * * 0 ...` | Light user; check once a week |
-
-The cron line is a single shell command. If you need more complex logic (e.g. only run if disk is not full), wrap it:
-
-```bash
-0 2 * * * /bin/bash -c '[ $(df -k ~/Documents/知识库/ | tail -1 | awk "{print \$4}") -gt 1048576 ] && $SKILL_DIR/scripts/wiki-monitor.sh'
-```
-
-This is a common idiom: "only run if at least 1GB free".
-
----
-
-## Lint cron (separate, optional)
-
-The ingest cron handles new files. A second cron can run **structural-only
-Lint** periodically. Relevant modes:
-- **structural** (`wiki-lint.sh --structural-only`): broken-link / orphan / no-outlinks / missing-frontmatter — deterministic, cron-safe
-- **full default lint** (plain `wiki-lint.sh`): semantic + Review/fix/sweep/dedup，走 conversation-mode handoff，并在 delete-orphans 前退出 102 等待用户确认 — NOT cron-safe
-- **review sweep** (`sweep_reviews.py`): auto-resolve stale review items — run manually after batch ingests
-- **cross-source dedup** (`cross_source_dedup.py`): 跨源重复页检测/合并 — manual, LLM-confirmed
-
-Only the structural pass belongs in cron:
-
-```bash
-# Structural lint weekly (Sunday 04:00)
-0 4 * * 0 $SKILL_DIR/scripts/wiki-lint.sh --structural-only
-```
-
-Plain `wiki-lint.sh` intentionally runs the full maintenance workflow by
-default. Unattended cron must pass `--structural-only`; do not use plain lint
-or any mutating continuation in cron.
-
----
-
-## Disabling the cron
-
-```bash
-# Comment out the line
-crontab -e
-# add a # at the start of the line
-
-# Or remove it entirely
-crontab -l | grep -v wiki-monitor | crontab -
-```
-
-Disabling does NOT delete the cache or the queue — they survive. Re-enabling picks up where it left off.
-
----
-
-## Why not use agent cron?
-
-Agent cron (LLM-driven periodic tasks) is for **LLM-driven jobs** (the agent runs the prompt each tick). The `improved-wiki` pipeline is a **pure shell pipeline** (no LLM needed for the trigger step — the LLM runs inside `ingest.py`, not at the cron layer).
-
-If you used agent cron for this, you'd be paying tokens to detect "no new files" — wasteful. Use the system cron for shell pipelines; use agent cron for LLM-driven periodic tasks (daily briefings, etc.).
-
-This distinction is also captured in your persistent memory: "成功不推送，失败才发飞书。配置 no_agent cron 时默认 deliver=feishu + no_agent=true".
-
----
-
-## See also
-
-- `SKILL.md` — The ingest pipeline reference
-- `references/known-issues.md` — Unresolved limitations
-- `references/initial-setup.md` — Verifying the install
+Use the host scheduler appropriate to the user's request; no vendor-specific
+`no_agent`, notification destination or delivery flag is part of this CLI.
+Avoid duplicate schedulers; project/coordinator locks and durable reservations
+remain authoritative. Pause/resume controls are documented in
+`batch-parallel-prefetch.md`. Disabling a schedule does not delete its queue,
+checkpoints or completion history.

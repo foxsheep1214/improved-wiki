@@ -7,7 +7,6 @@ import time
 from pathlib import Path
 
 from _config import Config
-from _core import record_rate_limit as _record_rate_limit
 from _schema import (
     list_existing_slugs,
     load_purpose_md,
@@ -425,26 +424,22 @@ def _stage_2_2_digest_meta_template(source_kind: str) -> str:
     return common + '\n    venue: "..."\n    publisher: "..."\n    url: "..."'
 
 
-def _stage_2_2_build_template_section(template: str, file_path: Path, max_chars: int = 4000) -> str:
+def _stage_2_2_build_template_section(template: str, file_path: Path) -> str:
     """Build the template injection section for a Stage 2.2 prompt.
 
-    Truncates the template to *max_chars* and wraps it in a
+    Includes the complete type guidance in a
     ``# Document Type Instructions`` block.  Returns an empty string when
     *template* is falsy.
     """
     if not template:
         return ""
-    template_trimmed = template[:max_chars]
     source_kind = _stage_2_2_source_kind(template, file_path)
     return f"""
 # Document Type Instructions
 The source is a **{source_kind}**. Follow these type-specific conventions as
-content-emphasis guidance. If the template names a type-specific metadata block
-such as `paper_meta`, map those fields into the required compatibility
-`book_meta` block in the Stage 2.2 output below; do not emit a competing second
-metadata block.
+content-emphasis guidance. The output schema below remains authoritative.
 <template>
-{template_trimmed}
+{template}
 </template>
 
 """
@@ -665,7 +660,7 @@ def _stage_2_2_build_prompt(
 
     source_kind = _stage_2_2_source_kind(template, file_path)
     digest_meta_template = _stage_2_2_digest_meta_template(source_kind)
-    template_section = _stage_2_2_build_template_section(template, file_path, max_chars=2000)
+    template_section = _stage_2_2_build_template_section(template, file_path)
 
     overlap_section = _stage_2_2_build_overlap_section(overlap_before)
 
@@ -1198,7 +1193,6 @@ def _stage_2_2_analyze_chunk(
                     _is_retryable_exception(e) or schema_error):
                 if schema_error:
                     validation_feedback = str(e)[:500]
-                _record_rate_limit()
                 wait = _retry_jitter(2.0, attempt)
                 err_label = type(e).__name__
                 print(f"  [chunk {chunk_idx+1}/{chunk_total}] analyze retry {attempt+1}/{1+max_retries}"

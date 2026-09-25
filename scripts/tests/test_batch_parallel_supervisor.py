@@ -15,7 +15,9 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import _core  # noqa: E402
-import ingest  # noqa: E402
+import _ingest_cli as cli
+import _batch_status as status
+import _batch_supervisor as ingest  # noqa: E402
 import _stage_1_1_scanned as scanned  # noqa: E402
 from _batch_coordination import (  # noqa: E402
     SpineReservationConflict,
@@ -451,23 +453,23 @@ class SpineLockScopeTests(unittest.TestCase):
             def fake_prefetch(*_args, **_kwargs):
                 self.assertFalse(held["value"])
                 calls.append("prefetch")
-                raise ingest.PrepareStopAfter("1.5")
+                raise cli.PrepareStopAfter("1.5")
 
             def fake_ingest(*_args, **_kwargs):
                 self.assertTrue(held["value"])
                 calls.append("spine")
                 return {"status": "skipped"}
 
-            argv = ["ingest.py", str(raw)]
+            argv = ["cli.py", str(raw)]
             with (
                 patch.object(sys, "argv", argv),
-                patch.object(ingest.Config, "from_env", return_value=cfg),
-                patch.object(ingest, "_probe_and_apply_context"),
-                patch.object(ingest, "_do_prepare", side_effect=fake_prefetch),
-                patch.object(ingest, "ingest_one", side_effect=fake_ingest),
-                patch.object(ingest, "ProjectLock", FakeLock),
+                patch.object(cli.Config, "from_env", return_value=cfg),
+                patch.object(cli, "apply_context_budget"),
+                patch.object(cli, "_do_prepare", side_effect=fake_prefetch),
+                patch.object(cli, "ingest_one", side_effect=fake_ingest),
+                patch.object(cli, "ProjectLock", FakeLock),
             ):
-                self.assertEqual(ingest.main(), 0)
+                self.assertEqual(cli.main(), 0)
 
             self.assertEqual(
                 calls, ["prefetch", "acquire", "spine", "release"])
@@ -576,29 +578,29 @@ class BatchCliGuardTests(unittest.TestCase):
             for path in files:
                 path.write_bytes(b"%PDF fake")
             argv = [
-                "ingest.py", "--stop-after-stage", "0",
+                "cli.py", "--stop-after-stage", "0",
                 str(files[0]), str(files[1]),
             ]
             with (
                 patch.object(sys, "argv", argv),
-                patch.object(ingest.Config, "from_env", return_value=cfg),
-                patch.object(ingest, "_probe_and_apply_context") as probe,
+                patch.object(cli.Config, "from_env", return_value=cfg),
+                patch.object(cli, "apply_context_budget") as probe,
             ):
-                self.assertEqual(ingest.main(), 2)
+                self.assertEqual(cli.main(), 2)
                 probe.assert_not_called()
 
     def test_pause_prefetch_is_first_class_and_does_not_full_pause(self):
         with tempfile.TemporaryDirectory() as d:
             cfg = _make_config(Path(d))
-            argv = ["ingest.py", "--pause-prefetch"]
+            argv = ["cli.py", "--pause-prefetch"]
             with (
                 patch.object(sys, "argv", argv),
-                patch.object(ingest.Config, "from_env", return_value=cfg),
+                patch.object(cli.Config, "from_env", return_value=cfg),
                 patch.object(
                     ingest, "_pause_batch_workers", return_value=0),
-                patch.object(ingest, "_probe_and_apply_context") as probe,
+                patch.object(cli, "apply_context_budget") as probe,
             ):
-                self.assertEqual(ingest.main(), 0)
+                self.assertEqual(cli.main(), 0)
                 probe.assert_not_called()
             self.assertTrue(
                 (cfg.runtime_dir / "batch-prefetch.pause").exists())
@@ -607,13 +609,13 @@ class BatchCliGuardTests(unittest.TestCase):
     def test_batch_status_is_read_only_first_class_action(self):
         with tempfile.TemporaryDirectory() as d:
             cfg = _make_config(Path(d))
-            argv = ["ingest.py", "--batch-status"]
+            argv = ["cli.py", "--batch-status"]
             with (
                 patch.object(sys, "argv", argv),
-                patch.object(ingest.Config, "from_env", return_value=cfg),
-                patch.object(ingest, "_probe_and_apply_context") as probe,
+                patch.object(cli.Config, "from_env", return_value=cfg),
+                patch.object(cli, "apply_context_budget") as probe,
             ):
-                self.assertEqual(ingest.main(), 0)
+                self.assertEqual(cli.main(), 0)
                 probe.assert_not_called()
 
     def test_full_pause_blocks_single_source_continuation(self):
@@ -624,14 +626,14 @@ class BatchCliGuardTests(unittest.TestCase):
             raw.parent.mkdir(parents=True, exist_ok=True)
             raw.write_bytes(b"%PDF fake")
             ingest._write_batch_pause_marker(cfg, "test full pause")
-            argv = ["ingest.py", str(raw)]
+            argv = ["cli.py", str(raw)]
             with (
                 patch.object(sys, "argv", argv),
-                patch.object(ingest.Config, "from_env", return_value=cfg),
-                patch.object(ingest, "_probe_and_apply_context") as probe,
-                patch.object(ingest, "_do_prepare") as prepare,
+                patch.object(cli.Config, "from_env", return_value=cfg),
+                patch.object(cli, "apply_context_budget") as probe,
+                patch.object(cli, "_do_prepare") as prepare,
             ):
-                self.assertEqual(ingest.main(), 75)
+                self.assertEqual(cli.main(), 75)
                 probe.assert_not_called()
                 prepare.assert_not_called()
 
@@ -642,13 +644,13 @@ class BatchCliGuardTests(unittest.TestCase):
             raw = tmp / "raw" / "Book" / "a.pdf"
             raw.parent.mkdir(parents=True, exist_ok=True)
             raw.write_bytes(b"%PDF fake")
-            argv = ["ingest.py", "--no-project-lock", str(raw)]
+            argv = ["cli.py", "--no-project-lock", str(raw)]
             with (
                 patch.object(sys, "argv", argv),
-                patch.object(ingest.Config, "from_env", return_value=cfg),
-                patch.object(ingest, "_probe_and_apply_context") as probe,
+                patch.object(cli.Config, "from_env", return_value=cfg),
+                patch.object(cli, "apply_context_budget") as probe,
             ):
-                self.assertEqual(ingest.main(), 2)
+                self.assertEqual(cli.main(), 2)
                 probe.assert_not_called()
 
 

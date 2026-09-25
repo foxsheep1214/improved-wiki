@@ -24,7 +24,6 @@ BATCH_MAX_CONCURRENT = 4
 # ── Progress / UI helpers ──
 
 _current_file_local = threading.local()
-_stage_start_times: dict[str, float] = {}
 
 
 def set_current_file(name: str) -> None:
@@ -45,20 +44,8 @@ def file_tag() -> str:
 
 
 def stage_begin(name: str) -> None:
-    _stage_start_times[name] = time.time()
     tag = file_tag()
     print(f"\n{'─'*40}\n{tag}[{name}] Starting...\n{'─'*40}", flush=True)
-
-
-# Rate-limit tracking (shared across workers)
-_RATE_LIMIT_HIT_AT = 0.0
-_RLOCK = threading.Lock()
-
-
-def record_rate_limit() -> None:
-    global _RATE_LIMIT_HIT_AT
-    with _RLOCK:
-        _RATE_LIMIT_HIT_AT = time.time()
 
 
 class ConversationPending(BaseException):
@@ -184,31 +171,14 @@ def is_query_bridge_source(raw_file: Path, config: "Config") -> bool:
 
 
 def canonical_source_path(raw_file: Path, config: "Config") -> str:
-    """The authoritative ``sources:`` frontmatter value for ``raw_file``.
-
-    ``raw/<rel>`` for a normal source under ``config.raw_root``; ``wiki/queries/<rel>``
-    for a query page explicitly ingested from ``wiki/queries/`` (no
-    ``raw/queries/`` bridge copy — see ``is_query_bridge_source``). Falls
-    back to the bare filename for any other path (should not normally happen —
-    ``ingest.py``'s CLI gate only accepts these two roots).
-
-    Single source of truth: every place that writes a ``sources:`` field
-    (canonical write in ``_ingest_write.py``, the per-page prompt hints in
-    Stage 2.4, the log.md line in Stage 3.3) must call this — not
-    hand-roll an ``f"raw/{rel}"`` string — so they can never drift out of
-    sync with each other. A drift would silently defeat
-    ``_stage_3_2_canonicalize_sources_field``'s basename-based "already
-    present" check (two differently-prefixed strings for the same file both
-    have the same basename, so the stale one never gets overwritten).
-    """
-    try:
-        return f"raw/{raw_file.relative_to(config.raw_root)}"
-    except ValueError:
-        pass
-    try:
-        return f"wiki/queries/{raw_file.relative_to(config.wiki_dir / 'queries')}"
-    except ValueError:
-        return raw_file.name
+    """Logical source identity; physical raw roots may be configured separately."""
+    from _source_identity import normalize_source_ref
+    for base, prefix in ((config.raw_root, "raw/"), (config.wiki_dir / "queries", "wiki/queries/")):
+        try:
+            return normalize_source_ref(prefix + raw_file.relative_to(base).as_posix(), config.wiki_root)
+        except ValueError:
+            continue
+    raise ValueError(f"Source is outside configured source roots: {raw_file}")
 
 
 def source_cache_key(raw_file: Path, config: "Config") -> str:

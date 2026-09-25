@@ -54,7 +54,8 @@ class LedgerTests(unittest.TestCase):
             )
             record = json.loads(path.read_text(encoding="utf-8"))
 
-        self.assertEqual(path.name, "abababababababab.json")
+        self.assertIn('-abababababababab-', path.name)
+        self.assertEqual(record['schema_version'], 2)
         self.assertEqual(record["source"], "raw/Book/Phased Array - 2021 - Wu.pdf")
         self.assertEqual(record["source_page"],
                          "wiki/sources/Book/Phased Array - 2021 - Wu.md")
@@ -95,9 +96,22 @@ class WritePhaseOrderTests(unittest.TestCase):
 class LookupTests(unittest.TestCase):
     def _project(self, root: Path) -> None:
         config = _config(root)
+        from _ingest_events import append_ingest_event
+        from _progress import file_sha256
+        from test_source_reclassification_history import event
+        source = 'raw/Book/Phased Array - 2021 - Wu.pdf'
+        raw = root / source
+        raw.parent.mkdir(parents=True)
+        raw.write_bytes(b'book bytes')
+        sha = file_sha256(raw)
+        completed = event(source, sha)
+        append_ingest_event(config, completed)
+        marker = config.runtime_dir / 'ingest-progress' / f'{sha[:16]}.stages.json'
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({'ingested': completed['completed_at_ms'],
+                                     'ingested__payload': {'run_id': 'original'}}))
         ledger.write_evidence_ledger(
-            config, "raw/Book/Phased Array - 2021 - Wu.pdf", "ef" * 32,
-            _ANALYSES, [])
+            config, source, sha, _ANALYSES, [], run_id='original')
         page = root / "wiki" / "concepts" / "comet-calibration.md"
         page.parent.mkdir(parents=True)
         page.write_text(

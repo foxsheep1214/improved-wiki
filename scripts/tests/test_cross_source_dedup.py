@@ -773,14 +773,16 @@ class TestWhitelistWritePath(unittest.TestCase):
 class TestMergeLock(unittest.TestCase):
     """Task 7: merge+persist runs under an exclusive file lock."""
 
-    def test_merge_lock_serializes(self):
+    def test_project_lock_serializes(self):
         with tempfile.TemporaryDirectory() as t:
             rt = Path(t)
             # Re-entrant from a different fd must block; we assert the lock file
             # is created and a second non-blocking acquire fails while held.
             import fcntl
-            with ds._merge_lock(rt):
-                lock_path = rt / "dedup-merge.lock"
+            from types import SimpleNamespace
+            from _maintenance_lock import maintenance_write_lock
+            with maintenance_write_lock(SimpleNamespace(runtime_dir=rt)):
+                lock_path = rt / "ingest.lock"
                 self.assertTrue(lock_path.exists())
                 fd = os.open(str(lock_path), os.O_RDWR)
                 try:
@@ -789,7 +791,7 @@ class TestMergeLock(unittest.TestCase):
                 finally:
                     os.close(fd)
             # After release, a non-blocking acquire succeeds.
-            fd = os.open(str(rt / "dedup-merge.lock"), os.O_RDWR)
+            fd = os.open(str(rt / "ingest.lock"), os.O_RDWR)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 fcntl.flock(fd, fcntl.LOCK_UN)

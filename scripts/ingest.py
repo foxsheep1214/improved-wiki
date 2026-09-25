@@ -8,16 +8,14 @@ Implementation is split by responsibility:
 - ``_batch_status``: read-only diagnostics
 - ``_ingest_cli``: argument parsing and exit-code mapping
 
-Private names remain available here for existing automation and tests.
+Private imports remain direct aliases for existing automation. Patch the owning
+module in tests; this facade never synchronizes or mutates module globals.
 """
 from __future__ import annotations
 
 import sys
-from types import ModuleType
 
-# `os` and `time` are re-exported deliberately: tests reach the supervisor's
-# sleep/killpg through this facade (patch.object(ingest.os, "killpg")), so the
-# attributes must exist here even though this module never calls them.
+# Retained direct aliases for callers that imported these from the old facade.
 import os
 import time
 
@@ -52,10 +50,7 @@ from _conversation_router import (
     call_anthropic_protocol,
 )
 
-# Re-exported for the monkeypatch surface described above: tests swap
-# `ingest.Config.from_env`, `ingest._do_prepare`,
-# `ingest._do_write` and `ingest.stage_3_7_embed_new_pages`, and
-# `_sync_compat_module` propagates the swap into the implementation modules.
+# Direct aliases preserve imports; tests patch the owning implementation.
 from _config import Config
 from _ingest_prepare import _do_prepare
 from _ingest_write import _do_write
@@ -106,7 +101,7 @@ _STATUS_FUNCTIONS = (
     "_print_batch_status",
 )
 _CLI_FUNCTIONS = (
-    "_probe_and_apply_context",
+    "apply_context_budget",
     "main",
 )
 
@@ -133,57 +128,6 @@ _BATCH_PREFETCH_PROCESS_LIMIT = (
 )
 _WORKER_TERMINAL_STATES = _batch_supervisor._WORKER_TERMINAL_STATES
 _WORKER_HAS_MINERU_TURN = _batch_supervisor._WORKER_HAS_MINERU_TURN
-
-
-_MODULE_FUNCTIONS = {
-    _ingest_runner: _RUNNER_FUNCTIONS,
-    _batch_supervisor: _SUPERVISOR_FUNCTIONS,
-    _batch_status: _STATUS_FUNCTIONS,
-    _ingest_cli: _CLI_FUNCTIONS,
-}
-_ORIGINALS: dict[ModuleType, dict[str, object]] = {}
-for _module in _MODULE_FUNCTIONS:
-    _ORIGINALS[_module] = {
-        name: value
-        for name, value in vars(_module).items()
-        if name in globals() and not name.startswith("__")
-    }
-
-_WRAPPERS: dict[tuple[ModuleType, str], object] = {}
-
-
-def _sync_compat_module(module: ModuleType) -> None:
-    """Propagate facade monkeypatches while restoring normal implementations."""
-    for name, original in _ORIGINALS[module].items():
-        current = globals().get(name, original)
-        wrapper = _WRAPPERS.get((module, name))
-        setattr(
-            module,
-            name,
-            original if current is original or current is wrapper else current,
-        )
-
-
-def _make_compat_wrapper(module: ModuleType, name: str):
-    original = _ORIGINALS[module][name]
-
-    def _wrapped(*args, **kwargs):
-        _sync_compat_module(_ingest_runner)
-        _sync_compat_module(_batch_supervisor)
-        _sync_compat_module(_batch_status)
-        _sync_compat_module(_ingest_cli)
-        return original(*args, **kwargs)
-
-    _wrapped.__name__ = name
-    _wrapped.__doc__ = getattr(original, "__doc__", None)
-    _wrapped.__module__ = __name__
-    _WRAPPERS[(module, name)] = _wrapped
-    return _wrapped
-
-
-for _module, _function_names in _MODULE_FUNCTIONS.items():
-    for _name in _function_names:
-        globals()[_name] = _make_compat_wrapper(_module, _name)
 
 
 if __name__ == "__main__":

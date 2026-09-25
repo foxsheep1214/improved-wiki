@@ -131,7 +131,18 @@ python3 "$SKILL_DIR/scripts/evidence_lookup.py" --project <项目> \
 
 输出该页各来源的 claim（带 `§2.5.2 and Figure 2.20` 这类锚点和置信度）、带编号的公式、
 逐字表格（如器件规格表）。`--source <原文件名片段>` 按来源查；`--json` 供解析。
-账本只覆盖新出处账本上线后 ingest 的来源，更早的来源列在 `missing_sources`。
+完整来源路径精确匹配；旧 basename 引用只能唯一解析，同名歧义列在
+`ambiguous_sources`，不会合并不同来源的证据。
+
+默认只返回当前原文件 hash、完成事件、`ingested` marker 的 `run_id` 一致的账本。
+每条结果带 `source_hash`、`run_id`、`completed_at`、`evidence_status`。
+旧版、未完成、已删除来源的证据由显式 `--history` 返回，并保留状态标记；
+新增批次不会覆盖其他来源或之前批次的账本。没有 run_id 的旧版账本只能按历史查询，
+不自动认定为当前已完成证据。
+
+账本只覆盖该功能上线后 ingest 的来源，升级不会回填旧书。
+`missing_sources` 表示所选查询范围内没有可用证据；`unavailable_sources`
+说明被当前版本筛选排除的账本，不能把两者都解释成“从未消化”。
 
 ### 5.3 补充：Read 精读
 

@@ -20,10 +20,23 @@ Usage:
 from __future__ import annotations
 
 import re
+import yaml
 import time
 from typing import Callable, Optional
 
 from _wikilinks import WIKILINK_RE
+
+class FrontmatterLoader(yaml.SafeLoader):
+    """Wiki scalars are strings (including dates/booleans); YAML null is None."""
+
+
+FrontmatterLoader.yaml_implicit_resolvers = {
+    key: [(tag, pattern) for tag, pattern in values
+          if tag not in {"tag:yaml.org,2002:timestamp", "tag:yaml.org,2002:int",
+                         "tag:yaml.org,2002:float", "tag:yaml.org,2002:bool"}]
+    for key, values in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+
 
 # ── Parse ────────────────────────────────────────────────────────────────────
 
@@ -93,28 +106,19 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     fm_text = m.group(1).strip()
     body = content[m.end():].lstrip("\n")
 
-    fm = {}
-    for line in fm_text.split("\n"):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        m2 = re.match(r'^([\w_-]+):\s*(.*)', line)
-        if m2:
-            key, val = m2.group(1), m2.group(2).strip()
-            # Array values: [a, b, c]
-            if val.startswith("[") and val.endswith("]"):
-                inner = val[1:-1].strip()
-                if inner:
-                    fm[key] = [v.strip().strip("'\"") for v in inner.split(",")]
-                else:
-                    fm[key] = []
-            # Quoted strings
-            elif val.startswith('"') and val.endswith('"'):
-                fm[key] = val[1:-1]
-            elif val.startswith("'") and val.endswith("'"):
-                fm[key] = val[1:-1]
-            else:
-                fm[key] = val
+    try:
+        fm = yaml.load(fm_text, Loader=FrontmatterLoader)
+    except yaml.YAMLError:
+        return {}, body
+    if not isinstance(fm, dict):
+        return {}, body
+    # Legacy unquoted related: [[target]] is YAML's nested singleton list.
+    # Interpret this known wiki notation in one place for every reader.
+    related = fm.get("related")
+    if isinstance(related, list):
+        fm["related"] = [f"[[{item[0]}]]" if isinstance(item, list)
+                         and len(item) == 1 and isinstance(item[0], str)
+                         else item for item in related]
     return fm, body
 
 
@@ -131,7 +135,7 @@ _QUOTE_ANY_CHARS = set(":#[]{}\"'")
 
 
 def _needs_quoting(value: str) -> bool:
-    if value == "":
+    if value in {"", "null", "Null", "NULL", "~"}:
         return True
     if value[0] in _QUOTE_START_CHARS:
         return True
@@ -153,6 +157,10 @@ def write_frontmatter(fm: dict, body: str) -> str:
         if isinstance(value, list):
             items = ", ".join(_quote_value(v) for v in value)
             lines.append(f"{key}: [{items}]")
+        elif value is None:
+            lines.append(f"{key}: null")
+        elif isinstance(value, dict):
+            lines.extend(yaml.safe_dump({key: value}, allow_unicode=True, sort_keys=False).rstrip().splitlines())
         elif isinstance(value, str) and _needs_quoting(value):
             lines.append(f"{key}: {_quote_value(value)}")
         else:
@@ -248,12 +256,8 @@ def merge_array_fields_into_content(new_content: str, existing_content: str) -> 
 def lock_fields(content: str, reference_fm: dict) -> str:
     """Force LOCKED_FIELDS back to reference values.
 
-    Block-style arrays are normalized to inline first: this function does a
-    naive parse→write round-trip, which would otherwise silently empty a
-    block-form tags/related/sources array.
+    The shared YAML reader preserves both block and inline arrays.
     """
-    from _frontmatter_array import normalize_block_arrays
-    content = normalize_block_arrays(content)
     fm, body = parse_frontmatter(content)
     for field in LOCKED_FIELDS:
         if field in reference_fm and reference_fm[field]:
@@ -294,9 +298,7 @@ def merge_page_content(
     # right away: fast path 4 below (and layer 3 via lock_fields) round-trips
     # the content through the naive parse_frontmatter → write_frontmatter,
     # which silently empties block-form tags/related/sources.
-    from _frontmatter_array import normalize_block_arrays
-    array_merged = normalize_block_arrays(
-        merge_array_fields_into_content(new_content, existing_content))
+    array_merged = merge_array_fields_into_content(new_content, existing_content)
 
     # NashSU 0.6.6 corrected-source behavior: if the caller proved that every
     # existing source reference resolves to this same source, the newly
@@ -369,7 +371,7 @@ def merge_page_content(
         for field in UNION_FIELDS:
             existing_values = parse_frontmatter_array(result, field)
             incoming_values = parse_frontmatter_array(new_content, field)
-            merged_values = merge_lists(existing_values, incoming_values)
+            merged_values = merge_lists(existing_values, incoming_values, case_sensitive=field == "sources")
             if merged_values != existing_values:
                 result = write_frontmatter_array(
                     result, field, merged_values)
