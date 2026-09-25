@@ -289,7 +289,54 @@ def _read_events_unlocked(path: Path) -> list[dict]:
 
 def load_ingest_events(config) -> list[dict]:
     """Read and strictly validate the complete event ledger."""
-    return _read_events_unlocked(ingest_event_path(config))
+    return _project_source_reclassifications(
+        _read_events_unlocked(ingest_event_path(config))
+    )
+
+
+def _project_source_reclassifications(events: list[dict]) -> list[dict]:
+    """Resolve audited path moves without rewriting completed-run history.
+
+    A source_reclassification repair binds old/new raw paths to the same
+    content hash. The original events stay byte-for-byte in the ledger;
+    readers get current paths while retaining the paths at event time.
+    """
+    routes = {}
+    for event in events:
+        if (event.get("event") != REPAIR_COMPLETED
+                or event.get("repair_kind") != "source_reclassification"):
+            continue
+        old = event.get("previous_source", "")
+        new = event.get("source", "")
+        sha = event.get("source_hash", "")
+        page = event.get("source_page", "")
+        if (not isinstance(old, str) or not old.startswith("raw/")
+                or not isinstance(new, str) or not new.startswith("raw/")
+                or ".." in Path(old).parts or ".." in Path(new).parts
+                or old == new or not re.fullmatch(r"[0-9a-f]{64}", sha)
+                or page != "wiki/sources/" + str(Path(new[4:]).with_suffix(".md"))):
+            raise IngestEventError("invalid source_reclassification repair")
+        key, target = (old, sha), (new, page)
+        if key in routes and routes[key] != target:
+            raise IngestEventError(f"conflicting source relocation: {old}")
+        routes[key] = target
+    projected = []
+    for event in events:
+        source, sha = event["source"], event["source_hash"]
+        page = event.get("source_page", "")
+        seen = set()
+        while (source, sha) in routes:
+            if source in seen:
+                raise IngestEventError(f"cyclic source relocation: {source}")
+            seen.add(source)
+            source, page = routes[(source, sha)]
+        if source != event["source"]:
+            event = dict(event)
+            event.setdefault("source_at_event", event["source"])
+            event.setdefault("source_page_at_event", event.get("source_page", ""))
+            event.update(source=source, source_page=page)
+        projected.append(event)
+    return projected
 
 
 def append_ingest_event(config, event: dict) -> tuple[dict, bool]:
