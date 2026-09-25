@@ -57,6 +57,7 @@ import _dedup  # noqa: E402
 from _core import ConversationPending  # noqa: E402
 from _exit_codes import HANDOFF_PENDING  # noqa: E402
 from _paths import detect_runtime_dir, iter_wiki_pages, atomic_write  # noqa: E402
+from _embedding_store import remove_page_embeddings  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
 from _dedup_embedding import (  # noqa: E402
     candidate_pairs,
@@ -767,10 +768,19 @@ def _persist_merge(project_root, result, backup_dir) -> None:
     atomic_write(canon, result.canonical_content)
     for r in result.rewrites:
         atomic_write(project_root / r["path"], r["new_content"])
+    deleted = []
     for p in result.pages_to_delete:
         dpath = project_root / p
         if dpath.exists():
             dpath.unlink()
+            deleted.append(p)
+    # Drop the deleted pages' vector rows after the Markdown delete; like the
+    # source/lint deletions this is best-effort (NashSU removePageEmbedding).
+    if deleted:
+        embedding_result = remove_page_embeddings(project_root, deleted)
+        if embedding_result["error"]:
+            print(f"[dedup] warn: page embedding cleanup failed: "
+                  f"{embedding_result['error']}", flush=True)
     removed_slugs = {_slug_from_path(p) for p in result.pages_to_delete}
     index_path = project_root / "wiki" / "index.md"
     if index_path.exists() and removed_slugs:

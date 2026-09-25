@@ -448,6 +448,96 @@ class IncrementalPageIndexTests(unittest.TestCase):
             )
 
 
+class SyncTests(unittest.TestCase):
+    _configure = IncrementalPageIndexTests._configure
+    _fake_vectors = staticmethod(IncrementalPageIndexTests._fake_vectors)
+
+    def _page_ids(self) -> set[str]:
+        table = embeddings.lancedb.connect(embeddings.LANCE_DIR).open_table(
+            embeddings.TABLE_NAME
+        )
+        return set(table.to_pandas()["page_id"])
+
+    def test_sync_repairs_stale_missing_and_changed_pages_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            concepts = root / "wiki" / "concepts"
+            concepts.mkdir(parents=True)
+            for name in ("a", "b", "c"):
+                (concepts / f"{name}.md").write_text(
+                    f"---\ntitle: {name.upper()}\n---\n# {name}\n\n{name} body\n",
+                    encoding="utf-8",
+                )
+            self._configure(root)
+            embeddings.ARGS = SimpleNamespace(page=None)
+            with (
+                mock.patch.object(
+                    embeddings, "embed_with_config", side_effect=self._fake_vectors
+                ),
+                mock.patch.object(
+                    embeddings, "_best_effort_compact_and_prune", return_value=True
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                embeddings.cmd_embed()
+
+            # Drift: c deleted outside the lifecycle, b edited, d never indexed.
+            (concepts / "c.md").unlink()
+            (concepts / "b.md").write_text(
+                "---\ntitle: B\n---\n# b\n\nb body after review fix\n",
+                encoding="utf-8",
+            )
+            (concepts / "d.md").write_text(
+                "---\ntitle: D\n---\n# d\n\nd body\n", encoding="utf-8"
+            )
+
+            embeddings.ARGS = SimpleNamespace(dry_run=True)
+            out = io.StringIO()
+            with (
+                mock.patch.object(
+                    embeddings, "embed_with_config",
+                    side_effect=AssertionError("dry run must not embed"),
+                ),
+                redirect_stdout(out),
+            ):
+                embeddings.cmd_sync()
+            self.assertEqual(
+                self._page_ids(), {"concepts/a", "concepts/b", "concepts/c"}
+            )
+            self.assertIn("missing 1, stale 1, changed 1", out.getvalue())
+
+            embedded: list[str] = []
+
+            def record(texts, config):
+                embedded.extend(texts)
+                return self._fake_vectors(texts, config)
+
+            embeddings.ARGS = SimpleNamespace(dry_run=False)
+            with (
+                mock.patch.object(
+                    embeddings, "embed_with_config", side_effect=record
+                ),
+                mock.patch.object(
+                    embeddings, "_best_effort_compact_and_prune", return_value=True
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
+                embeddings.cmd_sync()
+
+            self.assertEqual(
+                self._page_ids(), {"concepts/a", "concepts/b", "concepts/d"}
+            )
+            self.assertTrue(any("after review fix" in t for t in embedded))
+            self.assertTrue(any("d body" in t for t in embedded))
+            self.assertFalse(any("a body" in t for t in embedded))
+
+            out = io.StringIO()
+            embeddings.ARGS = SimpleNamespace(dry_run=True)
+            with redirect_stdout(out):
+                embeddings.cmd_sync()
+            self.assertIn("missing 0, stale 0, changed 0", out.getvalue())
+
+
 class PageAggregationTests(unittest.TestCase):
     def test_top_chunk_plus_bounded_tail_can_promote_a_page(self):
         class Frame:

@@ -43,12 +43,13 @@ from _wiki_keyword import (  # noqa: E402
 _MAX_REDIRECT_HOPS = 3
 
 
-def _vector_search(query: str, runtime: Path, top: int):
+def _vector_search(query: str, runtime: Path, top: int, wiki_dir: Path):
     """Run the vector path. Returns (results, error_or_None).
 
     results: list of {path, title, snippet, score, vector_score}.
     On any failure (deps missing, Ollama down, lancedb missing/empty) returns
-    ([], error) so the caller degrades to keyword-only.
+    ([], error) so the caller degrades to keyword-only. Rows whose page no
+    longer exists are dropped with a warning pointing at ``sync``.
     """
     lancedb_dir = runtime / "lancedb"
     if not lancedb_dir.exists():
@@ -79,6 +80,17 @@ def _vector_search(query: str, runtime: Path, top: int):
 
     if df is None or df.empty:
         return [], None  # no vector hits, but no error
+
+    exists = df["path"].map(lambda p: (wiki_dir / str(p)).is_file())
+    if not exists.all():
+        gone = sorted(set(df.loc[~exists, "page_id"].astype(str)))
+        print(f"⚠️  vector index still holds {len(gone)} deleted page(s) in this "
+              f"result window (e.g. {gone[0]}); dropped. Repair with: "
+              f"build_embeddings.py --project {wiki_dir.parent} sync",
+              file=sys.stderr)
+        df = df[exists]
+        if df.empty:
+            return [], None
 
     results = []
     for page in _aggregate_page_results(df, top):
@@ -197,7 +209,8 @@ def main() -> int:
     vec_results: list[dict] = []
     vec_error = None
     if not args.keyword_only:
-        vec_results, vec_error = _vector_search(args.query, runtime, args.top)
+        vec_results, vec_error = _vector_search(args.query, runtime, args.top,
+                                                wiki_dir)
         if vec_error:
             _warn_vector_unavailable(vec_error, project)
 

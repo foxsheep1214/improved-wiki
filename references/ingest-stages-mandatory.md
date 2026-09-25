@@ -167,7 +167,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **产物**：`.llm-wiki/lancedb/wiki_chunks`。旧 `embed-cache.json` 不再参与 ingest 或 full re-index；文件可作为旧版运行遗留保留，确认无旧 embedding 进程后再人工清理。
 - **go/no-go**：本次 touched page 的每个预期 chunk 都取得合法、同维向量；page replacement 后逐页 row count 必须与预期完全相等。任何 partial response / 缺向量 / 维度不一致 / 写后行数不一致均失败，不得置 `ingested`。
 - **全量重建**：仅显式执行 `build_embeddings.py --project <root> embed`；先准备全部当前 chunk 的向量，全部成功后才 overwrite live table，并验证最终 row count。
-- **删除生命周期**：`ingest.py --delete` 与 lint orphan cascade 在文件成功删除后按 page id 清除对应 rows；清理失败按 NashSU 视为 non-critical 并明确告警。显式单页清理可用 `build_embeddings.py --project <root> delete --page <wiki-relative.md>`。手工旁路删文件后需 full re-index。
+- **删除生命周期**：`ingest.py --delete`、lint orphan cascade 与 `cross_source_dedup.py` 合并在文件成功删除后按 page id 清除对应 rows；清理失败按 NashSU 视为 non-critical 并明确告警。显式单页清理可用 `build_embeddings.py --project <root> delete --page <wiki-relative.md>`。ingest 之外的改页/删页（dedup 改链、review 修复、补链、手工编辑）用 `build_embeddings.py --project <root> sync [--dry-run]` 对账：不调 embedding 重新分块比对，只补缺失/已变页、删已消失页。
 - **升级迁移**：旧索引采用旧 chunk 边界且没有版本元数据，不能安全地与新规则自动判别。升级后先显式 full re-index 一次；之后普通 ingest 才会稳定保持 page-scoped 增量更新。
 - **无回退（ingest）**：stack 缺失或 touched-page coverage 不完整 → `raise RuntimeError` 暂停。页面已落盘，修好后重跑从 3.7 恢复（`write_phase`、`review_done`、`aggregate_done` 分别跳过已完成段）。搜索侧则按 NashSU 报警后 keyword-only，不把搜索降级等同于 ingest 完成。
 - **为何 NashSU 可选而 improved-wiki 强制**：NashSU 的核心检索仍可用 keyword + graph，向量索引是可失效的搜索增强，因此 ingest 捕获 embedding 错误后仍可返回已写页面；improved-wiki 有意采用更强的完成语义：`ingested` 必须同时证明 Markdown 页面和语义索引同步。故 ingest 期 upsert 失败停在 3.7、修复后从 checkpoint 恢复；只有搜索请求本身允许按 NashSU 降级到 keyword-only。

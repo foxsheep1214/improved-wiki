@@ -793,6 +793,10 @@ def cmd_upsert():
     if not pages:
         print("✓ No embeddable pages in this write set")
         return
+    _upsert_pages(pages)
+
+
+def _upsert_pages(pages: list[dict]) -> None:
     db = lancedb.connect(LANCE_DIR)
     updated = 0
     last_table = None
@@ -814,6 +818,70 @@ def cmd_upsert():
     if last_table is not None:
         _best_effort_compact_and_prune(last_table)
     print(f"✓ Incremental embedding complete: {updated}/{len(pages)} pages")
+
+
+def _chunk_signature(chunks) -> list[tuple]:
+    """What decides a page's rows: order, text, breadcrumb and title."""
+    return sorted(
+        (int(c["chunk_index"]), str(c["chunk_text"]),
+         str(c["heading_path"] or ""), str(c["title"] or ""))
+        for c in chunks
+    )
+
+
+def cmd_sync():
+    """Reconcile the index with the wiki on disk, embedding only the drift.
+
+    Pages deleted, merged, edited or created outside ingest (dedup, review
+    repairs, deep research, manual edits) leave the index stale. Rows are
+    compared with a fresh chunking of every page — no embedding request —
+    so unchanged pages are never re-embedded.
+    """
+    pages = collect_pages()
+    expected: dict[str, list[dict]] = {}
+    for chunk in build_chunks(
+        pages,
+        target_chars=CONFIG.target_chars,
+        overlap_chars=CONFIG.overlap_chars,
+    ):
+        expected.setdefault(chunk["page_id"], []).append(chunk)
+
+    db = lancedb.connect(LANCE_DIR)
+    table = _open_table(db)
+    indexed: dict[str, list[dict]] = {}
+    if table is not None and table.count_rows():
+        columns = ["page_id", "chunk_index", "chunk_text", "heading_path", "title"]
+        frame = (table.search().select(columns)
+                 .limit(table.count_rows()).to_pandas())
+        for row in frame.to_dict("records"):
+            indexed.setdefault(str(row["page_id"]), []).append(row)
+
+    stale = sorted(set(indexed) - set(expected))
+    missing = sorted(set(expected) - set(indexed))
+    changed = sorted(
+        page_id for page_id in set(expected) & set(indexed)
+        if _chunk_signature(expected[page_id]) != _chunk_signature(indexed[page_id])
+    )
+    print(f"Index drift: missing {len(missing)}, stale {len(stale)}, "
+          f"changed {len(changed)} (of {len(expected)} embeddable pages)")
+    for label, ids in (("missing", missing), ("stale", stale), ("changed", changed)):
+        if ids:
+            print(f"  {label}: " + ", ".join(ids[:5]) + (" …" if len(ids) > 5 else ""))
+    if getattr(ARGS, "dry_run", False):
+        print("DRY RUN — index unchanged")
+        return
+
+    if stale:
+        result = remove_page_embeddings(
+            Path(ROOT), [f"{page_id}.md" for page_id in stale], strict=True
+        )
+        print(f"✓ Removed {result['rows_removed']} row(s) of "
+              f"{result['matched_pages']} stale page(s)")
+    to_embed = set(missing) | set(changed)
+    if to_embed:
+        _upsert_pages([page for page in pages if page["page_id"] in to_embed])
+    elif stale and table is not None:
+        _best_effort_compact_and_prune(db.open_table(TABLE_NAME))
 
 
 def cmd_embed():
@@ -1012,6 +1080,15 @@ def parse_args():
         required=True,
         help="Absolute, project-relative, or wiki-relative Markdown path",
     )
+    sync = sub.add_parser(
+        "sync",
+        help="Embed missing/changed pages and drop rows of deleted pages",
+    )
+    sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report the drift without changing the index",
+    )
     sub.add_parser("compact", help="Compact LanceDB and prune verified versions")
     search = sub.add_parser("search", help="Vector search with page aggregation")
     search.add_argument("--query", required=True)
@@ -1075,6 +1152,8 @@ if __name__ == "__main__":
         cmd_upsert()
     elif ARGS.command == "delete":
         cmd_delete()
+    elif ARGS.command == "sync":
+        cmd_sync()
     elif ARGS.command == "compact":
         cmd_compact()
     elif ARGS.command == "search":

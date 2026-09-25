@@ -172,6 +172,35 @@ class TestApply(unittest.TestCase):
             self.assertIn("entities/paos.md", idx)
 
 
+class TestApplyRemovesMergedAwayEmbeddings(unittest.TestCase):
+    """A merge that deletes a page must also drop its vector rows; otherwise
+    search keeps returning the deleted path (324 stale pages observed on
+    HardwareWiki after the 2026-08-29 dedup run)."""
+
+    def test_merged_away_rows_removed_canonical_rows_kept(self):
+        import lancedb
+
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            _make_wiki(root)
+            lance_dir = root / ".llm-wiki" / "lancedb"
+            lance_dir.mkdir(parents=True)
+            lancedb.connect(str(lance_dir)).create_table("wiki_chunks", [
+                {"chunk_id": "entities/paos#0", "page_id": "entities/paos",
+                 "vector": [1.0, 0.0]},
+                {"chunk_id": "entities/聚磷菌#0", "page_id": "entities/聚磷菌",
+                 "vector": [0.0, 1.0]},
+            ])
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                ds.run_phase2(root, _mock_llm(), apply=True, today=FIXED_TODAY,
+                              embedding_prefilter=False)
+
+            table = lancedb.connect(str(lance_dir)).open_table("wiki_chunks")
+            page_ids = set(table.to_pandas()["page_id"])
+            self.assertEqual(page_ids, {"entities/paos"})
+
+
 class TestApplySnapshotFreshness(unittest.TestCase):
     """2026-07-10: _apply_merges must not act on a stale in-memory snapshot.
 

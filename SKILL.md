@@ -275,11 +275,16 @@ There is no silent quality fallback:
   + verified old-version pruning. Maintenance is best-effort so a compact
   failure does not invalidate the successful index write; retry manually with
   `scripts/build_embeddings.py --project <wiki-root> compact`.
-- Source deletion and lint orphan deletion remove the corresponding LanceDB
-  rows after the Markdown delete, using NashSU's non-critical lifecycle
-  semantics. For a manual one-page cleanup use
+- Source deletion, lint orphan deletion, and cross-source dedup merges remove
+  the corresponding LanceDB rows after the Markdown delete, using NashSU's
+  non-critical lifecycle semantics. For a manual one-page cleanup use
   `scripts/build_embeddings.py --project <wiki-root> delete --page <path.md>`.
-  Direct filesystem deletions bypass this lifecycle and require a full re-index.
+- Pages changed outside ingest (dedup rewrites, review repairs, link
+  enrichment, deep research, manual edits or deletions) leave the index
+  stale. `scripts/build_embeddings.py --project <wiki-root> sync [--dry-run]`
+  re-chunks every page without embedding, then embeds only missing/changed
+  pages and drops rows of deleted pages. `search_wiki.py` drops vector hits
+  whose file is gone and prints the sync command.
 - Existing indexes have no chunker-version metadata. After upgrading from the
   legacy full-rebuild/cache implementation, run one explicit full re-index;
   subsequent ingests remain page-scoped.

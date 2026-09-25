@@ -143,6 +143,9 @@ failed chunks 则不 clear live table；全部准备成功后 clear + serialized
 improved-wiki 的 Stage 3.7 采用同一 page-scoped 更新方式。显式 `embed` 则先在
 内存中准备全部 rows，再以一次 LanceDB overwrite 替换 live table，并额外核验
 最终 row count；这是 CLI 环境下对 NashSU clear+serialized-upsert 的等价安全实现。
-source lifecycle 与 lint orphan cascade 删除 Markdown 后，也会按 page id 删除对应
-rows；该清理保持 NashSU 的 non-critical 语义。手工绕过工具直接删文件时没有桌面
-文件监听器，需显式执行 full re-index 才能清掉未知的陈旧 rows。
+source lifecycle、lint orphan cascade 与 cross-source dedup 合并删除 Markdown 后，
+也会按 page id 删除对应 rows；该清理保持 NashSU 的 non-critical 语义。CLI 没有桌面
+文件监听器，ingest 之外改页/删页（dedup 改链、review 修复、补链、手工编辑）造成的
+漂移用 `build_embeddings.py sync` 对账：重新分块（不调 embedding）逐页比对
+chunk 文本/面包屑/标题，只重嵌缺失与已变页、删除已消失页。`search_wiki.py` 在
+vector 结果里丢弃文件已不存在的页并提示 sync。
