@@ -209,6 +209,9 @@ def _html_cell_to_markdown(cell: str) -> str:
 def _convert_html_tables_in_segment(segment: str) -> str:
     def _repl(m: "re.Match") -> str:
         table_html = m.group(0)
+        # Markdown tables cannot represent merged cells. Keep the source HTML.
+        if re.search(r'\b(?:rowspan|colspan)\s*=', table_html, re.I):
+            return table_html
         rows: list[list[str]] = []
         for row_m in _HTMLTAB_TR_RE.finditer(table_html):
             cells = [_html_cell_to_markdown(c.group(1))
@@ -643,6 +646,8 @@ def _stage_1_1_scanned_extract_md(
     chunk_out.mkdir(parents=True, exist_ok=True)
     md_path = chunk_out / f"{chunk_pdf.stem}.md"
     md_path.write_text(md, encoding="utf-8")
+    from _scan_evidence import persist_scan_evidence
+    persist_scan_evidence(results, file_path, config, chunk_out, start, end)
     _stage_1_2_harvest_images(results, start, file_path, config, chunk_out)
     return md, md_path
 
@@ -937,7 +942,8 @@ def _stage_1_1_scanned_assemble_manifest(
     else:
         _stage_1_2_write_manifest(manifest_path, "mineru-ocr", file_path, [])
         print("[ocr] No extracted figures — empty manifest written")
-    return full_text
+    from _scan_evidence import review_source_regions
+    return full_text + review_source_regions(out_dir, config)
 
 
 def _stage_1_1_extract_text_scanned_impl(

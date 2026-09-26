@@ -364,6 +364,14 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
         if caps and caps[0].strip():
             mineru_captions[bn] = caps[0].strip()
 
+    located_blocks = {os.path.basename(b.get('img_path', '')): b
+                      for b in all_content if b.get('type') in ('image', 'chart')}
+    verified_locations = {
+        name for name, block in located_blocks.items()
+        if isinstance(block.get('page_idx'), int)
+        and not isinstance(block['page_idx'], bool) and block['page_idx'] >= 0
+    }
+
     # If content_list mapping produced nothing, fall back: assign all images
     # to the chunk-start page so they aren't lost.
     if not page_figs and all_images:
@@ -448,6 +456,8 @@ def _stage_1_2_harvest_images(results: dict, page_offset: int, raw_file: Path,
                 # context without scanning every prior minerU job in the
                 # project.
                 "mineru_basename": img_name,
+                "bbox": located_blocks.get(img_name, {}).get('bbox'),
+                "page_mapping_verified": img_name in verified_locations,
             })
 
             # NOTE (2026-06-24): minerU's image_caption is NO LONGER written as
