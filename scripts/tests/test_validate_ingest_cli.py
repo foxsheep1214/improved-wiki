@@ -76,13 +76,67 @@ class TestValidateIngestCli(unittest.TestCase):
         self.assertEqual(args.source, "Book Name - 2026 - Author")
         self.assertEqual(args.cache_key, "Book/exact.pdf")
 
-    def test_source_is_required_when_environment_is_unset(self):
+    def test_source_or_cache_key_is_required_when_environment_is_unset(self):
         with patch.dict(os.environ, {}, clear=True):
             with redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit) as raised:
                     validator._parse_args(["--root", "/tmp/wiki"])
 
         self.assertEqual(raised.exception.code, 2)
+
+    def test_cache_key_alone_selects_the_source(self):
+        with patch.dict(os.environ, {}, clear=True):
+            args = validator._parse_args(["--root", "/tmp/wiki",
+                                          "--cache-key", "Book/exact.pdf"])
+        self.assertEqual(args.source, "Book/exact.pdf")
+        self.assertEqual(args.cache_key, "Book/exact.pdf")
+
+    def test_query_history_accepts_the_legacy_bridge_identity(self):
+        # Query pages ingested before 2026-07-16 were recorded as
+        # raw/queries/<rel>, and a query ingest writes no source page.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / ".llm-wiki"
+            runtime.mkdir()
+            query = root / "wiki/queries/research-x.md"
+            query.parent.mkdir(parents=True)
+            query.write_text("# Research X\n", encoding="utf-8")
+            source_hash = "b" * 64
+            completed_at_ms = 1_700_000_000_456
+            append_ingest_event(SimpleNamespace(runtime_dir=runtime), {
+                "schema_version": 1,
+                "event": "ingest_completed",
+                "run_id": "run-q",
+                "source": "raw/queries/research-x.md",
+                "source_hash": source_hash,
+                "source_page": "wiki/sources/queries/research-x.md",
+                "completed_at": rfc3339_from_ms(completed_at_ms),
+                "completed_at_ms": completed_at_ms,
+                "mode": "ingest",
+            })
+            progress = runtime / "ingest-progress"
+            progress.mkdir()
+            progress.joinpath(f"{source_hash[:16]}.stages.json").write_text(
+                json.dumps({"ingested": completed_at_ms,
+                            "ingested__payload": {"run_id": "run-q"}}),
+                encoding="utf-8")
+            validator._configure_runtime(root, "queries/research-x.md")
+            ok, detail = validator._validate_completion_history(
+                {"key": "queries/research-x.md", "hash": source_hash}, None)
+            self.assertTrue(ok, detail)
+
+    def test_embedding_page_ids_use_the_on_disk_spelling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            page = root / "wiki/entities/fcc.md"
+            page.parent.mkdir(parents=True)
+            page.write_text("# FCC\n", encoding="utf-8")
+            self.assertEqual(
+                validator._on_disk_spelling(root, "wiki/entities/FCC.md"),
+                "wiki/entities/fcc.md")
+            self.assertEqual(
+                validator._on_disk_spelling(root, "wiki/entities/gone.md"),
+                "wiki/entities/gone.md")
 
     def test_runtime_paths_follow_cli_root_instead_of_import_cwd(self):
         with tempfile.TemporaryDirectory() as directory:

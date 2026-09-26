@@ -80,7 +80,10 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     args = parser.parse_args(argv)
     if not str(args.source).strip():
-        parser.error("--source is required (or set SOURCE_SLUG)")
+        if not str(args.cache_key).strip():
+            parser.error("--source or --cache-key is required "
+                         "(or set SOURCE_SLUG / CACHE_KEY)")
+        args.source = args.cache_key
     return args
 
 
@@ -165,6 +168,30 @@ def _validate_recorded_source_pages(entry: dict, project_root: Path) -> tuple[li
     return recorded, existing
 
 
+def _on_disk_spelling(project_root: Path, ref: str) -> str:
+    """Return ``ref`` with each component spelled as it is on disk.
+
+    On a case-insensitive filesystem a recorded ``entities/FCC.md`` opens the
+    file ``entities/fcc.md``, but the vector index keys the page by its real
+    name. Missing paths are returned unchanged.
+    """
+    current = project_root
+    parts: list[str] = []
+    for part in Path(ref).parts:
+        try:
+            names = os.listdir(current)
+        except OSError:
+            return ref
+        if part not in names:
+            folded = [n for n in names if n.casefold() == part.casefold()]
+            if len(folded) != 1:
+                return ref
+            part = folded[0]
+        parts.append(part)
+        current = current / part
+    return Path(*parts).as_posix()
+
+
 def _validate_completion_history(
     entry: dict,
     source_page: Path | None,
@@ -175,11 +202,16 @@ def _validate_completion_history(
     if not source_hash or not cache_key:
         return False, "cache entry lacks key/hash"
     source_identity = _validate_cache_source(cache_key)
+    is_query = source_identity.startswith("wiki/queries/")
     try:
-        events = ingest_events_for_source(
-            load_ingest_events(SimpleNamespace(runtime_dir=RUNTIME)),
-            source_identity,
-        )
+        all_events = load_ingest_events(SimpleNamespace(runtime_dir=RUNTIME))
+        events = ingest_events_for_source(all_events, source_identity)
+        if is_query:
+            # Query pages ingested through the pre-2026-07-16 bridge copy were
+            # recorded as raw/queries/<rel> (see _core.source_cache_key).
+            legacy = "raw/" + source_identity[len("wiki/"):]
+            events = sorted(events + ingest_events_for_source(all_events, legacy),
+                            key=lambda e: e["completed_at_ms"])
     except Exception as exc:
         return False, f"event ledger unreadable: {type(exc).__name__}: {exc}"
     matching = [
@@ -200,6 +232,10 @@ def _validate_completion_history(
         return False, "ingested marker timestamp differs from latest run event"
     if not isinstance(payload, dict) or payload.get("run_id") != latest["run_id"]:
         return False, "ingested marker run_id differs from latest run event"
+    if is_query:
+        # A query-page ingest writes no source page, so there is no
+        # first/last_ingested_at projection to compare.
+        return True, f"run_id={latest['run_id']} completed_at={latest['completed_at']}"
     if source_page is None or not source_page.is_file():
         return False, "source page missing for time projection check"
     fm, _body = parse_frontmatter(source_page.read_text(encoding="utf-8"))
@@ -262,6 +298,7 @@ def main(argv: Optional[list[str]] = None):
         return 2
     stages = entry.get("stages", {}) if entry else {}
     identity = _validate_cache_source(entry["key"]) if entry else None
+    is_query = bool(identity) and identity.startswith("wiki/queries/")
     media = _validate_find_media_dir(identity) if identity else None
     source_page = source_slug_from_raw_path(PROJECT_ROOT / identity, PROJECT_ROOT) if identity else None
     if source_page is not None and not source_page.is_file():
@@ -393,21 +430,32 @@ def main(argv: Optional[list[str]] = None):
     concepts = list((WIKI / "concepts").glob("*.md")) if (WIKI / "concepts").is_dir() else []
     if entry:
         fw = entry.get("filesWritten", [])
-        missing = [f for f in fw if not (PROJECT_ROOT / f).exists()]
-        check(f"{len(fw)} files written, all on disk",
-              not missing and len(fw) >= 1,
-              f"missing={len(missing)}" if missing else f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
-        recorded_sources, existing_recorded_sources = _validate_recorded_source_pages(
-            entry, PROJECT_ROOT,
-        )
-        check(
-            "target source page is recorded and exists",
-            bool(recorded_sources) and bool(existing_recorded_sources),
-            (
-                f"recorded={len(recorded_sources)} "
-                f"existing={len(existing_recorded_sources)}"
-            ),
-        )
+        check(f"{len(fw)} files written", len(fw) >= 1,
+              f"sources={len(sources)} concepts={len(concepts)} entities={len(entities)}")
+        # filesWritten only records successful writes, so a recorded page
+        # that is gone was removed after this ingest: resolved Review items,
+        # dedup merges and repairs (their backups live under the runtime dir).
+        # That is maintenance history, not a failed write.
+        gone = [f for f in fw if not (PROJECT_ROOT / f).exists()]
+        gone_pages = [f for f in gone if "/REVIEW/" not in f.replace("\\", "/")]
+        if gone:
+            note("recorded files removed after ingest (non-gating)",
+                 f"{len(gone_pages)} page(s), {len(gone) - len(gone_pages)} Review item(s)"
+                 + (f"; e.g. {', '.join(gone_pages[:3])}" if gone_pages else ""))
+        if is_query:
+            note("source page", "query-page ingest writes no source page (by design)")
+        else:
+            recorded_sources, existing_recorded_sources = _validate_recorded_source_pages(
+                entry, PROJECT_ROOT,
+            )
+            check(
+                "target source page is recorded and exists",
+                bool(recorded_sources) and bool(existing_recorded_sources),
+                (
+                    f"recorded={len(recorded_sources)} "
+                    f"existing={len(existing_recorded_sources)}"
+                ),
+            )
     else:
         check("sources/concepts/entities all populated",
               len(sources) > 0 and len(concepts) > 0 and len(entities) > 0,
@@ -507,11 +555,18 @@ def main(argv: Optional[list[str]] = None):
         if raw_file.exists():
             actual = file_sha256(raw_file)
             expected = entry.get("hash", "")
-            check("cache hash matches file",
-                  actual[:16] == expected[:16],
-                  f"expected={expected[:16]} actual={actual[:16]}")
+            if is_query and actual[:16] != expected[:16]:
+                # A query page is a living document; research upserts edit it.
+                note("query page edited after ingest (non-gating)",
+                     f"expected={expected[:16]} actual={actual[:16]} — "
+                     "re-ingest if the new content should reach derived pages")
+            else:
+                check("cache hash matches file",
+                      actual[:16] == expected[:16],
+                      f"expected={expected[:16]} actual={actual[:16]}")
         else:
-            check("raw file found", False, f"missing: {rel}")
+            check("query page found" if is_query else "raw file found",
+                  False, f"missing: {rel}")
         check("filesWritten ≥ 1",
               len(entry.get("filesWritten", [])) >= 1,
               f"{len(entry.get('filesWritten', []))} files")
@@ -551,7 +606,8 @@ def main(argv: Optional[list[str]] = None):
             check("lancedb table present + non-empty",
                   total_rows > 0, f"{total_rows} chunks")
 
-            refs = list((entry or {}).get("filesWritten", []))
+            refs = [_on_disk_spelling(PROJECT_ROOT, ref)
+                    for ref in (entry or {}).get("filesWritten", [])]
             _be.ROOT = str(PROJECT_ROOT)
             _be.WIKI = str(WIKI)
             pages = _be.collect_pages(refs) if refs else []
