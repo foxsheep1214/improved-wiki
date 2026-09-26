@@ -136,6 +136,46 @@ class TestCascadeDeleteOrphans(unittest.TestCase):
             encoding="utf-8").split("---")[1]
         self.assertNotIn("KV Cache", fm)
 
+    def test_shared_basename_keeps_refs_to_surviving_twin(self):
+        # methodology/calibration.md is the orphan; concepts/calibration.md
+        # survives under the same basename key. NashSU's key-only match would
+        # strip every link to the survivor too.
+        td = tempfile.mkdtemp()
+        wiki = Path(td) / "wiki"
+        (wiki / "concepts").mkdir(parents=True)
+        (wiki / "methodology").mkdir(parents=True)
+        (wiki / "methodology" / "calibration.md").write_text(
+            _page("methodology", "Calibration Method"), encoding="utf-8")
+        (wiki / "concepts" / "calibration.md").write_text(
+            _page("concept", "Calibration"), encoding="utf-8")
+        (wiki / "concepts" / "reader.md").write_text(
+            _page("concept", "Reader",
+                  "See [[concepts/calibration]], [[methodology/calibration]] "
+                  "and [[calibration]].",
+                  related=["concepts/calibration", "methodology/calibration"]),
+            encoding="utf-8")
+        (wiki / "index.md").write_text(
+            "# Index\n- [[concepts/calibration]] kept\n"
+            "- [[methodology/calibration]] gone\n",
+            encoding="utf-8")
+        with mock.patch.object(wlf, "remove_page_embeddings", return_value={
+                "requested_pages": 1, "matched_pages": 0, "rows_removed": 0,
+                "index_present": False, "error": ""}):
+            wlf.cascade_delete_orphans(
+                wiki, ["methodology/calibration.md"], dry_run=False)
+
+        self.assertTrue((wiki / "concepts" / "calibration.md").exists())
+        reader = (wiki / "concepts" / "reader.md").read_text(encoding="utf-8")
+        fm, body = reader.split("---")[1], reader.split("---", 2)[2]
+        self.assertIn("[[concepts/calibration]]", body)
+        self.assertIn("[[calibration]]", body)
+        self.assertNotIn("[[methodology/calibration]]", body)
+        self.assertIn("concepts/calibration", fm)
+        self.assertNotIn("methodology/calibration", fm)
+        index = (wiki / "index.md").read_text(encoding="utf-8")
+        self.assertIn("[[concepts/calibration]]", index)
+        self.assertNotIn("[[methodology/calibration]]", index)
+
 
 if __name__ == "__main__":
     unittest.main()

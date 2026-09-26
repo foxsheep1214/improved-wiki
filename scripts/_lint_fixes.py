@@ -286,34 +286,45 @@ def extract_title_anywhere(content: str) -> str:
     return m.group(1).strip() if m else ""
 
 
-def clean_index_listing(text: str, deleted_keys) -> str:
+def _key_matcher(deleted_keys, is_deleted):
+    if is_deleted is not None:
+        return is_deleted
+    return lambda ref: normalize_wiki_ref_key(ref) in deleted_keys
+
+
+def clean_index_listing(text: str, deleted_keys, is_deleted=None) -> str:
     """Drop list-item lines from an index-style file when their primary
     wikilink targets a deleted page (port of wiki-cleanup.ts:cleanIndexListing).
-    Anchored to wikilink structure, not substring matching."""
+    Anchored to wikilink structure, not substring matching.
+
+    ``is_deleted(ref)`` optionally replaces the NashSU key-membership test
+    (used by the orphan cascade to keep refs whose key a surviving page shares)."""
     if not deleted_keys:
         return text
+    matches = _key_matcher(deleted_keys, is_deleted)
 
     def _keep(line: str) -> bool:
         m = _INDEX_ENTRY_RE.match(line)
         if not m:
             return True
-        return normalize_wiki_ref_key(m.group(1).strip()) not in deleted_keys
+        return not matches(m.group(1).strip())
 
     return "\n".join(line for line in text.split("\n") if _keep(line))
 
 
-def strip_deleted_wikilinks(text: str, deleted_keys) -> str:
+def strip_deleted_wikilinks(text: str, deleted_keys, is_deleted=None) -> str:
     """Replace wikilinks pointing to deleted pages with plain text, leaving
     links to surviving pages alone (port of wiki-cleanup.ts:stripDeletedWikilinks).
     ``[[deleted]]`` → ``deleted``; ``[[deleted|display]]`` → ``display``;
-    ``[[kept]]`` unchanged."""
+    ``[[kept]]`` unchanged. ``is_deleted`` as in ``clean_index_listing``."""
     if not deleted_keys:
         return text
+    matches = _key_matcher(deleted_keys, is_deleted)
 
     def _sub(m):
         target = m.group(1)
         display = m.group(2)
-        if normalize_wiki_ref_key(target.strip()) not in deleted_keys:
+        if not matches(target.strip()):
             return m.group(0)
         return display if display is not None else target
 

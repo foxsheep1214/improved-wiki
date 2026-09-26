@@ -272,6 +272,52 @@ def _all_wiki_md(wiki_dir: Path) -> list[Path]:
     return sorted(p for p in wiki_dir.rglob("*.md"))
 
 
+def _ref_path_key(ref: str) -> str:
+    """'wiki/concepts/X.md' / 'concepts/X' → 'concepts/x' (path identity)."""
+    ref = ref.strip().replace("\\", "/")
+    if ref.lower().startswith("wiki/"):
+        ref = ref[len("wiki/"):]
+    if ref.lower().endswith(".md"):
+        ref = ref[:-3]
+    return ref.lower()
+
+
+def _deleted_ref_matcher(
+    wiki_dir: Path,
+    deleted_keys: set[str],
+    deleted_paths: set[Path],
+    surviving: dict[Path, str],
+):
+    """Return ``(is_deleted(ref), ambiguous_keys)`` for the reference sweep.
+
+    NashSU removes every ref whose slug/title key matches a deleted page. When
+    a surviving page owns the same key (same basename in another folder, or a
+    title that normalizes to it) that also strips links to the survivor. For
+    such an ambiguous key only a path ref naming a deleted page is removed; a
+    bare ``[[x]]`` is kept. Unambiguous keys keep NashSU's behavior.
+    """
+    surviving_keys: set[str] = set()
+    for path, content in surviving.items():
+        surviving_keys.add(normalize_wiki_ref_key(path.stem))
+        title = extract_title_anywhere(content)
+        if title:
+            surviving_keys.add(normalize_wiki_ref_key(title))
+    ambiguous = deleted_keys & surviving_keys
+    deleted_refs = {
+        _ref_path_key(p.relative_to(wiki_dir).as_posix()) for p in deleted_paths
+    }
+
+    def is_deleted(ref: str) -> bool:
+        key = normalize_wiki_ref_key(ref)
+        if key not in deleted_keys:
+            return False
+        if key not in ambiguous:
+            return True
+        return _ref_path_key(ref) in deleted_refs
+
+    return is_deleted, ambiguous
+
+
 def cascade_delete_orphans(
     wiki_dir: Path,
     orphan_rels: list[str],
@@ -293,6 +339,8 @@ def cascade_delete_orphans(
            plain text, alias preserved (strip_deleted_wikilinks)
          - any frontmatter `related:` array entry pointing at a deleted slug or
            its title-form  → filtered out, array rewritten
+         A key that a surviving page also owns only removes path refs to the
+         deleted page (see _deleted_ref_matcher; NashSU removes all of them).
 
     Atomic + idempotent: writes go through _atomic_write; a second run finds the
     files already gone and no surviving refs, so it is a no-op. Aggregate files
@@ -382,25 +430,30 @@ def cascade_delete_orphans(
     if not deleted_keys:
         return summary
 
+    surviving: dict[Path, str] = {}
     for path in _all_wiki_md(wiki_dir):
         if path in deleted_paths:
             continue
         try:
-            content = path.read_text(encoding="utf-8")
+            surviving[path] = path.read_text(encoding="utf-8")
         except OSError:
             continue
+    is_deleted, ambiguous = _deleted_ref_matcher(
+        wiki_dir, deleted_keys, deleted_paths, surviving)
+    if ambiguous:
+        print(f"  [keep]     {len(ambiguous)} deleted key(s) also name a surviving "
+              f"page; only path refs to the deleted page are removed: "
+              f"{sorted(ambiguous)[:5]}")
 
+    for path, content in surviving.items():
         updated = content
         if path.name == "index.md":
-            updated = clean_index_listing(updated, deleted_keys)
-        updated = strip_deleted_wikilinks(updated, deleted_keys)
+            updated = clean_index_listing(updated, deleted_keys, is_deleted)
+        updated = strip_deleted_wikilinks(updated, deleted_keys, is_deleted)
 
         related = parse_frontmatter_array(updated, "related")
         if related:
-            filtered = [
-                s for s in related
-                if normalize_wiki_ref_key(s) not in deleted_keys
-            ]
+            filtered = [s for s in related if not is_deleted(s)]
             if len(filtered) != len(related):
                 updated = write_frontmatter_array(updated, "related", filtered)
 
