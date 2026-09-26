@@ -45,8 +45,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
+import html
 import json
 import math
+import os
 import re
 import sys
 from collections import defaultdict
@@ -59,7 +62,7 @@ from networkx.algorithms.community import louvain_communities
 
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
-from _paths import detect_runtime_dir, WIKI_ARTIFACT_DIRS  # noqa: E402
+from _paths import atomic_write, detect_runtime_dir, WIKI_ARTIFACT_DIRS  # noqa: E402
 from _wikilinks import WIKILINK_RE, split_wikilink_inner  # noqa: E402
 
 # --- Signal weights (NashSU graph-relevance.ts WEIGHTS) ---------------------
@@ -134,9 +137,10 @@ class Page:
     sources: tuple[str, ...]
     links: tuple[str, ...]   # raw wikilink/related targets as written
     path: Path
+    redirect: str = ""       # `redirect:` target of a `type: redirect` stub
 
 
-from _frontmatter import parse_frontmatter as _parse_frontmatter
+from _frontmatter import MAX_REDIRECT_HOPS, parse_frontmatter as _parse_frontmatter
 
 
 def _as_list(value) -> list[str]:
@@ -186,9 +190,11 @@ def load_pages(wiki_root: Path, include_hidden: bool = False) -> dict[str, Page]
         )
         targets.extend(_as_list(fm.get("related")))
         links = tuple(t for t in targets if t)
+        redirect = (str(fm.get("redirect") or "").strip()
+                    if page_type == "redirect" else "")
         pages[node_id] = Page(
             node_id=node_id, stem=md.stem, title=title, page_type=page_type,
-            sources=sources, links=links, path=md,
+            sources=sources, links=links, path=md, redirect=redirect,
         )
     return pages
 
@@ -255,9 +261,41 @@ class LinkGraph:
         return len(self.out_links.get(nid, set())) + len(self.in_links.get(nid, set()))
 
 
+def redirect_canonicals(pages: dict[str, Page],
+                        resolver: LinkResolver) -> dict[str, str]:
+    """Redirect stub id -> the canonical page it stands for.
+
+    Redirect stubs are an improved-wiki dedup artifact (NashSU dedup leaves
+    none), so links written to a retired slug are credited to its canonical
+    page, as they would be in NashSU after a merge. Chains are followed up to
+    MAX_REDIRECT_HOPS; a stub whose chain does not end on a real page is
+    left in place.
+    """
+    out: dict[str, str] = {}
+    for nid, page in pages.items():
+        if page.page_type != "redirect" or not page.redirect:
+            continue
+        cur, seen = nid, {nid}
+        for _ in range(MAX_REDIRECT_HOPS):
+            nxt = resolver.resolve(pages[cur].redirect)
+            if nxt is None or nxt not in pages or nxt in seen:
+                break
+            cur = nxt
+            seen.add(cur)
+            if pages[cur].page_type != "redirect" or not pages[cur].redirect:
+                break
+        if cur != nid and pages[cur].page_type != "redirect":
+            out[nid] = cur
+    return out
+
+
 def build_link_graph(pages: dict[str, Page]) -> LinkGraph:
-    """Resolve every link to a node id and build the directional link graph."""
+    """Resolve every link to a node id and build the directional link graph.
+
+    A link to a redirect stub counts as a link to its canonical page.
+    """
     resolver = build_resolver(pages)
+    canonical = redirect_canonicals(pages, resolver)
     out_links: dict[str, set[str]] = {nid: set() for nid in pages}
     in_links: dict[str, set[str]] = {nid: set() for nid in pages}
     link_counts: dict[str, int] = {nid: 0 for nid in pages}
@@ -266,7 +304,10 @@ def build_link_graph(pages: dict[str, Page]) -> LinkGraph:
     for src, p in pages.items():
         for tgt_raw in p.links:
             dst = resolver.resolve(tgt_raw)
-            if dst is None or dst not in pages or dst == src:
+            if dst is None or dst not in pages:
+                continue
+            dst = canonical.get(dst, dst)
+            if dst == src:
                 continue
             out_links[src].add(dst)
             in_links[dst].add(src)
@@ -433,8 +474,13 @@ class KnowledgeGap:
 
 
 def detect_knowledge_gaps(pages: dict[str, Page], lg: LinkGraph,
-                          communities: list[Community], limit: int = 8) -> list[KnowledgeGap]:
-    """Port of NashSU detectKnowledgeGaps (no betweenness)."""
+                          communities: list[Community],
+                          limit: Optional[int] = 8) -> list[KnowledgeGap]:
+    """Port of NashSU detectKnowledgeGaps (no betweenness).
+
+    ``limit=8`` is NashSU's graph-panel cap (graph.json keeps it);
+    ``limit=None`` returns every gap for the knowledge-gaps.md report.
+    """
     gaps: list[KnowledgeGap] = []
     assign = community_assignments(communities)
     # Compatibility aliases are routing metadata, not knowledge content. Keep
@@ -671,7 +717,7 @@ def write_graph_json(out: Path, g: nx.Graph, pages: dict[str, Page], lg: LinkGra
         ],
     }
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write(out, json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def write_graph_html(
@@ -715,14 +761,14 @@ def write_graph_html(
         type_counts[n["type"]] = type_counts.get(n["type"], 0) + 1
     type_legend = "".join(
         f'<div class="legend-item"><span class="legend-dot" style="background:{type_colors.get(t, "#94a3b8")}"></span>'
-        f'<span>{type_labels.get(t, t)} <span class="legend-meta">{cnt}</span></span></div>'
+        f'<span>{html.escape(type_labels.get(t, t))} <span class="legend-meta">{cnt}</span></span></div>'
         for t, cnt in sorted(type_counts.items(), key=lambda x: -x[1])
     )
 
     community_legend = ""
     for c in communities:
         if c.cohesion >= COHESION_LOW and c.hub in pages:
-            hub_label = pages[c.hub].title[:30]
+            hub_label = html.escape(pages[c.hub].title[:30])
             color = community_colors[c.cid % len(community_colors)]
             community_legend += (
                 f'<div class="legend-item"><span class="legend-dot" style="background:{color}"></span>'
@@ -732,12 +778,13 @@ def write_graph_html(
     isolated_gap = next((gp for gp in gaps if gp.gap_type == "isolated-node"), None)
     gap_ids = isolated_gap.node_ids[:5] if isolated_gap else []
     gaps_html = "".join(
-        f'<div class="gap-item">&#9651; {pages[n].title[:26] if n in pages else n}</div>'
+        f'<div class="gap-item">&#9651; {html.escape(pages[n].title[:26] if n in pages else n)}</div>'
         for n in gap_ids
     ) or '<div class="gap-item" style="color:#64748b">无明显空缺</div>'
 
-    nodes_json = json.dumps(nodes_js, ensure_ascii=False)
-    edges_json = json.dumps(edges_js)
+    # "</" would end the inline <script> early (a page title is untrusted text).
+    nodes_json = json.dumps(nodes_js, ensure_ascii=False).replace("</", "<\\/")
+    edges_json = json.dumps(edges_js, ensure_ascii=False).replace("</", "<\\/")
     total_pages = g.number_of_nodes()
     total_edges = g.number_of_edges()
     total_communities = len(communities)
@@ -805,6 +852,11 @@ const COMMUNITY_COLORS = ["#60a5fa","#4ade80","#fb923c","#c084fc","#f87171","#2d
 let colorMode = "type";
 
 const d3 = window.d3;
+if (!d3) {
+  document.getElementById("loading").textContent = "无法加载 d3.js（需要联网访问 d3js.org）";
+  throw new Error("d3 unavailable");
+}
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const canvasEl = document.getElementById("canvas");
 const W = canvasEl.clientWidth || 1200;
 const H = canvasEl.clientHeight || 800;
@@ -865,7 +917,7 @@ function renderPositions() {
 const tt = document.getElementById("tooltip");
 function showTooltip(e,d) {
   tt.style.display="block";
-  tt.innerHTML = `<b>${d.label}</b><br><span style="color:#94a3b8;font-size:10px">${d.type} · C${d.community}</span><br><span style="color:#64748b;font-size:10px">${d.id}</span><br>Degree: ${deg[d.id]||0}`;
+  tt.innerHTML = `<b>${esc(d.label)}</b><br><span style="color:#94a3b8;font-size:10px">${esc(d.type)} · C${d.community}</span><br><span style="color:#64748b;font-size:10px">${esc(d.id)}</span><br>Degree: ${deg[d.id]||0}`;
   moveTooltip(e);
 }
 function moveTooltip(e) { tt.style.left=(e.clientX+12)+"px"; tt.style.top=(e.clientY-20)+"px"; }
@@ -963,16 +1015,16 @@ try {
 </body>
 </html>"""
 
-    html = (template
-            .replace("%%NODES%%", nodes_json)
-            .replace("%%EDGES%%", edges_json)
-            .replace("%%TYPE_LEGEND%%", type_legend)
-            .replace("%%COMMUNITY_LEGEND%%", community_legend)
-            .replace("%%GAPS%%", gaps_html)
-            .replace("%%TOTAL_PAGES%%", str(total_pages))
-            .replace("%%TOTAL_EDGES%%", str(total_edges))
-            .replace("%%TOTAL_COMMUNITIES%%", str(total_communities)))
-    out.write_text(html, encoding="utf-8")
+    html_text = (template
+                 .replace("%%NODES%%", nodes_json)
+                 .replace("%%EDGES%%", edges_json)
+                 .replace("%%TYPE_LEGEND%%", type_legend)
+                 .replace("%%COMMUNITY_LEGEND%%", community_legend)
+                 .replace("%%GAPS%%", gaps_html)
+                 .replace("%%TOTAL_PAGES%%", str(total_pages))
+                 .replace("%%TOTAL_EDGES%%", str(total_edges))
+                 .replace("%%TOTAL_COMMUNITIES%%", str(total_communities)))
+    atomic_write(out, html_text)
 
 
 def write_knowledge_gaps(out: Path, gaps: list[KnowledgeGap], pages: dict[str, Page]) -> None:
@@ -1007,24 +1059,13 @@ def write_knowledge_gaps(out: Path, gaps: list[KnowledgeGap], pages: dict[str, P
             lines.append(f"- `[[{pages[n].stem}]]` — {gp.title}: {gp.description}")
         lines.append("")
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines), encoding="utf-8")
+    atomic_write(out, "\n".join(lines))
 
 
 def write_clusters(clusters_dir: Path, communities: list[Community],
                    pages: dict[str, Page]) -> None:
     clusters_dir.mkdir(parents=True, exist_ok=True)
-    # Clear the previous run's cluster pages first (2026-07-12): community ids
-    # are not stable across runs, so a shrinking community count would leave
-    # stale cluster-NNN.md files behind, listing members that may no longer
-    # exist. Only files matching our own cluster-NNN.md pattern are removed.
-    _cluster_file_re = re.compile(r"^cluster-\d{3}\.md$")
-    for old in clusters_dir.glob("cluster-*.md"):
-        if _cluster_file_re.match(old.name):
-            try:
-                old.unlink()
-            except OSError as exc:
-                print(f"[graph] warn: could not remove stale {old.name}: {exc}",
-                      file=sys.stderr)
+    written: set[str] = set()
     for c in communities:
         if len(c.nodes) < 2:
             continue
@@ -1047,7 +1088,21 @@ def write_clusters(clusters_dir: Path, communities: list[Community],
         ]
         for n in c.nodes:
             lines.append(f"- `[[{pages[n].stem}]]` — {pages[n].title} ({pages[n].page_type})")
-        (clusters_dir / f"cluster-{c.cid:03d}.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        name = f"cluster-{c.cid:03d}.md"
+        atomic_write(clusters_dir / name, "\n".join(lines) + "\n")
+        written.add(name)
+    # Then drop the previous run's leftovers (2026-07-12): community ids are
+    # not stable across runs, so a shrinking community count would leave stale
+    # cluster-NNN.md files listing members that may no longer exist. Only our
+    # own cluster-NNN.md pattern is removed, after the new set is in place.
+    _cluster_file_re = re.compile(r"^cluster-\d{3}\.md$")
+    for old in clusters_dir.glob("cluster-*.md"):
+        if _cluster_file_re.match(old.name) and old.name not in written:
+            try:
+                old.unlink()
+            except OSError as exc:
+                print(f"[graph] warn: could not remove stale {old.name}: {exc}",
+                      file=sys.stderr)
 
 
 # --- Query mode (NashSU getRelatedNodes) ------------------------------------
@@ -1067,7 +1122,7 @@ def query_suggestions(pages: dict[str, Page], lg: LinkGraph,
     if not node:
         return None, []
     p = pages[node]
-    already = {resolver.resolve(t) for t in p.links}
+    already = {resolver.resolve(t) for t in p.links} | lg.out_links.get(node, set())
     already.add(node)
     scored: list[dict] = []
     for other in pages:
@@ -1134,6 +1189,29 @@ def run_build(wiki_root: Path, output: Optional[Path], dry_run: bool,
         g, pages, hide_structural=True)
 
     runtime = detect_runtime_dir(wiki_root)
+    runtime.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(runtime / "graph.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(lock_fd)
+        print(f"❌ Another graph build holds {runtime / 'graph.lock'}")
+        return 1
+    try:
+        return _write_build_outputs(
+            wiki_root, runtime, output, rendered, pages, lg, communities,
+            gaps, detect_knowledge_gaps(pages, lg, communities, limit=None),
+            surprising, stats)
+    finally:
+        os.close(lock_fd)
+
+
+def _write_build_outputs(wiki_root: Path, runtime: Path, output: Optional[Path],
+                         rendered: nx.Graph, pages: dict[str, Page],
+                         lg: LinkGraph, communities: list[Community],
+                         gaps: list[KnowledgeGap], all_gaps: list[KnowledgeGap],
+                         surprising: list[SurprisingConnection],
+                         stats: dict) -> int:
     graph_json = output or (runtime / "graph.json")
     write_graph_json(graph_json, rendered, pages, lg, communities, gaps, surprising, stats)
     print(f"📁 Wrote {graph_json}")
@@ -1142,7 +1220,8 @@ def run_build(wiki_root: Path, output: Optional[Path], dry_run: bool,
     print(f"🌐 Wrote {graph_html}")
     wiki_dir = wiki_root / "wiki"
     gaps_md = wiki_root / ".llm-wiki" / "knowledge-gaps.md"
-    write_knowledge_gaps(gaps_md, gaps, pages)
+    # The report lists every gap; graph.json keeps NashSU's 8-item panel cap.
+    write_knowledge_gaps(gaps_md, all_gaps, pages)
     print(f"📄 Wrote {gaps_md}")
     legacy_gaps_md = wiki_dir / "REVIEW" / "knowledge-gaps.md"
     if legacy_gaps_md.exists():

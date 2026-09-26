@@ -454,3 +454,92 @@ def test_write_clusters_removes_stale_cluster_files(wiki, tmp_path):
     assert (clusters_dir / "notes.md").exists(), "non-cluster files must survive"
     written = sorted(p.name for p in clusters_dir.glob("cluster-*.md"))
     assert len(written) == len([c for c in communities if len(c.nodes) >= 2])
+
+
+# --- redirect stubs fold onto their canonical page --------------------------
+
+
+def test_link_to_redirect_stub_counts_for_canonical(wiki):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "new", body_links=["other"])
+    _write_page(wiki_dir, "other")
+    _write_page(wiki_dir, "reader", body_links=["old"])
+    (wiki_dir / "old.md").write_text(
+        "---\ntype: redirect\nredirect: new\n---\n\nMoved.\n", encoding="utf-8")
+    pages = graph.load_pages(root)
+    lg = graph.build_link_graph(pages)
+    assert "wiki/new" in lg.out_links["wiki/reader"]
+    assert "wiki/old" not in lg.out_links["wiki/reader"]
+    assert "wiki/reader" in lg.in_links["wiki/new"]
+
+
+def test_redirect_chain_and_unresolvable_stub(wiki):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "final")
+    _write_page(wiki_dir, "reader", body_links=["first", "dangling"])
+    (wiki_dir / "first.md").write_text(
+        "---\ntype: redirect\nredirect: second\n---\n", encoding="utf-8")
+    (wiki_dir / "second.md").write_text(
+        "---\ntype: redirect\nredirect: final\n---\n", encoding="utf-8")
+    (wiki_dir / "dangling.md").write_text(
+        "---\ntype: redirect\nredirect: nowhere\n---\n", encoding="utf-8")
+    pages = graph.load_pages(root)
+    lg = graph.build_link_graph(pages)
+    assert lg.out_links["wiki/reader"] == {"wiki/final", "wiki/dangling"}
+
+
+# --- knowledge-gaps.md is not truncated to the 8-item panel cap -------------
+
+
+def test_gap_report_lists_every_gap(wiki, tmp_path):
+    root, wiki_dir = wiki
+    # 9 disjoint stars of 15 nodes: each is a sparse community (14/105 < 0.15)
+    # and every leaf is isolated (linkCount 1) → 10 gaps, above NashSU's 8.
+    for s in range(9):
+        leaves = [f"s{s}l{i}" for i in range(14)]
+        _write_page(wiki_dir, f"s{s}hub", body_links=leaves)
+        for leaf in leaves:
+            _write_page(wiki_dir, leaf)
+    out = tmp_path / "graph.json"
+    assert graph.run_build(root, out, dry_run=False, include_all=False) == 0
+    import json
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert len(data["gaps"]) == 8, "graph.json keeps NashSU's panel cap"
+    report = (root / ".llm-wiki" / "knowledge-gaps.md").read_text(encoding="utf-8")
+    assert "- Sparse clusters: **9**" in report
+    assert report.count("### Sparse cluster:") == 9
+
+
+# --- graph.html escapes page text --------------------------------------------
+
+
+def test_graph_html_escapes_titles(wiki, tmp_path):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "a", title='"</script><img src=x onerror=alert(1)>"',
+                body_links=["b"])
+    _write_page(wiki_dir, "b", body_links=["a"])
+    out = tmp_path / "graph.json"
+    assert graph.run_build(root, out, dry_run=False, include_all=False) == 0
+    html_text = out.with_suffix(".html").read_text(encoding="utf-8")
+    assert "</script><img" not in html_text
+    assert "<\\/script><img" in html_text          # inline JSON cannot close <script>
+    assert "&lt;/script&gt;&lt;img" in html_text    # sidebar legend is escaped
+
+
+def test_concurrent_build_is_refused(wiki, tmp_path):
+    import fcntl
+    import os
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "a", body_links=["b"])
+    _write_page(wiki_dir, "b", body_links=["a"])
+    runtime = graph.detect_runtime_dir(root)
+    runtime.mkdir(parents=True, exist_ok=True)
+    fd = os.open(runtime / "graph.lock", os.O_RDWR | os.O_CREAT, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        rc = graph.run_build(root, tmp_path / "graph.json", dry_run=False,
+                             include_all=False)
+    finally:
+        os.close(fd)
+    assert rc == 1
+    assert not (tmp_path / "graph.json").exists()
