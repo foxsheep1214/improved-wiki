@@ -49,6 +49,24 @@ class SourceLifecycleSafety(unittest.TestCase):
             self.assertTrue(same_name.exists())
             self.assertTrue(same_stem.exists())
 
+    def test_delete_backups_go_to_runtime_page_history(self):
+        from _paths import media_slug
+        from _schema import source_slug_from_raw_path
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = _config(root)
+            raw = write(root, 'raw/A/manual.pdf', 'A')
+            owned(root, 'target', 'raw/A/manual.pdf')
+            write(root, source_slug_from_raw_path(raw, root).relative_to(root).as_posix(),
+                  '# Source\n')
+            write(root, f'wiki/media/{media_slug(raw, cfg)}/fig1.png', 'png')
+            delete_source(raw, cfg)
+            history = root / '.llm-wiki/page-history'
+            self.assertFalse((root / 'page-history').exists())
+            self.assertEqual(1, len(list(history.glob('*_manual.md'))))
+            self.assertEqual(1, len(list(history.glob('*_concepts_target.md'))))
+            self.assertEqual(1, len(list((history / 'media').glob('*/fig1.png'))))
+
     def test_delete_does_not_casefold_another_source_cache_key(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

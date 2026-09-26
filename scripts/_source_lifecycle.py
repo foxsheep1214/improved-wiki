@@ -100,7 +100,7 @@ def _delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: bo
                 captured_at_ms=int(time.time() * 1000),
             )
             # Backup before delete
-            history_dir = wiki_root / "page-history"
+            history_dir = runtime_dir / "page-history"
             history_dir.mkdir(parents=True, exist_ok=True)
             ts = time.strftime("%Y%m%d-%H%M%S")
             backup = history_dir / f"{ts}_{src_path.name}"
@@ -184,7 +184,7 @@ def _delete_source(raw_file: Path, config, dry_run: bool = False, keep_media: bo
             print(f"{tag} Kept media directory (--keep-media): media/{slug}")
         else:
             if not dry_run:
-                media_history_dir = wiki_root / "page-history" / "media"
+                media_history_dir = runtime_dir / "page-history" / "media"
                 media_history_dir.mkdir(parents=True, exist_ok=True)
                 ts = time.strftime("%Y%m%d-%H%M%S")
                 shutil.copytree(media_dir, media_history_dir / f"{ts}_{slug.replace('/', '_')}")
@@ -274,7 +274,7 @@ def _cleanup_orphan_pages(
     pages = (_derived_pages_for_source(wiki_root, source, config)
              if planned_pages is None else planned_pages)
     removed = 0
-    history_dir = wiki_root / 'page-history'
+    history_dir = detect_runtime_dir(wiki_root) / 'page-history'
     for page, page_label in pages:
         # The plan matched a full identity or a unique legacy alias.
         tag = "[lifecycle][dry-run]" if dry_run else "[lifecycle]"

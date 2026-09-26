@@ -73,8 +73,8 @@ find "$PROJECT/wiki/concepts" -name "*.md" -exec grep -l "$BOOK" {} \; | \
 ```
 
 `--delete` also backs up the source/concept/entity pages it removes to
-`page-history/` on its own (and, since 2026-07-10, the media directory to
-`page-history/media/` too) — the manual backup above is for side-by-side
+`.llm-wiki/page-history/` on its own (and, since 2026-07-10, the media directory to
+`.llm-wiki/page-history/media/` too) — the manual backup above is for side-by-side
 comparison in Step 4, not the only safety net.
 
 ### Step 2: Delete old ingest (full redo, including media)
@@ -85,7 +85,7 @@ comparison in Step 4, not the only safety net.
 ```
 
 `--delete` removes: source page + orphan concepts/entities (whose only source was
-this book) + media directory (now backed up to `page-history/media/` first) + cache entry.
+this book) + media directory (now backed up to `.llm-wiki/page-history/media/` first) + cache entry.
 Prints a summary of all removed files.
 
 ### Step 3: Re-ingest
