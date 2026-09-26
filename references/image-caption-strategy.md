@@ -28,6 +28,20 @@ Unified image captioning. Implemented as `stage_1_3_caption_images()` /
 > 暂停 ingest，不静默降级。这是对 NashSU "caption 永不中断 ingest" 哲学的**刻意 override**。
 > **provider failover ≠ 违反此政策**：primary/fallback 之间的切换是两个真实 VLM 之间的转移（每次切换打一行日志，非静默），政策针对的是"完全跳过 caption、退回图片文字/空描述"这类静默降级——只要还有一个 provider 在真实产出 caption，就不算违反。详见 `ingest-stages-mandatory.md`。
 
+## Structured evidence (current batch path)
+
+New batch captions request a validated JSON object with a concise summary and
+separate visible text, axes, legend, relationships, formulas and uncertainty
+arrays. Both summary and details are written to `.caption.txt` for the existing
+digest path; `.caption.json` adds hashes and model/context provenance. Only the
+summary is short: detailed scientific evidence is not limited to 2–4 sentences.
+Malformed/truncated responses retry or fail over. Old text-only cached captions
+are retained; changed new image/caption pairs are recaptioned.
+
+The plain-text per-image helper below remains available for compatibility and
+independent formula/table review. See [scan evidence and review](scan-evidence-review.md)
+for exact artifacts, review limits and unresolved-state semantics.
+
 ## Architecture
 
 ```
@@ -63,7 +77,7 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
 
 ## One image per call (NashSU parity)
 
-每张图一次 VLM 调用、纯文本回复（对齐 `vision-caption.ts:captionImage`）。
+每张图一次 VLM 调用；新 batch 返回结构化 JSON，并派生兼容的全文本 sidecar。
 一图一调用让每张图独占 prompt 预算，单图失败只影响自己（批量模式下一张图的 JSON 截断会污染整批）。
 
 ## Context-aware prompt (NashSU parity)

@@ -67,6 +67,14 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 - **原因**：minerU 3.4.0 的 `mineru -b pipeline` CLI 有已知 502 Bad Gateway bug——它自己启动的内部 API 服务器会立刻关闭。持久本地服务器 + 直接调 `/file_parse` 绕开了这个 bug（见 commit `a79cd7d`）。pipeline CLI 路径已于 2026-06-24 移除，API path 是唯一提取后端。
 - 进程隔离仍然有：服务器是独立子进程，请求失败时 `_stage_1_1_scanned_restart_server()` 重启它，不影响 ingest.py 主进程。
 
+## 原始证据与局部复核
+
+新提取的 chunk 会在 runtime/scan-evidence 中按完整来源身份、源文件版本和
+响应版本保存 MinerU 原始结果、content_list、表格 HTML 和裁剪定位。公式/表格
+异常区域在释放 MinerU 锁后由已配置 VLM 独立转录；保留两份结果，不自动改写
+原文。复杂合并单元格表格保留 HTML。参见 [证据与复核](scan-evidence-review.md)
+了解限制、缓存兼容和手工指定区域的命令。
+
 ## 输出物（已与 Stage 1.2/1.3 融合，不是独立两步）
 
 | 产物 | 位置 | 验证标准 |
