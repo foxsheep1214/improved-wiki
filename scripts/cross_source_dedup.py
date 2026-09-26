@@ -600,7 +600,13 @@ def _run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
     wiki_dir = project_root / "wiki"
     runtime = detect_runtime_dir(project_root)
     pages = collect_wiki_pages(wiki_dir)
-    summaries = [s for s in (_dedup.extract_entity_summary(p, c) for p, c in pages) if s is not None]
+    # Source pages mirror raw files one-to-one, so they are never duplicate
+    # candidates (NashSU's dedup reads only entities/concepts). Merging two of
+    # them kept a page citing a raw file that does not exist. They stay in
+    # ``pages`` so merges still rewrite references inside them.
+    summaries = [s for s in (_dedup.extract_entity_summary(p, c) for p, c in pages)
+                 if s is not None and s.type != "source"
+                 and not s.path.startswith("wiki/sources/")]
     if len(summaries) < 2:
         print("[dedup] fewer than 2 summarizable pages; skipping.")
         return {"groups": 0, "applied": []}

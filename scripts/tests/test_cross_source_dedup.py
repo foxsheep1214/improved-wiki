@@ -124,6 +124,32 @@ class TestDryRun(unittest.TestCase):
             self.assertTrue((root / ".llm-wiki/dedup-report.json").exists())
 
 
+    def test_source_pages_are_never_duplicate_candidates(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = _make_wiki(root)
+            book = wiki / "sources" / "Book"
+            book.mkdir(parents=True)
+            for name, raw in (("Arrays 2nd - 2009 - Hansen", "Arrays 2nd - 2009 - Hansen.pdf"),
+                              ("Arrays - 2009 - Hansen", "Arrays - 2009 - Hansen.pdf")):
+                (book / f"{name}.md").write_text(_page(
+                    f"type: source\ntitle: Arrays\nsources: [\"raw/Book/{raw}\"]",
+                    "Hansen's phased array book."), encoding="utf-8")
+
+            def llm_call(system_prompt, user_message):
+                if "likely refer to the same" in system_prompt:
+                    self.assertNotIn("Hansen", user_message)
+                    return json.dumps({"groups": [{
+                        "slugs": ["Arrays 2nd - 2009 - Hansen", "Arrays - 2009 - Hansen"],
+                        "reason": "same book", "confidence": "high"}]})
+                raise AssertionError("no merge prompt expected")
+
+            report = ds.run_phase2(root, llm_call, apply=True, today=FIXED_TODAY,
+                                    embedding_prefilter=False)
+            self.assertEqual(report["groups"], [])
+            self.assertEqual(len(list(book.glob("*.md"))), 2)
+
+
 class TestApply(unittest.TestCase):
     def test_merges_backups_deletes_rewrites_and_prunes_index(self):
         with tempfile.TemporaryDirectory() as t:

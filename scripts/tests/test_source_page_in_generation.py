@@ -283,6 +283,28 @@ class GeneratedSourceBlockIsNormalizedAndGated(unittest.TestCase):
         self.assertEqual(
             paths.count("sources/Book/Some Book - 2020 - Author.md"), 1)
 
+    def test_misnamed_source_block_becomes_the_source_page(self):
+        path, content = self._block()
+        blocks, missing = self.prep._ensure_source_page(
+            self.digest, self.raw, self.cfg,
+            [("wiki/sources/Book/Some Book.md", content),
+             ("concepts/x.md", "---\ntype: concept\n---\n\n# X\n")])
+        self.assertFalse(missing)
+        paths = [p for p, _ in blocks]
+        self.assertEqual(
+            [p for p in paths if "sources/" in p],
+            ["sources/Book/Some Book - 2020 - Author.md"])
+        self.assertIn("A grounded summary.", blocks[0][1])
+
+    def test_exact_source_block_wins_over_a_misnamed_one(self):
+        blocks, _missing = self.prep._ensure_source_page(
+            self.digest, self.raw, self.cfg,
+            [("sources/Book/Some Book.md", self._block("# Some Book\n\nOther.")[1]),
+             self._block()])
+        sources = [(p, c) for p, c in blocks if "sources/" in p]
+        self.assertEqual(len(sources), 1)
+        self.assertIn("A grounded summary.", sources[0][1])
+
     def test_absent_source_block_still_falls_back(self):
         blocks, missing = self.prep._ensure_source_page(
             self.digest, self.raw, self.cfg,

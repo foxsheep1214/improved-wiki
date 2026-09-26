@@ -95,12 +95,22 @@ def _ensure_source_page(
     source_identity = canonical_source_path(raw_file, config)
     expected = f"sources/{source_rel_stem}.md"
 
-    def _is_source_block(path: str) -> bool:
-        norm = path[len("wiki/"):] if path.startswith("wiki/") else path
-        return norm == expected
+    def _norm(path: str) -> str:
+        return path[len("wiki/"):] if path.startswith("wiki/") else path
 
-    generated = [(p, c) for p, c in file_blocks
-                 if _is_source_block(p) and c.strip()]
+    # NashSU ingest.ts writes every generated wiki/sources/ block to the
+    # source's own summary path. Matching only the exact path let a
+    # model-named block become a second source page citing a raw file that
+    # does not exist (RadarWiki Hansen, 2026-08-20).
+    def _is_source_block(path: str) -> bool:
+        return _norm(path).startswith("sources/")
+
+    generated = sorted(
+        ((p, c) for p, c in file_blocks if _is_source_block(p) and c.strip()),
+        key=lambda block: _norm(block[0]) != expected)
+    for path, _content in generated:
+        if _norm(path) != expected:
+            print(f"  [stage 2.4] Source block {path} belongs to wiki/{expected}")
     if generated:
         # Structural gate + frontmatter repair prevent malformed blocks and
         # fill blank bibliographic fields from the digest before write.
