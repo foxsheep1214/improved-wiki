@@ -2,6 +2,18 @@
 
 适用于**所有 PDF**——文本层/扫描版/混合型，2026-06-23 起统一走这条 pipeline，不再有"纯文本走 PyMuPDF 直抽、只有扫描版才上 OCR"的两分路。由 `_stage_1_extract.py`（facade）的 `stage_1_1_extract_text()` 路由判定类型后调用，实际执行函数 `_stage_1_1_extract_text_scanned()` 及下方所有 `_stage_1_1_scanned_*` / 锁 / manifest 辅助函数现居 `scripts/_stage_1_1_scanned.py`（2026-06-24 从 `_stage_1_extract.py` 拆出；函数名是历史遗留——现在文本版/混合版也会调它）。
 
+## MinerU 4.x 当前调用方式
+
+4.x 服务由 `mineru.parser.api_server` 启动，绑定本地 19999 端口，显式使用
+Standard 档和 auto OCR。`_mineru_v4.py` 依次上传当前 PDF chunk、提交 V1 解析任务、
+轮询并下载自包含 ZIP。请求使用 `page_range=all`，不会落入新版 CLI 默认前十页。
+原生 middle/model/structured JSON 和图片保存在扫描证据中；官方 renderer 生成兼容
+content_list，保持原始页码和位置。未完成或部分完成的任务不能标记 chunk 成功。
+V1 不另发 warmup；首个真实 chunk 初始化模型，避免超时 warmup 留下后台工作。
+
+下方 `/file_parse` 和 hybrid-engine 说明保留用于 3.x 回退路径；4.x 不使用这些接口。
+安装、配置及验证见 [MinerU runtime checks](mineru-version-tracking.md)。
+
 ## 何时使用这条 pipeline
 
 - 任意类型的 PDF（text/scanned/mixed 不再分流）：统一交给这条 pipeline，hybrid-engine/auto 内部按页判 txt vs VLM OCR。method 标签统一为 `mineru-api`。（garbled 字体预检测与提取质量门已于 2026-07-08 移除，对齐 NashSU——`sample_pdf_text_density` 的 fitz 采样仅供 `--dry-run` 平均文本密度估算，不再影响提取路径。）

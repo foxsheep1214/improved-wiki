@@ -253,7 +253,7 @@ lint_finish_run() {
 
 # ── Phase 1: Structural lint ──
 mkdir -p /tmp/codex-work/improved-wiki-lint
-LINT_SCRIPT=$(mktemp /tmp/codex-work/improved-wiki-lint/lint-XXXXXX.py)
+LINT_SCRIPT=$(mktemp /tmp/codex-work/improved-wiki-lint/lint-XXXXXX)
 trap 'rm -f "$LINT_SCRIPT" "$LINT_CACHE.tmp" "$LINT_CACHE.tmp.err"' EXIT
 
 cat > "$LINT_SCRIPT" <<'PYEOF'

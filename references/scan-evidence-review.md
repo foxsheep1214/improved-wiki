@@ -1,8 +1,8 @@
 # Scan evidence and local region review
 
 Use this for scanned-PDF formula/table uncertainty, missing layout provenance,
-or reviewing a second transcription. The normal extractor remains MinerU
-`hybrid-engine` / medium; captions remain a separate configured VLM call.
+or reviewing a second transcription. The extractor uses MinerU 4 Standard / auto OCR, or the legacy 3.x
+`hybrid-engine` route for rollback; captions remain a separate configured VLM call.
 
 ## Durable originals
 

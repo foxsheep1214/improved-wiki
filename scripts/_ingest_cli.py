@@ -497,7 +497,7 @@ def main() -> int:
                 avg_chars = sample_pdf_text_density(raw_file)
                 mineru_chunks = max(1, (pages + MINERU_CHUNK_SIZE - 1) // MINERU_CHUNK_SIZE)
                 print(f"  PDF: {pages} pages, avg {avg_chars:.0f} chars/page (sampled)")
-                print(f"  minerU extraction: ~{mineru_chunks} chunk(s) ({MINERU_CHUNK_SIZE} pages/chunk, hybrid-engine)")
+                print(f"  minerU extraction: ~{mineru_chunks} chunk(s) ({MINERU_CHUNK_SIZE} pages/chunk, local MinerU API)")
                 est_chars = int(max(avg_chars, 200)) * pages  # floor at 200 chars/page
                 chunks_est = max(1, (est_chars + config.target_chars - 1) // config.target_chars)
                 print(f"  Estimated text: ~{est_chars:,} chars ({pages} pages × {max(avg_chars, 200):.0f} chars/page)")

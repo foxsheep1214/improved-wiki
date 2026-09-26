@@ -363,6 +363,9 @@ def _stage_1_1_release_mineru_lock(fd: int) -> None:
 
 def _is_mineru_healthy() -> bool:
     """Check if a healthy minerU API server is running on MINERU_API_PORT."""
+    from _mineru_v4 import health
+    if health(MINERU_API_PORT):
+        return True
     try:
         r = urllib.request.urlopen(
             f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
@@ -507,7 +510,8 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
     Returns (api_proc, venv_python). Raises RuntimeError if the API never
     becomes healthy (caller must close any open fitz doc on failure).
     """
-    venv_python = Path.home() / ".venv" / "bin" / "python3"
+    venv_python = Path(os.environ.get('IMPROVED_WIKI_MINERU_PYTHON',
+                                     str(Path.home() / '.venv' / 'bin' / 'python3')))
     if not venv_python.exists():
         venv_python = Path(sys.executable)
 
@@ -517,32 +521,67 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
         return None, venv_python
 
     api_proc = subprocess.Popen(
-        [str(venv_python), "-m", "mineru.cli.fast_api",
-         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        _mineru_server_command(venv_python),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
     for _ in range(30):
         time.sleep(2)
         try:
-            r = urllib.request.urlopen(
-                f"http://127.0.0.1:{MINERU_API_PORT}/health", timeout=3)
-            if json.loads(r.read()).get("status") == "healthy":
+            if _is_mineru_healthy():
                 print(f"[ocr] minerU API ready on port {MINERU_API_PORT}")
                 return api_proc, venv_python
         except Exception:
             pass
-    api_proc.terminate()
-    api_proc.wait()
+    _stop_owned_mineru_server(api_proc)
     raise RuntimeError(f"minerU API failed to start on port {MINERU_API_PORT}")
+
+
+def _mineru_server_command(venv_python: Path) -> list[str]:
+    version = subprocess.check_output([
+        str(venv_python), '-c',
+        'from importlib.metadata import version;print(version("mineru"))',
+    ], text=True, timeout=15).strip()
+    if version.startswith('4.'):
+        return [str(venv_python), '-m', 'mineru.parser.api_server',
+                '--host', '127.0.0.1', '--port', str(MINERU_API_PORT),
+                '--tier', 'standard', '--disable-image-analysis', '--concurrency', '1']
+    return [str(venv_python), '-m', 'mineru.cli.fast_api',
+            '--host', '127.0.0.1', '--port', str(MINERU_API_PORT)]
 
 
 def _stage_1_1_scanned_restart_server(venv_python: Path):
     """Spawn a fresh minerU API server (after a crash / 5xx)."""
     return subprocess.Popen(
-        [str(venv_python), "-m", "mineru.cli.fast_api",
-         "--host", "127.0.0.1", "--port", str(MINERU_API_PORT)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        _mineru_server_command(venv_python),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
+
+
+def _stop_owned_mineru_server(proc) -> None:
+    """Release an owned service and its model children; never stop a reused API."""
+    import signal
+    if proc is None:
+        return
+    group = None
+    try:
+        if isinstance(getattr(proc, 'pid', None), int) and os.getpgid(proc.pid) == proc.pid:
+            group = proc.pid
+    except ProcessLookupError:
+        return
+    try:
+        if group is not None:
+            os.killpg(group, signal.SIGTERM)
+        else:
+            proc.terminate()
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        if group is not None:
+            os.killpg(group, signal.SIGKILL)
+        else:
+            proc.kill()
+        proc.wait(timeout=5)
+    except ProcessLookupError:
+        pass
 
 
 def _stage_1_1_scanned_warmup(doc, out_dir: Path) -> None:
@@ -551,6 +590,11 @@ def _stage_1_1_scanned_warmup(doc, out_dir: Path) -> None:
     First chunk typically takes 134s; warmup reduces to ~74s (60s savings).
     Non-critical: failures are logged and skipped.
     """
+    from _mineru_v4 import health
+    if health(MINERU_API_PORT):
+        # V1 initializes models on the real chunk. Avoid a redundant job and
+        # a short warmup timeout that can leave inference running in a thread.
+        return
     try:
         import fitz
     except ImportError:
@@ -700,15 +744,21 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
         if attempt > 0:
             time.sleep(2)
         try:
-            body, boundary = _stage_1_1_scanned_build_parse_body(
-                chunk_pdf, "chunk.pdf", with_images=True)
-            req = urllib.request.Request(
-                f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
-                data=body,
-                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            )
-            r = urllib.request.urlopen(req, timeout=MINERU_PARSE_TIMEOUT)
-            resp = json.loads(r.read())
+            from _mineru_v4 import health, parse
+            if health(MINERU_API_PORT):
+                resp = {'status': 'completed', 'results': parse(
+                    MINERU_API_PORT, chunk_pdf, 'chunk.pdf', timeout=MINERU_PARSE_TIMEOUT,
+                    expected_pages=end-start)}
+            else:
+                body, boundary = _stage_1_1_scanned_build_parse_body(
+                    chunk_pdf, "chunk.pdf", with_images=True)
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{MINERU_API_PORT}/file_parse",
+                    data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                )
+                r = urllib.request.urlopen(req, timeout=MINERU_PARSE_TIMEOUT)
+                resp = json.loads(r.read())
             if resp.get("status") == "completed":
                 results = resp.get("results", {})
                 md, md_path = _stage_1_1_scanned_extract_md(
@@ -755,15 +805,11 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
                 if e.code >= 500:
                     print(f"HTTP {e.code} (retry {attempt+1}/3, restarting server)...")
                     if api_proc is not None:
-                        api_proc.terminate()
-                        try:
-                            api_proc.wait(timeout=5)
-                        except Exception:
-                            api_proc.kill()
+                        _stop_owned_mineru_server(api_proc)
                     else:
-                        # Reused an externally-started server — can't terminate it.
-                        # Kill by port to free the slot for a fresh server.
-                        _stage_1_1_kill_mineru_servers()
+                        # This caller does not own the existing service.
+                        print("Reused API returned an error; retrying without stopping it.")
+                        continue
                     time.sleep(3)
                     api_proc = _stage_1_1_scanned_restart_server(venv_python)
                     time.sleep(5)
@@ -1033,11 +1079,7 @@ def _stage_1_1_extract_text_scanned_impl(
     finally:
         doc.close()
         if api_proc is not None:
-            api_proc.terminate()
-            try:
-                api_proc.wait(timeout=10)
-            except Exception:
-                api_proc.kill()
+            _stop_owned_mineru_server(api_proc)
 
     # Final failure gate (no-silent-fallback): any chunk still failed after its
     # retries fails the whole extraction — the old "≤30% failed → silent
