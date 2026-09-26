@@ -207,6 +207,15 @@ class TestRewriteCrossReferences(unittest.TestCase):
         text = PAGE("type: entity\nrelated: [a, b]", "[[c]] and [[d]] here.")
         self.assertEqual(d.rewrite_cross_references(text, {"nonexistent": "other"}), text)
 
+    def test_rewrites_path_qualified_links_and_related(self):
+        text = PAGE("type: concept\nrelated: [entities/b, entities/bb, kept]",
+                    "[[entities/b]], [[wiki/entities/b.md|B]], [[entities/b#use]], "
+                    "| [[entities/b\\|t]] |, [[entities/bb]].")
+        out = d.rewrite_cross_references(text, {"b": "a"}, {"entities/b": "concepts/a"})
+        self.assertIn("[[concepts/a]], [[concepts/a|B]], [[concepts/a#use]], | [[concepts/a\\|t]] |", out)
+        self.assertIn("[[entities/bb]]", out)
+        self.assertEqual(parse_frontmatter_array(out, "related"), ["concepts/a", "entities/bb", "kept"])
+
     def test_multiple_slugs_one_pass(self):
         out = d.rewrite_cross_references("[[old-a]] and [[old-b]] and [[keep-me]].", {"old-a": "canonical", "old-b": "canonical"})
         self.assertEqual(out, "[[canonical]] and [[canonical]] and [[keep-me]].")
@@ -251,6 +260,10 @@ class TestRewriteIndexMd(unittest.TestCase):
         self.assertIn("[DPAO](entities/dpao.md)", out)
         self.assertIn("Some intro prose here", out)
         self.assertNotIn("dpaos.md", out)
+
+    def test_removes_path_qualified_wikilink_lines(self):
+        text = "- [[concepts/foo|Foo]]\n- [[concepts/foo-bar|Foo bar]]\n- [[wiki/concepts/foo.md]]"
+        self.assertEqual(d.rewrite_index_md(text, {"foo"}), "- [[concepts/foo-bar|Foo bar]]")
 
     def test_noop_when_empty_set(self):
         text = "- [Foo](entities/foo.md)\n- [Bar](entities/bar.md)"
@@ -327,6 +340,23 @@ class TestMergeDuplicateGroup(unittest.TestCase):
         self.assertIn("[[unrelated]]", rewritten)
         self.assertIsNone(_re.search(r"\[\[b(\|[^\]]*)?\]\]", rewritten))
         self.assertEqual(parse_frontmatter_array(rewritten, "related"), ["a", "kept"])
+
+    def test_cross_directory_merge_leaves_no_link_to_the_deleted_page(self):
+        canonical = PAGE("type: methodology\ntitle: A\nrelated: [concepts/b]", "Steps.\n\n- [[concepts/b]]")
+        dup = PAGE("type: concept\ntitle: A\nrelated: [methodology/a-method, x]", "Principle.\n\n- [[methodology/a-method]]")
+        referencing = PAGE("type: concept\ntitle: R\nrelated: [concepts/b]", "See [[concepts/b|the idea]].")
+        merged = PAGE("type: methodology\ntitle: A\nrelated: []", "Principle.\n\nSteps.\n\n- [[concepts/b]]")
+        result = d.merge_duplicate_group(
+            [{"slug": "a-method", "path": "wiki/methodology/a-method.md", "content": canonical},
+             {"slug": "b", "path": "wiki/concepts/b.md", "content": dup}],
+            "a-method", [{"path": "wiki/concepts/r.md", "content": referencing}],
+            lambda s, u: merged, today=FIXED_TODAY,
+        )
+        rewritten = result.rewrites[0]["new_content"]
+        self.assertIn("[[methodology/a-method|the idea]]", rewritten)
+        self.assertEqual(parse_frontmatter_array(rewritten, "related"), ["methodology/a-method"])
+        self.assertNotIn("concepts/b", result.canonical_content)
+        self.assertEqual(parse_frontmatter_array(result.canonical_content, "related"), ["x"])
 
     def test_does_not_include_unchanged_pages_in_rewrites(self):
         irrelevant = PAGE("type: concept\nrelated: [unrelated-slug]", "[[totally-different]] page.")

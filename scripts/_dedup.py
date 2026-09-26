@@ -386,14 +386,22 @@ def merge_duplicate_group(
     today_str = (today() if callable(today) else today) or _default_today()
     merged = _set_frontmatter_scalar(merged, "updated", today_str)
 
-    # 4. Cross-reference rewrites across every other wiki page.
+    # 4. Cross-reference rewrites across every other wiki page. Links may be
+    #    bare ([[slug]]) or directory-qualified ([[concepts/slug]]); a
+    #    cross-directory merge must rewrite both, including the canonical
+    #    page's own links to the pages it absorbs.
     slug_redirects: dict[str, str] = {}
+    path_redirects: dict[str, str] = {}
+    canonical_ref = _page_ref(canonical["path"])
     for page in group:
         if page["slug"] != canonical_slug:
             slug_redirects[page["slug"]] = canonical_slug
+            path_redirects[_page_ref(page["path"])] = canonical_ref
+    merged = rewrite_cross_references(merged, slug_redirects, path_redirects)
+    merged = _drop_self_references(merged, canonical_slug, canonical_ref)
     rewrites: list[dict] = []
     for page in other_wiki_pages:
-        rewritten = rewrite_cross_references(page["content"], slug_redirects)
+        rewritten = rewrite_cross_references(page["content"], slug_redirects, path_redirects)
         if rewritten != page["content"]:
             rewrites.append({"path": page["path"], "new_content": rewritten})
 
@@ -430,21 +438,39 @@ def _build_merger_user_message(group: list[dict]) -> str:
     ])
 
 
-def rewrite_cross_references(content: str, slug_redirects: dict[str, str]) -> str:
+def _page_ref(path: str) -> str:
+    """`wiki/concepts/x.md` / `concepts/x` / `[[x]]` -> `concepts/x` / `x`."""
+    ref = path.strip().strip("[]").split("|")[0].strip()
+    ref = ref[len("wiki/"):] if ref.startswith("wiki/") else ref
+    return ref[:-3] if ref.endswith(".md") else ref
+
+
+def rewrite_cross_references(content: str, slug_redirects: dict[str, str],
+                             path_redirects: dict[str, str] | None = None) -> str:
     """Rewrite [[old-slug]] / [[old-slug|alias]] wikilinks and the `related:`
-    field to point at the canonical slug. Dedups `related` after rewrite."""
+    field to point at the canonical slug. Dedups `related` after rewrite.
+
+    ``path_redirects`` maps directory-qualified refs (``concepts/old``) to the
+    canonical ref (``methodology/new``) for links written with a directory,
+    optionally prefixed ``wiki/`` or suffixed ``.md``, with an alias, anchor
+    or escaped table pipe."""
     out = content
+    path_redirects = {k.lower(): v for k, v in (path_redirects or {}).items()}
 
     # 1. Wikilinks in the body — both [[slug]] and [[slug|alias]].
     for old_slug, new_slug in slug_redirects.items():
         escaped = re.escape(old_slug)
         pattern = re.compile(rf"\[\[{escaped}(\\?\|[^\]]+)?\]\]")
         out = pattern.sub(lambda m, ns=new_slug: f"[[{ns}{m.group(1) or ''}]]", out)
+    for old_ref, new_ref in path_redirects.items():
+        pattern = re.compile(rf"\[\[(?:wiki/)?{re.escape(old_ref)}(?:\.md)?(?=[\]|#\\])", re.IGNORECASE)
+        out = pattern.sub(lambda m, nr=new_ref: f"[[{nr}", out)
 
     # 2. & 3. `related` field — re-parse and rewrite.
     existing = parse_frontmatter_array(out, "related")
     if existing:
-        rewritten = [slug_redirects.get(s, s) for s in existing]
+        rewritten = [path_redirects.get(_page_ref(s).lower()) or slug_redirects.get(s, s)
+                     for s in existing]
         seen: set[str] = set()
         unique: list[str] = []
         for s in rewritten:
@@ -457,6 +483,20 @@ def rewrite_cross_references(content: str, slug_redirects: dict[str, str]) -> st
             out = write_frontmatter_array(out, "related", unique)
 
     return out
+
+
+def _drop_self_references(content: str, slug: str, ref: str) -> str:
+    """Remove a merged page's `related` entries and link-only list items
+    that point at itself (they pointed at an absorbed page before rewrite)."""
+    self_refs = {slug.lower(), ref.lower()}
+    related = parse_frontmatter_array(content, "related")
+    kept = [r for r in related if _page_ref(r).lower() not in self_refs]
+    if kept != related:
+        content = write_frontmatter_array(content, "related", kept)
+    targets = "|".join(re.escape(r) for r in sorted(self_refs))
+    item = re.compile(rf"^[ \t]*[-*][ \t]*\[\[(?:wiki/)?(?:{targets})(?:\.md)?"
+                      rf"(?:\\?\|[^\]]*)?\]\][ \t]*(?:\n|$)", re.MULTILINE | re.IGNORECASE)
+    return item.sub("", content)
 
 
 def _set_frontmatter_scalar(content: str, field_name: str, value: str) -> str:
@@ -495,7 +535,8 @@ def rewrite_index_md(content: str, removed_slugs: set[str]) -> str:
 def _line_refers_to_slug(line: str, slugs: set[str]) -> bool:
     for slug in slugs:
         escaped = re.escape(slug)
-        if re.search(rf"\[\[{escaped}(\\?\|[^\]]*)?\]\]", line):  # wikilink
+        if re.search(rf"\[\[(?:[^\[\]|#]*/)?{escaped}(?:\.md)?(?:\\?\|[^\]]*|#[^\]]*)?\]\]",
+                     line):  # wikilink, bare or directory-qualified
             return True
         if re.search(rf"\(([^)]*/)?{escaped}\.md\)", line):    # markdown link
             return True
