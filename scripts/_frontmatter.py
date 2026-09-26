@@ -22,6 +22,7 @@ from __future__ import annotations
 import re
 import yaml
 import time
+from pathlib import Path
 from typing import Callable, Optional
 
 from _wikilinks import WIKILINK_RE
@@ -120,6 +121,27 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
                          and len(item) == 1 and isinstance(item[0], str)
                          else item for item in related]
     return fm, body
+
+
+MAX_REDIRECT_HOPS = 3
+
+
+def redirect_target(wiki_dir: Path, content: str) -> tuple[str, str] | None:
+    """(wiki-relative path, content) of a ``type: redirect`` page's target.
+
+    Only the frontmatter ``redirect:`` field is honoured. A missing target,
+    or one outside wiki/, leaves the stub as the result.
+    """
+    fm, _body = parse_frontmatter(content)
+    target = str(fm.get("redirect") or "").strip() if fm.get("type") == "redirect" else ""
+    if not target:
+        return None
+    rel = target if target.endswith(".md") else f"{target}.md"
+    root = wiki_dir.resolve()
+    path = (root / rel).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        return None
+    return path.relative_to(root).as_posix(), path.read_text(encoding="utf-8")
 
 
 def _quote_value(value) -> str:

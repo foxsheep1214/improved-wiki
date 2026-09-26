@@ -308,7 +308,9 @@ def _stage_3_2_backup_existing_page(path: Path, config: Config) -> None:
 
 # ── Frontmatter: delegate to canonical _frontmatter.py (NashSU frontmatter.ts + page-merge.ts pattern) ──
 from _frontmatter import (
+    MAX_REDIRECT_HOPS,
     parse_frontmatter,
+    redirect_target,
     write_frontmatter,
     merge_page_content as _fm_merge_page_content,
     strip_embedded_images_section,
@@ -582,6 +584,39 @@ def _stage_3_2_scan_wiki_slug_dirs(config: Config) -> dict[str, set[str]]:
     return out
 
 
+def _is_redirect_stub(content: str) -> bool:
+    return parse_frontmatter(content)[0].get("type") == "redirect"
+
+
+def _stage_3_2_follow_redirect_stub(
+    rel_path: str, wiki_dir: Path, valid_subdirs: set[str]
+) -> str:
+    """The page a block for ``rel_path`` belongs on when that path is a redirect stub.
+
+    Dedup leaves ``type: redirect`` stubs on retired slugs, and those are the
+    natural names a later generation reuses. Merging into the stub kept
+    ``type: redirect``, dropped ``redirect:`` and hid the new body behind a
+    stub (RadarWiki concepts/micro-doppler-uav-classification, 2026-09-24).
+    The block goes to the stub's target instead. A stub without a usable
+    target keeps its path; stage_3_2_write_wiki_file replaces it.
+    """
+    path = wiki_dir / rel_path
+    if not path.is_file():
+        return rel_path
+    current, content = rel_path, path.read_text(encoding="utf-8")
+    for _ in range(MAX_REDIRECT_HOPS):
+        target = redirect_target(wiki_dir, content)
+        if target is None:
+            break
+        current, content = target
+    if (current == rel_path or _is_redirect_stub(content)
+            or not is_safe_ingest_path(current)
+            or current.split("/")[0] not in valid_subdirs
+            or Path(current).name in _LISTING_BASENAMES):
+        return rel_path
+    return current
+
+
 def resolve_ingest_write_path(
     rel_path: str,
     content: str,
@@ -589,12 +624,14 @@ def resolve_ingest_write_path(
     routing: dict[str, str],
     *,
     quiet: bool = False,
+    wiki_dir: Path | None = None,
 ) -> str | None:
     """Where Stage 3.2 will write one FILE block, or ``None`` if dropped.
 
     The single implementation of the write-path chain: traversal/safety reject →
     application-managed aggregate reject → top-dir accept-list or auto-correct →
-    ``.md`` suffix → schema route. Three callers must agree exactly on the
+    ``.md`` suffix → schema route → redirect-stub target (when ``wiki_dir`` is
+    given). Three callers must agree exactly on the
     result — the write loop, the ``slug_dirs`` link universe, and the Stage 3.1
     review projection — so any drift between copies would silently reintroduce
     dangling links or reviews pointed at paths that were never written.
@@ -637,6 +674,14 @@ def resolve_ingest_write_path(
         if not quiet:
             print(f"  [write] Schema-routed: {rel_path} → {routed}")
         rel_path = routed
+
+    if wiki_dir is not None:
+        target = _stage_3_2_follow_redirect_stub(rel_path, wiki_dir, valid_subdirs)
+        if target != rel_path:
+            if not quiet:
+                print(f"  [write] Redirected: {rel_path} → {target} "
+                      "(existing page is a redirect stub)")
+            rel_path = target
     return rel_path
 
 
@@ -654,7 +699,8 @@ def stage_3_2_build_slug_dirs(
     slug_dirs = _stage_3_2_scan_wiki_slug_dirs(config)
     for rel_path, content in file_blocks:
         resolved = resolve_ingest_write_path(
-            rel_path, content, valid_subdirs, routing, quiet=True)
+            rel_path, content, valid_subdirs, routing, quiet=True,
+            wiki_dir=config.wiki_dir)
         if not resolved or "/" not in resolved:
             continue
         rel_dir, name = resolved.rsplit("/", 1)
@@ -672,6 +718,7 @@ def project_write_result_blocks(
     today: str,
     source_page_slug: str,
     source_resolver: SourceResolver | None = None,
+    wiki_dir: Path | None = None,
 ) -> list[tuple[str, str]]:
     """Project the in-memory generation onto its post-write paths and links.
 
@@ -692,7 +739,8 @@ def project_write_result_blocks(
     projected: list[tuple[str, str]] = []
     for rel_path, content in file_blocks:
         resolved = resolve_ingest_write_path(
-            rel_path, content, valid_subdirs, routing, quiet=True)
+            rel_path, content, valid_subdirs, routing, quiet=True,
+            wiki_dir=wiki_dir)
         if not resolved:
             continue
         content = _stage_3_2_sanitize_ingested_content(content)
@@ -988,6 +1036,14 @@ def stage_3_2_write_wiki_file(
     content = _stage_3_2_sanitize_ingested_content(content)
     existing: str | None = None
     if config is not None:
+        if merge and path.exists() and _is_redirect_stub(path.read_text(encoding="utf-8")):
+            # resolve_ingest_write_path already moved blocks for a stub with a
+            # usable target onto that target. This stub has none, so it holds
+            # nothing to merge, and a merge would keep ``type: redirect`` over
+            # the new body.
+            print(f"  [write] ⚠️  {path.name}: replacing a redirect stub that "
+                  "has no usable target")
+            merge = False
         if merge and path.exists():
             existing = path.read_text(encoding="utf-8")
             # NashSU's corrected-source replacement is about a page left behind

@@ -33,7 +33,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from _frontmatter import parse_frontmatter  # noqa: E402
+from _frontmatter import MAX_REDIRECT_HOPS, redirect_target  # noqa: E402
 from _paths import detect_runtime_dir  # noqa: E402
 from _search_graph import GraphPages, blend_graph_results  # noqa: E402
 from _wiki_keyword import (  # noqa: E402
@@ -43,9 +43,6 @@ from _wiki_keyword import (  # noqa: E402
     rrf_merge,
     tokenize_query,
 )
-
-# A redirect pointing at another redirect is followed at most this far.
-_MAX_REDIRECT_HOPS = 3
 
 
 def _vector_search(query: str, runtime: Path, top: int, wiki_dir: Path):
@@ -117,24 +114,6 @@ def _vector_search(query: str, runtime: Path, top: int, wiki_dir: Path):
     return results, None
 
 
-def _redirect_target(wiki_dir: Path, content: str) -> tuple[str, str] | None:
-    """(wiki-relative path, content) of a ``type: redirect`` page's target.
-
-    Only the frontmatter ``redirect:`` field is honoured. A missing target,
-    or one outside wiki/, leaves the stub as the result.
-    """
-    fm, _body = parse_frontmatter(content)
-    target = str(fm.get("redirect") or "").strip() if fm.get("type") == "redirect" else ""
-    if not target:
-        return None
-    rel = target if target.endswith(".md") else f"{target}.md"
-    root = wiki_dir.resolve()
-    path = (root / rel).resolve()
-    if not path.is_relative_to(root) or not path.is_file():
-        return None
-    return path.relative_to(root).as_posix(), path.read_text(encoding="utf-8")
-
-
 def _resolve_redirects(results: list[dict], wiki_dir: Path, query: str) -> list[dict]:
     """Replace dedup redirect stubs with the page they point to.
 
@@ -154,8 +133,8 @@ def _resolve_redirects(results: list[dict], wiki_dir: Path, query: str) -> list[
         except OSError:
             content = ""
         origin = None
-        for _ in range(_MAX_REDIRECT_HOPS):
-            target = _redirect_target(wiki_dir, content) if content else None
+        for _ in range(MAX_REDIRECT_HOPS):
+            target = redirect_target(wiki_dir, content) if content else None
             if target is None:
                 break
             origin = origin or result["path"]

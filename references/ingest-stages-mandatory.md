@@ -131,13 +131,14 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 
 ### Stage 3.1 · Pre-write Review Generation
 - **作用**：满足 NashSU 3 条件（≥4 FILE 块 / ≥10K 字符 / 未闭合 REVIEW）时跑一次 LLM，输出 5 类 review items（confirm/suggestion/missing-page/contradiction/duplicate）。写盘前审查 in-memory FILE generation，严格解析校验后把规范化 items 写入 `review_prepared` checkpoint；此阶段不写 REVIEW 文件。`confirm` 在 improved-wiki 中表示“需核查并修复的疑似内容缺陷”，description 必须包含具体问题、可疑依据和修复判据；其持久化动作是 `Fix | Skip`，不是 NashSU 的 close-only `Approve | Skip`。
-- **审查输入 = 写盘投影**：3.1 拿到的不是原始生成块，而是 `project_write_result_blocks` 的**确定性投影**——与写循环共用 `resolve_ingest_write_path`（路径安全/聚合页丢弃/auto-correct/`.md`/schema 路由），再跑同一条 sanitize → canonicalize sources → stamp dates → `stage_3_2_normalize_page_links(strict_missing_targets=True)`。审原始草稿会让 reviewer 为随后会被写时去链的链接开 `missing-page`，并让 `affected_pages` 指向 schema 路由前的旧路径。投影**不做** page merge，合并进已有页的部分仍以本源贡献呈现。写循环、`slug_dirs` 与投影共用同一个 resolver。
+- **审查输入 = 写盘投影**：3.1 拿到的不是原始生成块，而是 `project_write_result_blocks` 的**确定性投影**——与写循环共用 `resolve_ingest_write_path`（路径安全/聚合页丢弃/auto-correct/`.md`/schema 路由/重定向页目标），再跑同一条 sanitize → canonicalize sources → stamp dates → `stage_3_2_normalize_page_links(strict_missing_targets=True)`。审原始草稿会让 reviewer 为随后会被写时去链的链接开 `missing-page`，并让 `affected_pages` 指向 schema 路由前的旧路径。投影**不做** page merge，合并进已有页的部分仍以本源贡献呈现。写循环、`slug_dirs` 与投影共用同一个 resolver。
 - **go/no-go**：review items 数量 ≥0（空数组 `[]` 合法）；非空 item 必须完整通过严格 schema：`type`/`severity` 枚举合法，title/description 非空，`affected_pages` 是 wiki 内安全 `.md` 路径，suggestion/missing-page 恰有 2–3 条搜索 query，其余类型 query 为空。整批先校验，任何非法 item 都 hard-fail。`review_prepared` 使写盘或后续 handoff 失败后恢复不会重复调用 reviewer。
 
 ### Stage 3.2 · Write files（含 source page gate）
 - **作用**：Phase 3 唯一磁盘写入入口。先 source page gate；若 LLM/旧缓存仍未提供 source 页，按 NashSU 从**完整 Stage 2 analysis**（滚动 digest + 全部 chunk analyses，不截断）生成确定性最低限度 source summary，再原子写盘（.tmp → rename）。
 - **NashSU 0.6.6 更新语义**：同路径已有页若 `sources` 全部解析为当前来源，说明它只由该来源拥有；纠正来源重摄取时用新正文替换旧正文，同时 union `sources/tags/related`、锁定 `type/title/created` 并更新时间，避免被撤回的旧表述经 merge 永久残留。只要存在其他来源，仍走三层 page-merge，保留其他来源贡献。两条路径都先备份旧页。
 - **同轮 slug 碰撞例外**：上面的替换语义只针对**上一次消化**留下的页。本轮写循环已写过的同路径页必须走真合并——`_is_same_run_collision` 把它标出来并强制 `replace_existing_body=False`。否则"只被本源拥有"这条判据在本轮写入后会恒成立，第二个 FILE 块会静默丢掉第一个块的正文。碰撞时打印 `same-slug collision`。
+- **不写进重定向页**：去重留下的 `type: redirect` 页占着旧 slug，后来的生成很容易再用这个名字。`resolve_ingest_write_path(wiki_dir=...)` 在 schema 路由之后沿 frontmatter `redirect:` 最多跟 3 跳，把 FILE block 改写到目标页（打印 `Redirected: A → B`）；写循环、`slug_dirs` 与 3.1 投影都传 `wiki_dir`，三者落点一致。没有可用目标的重定向页（缺 `redirect:`、目标不存在/在 wiki 外、成环）保留原路径，由 `stage_3_2_write_wiki_file` 整页替换并照常备份，不做 merge——merge 会保留 `type: redirect` 而把新正文藏在重定向页里（RadarWiki `concepts/micro-doppler-uav-classification`，2026-09-24）。
 - **合并后规范化**：入站 FILE block 在 merge 前规范化一次；多来源 LLM merge 完成后必须对**实际合并结果**再规范化一次，清掉旧页带入的畸形 `related`，并在同 stem 只有一个真实目标时纠正 body wikilink 的错误/大小写不匹配目录前缀。不能只规范化 merge 输入，否则 merger 会重新引入坏链接。
 - **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
 

@@ -551,6 +551,7 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
                 source_resolver=source_resolver,
                 today=today_str,
                 source_page_slug=_source_page_slug,
+                wiki_dir=config.wiki_dir,
             )
             if write_phase_done or write_loop_done:
                 prewrite_review_blocks = (
@@ -585,11 +586,13 @@ def _do_write(prepared: dict, verbose: bool = False) -> dict:
     for rel_path, content in _write_blocks:
         # Traversal/safety reject → application-managed aggregate reject →
         # top-dir accept-list or auto-correct → `.md` suffix → schema routing
-        # (NashSU validateWikiPageRouting parity, applied at write time). The
-        # same resolver builds _slug_dirs and the Stage 3.1 review projection,
-        # so all three agree on where this block lands.
+        # (NashSU validateWikiPageRouting parity, applied at write time), then
+        # onto the target of an existing redirect stub. The same resolver
+        # builds _slug_dirs and the Stage 3.1 review projection, so all three
+        # agree on where this block lands.
         resolved = resolve_ingest_write_path(
-            rel_path, content, _VALID_SUBDIRS, _routing)
+            rel_path, content, _VALID_SUBDIRS, _routing,
+            wiki_dir=config.wiki_dir)
         if not resolved:
             continue
         rel_path = resolved
