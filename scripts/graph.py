@@ -210,7 +210,12 @@ class LinkResolver:
     by_stem: dict[str, list[str]]      # stem -> [node_id, ...]
 
     def resolve(self, target: str) -> Optional[str]:
-        t = split_wikilink_inner(target)[0].split("#")[0].strip()
+        t = target.strip()
+        if t.startswith("[[") and t.endswith("]]"):
+            t = t[2:-2]  # related: ["[[x]]"] — the form the frontmatter reader yields
+        t = split_wikilink_inner(t)[0].split("#")[0].strip()
+        if t.endswith(".md"):
+            t = t[:-3]
         if not t:
             return None
         candidates: list[str] = []

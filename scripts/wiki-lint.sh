@@ -15,6 +15,8 @@
 #   1. broken-link        — [[wikilink]] points to a non-existent page
 #   2. orphan              — page no other page links to
 #   3. no-outlinks         — page has no outbound [[wikilink]]s
+#      broken-related      — a bare related: entry names no page (fix-links
+#                            repoints a confident match, else drops the entry)
 #   4. missing-frontmatter — page lacks the required YAML block
 #      invalid-frontmatter — block is unclosed or not valid YAML (not auto-fixed)
 #   5. semantic            — contradiction / stale / missing-page / suggestion /
@@ -340,6 +342,9 @@ for _f in run_structural_lint(structural_pages):
         _f["id"] = f"lint-nol-{_stem_key}"
     elif _f["type"] == "slug-collision":
         _f["id"] = f"lint-slugcol-{_stem_key}"
+    elif _f["type"] == "broken-related":
+        _bl_counter += 1
+        _f["id"] = f"lint-br-{_stem_key}-{_bl_counter}"
     _f["createdAt"] = now_ms
     findings.append(_f)
 
@@ -396,7 +401,7 @@ from collections import Counter
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
 c = Counter(f['type'] for f in findings)
 total = sum(c.values())
-parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
+parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'broken-related: {c.get(\"broken-related\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
 print(' | '.join(parts))
 ")
   echo "[lint]$1 $SUMMARY_LINE"
@@ -550,6 +555,7 @@ parts = [f'{total} findings',
          f'broken-link: {c.get(\"broken-link\", 0)}',
          f'orphan: {c.get(\"orphan\", 0)}',
          f'no-outlinks: {c.get(\"no-outlinks\", 0)}',
+         f'broken-related: {c.get(\"broken-related\", 0)}',
          f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}',
          f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}',
          f'read-error: {c.get(\"read-error\", 0)}',
@@ -662,7 +668,7 @@ if [ "$FIX_LINKS" = true ]; then
     echo "[lint] Auto-fix-links: already complete for logical run $LINT_RUN_ID; skipping."
   else
     CACHE_DIRTY_AFTER_SCAN=true
-    echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
+    echo "[lint] Auto-fix-links: applying rewrites + append + related: repairs + broken→review (no stubs)..."
     "$PYTHON" "$SCRIPT_DIR/wiki-lint-fix.py" --apply \
       --from-cache "$LINT_CACHE" \
       --project-root "$WIKI_ROOT"

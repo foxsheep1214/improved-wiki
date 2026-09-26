@@ -431,5 +431,35 @@ class TestCrossDirectorySlugCollision(unittest.TestCase):
         self.assertIsNone(finding(results, type="slug-collision"))
 
 
+class TestBrokenRelated(unittest.TestCase):
+    def _page(self, related, body="See [[concepts/b]].", title="Alpha Page"):
+        items = ", ".join(f'"{r}"' for r in related)
+        return (f"---\ntype: concept\ntitle: {title}\nrelated: [{items}]\n---\n\n"
+                f"{body}\n")
+
+    def test_dangling_bare_entry_is_reported_with_a_suggestion(self):
+        pages = [
+            ("concepts/a.md", self._page(["concepts/b", "methodology/b",
+                                          "concepts/scan-losses", "[[concepts/gone]]"])),
+            ("concepts/b.md", self._page([], "See [[concepts/a]].", "Beta Page")),
+            ("concepts/scan-loss.md", self._page([], "See [[concepts/a]].", "Scan Loss")),
+        ]
+        findings = ls.run_structural_lint(pages)
+        related = [f for f in findings if f["type"] == "broken-related"]
+        # concepts/b exists; methodology/b resolves by basename like a link.
+        self.assertEqual([f["broken_target"] for f in related], ["concepts/scan-losses"])
+        self.assertEqual(related[0]["suggested_target"], "concepts/scan-loss.md")
+        # A bracketed entry is a wikilink and stays a broken-link finding.
+        self.assertIn("concepts/gone",
+                      [f["broken_target"] for f in findings if f["type"] == "broken-link"])
+
+    def test_related_entries_do_not_count_as_inbound_links(self):
+        # NashSU parity: orphan detection reads [[wikilinks]] only.
+        pages = [("concepts/a.md", self._page(["concepts/b"], "No links.")),
+                 ("concepts/b.md", self._page([], "See [[concepts/a]]."))]
+        orphans = [f["page"] for f in ls.run_structural_lint(pages) if f["type"] == "orphan"]
+        self.assertEqual(orphans, ["concepts/b.md"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

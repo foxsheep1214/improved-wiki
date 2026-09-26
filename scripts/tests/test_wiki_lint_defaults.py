@@ -243,6 +243,21 @@ class TestWikiLintRunOutcomes(unittest.TestCase):
             lint_dir = root / ".llm-wiki" / "lint"
             self.assertFalse(list(lint_dir.glob("missing-frontmatter-*.md")))
 
+    def test_fix_links_clears_dangling_related_entries(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _linked_pair(root)
+            page = _write(root, "concepts/c.md",
+                          '---\ntype: concept\ntitle: Gamma Page\n'
+                          'related: ["concepts/a", "concepts/never-written"]\n---\n\n'
+                          'See [[concepts/a]].\n')
+            result = self.run_lint(root, "--no-semantic", "--no-emit-review", "--no-fix",
+                                   "--no-sweep", "--no-dedup", "--no-delete-orphans")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('related: ["concepts/a"]', page.read_text(encoding="utf-8"))
+            cache = json.loads((root / ".llm-wiki/lint-cache.json").read_text("utf-8"))
+            self.assertNotIn("broken-related", {f["type"] for f in cache})
+
     def test_auto_fix_takes_page_type_from_schema(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

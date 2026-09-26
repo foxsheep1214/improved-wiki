@@ -543,3 +543,13 @@ def test_concurrent_build_is_refused(wiki, tmp_path):
         os.close(fd)
     assert rc == 1
     assert not (tmp_path / "graph.json").exists()
+
+
+def test_bracketed_and_md_related_entries_resolve(wiki):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "a", related=['"[[b]]"', "c.md"])
+    _write_page(wiki_dir, "b")
+    _write_page(wiki_dir, "c")
+    pages = graph.load_pages(root)
+    lg = graph.build_link_graph(pages)
+    assert lg.out_links["wiki/a"] == {"wiki/b", "wiki/c"}

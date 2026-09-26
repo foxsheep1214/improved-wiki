@@ -316,5 +316,33 @@ class TestDeleteOrphansEmitReview(unittest.TestCase):
             self.assertEqual(len(review_files), 1)
 
 
+class TestBrokenRelatedRepair(unittest.TestCase):
+    def test_confident_suggestion_repoints_and_weak_one_drops(self):
+        wlf = _load_module()
+        findings = [
+            {"type": "broken-related", "page": "concepts/a.md",
+             "broken_target": "concepts/scan-loss", "suggested_target":
+             "methodology/scan-loss.md", "suggested_score": 0.96},
+            {"type": "broken-related", "page": "concepts/a.md",
+             "broken_target": "concepts/never-written", "suggested_target":
+             "concepts/written.md", "suggested_score": 0.8},
+        ]
+        actions = wlf.plan_fixes(findings)
+        self.assertEqual([a["replacement"] for a in actions],
+                         ["methodology/scan-loss.md", None])
+        with tempfile.TemporaryDirectory() as t:
+            wiki = Path(t) / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            page = wiki / "concepts" / "a.md"
+            page.write_text(
+                '---\ntype: concept\nrelated: ["concepts/b", "concepts/scan-loss", '
+                '"concepts/never-written"]\n---\n\nBody [[concepts/b]].\n',
+                encoding="utf-8")
+            summary = wlf.apply_fixes(Path(t), wiki, actions, dry_run=False)
+            self.assertEqual(summary["related"], 2)
+            self.assertIn('related: ["concepts/b", "methodology/scan-loss"]',
+                          page.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

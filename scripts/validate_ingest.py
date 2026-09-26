@@ -672,7 +672,8 @@ def main(argv: Optional[list[str]] = None):
     note("findings",
          f"broken-link={_lc.get('broken-link', 0)} "
          f"orphan={_lc.get('orphan', 0)} "
-         f"no-outlinks={_lc.get('no-outlinks', 0)}")
+         f"no-outlinks={_lc.get('no-outlinks', 0)} "
+         f"broken-related={_lc.get('broken-related', 0)}")
     for f in lint_findings[:20]:
         suggestion = f.get("suggested_target") or f.get("suggested_source")
         sugg = f" → suggest: {suggestion}" if suggestion else " (no suggestion)"

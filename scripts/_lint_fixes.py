@@ -29,6 +29,7 @@ from _frontmatter import (
     WIKILINK_RE as _WIKILINK_BODY_RE,
 )
 from _paths import atomic_write as _atomic_write
+from _frontmatter_array import parse_frontmatter_array, write_frontmatter_array
 from _wiki_filename import make_query_slug as _make_query_slug
 from pathlib import Path
 
@@ -47,6 +48,7 @@ __all__ = [
     "extract_title_anywhere",
     "clean_index_listing",
     "strip_deleted_wikilinks",
+    "fix_related_entry",
 ]
 
 
@@ -329,3 +331,22 @@ def strip_deleted_wikilinks(text: str, deleted_keys, is_deleted=None) -> str:
         return display if display is not None else target
 
     return _WIKILINK_BODY_RE.sub(_sub, text)
+
+
+def fix_related_entry(content: str, entry: str, replacement: str | None) -> str:
+    """Point a dangling ``related:`` entry at ``replacement``, or drop it.
+
+    Only the exact entry string (as parse_frontmatter_array returns it) is
+    touched; a replacement already present is not duplicated.
+    """
+    related = parse_frontmatter_array(content, "related")
+    if entry not in related:
+        return content
+    value = lint_link_target(replacement) if replacement else None
+    kept: list[str] = []
+    for item in related:
+        if item == entry:
+            item = value
+        if item and item not in kept:
+            kept.append(item)
+    return write_frontmatter_array(content, "related", kept)

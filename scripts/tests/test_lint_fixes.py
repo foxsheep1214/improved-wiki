@@ -278,5 +278,23 @@ class TestStripDeletedWikilinks(unittest.TestCase):
         self.assertEqual(out, "ai [[OpenAI]]")
 
 
+class TestFixRelatedEntry(unittest.TestCase):
+    PAGE = '---\ntype: concept\nrelated: ["concepts/a", "concepts/x", "concepts/b"]\n---\n\nBody\n'
+
+    def test_drop(self):
+        out = f.fix_related_entry(self.PAGE, "concepts/x", None)
+        self.assertIn('related: ["concepts/a", "concepts/b"]', out)
+        self.assertTrue(out.endswith("\n\nBody\n"))
+
+    def test_replace_without_duplicating(self):
+        self.assertIn('related: ["concepts/a", "methodology/x", "concepts/b"]',
+                      f.fix_related_entry(self.PAGE, "concepts/x", "wiki/methodology/x.md"))
+        self.assertIn('related: ["concepts/a", "concepts/b"]',
+                      f.fix_related_entry(self.PAGE, "concepts/x", "concepts/b.md"))
+
+    def test_absent_entry_leaves_page_untouched(self):
+        self.assertEqual(f.fix_related_entry(self.PAGE, "concepts/zz", None), self.PAGE)
+
+
 if __name__ == "__main__":
     unittest.main()

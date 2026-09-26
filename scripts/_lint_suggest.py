@@ -3,7 +3,9 @@
 
 Faithful port of the structural half of NashSU `src/lib/lint.ts`:
 orphan / broken-link / no-outlinks detection, each enriched with a suggested
-fix computed by a deterministic similarity engine:
+fix computed by a deterministic similarity engine. improved-wiki adds
+slug-collision and broken-related (a bare ``related:`` entry naming no page;
+NashSU writes bare-slug ``related:`` too but never checks it):
 
   - broken link  → closest existing page by slug/path/title similarity
                    (basename equality, substring, Levenshtein ratio).
@@ -30,6 +32,7 @@ from _frontmatter import (
     WIKILINK_RE as _WIKILINK_RE_SHARED,
     parse_frontmatter,
 )
+from _frontmatter_array import parse_frontmatter_array
 
 __all__ = [
     "run_structural_lint",
@@ -267,6 +270,7 @@ class _PageData:
     tokens: set[str] = field(default_factory=set)
     page_type: str = ""
     redirect_target: str = ""
+    related: list[str] = field(default_factory=list)
 
 
 def _build_slug_map(pages: list[_PageData]) -> dict[str, int]:
@@ -323,9 +327,13 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 f"{title}\n{slug_name}\n{content[:SUGGESTION_TOKEN_WINDOW]}"
             ) if with_suggestions else set()
         )
+        # Bracketed entries are wikilinks already in `outlinks` (the scan
+        # reads the whole file, as NashSU's does); bare ones are checked here.
+        related = [entry for entry in parse_frontmatter_array(content, "related")
+                   if "[[" not in entry]
         data.append(_PageData(
             short_name, short_name, slug, title, content, outlinks, tokens,
-            page_type, redirect_target,
+            page_type, redirect_target, related,
         ))
 
     slug_map = _build_slug_map(data)
@@ -447,17 +455,22 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             return best[0]
         return None
 
+    def resolve(link: str) -> int | None:
+        """Existence check shared by links and related: entries."""
+        target = slug_map.get(normalize_link_target(link))
+        if target is None:
+            basename = re.sub(
+                r"\.md$", "", _get_file_name(link), flags=re.IGNORECASE
+            )
+            target = slug_map.get(normalize_link_target(basename))
+        return target
+
     # Inbound counts use the same normalization and basename fallback as
     # broken-link existence checks (NashSU 0.6.6 parity).
     inbound_counts: dict[int, int] = {}
     for p in data:
         for link in p.outlinks:
-            basename = re.sub(
-                r"\.md$", "", _get_file_name(link), flags=re.IGNORECASE
-            )
-            target = slug_map.get(normalize_link_target(link))
-            if target is None:
-                target = slug_map.get(normalize_link_target(basename))
+            target = resolve(link)
             if target is not None:
                 inbound_counts[target] = inbound_counts.get(target, 0) + 1
 
@@ -546,15 +559,26 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 "suggested_target": suggested_target.short_name if suggested_target else None,
             })
 
+        # related: entries naming no page (improved-wiki extension). The fixer
+        # rewrites a confident suggestion and otherwise drops the entry, as
+        # NashSU's page-delete cascade drops related refs to deleted pages.
+        for entry in p.related:
+            if resolve(entry.strip().strip('"').strip("'")) is not None:
+                continue
+            suggestion = _cached_broken_target(entry) if with_suggestions else None
+            results.append({
+                "type": "broken-related",
+                "severity": "warning",
+                "page": short_name,
+                "detail": f"related: entry '{entry}' names no existing page.",
+                "broken_target": entry,
+                "suggested_target": suggestion[0].short_name if suggestion else None,
+                "suggested_score": round(suggestion[1], 4) if suggestion else None,
+            })
+
         # Broken links.
         for link in p.outlinks:
-            basename = re.sub(
-                r"\.md$", "", _get_file_name(link), flags=re.IGNORECASE
-            )
-            target = slug_map.get(normalize_link_target(link))
-            if target is None:
-                target = slug_map.get(normalize_link_target(basename))
-            if target is not None:
+            if resolve(link) is not None:
                 continue
             suggestion = _cached_broken_target(link) if with_suggestions else None
             link_origin = (

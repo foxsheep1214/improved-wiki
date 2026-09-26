@@ -13,6 +13,10 @@ and applies the three fixes ported from NashSU ``lint-fixes.ts``:
                                        bulk-create ``type: query`` stub pages)
   - orphan + suggested_source        → append [[orphan]] to the source page
   - no-outlinks + suggested_target   → append [[suggested]] to the page
+  - broken-related                   → point the related: entry at a
+                                       suggestion scoring >= the rewrite gate,
+                                       else drop it (NashSU's page-delete
+                                       cascade drops related refs the same way)
 
 It also ports NashSU lint-view.tsx:handleDeleteOrphan as a separate, opt-in,
 DESTRUCTIVE action (``--delete-orphans``): cascade-delete every orphan page
@@ -57,6 +61,7 @@ from _lint_fixes import (  # noqa: E402
     stub_relative_path_from_broken_target,
     build_deleted_keys,
     clean_index_listing,
+    fix_related_entry,
     extract_title_anywhere,
     normalize_wiki_ref_key,
     strip_deleted_wikilinks,
@@ -103,6 +108,8 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
                                        # → routed to REVIEW, never auto-applied
       {kind: "stub", broken, page}     # create stub AND rewrite [[broken]] in `page`
       {kind: "append", page, target}   # append [[target]] to `page`
+      {kind: "related", page, entry, replacement}
+                                       # replacement None → drop the entry
     """
     actions: list[dict] = []
     for fnd in findings:
@@ -144,6 +151,16 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
             page = fnd.get("page")
             if target and page:
                 actions.append({"kind": "append", "page": page, "target": target})
+        elif kind == "broken-related":
+            page, entry = fnd.get("page"), fnd.get("broken_target")
+            if page and entry:
+                score = fnd.get("suggested_score")
+                confident = (score is not None
+                             and score >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE)
+                actions.append({
+                    "kind": "related", "page": page, "entry": entry,
+                    "replacement": fnd.get("suggested_target") if confident else None,
+                })
     return actions
 
 
@@ -162,12 +179,12 @@ def apply_fixes(
     # rewrite then produces. Process link-FIXING actions (rewrite/stub) before
     # link-ADDING ones (append) so append sees the final canonical link and
     # correctly skips. Stable sort preserves original order within each group.
-    _KIND_ORDER = {"rewrite": 0, "stub": 0, "append": 1}
+    _KIND_ORDER = {"rewrite": 0, "stub": 0, "related": 0, "append": 1}
     actions = sorted(actions, key=lambda a: _KIND_ORDER.get(a.get("kind"), 0))
 
     cache: dict[str, str] = {}
     dirty: set[str] = set()
-    summary = {"rewrite": 0, "stub": 0, "append": 0, "skipped": 0}
+    summary = {"rewrite": 0, "stub": 0, "append": 0, "related": 0, "skipped": 0}
 
     def load(rel: str) -> str | None:
         if rel in cache:
@@ -246,6 +263,8 @@ def apply_fixes(
             # keep both representations synchronized in one atomic write.
         elif kind == "append":
             new = append_wikilink(content, act["target"])
+        elif kind == "related":
+            new = fix_related_entry(content, act["entry"], act.get("replacement"))
         else:
             summary["skipped"] += 1
             continue
@@ -255,7 +274,7 @@ def apply_fixes(
         cache[rel] = new
         dirty.add(rel)
         summary[kind] += 1
-        verb = "rewrite" if kind == "rewrite" else "append"
+        verb = {"rewrite": "rewrite", "related": "related"}.get(kind, "append")
         print(f"  [{verb:7}] {rel}")
 
     if not dry_run:
@@ -828,13 +847,16 @@ def _run(args, project_root: Path) -> int:
         # Drop any aggregate-file findings: a cache produced by a tool/version
         # without finding-suppression must not let us mutate index/log/overview/schema.
         findings = [f for f in all_findings
-                    if f.get("type") in ("broken-link", "orphan", "no-outlinks")
+                    if f.get("type") in ("broken-link", "orphan", "no-outlinks",
+                                         "broken-related")
                     and Path(str(f.get("page", ""))).name not in _AGGREGATE_FILES]
         broken  = [f for f in findings if f["type"] == "broken-link"]
         orphans = [f for f in findings if f["type"] == "orphan"]
         no_out  = [f for f in findings if f["type"] == "no-outlinks"]
+        related = [f for f in findings if f["type"] == "broken-related"]
         print(f"[lint-fix] from cache ({cache_path.name}): "
-              f"broken-link={len(broken)} orphan={len(orphans)} no-outlinks={len(no_out)}")
+              f"broken-link={len(broken)} orphan={len(orphans)} no-outlinks={len(no_out)} "
+              f"broken-related={len(related)}")
     else:
         pages = _collect_pages(wiki_dir)
         if not pages:
@@ -845,8 +867,10 @@ def _run(args, project_root: Path) -> int:
         broken  = [f for f in findings if f["type"] == "broken-link"]
         orphans = [f for f in findings if f["type"] == "orphan"]
         no_out  = [f for f in findings if f["type"] == "no-outlinks"]
+        related = [f for f in findings if f["type"] == "broken-related"]
         print(f"[lint-fix] findings: broken-link={len(broken)} "
-              f"orphan={len(orphans)} no-outlinks={len(no_out)}")
+              f"orphan={len(orphans)} no-outlinks={len(no_out)} "
+              f"broken-related={len(related)}")
 
     if args.delete_orphans:
         orphan_rels = [str(f.get("page", "")) for f in orphans if f.get("page")]
@@ -930,7 +954,8 @@ def _run(args, project_root: Path) -> int:
     summary = apply_fixes(project_root, wiki_dir, actions, dry_run=not args.apply)
     print(f"[lint-fix] {mode} summary: "
           f"rewrite={summary['rewrite']} stub={summary['stub']} "
-          f"append={summary['append']} skipped={summary['skipped']}")
+          f"append={summary['append']} related={summary['related']} "
+          f"skipped={summary['skipped']}")
     if not args.apply:
         print("[lint-fix] dry-run — no files changed. Re-run with --apply to write.")
     return 0

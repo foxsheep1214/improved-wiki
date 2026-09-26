@@ -48,6 +48,14 @@
 - Keep improved-wiki's documented semantic batching/safety extensions; v0.6.6
   parity covers normalized indexed structural suggestions and exact normalized
   filtering of false `missing-page` findings.
+- Structural lint reports `broken-related` (warning) for a bare `related:`
+  entry that names no page (resolved like a body link: path, then basename).
+  NashSU writes bare-slug `related:` too but never checks it; orphan and
+  no-outlinks detection still read `[[wikilinks]]` only, as in NashSU.
+  `--fix-links` repoints an entry whose suggestion clears the 0.9 rewrite
+  gate and otherwise drops it, as NashSU's page-delete cascade drops related
+  refs to deleted pages. Bracketed entries are wikilinks and stay
+  `broken-link` findings.
 - Structural lint reports `invalid-frontmatter` (error) for a block that is
   unclosed, empty or not valid YAML: every reader treats such a page as having
   no frontmatter. It is not auto-fixed; `--strict` counts it as critical.
