@@ -20,9 +20,15 @@
 #   5. semantic            — contradiction / stale / missing-page / suggestion /
 #                             term-ambiguity (LLM-driven, --no-semantic to skip)
 #
+# With --emit-review, warning-severity semantic findings are first re-checked
+# against full page content (lint_verify_semantic.py); refuted ones never
+# reach wiki/REVIEW/.
+#
 # Output:
-#   - .llm-wiki/lint/*.md         — human-browsable lint pages
-#   - .llm-wiki/lint-cache.json   — JSON array (for tooling)
+#   - .llm-wiki/lint/*.md         — human-browsable lint pages (semantic-*.md
+#                                   belong to the semantic pass)
+#   - .llm-wiki/lint-cache.json   — JSON array (for tooling); refreshed after
+#                                   the maintenance stages change the wiki
 #   - stdout: summary line
 #
 # Usage:
@@ -57,24 +63,29 @@
 #                                     # equivalent): re-verify severity=="warning"
 #                                     # semantic-lint findings against FULL page
 #                                     # content (the semantic pass itself only
-#                                     # sees a 500-char preview per page, batched
-#                                     # blind with no cross-batch memory). Run
-#                                     # after a lint pass; see the module docstring.
+#                                     # sees a short summary per page, batched).
+#                                     # Runs before semantic warnings are routed
+#                                     # to REVIEW; see the module docstring.
 #
 # Exit code:
-#   0 — clean (or with findings but no --strict)
+#   0 — clean (or with findings but no --strict); also plain lint when no
+#       orphan page remains, so there is nothing to confirm
 #   1 — broken-link, missing- or invalid-frontmatter found (only with --strict)
-#   2 — script error
-#   101 — conversation handoff pending: --semantic, --sweep, or --dedup wrote
+#   2 — script error, or a stage failed: the run stops before the
+#       delete-orphans checkpoint and keeps its checkpoint, so re-running the
+#       same command retries the failed stage and skips completed ones
+#   101 — conversation handoff pending: --semantic (or its verify step),
+#         --sweep, or --dedup wrote
 #         a prompt and is waiting for the calling agent's answer. Answer it
 #         (per that sub-script's own conversation dir) and re-invoke
 #         wiki-lint.sh with the same flags to continue requested stages. (2026-07-10:
 #         --sweep/--dedup used to swallow this and silently fall through to
 #         later stages without actually applying the sweep/dedup — fixed to
 #         propagate exit 101 the same way --semantic already did.)
-#   102 — all preceding default stages finished; ask the user whether to run
-#         delete-orphans. If approved, invoke --delete-orphans-only. Do not
-#         treat 102 as failure or run the continuation without confirmation.
+#   102 — all preceding default stages finished and orphan pages remain; ask
+#         the user whether to run delete-orphans. If approved, invoke
+#         --delete-orphans-only. Do not treat 102 as failure or run the
+#         continuation without confirmation.
 #
 # --dedup convergence note (2026-07-12, user-directed): cross_source_dedup.py
 # batches are content-hash keyed, so each merge round shifts the wiki page
@@ -91,6 +102,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export SCRIPT_DIR
 WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
+PYTHON="${IMPROVED_WIKI_PYTHON:-python3}"
 WIKI_DIR="$WIKI_ROOT/wiki"
 export WIKI_DIR
 
@@ -186,11 +198,11 @@ fi
 # The Python launcher owns the locks across exec, without a watcher or FIFO.
 # The private re-entry marker is never trusted without validating its fds.
 if [ "$INTERNAL_LOCKED" != true ]; then
-    exec "${IMPROVED_WIKI_PYTHON:-python3}" "$SCRIPT_DIR/_maintenance_lock.py" \
+    exec "$PYTHON" "$SCRIPT_DIR/_maintenance_lock.py" \
         "${LOCK_MODE[@]}" "$WIKI_ROOT" bash "$0" --internal-locked "$@"
 fi
-python3 "$SCRIPT_DIR/_maintenance_lock.py" --check "${LOCK_MODE[@]}" "$WIKI_ROOT" || exit 1
-RUNTIME_DIR=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+"$PYTHON" "$SCRIPT_DIR/_maintenance_lock.py" --check "${LOCK_MODE[@]}" "$WIKI_ROOT" || exit 1
+RUNTIME_DIR=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON" -c \
     'import sys; from pathlib import Path; from _paths import detect_runtime_dir; print(detect_runtime_dir(Path(sys.argv[1])))' "$WIKI_ROOT") || exit 1
 mkdir -p "$RUNTIME_DIR"
 
@@ -202,11 +214,14 @@ LINT_CACHE="$RUNTIME_DIR/lint-cache.json"
 SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
 
 
-# Structural-only and the separately confirmed delete-orphans continuation are
-# standalone commands. They must not consume or overwrite an exit-101
-# checkpoint belonging to a full/diagnostic logical lint run.
+# Structural-only, the separately confirmed delete-orphans continuation and
+# every mutation-free run are standalone commands: they must not consume or
+# finish an exit-101 checkpoint belonging to a maintenance run. A mutation-free
+# run needs no checkpoint of its own — its only resumable stage is semantic,
+# whose answered batches are cached by content.
 STATEFUL_LINT_RUN=true
-if [ "$STRUCTURAL_ONLY_MODE" = true ] || [ "$DELETE_ORPHANS_ONLY_MODE" = true ]; then
+if [ "$STRUCTURAL_ONLY_MODE" = true ] || [ "$DELETE_ORPHANS_ONLY_MODE" = true ] || \
+   [ "${LOCK_MODE[0]}" = --read-only ]; then
   STATEFUL_LINT_RUN=false
 fi
 
@@ -221,13 +236,14 @@ LINT_RUN_ACTIVE=false
 LINT_RUN_ID=""
 
 if [ "$RESET_LINT_RUN" = true ]; then
-  python3 "$SCRIPT_DIR/_lint_run_state.py" reset "$LINT_RUN_STATE" \
+  "$PYTHON" "$SCRIPT_DIR/_lint_run_state.py" reset "$LINT_RUN_STATE" \
     --related-state "$RUNTIME_DIR/review-sweep-run.json" || exit 2
   echo "[lint] Discarded the previous logical lint-run checkpoint." >&2
 fi
 
 if [ "$STATEFUL_LINT_RUN" = true ]; then
-  if ! LINT_RUN_ID=$(python3 "$SCRIPT_DIR/_lint_run_state.py" begin "$LINT_RUN_STATE"); then
+  if ! LINT_RUN_ID=$("$PYTHON" "$SCRIPT_DIR/_lint_run_state.py" begin "$LINT_RUN_STATE" \
+      --related-state "$RUNTIME_DIR/review-sweep-run.json"); then
     echo "[lint] Could not start/resume logical lint-run state." >&2
     exit 2
   fi
@@ -237,18 +253,31 @@ fi
 
 lint_stage_done() {
   [ "$LINT_RUN_ACTIVE" = true ] || return 1
-  python3 "$SCRIPT_DIR/_lint_run_state.py" is-done "$LINT_RUN_STATE" "$1"
+  "$PYTHON" "$SCRIPT_DIR/_lint_run_state.py" is-done "$LINT_RUN_STATE" "$1"
 }
 
 lint_mark_done() {
   [ "$LINT_RUN_ACTIVE" = true ] || return 0
-  python3 "$SCRIPT_DIR/_lint_run_state.py" mark-done "$LINT_RUN_STATE" "$1"
+  "$PYTHON" "$SCRIPT_DIR/_lint_run_state.py" mark-done "$LINT_RUN_STATE" "$1"
 }
 
 lint_finish_run() {
   [ "$LINT_RUN_ACTIVE" = true ] || return 0
-  python3 "$SCRIPT_DIR/_lint_run_state.py" finish "$LINT_RUN_STATE"
+  "$PYTHON" "$SCRIPT_DIR/_lint_run_state.py" finish "$LINT_RUN_STATE"
   LINT_RUN_ACTIVE=false
+}
+
+# A failed stage no longer lets the run report completion: it is recorded, the
+# independent later stages still run, and the run exits 2 before the
+# delete-orphans checkpoint with its logical-run checkpoint kept for a retry.
+FAILED_STAGES=""
+record_failure() {
+  FAILED_STAGES="${FAILED_STAGES:+$FAILED_STAGES, }$1 (exit $2)"
+}
+stop_if_failed() {
+  [ -n "$FAILED_STAGES" ] || return 0
+  echo "[lint] Failed stage(s): $FAILED_STAGES — lint remains incomplete. Fix the cause and re-run the same command; completed stages are skipped." >&2
+  exit 2
 }
 
 # ── Phase 1: Structural lint ──
@@ -342,7 +371,7 @@ PYEOF
 run_structural_scan() {
   # Guard the cache write: a failed python run leaves a partial/empty .tmp,
   # and a blind mv would clobber the last good cache used by fix/orphan stages.
-  if ! python3 "$LINT_SCRIPT" > "$LINT_CACHE.tmp" 2> "$LINT_CACHE.tmp.err"; then
+  if ! "$PYTHON" "$LINT_SCRIPT" > "$LINT_CACHE.tmp" 2> "$LINT_CACHE.tmp.err"; then
     echo "[lint] Structural lint failed — keeping previous cache." >&2
     cat "$LINT_CACHE.tmp.err" >&2
     rm -f "$LINT_CACHE.tmp" "$LINT_CACHE.tmp.err"
@@ -359,8 +388,9 @@ if ! run_structural_scan; then
 fi
 CACHE_DIRTY_AFTER_SCAN=false
 
-# ── Summary ──
-SUMMARY_LINE=$(python3 -c "
+# ── Summary + lint pages (also re-run after maintenance mutates the wiki) ──
+structural_summary() {
+  SUMMARY_LINE=$("$PYTHON" -c "
 import json
 from collections import Counter
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
@@ -369,13 +399,15 @@ total = sum(c.values())
 parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
 print(' | '.join(parts))
 ")
-echo "[lint] $SUMMARY_LINE"
+  echo "[lint]$1 $SUMMARY_LINE"
+}
 
-# ── Write lint pages ──
-if [ "$JSON_ONLY" != true ]; then
+write_lint_pages() {
+  [ "$JSON_ONLY" != true ] || return 0
   mkdir -p "$LINT_PAGES_DIR"
-  find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' -print0 | xargs -0 rm -f
-  python3 -c "
+  # semantic-*.md belong to the semantic pass (and its verification notes).
+  find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' ! -name 'semantic-*' -print0 | xargs -0 rm -f
+  "$PYTHON" -c "
 import json, os, time, re
 from pathlib import Path
 
@@ -435,9 +467,12 @@ created: {date_str}
 
 print(f'[lint] {written} lint pages → {lint_dir}')
 "
-  LINT_PAGE_COUNT=$(ls "$LINT_PAGES_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  LINT_PAGE_COUNT=$(find "$LINT_PAGES_DIR" -maxdepth 1 -name '*.md' ! -name 'semantic-*' | wc -l | tr -d ' ')
   echo "[lint] Pages: $LINT_PAGE_COUNT findings in $LINT_PAGES_DIR/"
-fi
+}
+
+structural_summary ""
+write_lint_pages
 
 # ── Phase 2: Semantic lint (user-selected default; --no-semantic skips) ──
 if [ "$SEMANTIC" = true ]; then
@@ -446,17 +481,17 @@ if [ "$SEMANTIC" = true ]; then
   else
     SEM_ARGS=()
     [ -n "$SEMANTIC_LIMIT" ]  && SEM_ARGS+=(--limit "$SEMANTIC_LIMIT")
-    [ "$EMIT_REVIEW" = true ] && SEM_ARGS+=(--emit-review)
     [ -n "$SEMANTIC_TOKENS" ] && \
       echo "[lint] --semantic: --semantic-tokens is ignored in conversation mode" >&2
     echo "[lint] --semantic: running conversation-mode semantic pass ..."
-    IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/wiki-lint-semantic.py" ${SEM_ARGS:+"${SEM_ARGS[@]}"}
+    IMPROVED_WIKI_ROOT="$WIKI_ROOT" "$PYTHON" "$SCRIPT_DIR/wiki-lint-semantic.py" ${SEM_ARGS:+"${SEM_ARGS[@]}"}
     sem_rc=$?
     if [ "$sem_rc" -eq 101 ]; then
       echo "[lint] --semantic: conversation handoff pending (exit 101) — answer the written prompt and re-run wiki-lint.sh with the same flags; the logical-run checkpoint prevents a second full pass after this one completes." >&2
       exit 101
     elif [ "$sem_rc" -ne 0 ]; then
       echo "[lint] --semantic: sub-script exited $sem_rc, continuing" >&2
+      record_failure semantic "$sem_rc"
     elif ! lint_mark_done "semantic"; then
       echo "[lint] --semantic: failed to persist completion checkpoint." >&2
       lint_finish_run
@@ -465,9 +500,45 @@ if [ "$SEMANTIC" = true ]; then
   fi
 fi
 
+# ── Semantic → REVIEW: re-check warnings on full page content first ──
+# The semantic pass only sees short summaries; lint_verify_semantic.py reads
+# every cited page in full, and findings it refutes are not routed to REVIEW.
+if [ "$SEMANTIC" = true ] && [ "$EMIT_REVIEW" = true ] && lint_stage_done "semantic"; then
+  if lint_stage_done "semantic_verify"; then
+    echo "[lint] Semantic verify: already complete for logical run $LINT_RUN_ID; skipping."
+  else
+    echo "[lint] Semantic verify: re-checking warning findings against full pages..."
+    "$PYTHON" "$SCRIPT_DIR/lint_verify_semantic.py" --project "$WIKI_ROOT"
+    verify_rc=$?
+    if [ "$verify_rc" -eq 101 ]; then
+      echo "[lint] Semantic verify: conversation handoff pending (exit 101) — answer the written prompt and re-run wiki-lint.sh with the same flags." >&2
+      exit 101
+    elif [ "$verify_rc" -ne 0 ]; then
+      echo "[lint] Semantic verify: sub-script exited $verify_rc; warnings not routed to REVIEW" >&2
+      record_failure semantic_verify "$verify_rc"
+    elif ! lint_mark_done "semantic_verify"; then
+      echo "[lint] Semantic verify: failed to persist completion checkpoint." >&2
+      lint_finish_run
+      exit 2
+    fi
+  fi
+  if lint_stage_done "semantic_verify" && ! lint_stage_done "semantic_review"; then
+    IMPROVED_WIKI_ROOT="$WIKI_ROOT" "$PYTHON" "$SCRIPT_DIR/wiki-lint-semantic.py" --emit-review-only
+    review_rc=$?
+    if [ "$review_rc" -ne 0 ]; then
+      echo "[lint] Semantic review routing exited $review_rc" >&2
+      record_failure semantic_review "$review_rc"
+    elif ! lint_mark_done "semantic_review"; then
+      echo "[lint] Semantic review routing: failed to persist completion checkpoint." >&2
+      lint_finish_run
+      exit 2
+    fi
+  fi
+fi
+
 # ── Combined summary (with semantic) ──
 if [ "$SEMANTIC" = true ] && [ -e "$SEMANTIC_CACHE" ]; then
-  SUMMARY_LINE=$(python3 -c "
+  SUMMARY_LINE=$("$PYTHON" -c "
 import json, os
 from collections import Counter
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
@@ -490,7 +561,7 @@ fi
 
 # ── Verbose ──
 if [ "$VERBOSE" = true ]; then
-  python3 -c "
+  "$PYTHON" -c "
 import json, os
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
 if os.path.exists('$SEMANTIC_CACHE'):
@@ -502,7 +573,7 @@ fi
 
 # ── Strict ──
 if [ "$STRICT" = true ]; then
-  HAS_ERRORS=$(python3 -c "
+  HAS_ERRORS=$("$PYTHON" -c "
 import json
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
 errors = sum(1 for f in findings if f['type'] in ('broken-link', 'missing-frontmatter', 'invalid-frontmatter'))
@@ -525,7 +596,7 @@ if [ "$AUTO_FIX" = true ]; then
     TIMESTAMP=$(date +%Y-%m-%d)
     # Progress lines go to stderr; stdout carries ONLY the final count, so
     # $FIXED can't be a multi-line blob (2026-07-12). Writes are atomic.
-    FIXED=$(python3 << PYEOF
+    FIXED=$("$PYTHON" << PYEOF
 import json, re, pathlib, os, sys
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from _paths import atomic_write
@@ -533,6 +604,18 @@ with open('${LINT_CACHE}', 'r') as fh:
     cache = json.load(fh)
 wiki_dir = pathlib.Path('${WIKI_DIR}')
 fixed = 0
+# schema.md's Page Types table owns type-to-directory routing; the literal
+# map below is only the fallback for a project without a readable table.
+DIR_TYPE = {'entities':'entity','concepts':'concept','sources':'source','queries':'query','comparisons':'comparison','synthesis':'synthesis','findings':'finding','thesis':'thesis','methodology':'methodology'}
+try:
+    from _schema import parse_wiki_schema_routing
+    ROUTES = {t: d for t, d in parse_wiki_schema_routing(
+        (wiki_dir.parent / 'schema.md').read_text(encoding='utf-8')).items() if d}
+except OSError:
+    ROUTES = {}
+def page_type_for(rel):
+    matches = [(len(d), t) for t, d in ROUTES.items() if rel.startswith(d + '/')]
+    return max(matches)[1] if matches else DIR_TYPE.get(rel.split('/')[0], 'concept')
 items = cache if isinstance(cache, list) else cache.get('findings', cache.get('items', []))
 for f in items:
     page_rel = f.get('page', f.get('path', ''))
@@ -545,8 +628,7 @@ for f in items:
     if t == 'missing-frontmatter':
         text = path.read_text(encoding='utf-8')
         if not text.startswith('---'):
-            DIR_TYPE = {'entities':'entity','concepts':'concept','sources':'source','queries':'query','comparisons':'comparison','synthesis':'synthesis','findings':'finding','thesis':'thesis','methodology':'methodology'}
-            ptype = DIR_TYPE.get(page_rel.split('/')[0], 'concept')
+            ptype = page_type_for(page_rel)
             fm = f'---\ntype: {ptype}\ntitle: "{path.stem}"\ncreated: ${TIMESTAMP}\nupdated: ${TIMESTAMP}\ntags: []\nrelated: []\n---\n\n'
             atomic_write(path, fm + text)
             fixed += 1
@@ -557,6 +639,7 @@ PYEOF
     fix_rc=$?
     if [ "$fix_rc" -ne 0 ]; then
       echo "[lint] Auto-fix: python exited $fix_rc, continuing" >&2
+      record_failure auto_fix "$fix_rc"
     else
       if ! lint_mark_done "auto_fix"; then
         echo "[lint] Auto-fix: failed to persist completion checkpoint." >&2
@@ -580,12 +663,13 @@ if [ "$FIX_LINKS" = true ]; then
   else
     CACHE_DIRTY_AFTER_SCAN=true
     echo "[lint] Auto-fix-links: applying rewrites + append + broken→review (no stubs)..."
-    python3 "$SCRIPT_DIR/wiki-lint-fix.py" --apply \
+    "$PYTHON" "$SCRIPT_DIR/wiki-lint-fix.py" --apply \
       --from-cache "$LINT_CACHE" \
       --project-root "$WIKI_ROOT"
     fixlinks_rc=$?
     if [ "$fixlinks_rc" -ne 0 ]; then
       echo "[lint] --fix-links: sub-script exited $fixlinks_rc, continuing" >&2
+      record_failure fix_links "$fixlinks_rc"
     elif ! lint_mark_done "fix_links"; then
       echo "[lint] --fix-links: failed to persist completion checkpoint." >&2
       lint_finish_run
@@ -605,7 +689,7 @@ if [ "$SWEEP" = true ]; then
     if [ "$LINT_RUN_ACTIVE" = true ]; then
       SWEEP_ARGS+=(--run-id "$LINT_RUN_ID")
     fi
-    SWEEP_OUT=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" python3 "$SCRIPT_DIR/sweep_reviews.py" \
+    SWEEP_OUT=$(IMPROVED_WIKI_ROOT="$WIKI_ROOT" "$PYTHON" "$SCRIPT_DIR/sweep_reviews.py" \
         "${SWEEP_ARGS[@]}" 2>&1 | tail -3)
     sweep_rc=$?
     echo "[lint] --sweep: $SWEEP_OUT"
@@ -614,6 +698,7 @@ if [ "$SWEEP" = true ]; then
       exit 101
     elif [ "$sweep_rc" -ne 0 ]; then
       echo "[lint] --sweep: sub-script exited $sweep_rc, continuing" >&2
+      record_failure sweep "$sweep_rc"
     elif ! lint_mark_done "sweep"; then
       echo "[lint] --sweep: failed to persist completion checkpoint." >&2
       lint_finish_run
@@ -629,14 +714,14 @@ if [ "$DEDUP" = true ]; then
   else
     CACHE_DIRTY_AFTER_SCAN=true
     echo "[lint] Cross-source dedup: merging near-duplicate concepts..."
-    python3 "$SCRIPT_DIR/cross_source_dedup.py" --project "$WIKI_ROOT" 2>&1 | tail -5
+    "$PYTHON" "$SCRIPT_DIR/cross_source_dedup.py" --project "$WIKI_ROOT" 2>&1 | tail -5
     dedup_rc=${PIPESTATUS[0]}
     if [ "$dedup_rc" -eq 101 ]; then
       echo "[lint] --dedup: conversation handoff pending (exit 101) — answer the written prompt and re-run wiki-lint.sh to finish the same logical lint run." >&2
       exit 101
     elif [ "$dedup_rc" -ne 0 ]; then
-      echo "[lint] --dedup: sub-script exited $dedup_rc; lint remains incomplete" >&2
-      exit "$dedup_rc"
+      echo "[lint] --dedup: sub-script exited $dedup_rc" >&2
+      record_failure dedup "$dedup_rc"
     elif ! lint_mark_done "dedup"; then
       echo "[lint] --dedup: failed to persist completion checkpoint." >&2
       lint_finish_run
@@ -653,9 +738,32 @@ fi
 # that a --fix-links append in this very run had just rescued (the cache
 # predates the fix). Real delete is an explicit, separate step:
 #   wiki-lint-fix.py --delete-orphans --apply --from-cache <cache> --project-root <root>
+if [ "$CACHE_DIRTY_AFTER_SCAN" = true ]; then
+  # The stages above changed the wiki: refresh the cache and lint pages so
+  # they describe the wiki as left by this run, not as it was before it.
+  echo "[lint] Refreshing structural findings after maintenance..."
+  if run_structural_scan; then
+    CACHE_DIRTY_AFTER_SCAN=false
+    structural_summary " After maintenance:"
+    write_lint_pages
+  else
+    record_failure structural_refresh 1
+  fi
+fi
+stop_if_failed
+
 if [ "$DELETE_ORPHANS" = ask ]; then
+  ORPHAN_COUNT=$("$PYTHON" -c "
+import json
+print(sum(1 for f in json.load(open('$LINT_CACHE', encoding='utf-8')) if f.get('type') == 'orphan'))
+") || ORPHAN_COUNT=unknown
+  if [ "$ORPHAN_COUNT" = 0 ]; then
+    echo "[lint] No orphan pages remain; delete-orphans confirmation is not needed."
+    lint_finish_run
+    exit 0
+  fi
   echo "[lint] DELETE_ORPHANS_CONFIRMATION_REQUIRED" >&2
-  echo "[lint] All preceding default lint/fix/sweep/dedup stages are complete." >&2
+  echo "[lint] All preceding default lint/fix/sweep/dedup stages are complete; $ORPHAN_COUNT orphan page(s) remain." >&2
   echo "[lint] Ask the user: 是否执行 delete-orphans（仅预览并生成 Review，不会删除页面）？" >&2
   echo "[lint] If approved, run: $0 --delete-orphans-only" >&2
   lint_finish_run
@@ -663,20 +771,15 @@ if [ "$DELETE_ORPHANS" = ask ]; then
 fi
 
 if [ "$DELETE_ORPHANS" = true ]; then
-  if [ "$CACHE_DIRTY_AFTER_SCAN" = true ]; then
-    echo "[lint] Refreshing structural cache after wiki mutations before orphan review..."
-    if ! run_structural_scan; then
-      lint_finish_run
-      exit 1
-    fi
-  fi
   echo "[lint] Delete-orphans: preview + review items (real delete: wiki-lint-fix.py --delete-orphans --apply)..."
-  python3 "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans --emit-review \
+  "$PYTHON" "$SCRIPT_DIR/wiki-lint-fix.py" --delete-orphans --emit-review \
     --from-cache "$LINT_CACHE" \
     --project-root "$WIKI_ROOT"
   delorph_rc=$?
   if [ "$delorph_rc" -ne 0 ]; then
-    echo "[lint] --delete-orphans: sub-script exited $delorph_rc, continuing" >&2
+    echo "[lint] --delete-orphans: sub-script exited $delorph_rc" >&2
+    record_failure delete_orphans "$delorph_rc"
+    stop_if_failed
   fi
 fi
 

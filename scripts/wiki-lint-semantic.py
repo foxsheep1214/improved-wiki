@@ -4,9 +4,12 @@ wiki-lint-semantic.py — LLM-driven semantic lint for a wiki/.
 
 This is improved-wiki's port of NashSU's runSemanticLint() from
 src/lib/lint.ts (runSemanticLint ~L305, excludes
-only log.md). It scans every page's first 500
-chars + frontmatter, sends the concatenated summaries to an LLM, and
-parses ---LINT:type|severity|title--- blocks back into findings.
+only log.md). It summarizes every page as its frontmatter + first 500
+body chars (NashSU's stated summary; its code slices the raw text, which
+left long-frontmatter pages with little or no body), sends the summaries
+to an LLM, and parses ---LINT:type|severity|title--- blocks back into
+findings. Batches keep pages of one link-graph community together, since
+NashSU compares the whole wiki in a single call.
 
 Findings carry type="semantic" (matching NashSU's semantic result type),
 with the raw type (contradiction / stale / missing-page / suggestion /
@@ -43,6 +46,8 @@ Usage:
   ./wiki-lint-semantic.py --dry-run    # print prompt + summaries, no LLM call
   ./wiki-lint-semantic.py --limit 50   # cap pages sampled (for huge wikis)
   ./wiki-lint-semantic.py --emit-review # explicitly route warnings to REVIEW/
+  ./wiki-lint-semantic.py --emit-review-only # route the saved findings, skipping
+                                             # ones lint_verify_semantic refuted
 
 Exit codes: 0 done; 101 conversation pending (agent answers + re-invokes);
 2 usage error.
@@ -78,8 +83,9 @@ ANCHOR_FILES = {"log.md"}
 # semantic-lint LLM — shared guard; see _paths.WIKI_ARTIFACT_DIRS for the
 # rationale (the literal NashSU port `f.name !== "log.md"` is faithless here).
 
-# Per-page summary size (NashSU: 500 chars)
+# Per-page summary size (NashSU: 500 chars), counted after the frontmatter.
 SUMMARY_CHARS = 500
+_FRONTMATTER_BLOCK_RE = re.compile(r"^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)")
 # Concatenated sample for language detection (NashSU: 2000 chars)
 LANG_SAMPLE_CHARS = 2000
 # Batch budget: context-derived char ceiling per LLM call (2026-07-10),
@@ -146,6 +152,50 @@ def missing_page_already_exists(
     return bool(normalized) and normalized in existing_page_names
 
 
+def summary_preview(text: str) -> str:
+    """Frontmatter block + the first SUMMARY_CHARS chars of the body."""
+    m = _FRONTMATTER_BLOCK_RE.match(text)
+    head, body = (text[:m.end()], text[m.end():]) if m else ("", text)
+    return head + body[:SUMMARY_CHARS] + ("..." if len(body) > SUMMARY_CHARS else "")
+
+
+def order_by_community(
+    root: Path, summaries: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Put pages of one link-graph community next to each other.
+
+    Batches are cut from this order, so related pages share a batch and a
+    contradiction between them can be seen; path order put concepts, sources
+    and comparisons of one topic in different batches. Communities come
+    from graph.py's Louvain on body links + ``related:`` (index/log/overview
+    are left out: they link everything and would merge all communities).
+    Falls back to path order when the graph cannot be built.
+    """
+    try:
+        import networkx as nx
+        import graph
+        pages = graph.load_pages(root, include_hidden=True)
+        lg = graph.build_link_graph(pages)
+        skip = {nid for nid, page in pages.items()
+                if page.stem in graph.INSIGHT_STRUCTURAL_IDS}
+        g = nx.Graph()
+        g.add_nodes_from(nid for nid in pages if nid not in skip)
+        g.add_edges_from(tuple(e) for e in lg.edges if not (e & skip))
+        communities = graph.detect_communities(g, lg)
+    except Exception as exc:  # noqa: BLE001 — ordering is an optimization
+        print(f"[semantic-lint] graph ordering unavailable ({exc}); using path order",
+              file=sys.stderr)
+        return summaries
+    rank: dict[str, tuple[int, int, str]] = {}
+    for c in communities:
+        for nid in c.nodes:
+            rank[nid] = (-len(c.nodes), 0, min(c.nodes))
+    def key(item: tuple[str, str]) -> tuple:
+        nid = "wiki/" + item[0][:-3] if item[0].endswith(".md") else "wiki/" + item[0]
+        return rank.get(nid, (0, 1, "")) + (item[0],)
+    return sorted(summaries, key=key)
+
+
 def collect_summary_bundle(
     wiki_dir: Path, limit: Optional[int] = None
 ) -> tuple[list[tuple[str, str]], set[str]]:
@@ -167,10 +217,7 @@ def collect_summary_bundle(
         if title:
             existing_page_names.add(_normalize_for_existence(title))
         if limit is None or len(out) < limit:
-            preview = text[:SUMMARY_CHARS] + (
-                "..." if len(text) > SUMMARY_CHARS else ""
-            )
-            out.append((rel_str, preview))
+            out.append((rel_str, summary_preview(text)))
     return out, existing_page_names
 
 
@@ -336,6 +383,12 @@ def main() -> int:
         action="store_true",
         help="Route warning findings into wiki/REVIEW/ (explicit mutation)",
     )
+    parser.add_argument(
+        "--emit-review-only",
+        action="store_true",
+        help="Route the saved lint-semantic.json warnings into wiki/REVIEW/ "
+             "without scanning; findings lint_verify_semantic refuted are skipped",
+    )
     args = parser.parse_args()
 
     root = Path(os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
@@ -352,6 +405,14 @@ def main() -> int:
 
     state_dir = detect_runtime_dir(root)  # handles all fallback logic
     out_path = Path(args.output) if args.output else state_dir / "lint-semantic.json"
+
+    if args.emit_review_only:
+        if not out_path.exists():
+            print(f"[semantic-lint] no findings file at {out_path}", file=sys.stderr)
+            return 2
+        emit_review_for_warnings(
+            wiki_dir, json.loads(out_path.read_text(encoding="utf-8")))
+        return 0
 
     summaries, existing_page_names = collect_summary_bundle(
         wiki_dir, limit=args.limit
@@ -390,7 +451,7 @@ def main() -> int:
     now_ms = int(time.time() * 1000)
     llm_call = make_conversation_llm_call(state_dir, stage_prefix="semantic-lint")
     print(f"[semantic-lint] batch budget: target_chars={target_chars:,} (context-derived)")
-    batches = chunk_batches(summaries, target_chars)
+    batches = chunk_batches(order_by_community(root, summaries), target_chars)
     findings: list[dict] = []
     pending = 0
     for i, batch in enumerate(batches, 1):
@@ -438,6 +499,9 @@ def main() -> int:
     # source knowledge; matches wiki-lint.sh's LINT_PAGES_DIR=$RUNTIME_DIR/lint.
     lint_dir = state_dir / "lint"
     lint_dir.mkdir(parents=True, exist_ok=True)
+    # This pass owns semantic-*.md; structural lint owns the rest of lint/.
+    for old in lint_dir.glob("semantic-*.md"):
+        old.unlink(missing_ok=True)
     date_str = time.strftime("%Y-%m-%d")
     severity_icon = {"warning": "⚠️", "info": "ℹ️"}
 
@@ -522,7 +586,13 @@ def emit_review_for_warnings(wiki_dir: Path, findings: list[dict]) -> int:
     only. Idempotent: stable filename per (raw_type, title); existing files
     are left untouched. Returns the number of items written.
     """
-    warnings = [f for f in findings if f.get("severity") == "warning"]
+    warnings = [f for f in findings if f.get("severity") == "warning"
+                and f.get("verified") != "refuted"]
+    refuted = sum(1 for f in findings if f.get("severity") == "warning"
+                  and f.get("verified") == "refuted")
+    if refuted:
+        print(f"[semantic-lint] {refuted} warning(s) refuted by lint_verify_semantic "
+              f"— not routed to REVIEW")
     if not warnings:
         return 0
     date_str = time.strftime("%Y-%m-%d")
@@ -543,6 +613,9 @@ def emit_review_for_warnings(wiki_dir: Path, findings: list[dict]) -> int:
             continue
         affected_yaml = "\n".join(f"  - {p}" for p in affected) or "  []"
         body_detail = re.sub(r"^\[[\w-]+\]\s*", "", detail)
+        if f.get("verified"):
+            body_detail += (f"\n\n**Full-content check:** {f['verified']}"
+                            f" — {f.get('verify_reason', '')}")
         md = f"""---
 type: review
 review_id: {review_id}

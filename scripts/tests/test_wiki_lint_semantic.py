@@ -494,6 +494,86 @@ class TestEmitReviewForWarnings(unittest.TestCase):
             self.assertEqual(wls.emit_review_for_warnings(wiki, findings), 0)
 
 
+class TestSummaryPreviewAndOrder(unittest.TestCase):
+    def test_preview_keeps_frontmatter_and_500_body_chars(self):
+        wls = _load_module()
+        fm = "type: concept\ntitle: Long\nrelated:\n" + "".join(
+            f"  - concepts/p{i}\n" for i in range(60))
+        body = "B" * 800
+        text = _page(fm.rstrip("\n"), body)
+        preview = wls.summary_preview(text)
+        self.assertTrue(preview.startswith("---\ntype: concept"))
+        self.assertIn("concepts/p59", preview)
+        # 500 chars after the closing ---, the blank separator line included.
+        self.assertEqual(preview.count("B"), wls.SUMMARY_CHARS - 1)
+        self.assertTrue(preview.endswith("..."))
+        short = _page("type: concept\ntitle: S", "# S\nshort body")
+        self.assertEqual(wls.summary_preview(short), short)
+
+    def test_linked_pages_are_batched_together(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = root / "wiki" / "concepts"
+            wiki.mkdir(parents=True)
+            # a-* and z-* form two linked clusters; path order interleaves
+            # nothing, so rename to make path order alternate between them.
+            links = {"a1": ["z1"], "z1": ["a1"], "b1": ["y1"], "y1": ["b1"]}
+            for name, targets in links.items():
+                (wiki / f"{name}.md").write_text(_page(
+                    f"type: concept\ntitle: {name}",
+                    " ".join(f"[[{t}]]" for t in targets)), encoding="utf-8")
+            summaries, _ = wls.collect_summary_bundle(root / "wiki")
+            self.assertEqual([p for p, _ in summaries],
+                             ["concepts/a1.md", "concepts/b1.md",
+                              "concepts/y1.md", "concepts/z1.md"])
+            ordered = [p for p, _ in wls.order_by_community(root, summaries)]
+            pairs = {frozenset(ordered[:2]), frozenset(ordered[2:])}
+            self.assertEqual(pairs, {
+                frozenset({"concepts/a1.md", "concepts/z1.md"}),
+                frozenset({"concepts/b1.md", "concepts/y1.md"}),
+            })
+
+
+class TestEmitReviewOnlySkipsRefuted(unittest.TestCase):
+    def test_refuted_warning_not_routed(self):
+        wls = _load_module()
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            (root / "wiki").mkdir()
+            runtime = root / ".llm-wiki"
+            runtime.mkdir()
+            (runtime / "lint-cache.json").write_text("[]", encoding="utf-8")
+            findings = [
+                {"type": "semantic", "severity": "warning", "page": "Real clash",
+                 "detail": "[contradiction] A vs B", "affectedPages": ["a.md"],
+                 "id": "lint-semantic-0", "verified": "confirmed",
+                 "verify_reason": "两页确实矛盾"},
+                {"type": "semantic", "severity": "warning", "page": "False alarm",
+                 "detail": "[contradiction] C vs D", "affectedPages": ["c.md"],
+                 "id": "lint-semantic-1", "verified": "refuted",
+                 "verify_reason": "讲的是不同的东西"},
+            ]
+            (runtime / "lint-semantic.json").write_text(
+                json.dumps(findings), encoding="utf-8")
+            old_root, old_argv = os.environ.get("IMPROVED_WIKI_ROOT"), sys.argv
+            os.environ["IMPROVED_WIKI_ROOT"] = str(root)
+            sys.argv = ["wiki-lint-semantic.py", "--emit-review-only"]
+            try:
+                self.assertEqual(wls.main(), 0)
+            finally:
+                sys.argv = old_argv
+                if old_root is None:
+                    os.environ.pop("IMPROVED_WIKI_ROOT", None)
+                else:
+                    os.environ["IMPROVED_WIKI_ROOT"] = old_root
+            items = list((root / "wiki" / "REVIEW" / "contradiction").glob("*.md"))
+            self.assertEqual(len(items), 1)
+            text = items[0].read_text(encoding="utf-8")
+            self.assertIn("Real clash", text)
+            self.assertIn("两页确实矛盾", text)
+
+
 class TestCollectSummariesDirExclusion(unittest.TestCase):
     """Regression: derived-artifact dirs (REVIEW/, clusters/, media/, lint/)
     must NOT be fed to the semantic-lint LLM — they are diagnostics this port

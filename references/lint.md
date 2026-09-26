@@ -10,11 +10,26 @@
   and completed stages are not restarted. Sweep likewise preserves NashSU's
   single hard budget of at most five 40-item judge batches across re-entry and
   stops at the first batch that resolves zero items. Use `--reset-lint-run`
-  only to discard an abandoned checkpoint and intentionally start over. After
+  only to discard an abandoned checkpoint and intentionally start over; a
+  checkpoint nobody resumed for 24 hours is discarded automatically. Only
+  runs with a wiki mutation keep a checkpoint: mutation-free runs never read
+  or finish it. After
   one requested dedup round, continue remaining stages with `--no-dedup`
   unless the user explicitly asks for full convergence.
+- With `--emit-review`, warning-severity semantic findings are re-checked on
+  full page content (`lint_verify_semantic.py`, may also exit 101) before
+  they are routed to `wiki/REVIEW/`; refuted findings are not routed.
+- A stage that fails (any exit other than 0/101) no longer lets the run look
+  complete: later independent stages still run, then lint exits **2** listing
+  the failed stages, before the delete-orphans checkpoint. The checkpoint is
+  kept, so re-running the same command retries only what did not finish.
+- After mutating stages, lint rescans and rewrites `lint-cache.json` and the
+  structural lint pages, so they describe the wiki as this run left it.
+  `semantic-*.md` lint pages belong to the semantic pass; structural scans
+  never delete them.
 - After all preceding default stages finish, plain lint exits **102** with
-  `DELETE_ORPHANS_CONFIRMATION_REQUIRED`. This is a required pause: ask the
+  `DELETE_ORPHANS_CONFIRMATION_REQUIRED` when orphan pages remain (exit 0 and
+  no question when none do). This is a required pause: ask the
   user whether to run delete-orphans. Do not infer consent.
   - If approved: run `wiki-lint.sh --delete-orphans-only`; it performs a fresh
     structural scan, then emits orphan preview/Review items.
@@ -24,7 +39,12 @@
   structural-only diagnostic route.
 - Delete-orphans remains preview + Review generation; it does **not** delete
   pages. Real deletion is the separately confirmed
-  `wiki-lint-fix.py --delete-orphans --apply` command.
+  `wiki-lint-fix.py --delete-orphans --apply` command. Its reference cleanup
+  matches NashSU's slug/title keys, except that a key a surviving page also
+  owns only removes path references to the deleted page.
+- Semantic lint summarizes each page as its frontmatter plus the first 500
+  body chars (NashSU's stated summary) and batches pages of one link-graph
+  community together, since NashSU compares the whole wiki in one call.
 - Keep improved-wiki's documented semantic batching/safety extensions; v0.6.6
   parity covers normalized indexed structural suggestions and exact normalized
   filtering of false `missing-page` findings.
@@ -35,7 +55,9 @@
   `graph.py`; run Graph explicitly when graph artifacts are requested.
 - Graph writes its derived gap report to
   `<project>/.llm-wiki/knowledge-gaps.md`, never under `wiki/REVIEW/`; it is
-  graph state, not a Review item.
+  graph state, not a Review item. The report lists every gap; `graph.json`
+  keeps NashSU's 8-item panel cap. Links to a `type: redirect` stub count for
+  its canonical page.
 
 
 ## Entry points

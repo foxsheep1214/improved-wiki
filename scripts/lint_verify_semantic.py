@@ -7,9 +7,10 @@ page, batched blind — 200 pages per call, no memory across batches. That's
 enough to flag a *candidate* issue but not enough to be sure it's real (the
 same reason ingest's Stage 2.4 dedup groups get a fresh subagent's yes/no
 before two pages are merged, rather than trusting the first LLM's guess).
-This is a standalone follow-up step porting that same discipline to lint
-output — like sweep_reviews.py / cross_source_dedup.py, it is NOT wired into
-wiki-lint.sh's default chain; run it manually after a lint pass.
+This ports that same discipline to lint output. wiki-lint.sh runs it after
+the semantic pass whenever warnings are routed to REVIEW (--emit-review, the
+default), and routes only findings it did not refute; it can also be run
+manually after a lint pass.
 
 Scope: only severity=="warning" findings without a "verified" key yet
 (idempotent — safe to re-run, already-verified findings are skipped).

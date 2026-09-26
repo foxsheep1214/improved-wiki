@@ -94,7 +94,7 @@ Existing explicit authorization satisfies a gate; do not reconfirm it.
 - Re-ingest/delete needs source identity and full redo versus `--keep-media`.
 - Explicit research topics/Review choices are already authorized. Confirm only
   agent-proposed topics/queries before searching.
-- Plain lint authorizes its default maintenance. Exit `102` requires confirmation
+- Plain lint authorizes its default maintenance. Exit `102` (orphans remain) requires confirmation
   for `--delete-orphans-only`, which generates previews/Reviews; actual orphan
   deletion requires separate authorization. See the Lint runbook.
 - Review fixes cannot widen declared page scope without authorization.

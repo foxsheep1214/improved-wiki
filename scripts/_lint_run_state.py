@@ -8,7 +8,9 @@ repeat a full semantic scan or already-completed mutation stages.
 
 The state file is intentionally small and exists only while a logical run is
 active.  ``finish`` removes it; ``--reset-lint-run`` in the shell wrapper is
-the explicit escape hatch for an abandoned run.
+the explicit escape hatch for an abandoned run.  A run nobody has resumed for
+MAX_IDLE_HOURS is treated as abandoned: the next ``begin`` starts fresh instead
+of silently skipping stages that completed long ago.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from _paths import atomic_write
 
 
 STATE_VERSION = 1
+MAX_IDLE_HOURS = 24
 _STAGE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
@@ -60,15 +63,38 @@ def _load(path: Path) -> dict[str, Any] | None:
     return raw
 
 
-def begin(path: Path, *, reset: bool = False) -> dict[str, Any]:
-    """Start or resume a logical lint run and return its state."""
+def _idle_hours(state: dict[str, Any]) -> float:
+    try:
+        updated = datetime.fromisoformat(state["updated_at"])
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    return (datetime.now(timezone.utc) - updated).total_seconds() / 3600
+
+
+def begin(
+    path: Path, *, reset: bool = False, related: tuple[Path, ...] = (),
+) -> dict[str, Any]:
+    """Start or resume a logical lint run and return its state.
+
+    Every resume refreshes ``updated_at``. A run idle for more than
+    MAX_IDLE_HOURS is discarded together with its ``related`` checkpoints.
+    """
     if reset:
         path.unlink(missing_ok=True)
     state = _load(path)
+    if state is not None and _idle_hours(state) > MAX_IDLE_HOURS:
+        print(f"[lint] Discarding logical run {state['run_id']}: idle since "
+              f"{state.get('updated_at')} (> {MAX_IDLE_HOURS}h). Starting fresh.",
+              file=sys.stderr)
+        for stale in (path, *related):
+            stale.unlink(missing_ok=True)
+        state = None
     if state is None:
         state = _new_state()
         path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
+    else:
+        state["updated_at"] = _now()
+    atomic_write(path, json.dumps(state, ensure_ascii=False, indent=2) + "\n")
     return state
 
 
@@ -100,6 +126,13 @@ def main(argv: list[str] | None = None) -> int:
     begin_p = sub.add_parser("begin", help="start or resume a logical lint run")
     begin_p.add_argument("state_file", type=Path)
     begin_p.add_argument("--reset", action="store_true")
+    begin_p.add_argument(
+        "--related-state",
+        action="append",
+        default=[],
+        type=Path,
+        help="per-run checkpoint discarded with an idle run",
+    )
 
     done_p = sub.add_parser("is-done", help="exit 0 when a stage is complete")
     done_p.add_argument("state_file", type=Path)
@@ -125,7 +158,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "begin":
-            state = begin(args.state_file, reset=args.reset)
+            state = begin(args.state_file, reset=args.reset,
+                          related=tuple(args.related_state))
             print(state["run_id"])
         elif args.command == "is-done":
             return 0 if is_done(args.state_file, args.stage) else 1
