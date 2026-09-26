@@ -230,6 +230,8 @@ def test_forged_lint_reentry_cannot_skip_lock(tmp_path, monkeypatch):
     monkeypatch.delenv('IMPROVED_WIKI_PROJECT_LOCK_FD', raising=False)
     env = dict(os.environ, IMPROVED_WIKI_ROOT=str(tmp_path), PATH=str(Path(sys.executable).parent)+os.pathsep+os.environ['PATH'])
     result = subprocess.run(['bash', str(SCRIPTS/'wiki-lint.sh'), '--internal-locked', '--structural-only'], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0 and 'No inherited lint lock' in result.stderr
+    result = subprocess.run(['bash', str(SCRIPTS/'wiki-lint.sh'), '--internal-locked', '--no-semantic'], env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode != 0 and 'No inherited project lock' in result.stderr
 
 
@@ -242,8 +244,8 @@ def test_shell_and_python_select_ledger_runtime(tmp_path, monkeypatch):
     result = subprocess.run(['bash', str(SCRIPTS/'wiki-lint.sh'), '--structural-only'], env=env, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert detect_runtime_dir(tmp_path) == tmp_path / '.llm-wiki'
-    assert (tmp_path / '.llm-wiki/ingest.lock').exists()
-    assert not (tmp_path / 'wiki/ingest.lock').exists()
+    assert (tmp_path / '.llm-wiki/lint.lock').exists()
+    assert not (tmp_path / 'wiki/lint.lock').exists()
     assert legacy.read_text() == '{"legacy":true}'
 
 

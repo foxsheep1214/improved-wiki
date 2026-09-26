@@ -28,7 +28,9 @@ publishes the result, and immediately re-invokes the exact command.
 
 For every conversation handoff:
 
-1. Dispatch one fresh worker/subagent per handoff.
+1. Dispatch one fresh worker/subagent per handoff. Its context window must be
+   at least the project's configured budget (`ingest.py --set-context-tokens`,
+   see `context-budget.md`); prompts are sized from that value.
 2. Give it exactly one prompt and forbid further delegation or background
    fan-out.
 3. Require one complete response, then terminate that worker.

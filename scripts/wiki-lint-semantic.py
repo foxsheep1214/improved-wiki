@@ -120,10 +120,10 @@ from _review_utils import normalize_review_title, resolve_review_path  # noqa: E
 
 
 def resolve_batch_target_chars(state_dir: Path) -> int:
-    """Per-batch char budget for chunk_batches(), derived from the explicit/default
-    context budget via the shared _core formula."""
+    """Per-batch char budget for chunk_batches(), derived from the explicit,
+    project-saved or default context budget via the shared _core formula."""
     from _context_budget import context_tokens
-    context_size = context_tokens()
+    context_size = context_tokens(runtime_dir=state_dir)
     ceil_env = os.environ.get("IMPROVED_WIKI_LINT_TARGET_TOKENS_CEIL", "").strip()
     hard_ceil = int(ceil_env) if ceil_env.isdigit() else _LINT_TARGET_TOKENS_HARD_CEIL
     _, target_chars = _compute_chunk_targets(context_size, hard_ceil=hard_ceil)

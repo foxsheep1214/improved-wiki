@@ -395,6 +395,42 @@ def _validate_bound_artifacts(
                     + ", ".join(missing_required))
 
 
+# Budget-derived fields that saved work depends on. Chunk boundaries (and so
+# every Stage 2.2 analysis and the Stage 3.2 merge prompt cap) follow the
+# chunk targets; the Stage 2.4 prompt also follows source_budget until its
+# result is cached. context_size itself only matters through these.
+_CHUNKING_BUDGET_FIELDS = ("target_tokens", "target_chars", "chunk_overlap")
+_STAGE_2_2_STARTED_ARTIFACTS = (
+    "wiki_index_snapshot_2_2", "chunk_plan_v2", "chunk_analyses")
+
+
+def _budget_drift(manifest: dict, current: dict, config, source_hash: str) -> list[str]:
+    """Budget fields that changed while this unfinished task depends on them."""
+    recorded = manifest.get("contract", {}).get("analysis", {})
+    if not recorded.get("context_size"):
+        return []
+    stages = load_stages(config, source_hash)
+    if stages.get("ingested"):
+        return []
+    writing = (
+        any(key in stages for key in POSTWRITE_COMPLETION_MARKERS)
+        or (config.runtime_dir / f"write-ledger-{source_hash[:16]}.json").exists()
+    )
+    generated = writing or "stage_2_3_done" in stages
+    # ``--delete`` clears the stages file for an explicit re-analysis, so
+    # leftover Stage 2.2 artifacts alone do not pin the budget.
+    analysing = stages_path(config, source_hash).exists() and any(
+        key in (load_progress(config, source_hash) or {})
+        for key in _STAGE_2_2_STARTED_ARTIFACTS)
+    if not (generated or analysing):
+        return []
+    fields = list(_CHUNKING_BUDGET_FIELDS)
+    if not generated:
+        fields.append("source_budget")
+    live = current["contract"]["analysis"]
+    return [f for f in fields if f in recorded and recorded[f] != live.get(f)]
+
+
 def ensure_task_manifest(raw_file: Path, config) -> dict:
     """Create or validate the source-bound manifest before resume/skip logic."""
     source_hash = file_sha256(raw_file)
@@ -431,16 +467,14 @@ def ensure_task_manifest(raw_file: Path, config) -> dict:
                 f"{current['source']['identity']!r}. Progress is keyed by "
                 "source hash and cannot be reused across identities.")
 
-    old_context = manifest.get("contract", {}).get("analysis", {}).get("context_size")
-    stages = load_stages(config, source_hash)
-    writing = (
-        any(key in stages for key in ("write_loop_done", "write_phase", "review_done", "aggregate_done"))
-        or (config.runtime_dir / f"write-ledger-{source_hash[:16]}.json").exists()
-    )
-    if writing and not stages.get("ingested") and old_context and old_context != config.context_size:
+    drift = _budget_drift(manifest, current, config, source_hash)
+    if drift:
+        old_context = manifest["contract"]["analysis"]["context_size"]
         raise TaskManifestError(
-            f"Context budget changed during a partial write; resume with "
-            f"--context-tokens {old_context} after verifying worker capacity")
+            f"Context budget changed after Stage 2.2 started ({', '.join(drift)} "
+            f"differ); resume with --context-tokens {old_context} after verifying "
+            "worker capacity. To re-analyze under the new budget instead, run "
+            f"`ingest.py --delete --keep-media {current['source']['identity']}` first.")
 
     prior_contract_hash = manifest.get("contract_sha256", "")
     if prior_contract_hash != current["contract_sha256"]:

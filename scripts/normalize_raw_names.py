@@ -483,8 +483,23 @@ def main():
     scope = f"（最近 {args.recent} 分钟内修改的文件）" if args.recent else ""
     print(f"{mode}模式{scope} — {project_root.name}\n")
 
-    results = stage_0_1_scan_raw(raw_root, rules, fix=args.fix,
-                       verbose=args.verbose, recent_minutes=args.recent)
+    if args.fix:
+        # Renaming raw sources while an ingest holds or has reserved the write
+        # spine would move a source out from under it.
+        from types import SimpleNamespace
+        from _maintenance_lock import MaintenanceLockError, maintenance_write_lock
+        from _paths import detect_runtime_dir
+        try:
+            with maintenance_write_lock(SimpleNamespace(
+                    runtime_dir=detect_runtime_dir(project_root.resolve()))):
+                results = stage_0_1_scan_raw(raw_root, rules, fix=True,
+                                   verbose=args.verbose, recent_minutes=args.recent)
+        except MaintenanceLockError as exc:
+            print(f"Error: {exc}")
+            return 1
+    else:
+        results = stage_0_1_scan_raw(raw_root, rules, fix=False,
+                           verbose=args.verbose, recent_minutes=args.recent)
 
     print("\n── 结果 ──")
     print(f"  ✅ 符合规范: {results['ok']}")

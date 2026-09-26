@@ -123,6 +123,39 @@ def parse_frontmatter(content: str) -> tuple[dict, str]:
     return fm, body
 
 
+def frontmatter_error(content: str) -> str | None:
+    """Why a page's frontmatter block is unusable, or None.
+
+    ``parse_frontmatter`` returns ``{}`` for an unclosed or non-YAML block, so
+    every reader (type routing, sources, search, graph) silently sees a page
+    without metadata. Writers and lint use this to refuse or report it. A page
+    with no frontmatter block at all is lint's separate missing-frontmatter.
+    """
+    if not content.startswith("---"):
+        content = _strip_leading_code_fence(content)
+    if not re.match(r"^---[ \t]*\r?\n", content):
+        return None
+    m = _FM_RE.match(content)
+    if not m:
+        if re.match(r"^---[ \t]*\r?\n---[ \t]*(?:\r?\n|$)", content):
+            return "frontmatter block is empty"
+        return "frontmatter block has no closing --- line"
+    raw = m.group(1)
+    try:
+        fm = yaml.load(raw.strip(), Loader=FrontmatterLoader)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = ""
+        if mark is not None:
+            skipped = raw[: len(raw) - len(raw.lstrip())].count("\n")
+            where = f" at line {mark.line + skipped + 2}"
+        problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+        return f"frontmatter is not valid YAML{where}: {problem}"
+    if fm is not None and not isinstance(fm, dict):
+        return "frontmatter is not a key: value mapping"
+    return None
+
+
 MAX_REDIRECT_HOPS = 3
 
 

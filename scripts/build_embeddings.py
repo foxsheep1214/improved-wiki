@@ -1144,19 +1144,36 @@ def _init_cli():
     )
 
 
+# Index-mutating maintenance commands join the ingest project lock. ``upsert``
+# is Stage 3.7's own subprocess, run while that ingest holds the lock and the
+# write spine, so it cannot take the lock itself.
+_LOCKED_COMMANDS = {"embed", "delete", "sync", "compact"}
+
+
 if __name__ == "__main__":
     _init_cli()
-    if ARGS.command == "embed":
-        cmd_embed()
-    elif ARGS.command == "upsert":
-        cmd_upsert()
-    elif ARGS.command == "delete":
-        cmd_delete()
-    elif ARGS.command == "sync":
-        cmd_sync()
-    elif ARGS.command == "compact":
-        cmd_compact()
-    elif ARGS.command == "search":
-        cmd_search()
-    elif ARGS.command == "stats":
-        cmd_stats()
+    import contextlib
+    with contextlib.ExitStack() as _lock:
+        if ARGS.command in _LOCKED_COMMANDS and not getattr(ARGS, "dry_run", False):
+            from types import SimpleNamespace
+            from _maintenance_lock import MaintenanceLockError, maintenance_write_lock
+            try:
+                _lock.enter_context(maintenance_write_lock(
+                    SimpleNamespace(runtime_dir=Path(RUNTIME_DIR))))
+            except MaintenanceLockError as exc:
+                print(f"[embedding] {exc}", file=sys.stderr)
+                sys.exit(1)
+        if ARGS.command == "embed":
+            cmd_embed()
+        elif ARGS.command == "upsert":
+            cmd_upsert()
+        elif ARGS.command == "delete":
+            cmd_delete()
+        elif ARGS.command == "sync":
+            cmd_sync()
+        elif ARGS.command == "compact":
+            cmd_compact()
+        elif ARGS.command == "search":
+            cmd_search()
+        elif ARGS.command == "stats":
+            cmd_stats()

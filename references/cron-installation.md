@@ -19,7 +19,8 @@ bash "$SKILL_DIR/scripts/wiki-lint.sh" --structural-only
 `run-queue.sh` consumes work until completion, a pending handoff or an error.
 Before consuming, establish the authorized source list/project and an agent
 handoff driver following `delegate-mode.md`. Preserve the same context budget
-on every resume. Do not interpret a queued job or exit 101 as a completed ingest.
+on every resume: save it with `ingest.py --set-context-tokens` so scheduled and
+interactive runs use the same value. Do not interpret a queued job or exit 101 as a completed ingest.
 
 Use the host scheduler appropriate to the user's request; no vendor-specific
 `no_agent`, notification destination or delivery flag is part of this CLI.

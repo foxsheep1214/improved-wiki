@@ -16,6 +16,7 @@
 #   2. orphan              — page no other page links to
 #   3. no-outlinks         — page has no outbound [[wikilink]]s
 #   4. missing-frontmatter — page lacks the required YAML block
+#      invalid-frontmatter — block is unclosed or not valid YAML (not auto-fixed)
 #   5. semantic            — contradiction / stale / missing-page / suggestion /
 #                             term-ambiguity (LLM-driven, --no-semantic to skip)
 #
@@ -62,7 +63,7 @@
 #
 # Exit code:
 #   0 — clean (or with findings but no --strict)
-#   1 — broken-link or missing-frontmatter found (only with --strict)
+#   1 — broken-link, missing- or invalid-frontmatter found (only with --strict)
 #   2 — script error
 #   101 — conversation handoff pending: --semantic, --sweep, or --dedup wrote
 #         a prompt and is waiting for the calling agent's answer. Answer it
@@ -93,24 +94,11 @@ WIKI_ROOT="${IMPROVED_WIKI_ROOT:-$(pwd)}"
 WIKI_DIR="$WIKI_ROOT/wiki"
 export WIKI_DIR
 
-# The Python launcher owns the project lock across exec, without a watcher or
-# FIFO. The private re-entry marker is never trusted without validating its fd.
-if [ "${1:-}" != "--internal-locked" ]; then
-    exec "${IMPROVED_WIKI_PYTHON:-python3}" "$SCRIPT_DIR/_maintenance_lock.py" \
-        "$WIKI_ROOT" bash "$0" --internal-locked "$@"
+INTERNAL_LOCKED=false
+if [ "${1:-}" = "--internal-locked" ]; then
+    INTERNAL_LOCKED=true
+    shift
 fi
-shift
-python3 "$SCRIPT_DIR/_maintenance_lock.py" --check "$WIKI_ROOT" || exit 1
-RUNTIME_DIR=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
-    'import sys; from pathlib import Path; from _paths import detect_runtime_dir; print(detect_runtime_dir(Path(sys.argv[1])))' "$WIKI_ROOT") || exit 1
-mkdir -p "$RUNTIME_DIR"
-
-LINT_PAGES_DIR="$RUNTIME_DIR/lint"
-if [ -d "$WIKI_DIR/lint" ] && [ "$WIKI_DIR/lint" != "$LINT_PAGES_DIR" ]; then
-    echo "[lint] Legacy wiki/lint/ detected; leaving it untouched during this diagnostic run. New lint pages go to $LINT_PAGES_DIR." >&2
-fi
-LINT_CACHE="$RUNTIME_DIR/lint-cache.json"
-SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
 
 # ── Flags ──
 VERBOSE=false
@@ -186,6 +174,34 @@ for arg in "$@"; do
   esac
 done
 
+# Lock mode follows the EFFECTIVE flags (later flags can re-enable a stage).
+# A run with every wiki mutation off only reads wiki/ and writes lint state, so
+# it holds just the lint-run lock: it neither waits for nor blocks an ingest.
+LOCK_MODE=(--lint)
+if [ "$EMIT_REVIEW" = false ] && [ "$AUTO_FIX" = false ] && [ "$FIX_LINKS" = false ] && \
+   [ "$SWEEP" = false ] && [ "$DEDUP" = false ] && [ "$DELETE_ORPHANS" = false ]; then
+    LOCK_MODE=(--read-only)
+fi
+
+# The Python launcher owns the locks across exec, without a watcher or FIFO.
+# The private re-entry marker is never trusted without validating its fds.
+if [ "$INTERNAL_LOCKED" != true ]; then
+    exec "${IMPROVED_WIKI_PYTHON:-python3}" "$SCRIPT_DIR/_maintenance_lock.py" \
+        "${LOCK_MODE[@]}" "$WIKI_ROOT" bash "$0" --internal-locked "$@"
+fi
+python3 "$SCRIPT_DIR/_maintenance_lock.py" --check "${LOCK_MODE[@]}" "$WIKI_ROOT" || exit 1
+RUNTIME_DIR=$(PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" python3 -c \
+    'import sys; from pathlib import Path; from _paths import detect_runtime_dir; print(detect_runtime_dir(Path(sys.argv[1])))' "$WIKI_ROOT") || exit 1
+mkdir -p "$RUNTIME_DIR"
+
+LINT_PAGES_DIR="$RUNTIME_DIR/lint"
+if [ -d "$WIKI_DIR/lint" ] && [ "$WIKI_DIR/lint" != "$LINT_PAGES_DIR" ]; then
+    echo "[lint] Legacy wiki/lint/ detected; leaving it untouched during this diagnostic run. New lint pages go to $LINT_PAGES_DIR." >&2
+fi
+LINT_CACHE="$RUNTIME_DIR/lint-cache.json"
+SEMANTIC_CACHE="$RUNTIME_DIR/lint-semantic.json"
+
+
 # Structural-only and the separately confirmed delete-orphans continuation are
 # standalone commands. They must not consume or overwrite an exit-101
 # checkpoint belonging to a full/diagnostic logical lint run.
@@ -250,6 +266,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.environ.get("SCRIPT_DIR", ""))
 from _lint_suggest import run_structural_lint
+from _frontmatter import frontmatter_error
 
 wiki_dir = Path(os.environ["WIKI_DIR"])
 findings: list[dict] = []
@@ -310,6 +327,14 @@ for stem, path in pages.items():
             "detail": "Page has no YAML frontmatter block (must start with ---).",
             "id": f"lint-mf-{stem}", "createdAt": now_ms,
         })
+    elif (fm_error := frontmatter_error(text)):
+        findings.append({
+            "type": "invalid-frontmatter", "severity": "error",
+            "page": str(path.relative_to(wiki_dir)),
+            "detail": f"{fm_error}. Every reader treats this page as having no "
+                      "frontmatter (type/sources/related are invisible); fix it by hand.",
+            "id": f"lint-if-{stem}", "createdAt": now_ms,
+        })
 
 print(json.dumps(findings, ensure_ascii=False, indent=2))
 PYEOF
@@ -341,7 +366,7 @@ from collections import Counter
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
 c = Counter(f['type'] for f in findings)
 total = sum(c.values())
-parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
+parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
 print(' | '.join(parts))
 ")
 echo "[lint] $SUMMARY_LINE"
@@ -455,6 +480,7 @@ parts = [f'{total} findings',
          f'orphan: {c.get(\"orphan\", 0)}',
          f'no-outlinks: {c.get(\"no-outlinks\", 0)}',
          f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}',
+         f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}',
          f'read-error: {c.get(\"read-error\", 0)}',
          f'semantic: {c.get(\"semantic\", 0)}']
 print(' | '.join(parts))
@@ -479,7 +505,7 @@ if [ "$STRICT" = true ]; then
   HAS_ERRORS=$(python3 -c "
 import json
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
-errors = sum(1 for f in findings if f['type'] in ('broken-link', 'missing-frontmatter'))
+errors = sum(1 for f in findings if f['type'] in ('broken-link', 'missing-frontmatter', 'invalid-frontmatter'))
 print(errors)
 ")
   if [ "$HAS_ERRORS" != "0" ]; then

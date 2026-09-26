@@ -28,6 +28,9 @@
 - Keep improved-wiki's documented semantic batching/safety extensions; v0.6.6
   parity covers normalized indexed structural suggestions and exact normalized
   filtering of false `missing-page` findings.
+- Structural lint reports `invalid-frontmatter` (error) for a block that is
+  unclosed, empty or not valid YAML: every reader treats such a page as having
+  no frontmatter. It is not auto-fixed; `--strict` counts it as critical.
 - Graph is a peer command, not a lint phase. `wiki-lint.sh` never invokes
   `graph.py`; run Graph explicitly when graph artifacts are requested.
 - Graph writes its derived gap report to
@@ -45,6 +48,12 @@ bash "$SKILL_DIR/scripts/wiki-lint.sh" --diagnostic-only
 bash "$SKILL_DIR/scripts/wiki-lint.sh"
 ```
 
-Lint and dedup share the ingest project lock, including across shell children.
-A reserved ingest spine blocks maintenance; do not remove lock files to bypass it.
-Runtime selection is read-only; see `runtime-layout.md` for explicit migration.
+Every lint run holds `<runtime>/lint.lock`, so two lint runs never overlap.
+A run whose effective flags leave every wiki mutation off (`--structural-only`,
+`--diagnostic-only`, or all `--no-<action>` flags) holds only that lock: it runs
+beside an ingest writer or a reserved spine and warns that findings may reflect
+a partial write. Any mutating run also joins the ingest project lock, including
+across shell children, and a reserved ingest spine blocks it; the standalone
+`wiki-lint-fix.py --apply` / `--emit-review` does the same. `--help` needs no
+lock. Do not remove lock files to bypass a refusal. Runtime selection is
+read-only; see `runtime-layout.md` for explicit migration.

@@ -251,7 +251,7 @@ helper 再执行一次 URL/fallback-key 去重和 20 条上限作为写入门禁
 ```markdown
 ---
 type: query
-title: "Research: <topic；双引号转义>"
+title: "Research: <topic；反斜杠与双引号转义>"
 created: <当前本地日历日期 YYYY-MM-DD>
 origin: deep-research
 tags: [research]

@@ -140,8 +140,14 @@ source is configured. Older review files without `options:` also go through
    ```
 
    The finalizer requires at least one declared page hash to change and writes
-   `resolved_reason: "Fixed: ...; Verified: ..."`. No change, failed lint,
-   missing evidence, or a concurrently changed Review leaves it pending.
+   `resolved_reason: "Fixed: ...; Verified: ..."`. The snapshot also records a
+   size/mtime inventory of every wiki page outside `REVIEW/`, `media/`,
+   `clusters/`, `lint/` and the root `index.md`/`log.md`/`overview.md`; any
+   undeclared page changed, added or removed since the snapshot blocks
+   finalization, as does a changed page whose frontmatter no longer parses.
+   No change, an out-of-scope edit, failed lint, missing evidence, or a
+   concurrently changed Review leaves it pending. If another writer touched
+   the wiki meanwhile, re-snapshot after it finishes.
 
 **Deep Research** → run the `deep-research.md` flow:
 - topic = item title (strip leading "Save to Wiki:"/"Create:"/"Research:" prefixes)

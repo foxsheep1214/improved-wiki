@@ -140,6 +140,7 @@ Phase 划分：0 前置检查 / 1 提取 / 2 分析生成 / 3 写入富化。
 - **同轮 slug 碰撞例外**：上面的替换语义只针对**上一次消化**留下的页。本轮写循环已写过的同路径页必须走真合并——`_is_same_run_collision` 把它标出来并强制 `replace_existing_body=False`。否则"只被本源拥有"这条判据在本轮写入后会恒成立，第二个 FILE 块会静默丢掉第一个块的正文。碰撞时打印 `same-slug collision`。
 - **不写进重定向页**：去重留下的 `type: redirect` 页占着旧 slug，后来的生成很容易再用这个名字。`resolve_ingest_write_path(wiki_dir=...)` 在 schema 路由之后沿 frontmatter `redirect:` 最多跟 3 跳，把 FILE block 改写到目标页（打印 `Redirected: A → B`）；写循环、`slug_dirs` 与 3.1 投影都传 `wiki_dir`，三者落点一致。没有可用目标的重定向页（缺 `redirect:`、目标不存在/在 wiki 外、成环）保留原路径，由 `stage_3_2_write_wiki_file` 整页替换并照常备份，不做 merge——merge 会保留 `type: redirect` 而把新正文藏在重定向页里（RadarWiki `concepts/micro-doppler-uav-classification`，2026-09-24）。
 - **合并后规范化**：入站 FILE block 在 merge 前规范化一次；多来源 LLM merge 完成后必须对**实际合并结果**再规范化一次，清掉旧页带入的畸形 `related`，并在同 stem 只有一个真实目标时纠正 body wikilink 的错误/大小写不匹配目录前缀。不能只规范化 merge 输入，否则 merger 会重新引入坏链接。
+- **frontmatter 必须可解析**：共享读取器按 YAML 解析 frontmatter，解析失败时返回 `{}`，type/sources/related 对所有读者都不可见。写前清洗（improved-wiki 扩展，非 NashSU）仅在整块解析失败时，给单独解析也失败的顶层 `key: value` 标量加双引号（如 `title: Buck: 死区控制`），且修复后整块能解析才采用。`stage_3_2_write_wiki_file` 在重定向处理与合并之后、落盘之前调用 `frontmatter_error()` 做最终校验；仍不可解析（未闭合、空块、引号断裂等）即抛错暂停，不写该页。
 - **go/no-go**：任一 FILE block 或 deterministic source fallback 写失败即停止；只保留成功页用于诊断，不写 `write_loop_done`/`write_phase`。正常 source 的 source page 必须已落盘。
 
 ### Stage 3.3 · Aggregate Repair

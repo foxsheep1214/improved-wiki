@@ -191,6 +191,45 @@ def _repair_wikilink_lists_in_frontmatter(content: str) -> str:
     return open_fence + repaired + after_payload + content[m.end(0):]
 
 
+# ── (4.5) Quote plain scalars that break YAML (improved-wiki extension) ─────
+# Not in NashSU: its reader tolerates ``title: Buck: dead time``. Our shared
+# reader parses frontmatter as YAML, and one such line hides the whole block
+# (type/sources/related) from every reader. Only when the block fails to parse
+# are top-level ``key: value`` lines that fail on their own double-quoted; the
+# repair is kept only if the whole block then parses. Values that open a YAML
+# structure (quote, flow collection, block scalar, anchor, tag) are left alone.
+_TOP_LEVEL_SCALAR_RE = re.compile(r"^([A-Za-z_][\w-]*):[ \t]+(\S.*?)[ \t]*$")
+_YAML_STRUCTURE_STARTS = ('"', "'", "[", "{", "|", ">", "&", "*", "!")
+
+
+def _quote_unparseable_frontmatter_scalars(content: str) -> str:
+    import yaml
+    from _frontmatter import FrontmatterLoader, frontmatter_error
+
+    if frontmatter_error(content) is None:
+        return content
+    m = _FM_BLOCK_RE.match(content)
+    if not m:
+        return content
+
+    def _quote(line: str) -> str:
+        lm = _TOP_LEVEL_SCALAR_RE.match(line)
+        if not lm or lm.group(2).startswith(_YAML_STRUCTURE_STARTS):
+            return line
+        try:
+            yaml.load(line, Loader=FrontmatterLoader)
+            return line
+        except yaml.YAMLError:
+            value = lm.group(2).replace("\\", "\\\\").replace('"', '\\"')
+            return f'{lm.group(1)}: "{value}"'
+
+    repaired_payload = "\n".join(_quote(line) for line in m.group(1).split("\n"))
+    full = m.group(0)
+    repaired = (full[: m.start(1) - m.start(0)] + repaired_payload
+                + full[m.end(1) - m.start(0):] + content[m.end(0):])
+    return repaired if frontmatter_error(repaired) is None else content
+
+
 def sanitize_ingested_file_content(content: str) -> str:
     """Clean common LLM formatting errors before writing a wiki page to disk.
 
@@ -202,5 +241,6 @@ def sanitize_ingested_file_content(content: str) -> str:
     cleaned = _strip_frontmatter_key_prefix(cleaned)
     cleaned = _add_missing_opening_frontmatter_fence(cleaned)
     cleaned = _repair_wikilink_lists_in_frontmatter(cleaned)
+    cleaned = _quote_unparseable_frontmatter_scalars(cleaned)
     cleaned = _repair_latex_control_escapes(cleaned)
     return cleaned

@@ -186,12 +186,22 @@ def _build_chunk_plan(
     }
 
 
+# Recorded for diagnostics only: neither changes chunk boundaries nor any
+# Stage 2.2 prompt, so a budget change that keeps the chunk targets (e.g. 200K
+# vs 1M, both at the 64K chunk ceiling) must not discard finished analyses.
+_PLAN_BUDGET_ONLY_FIELDS = ("context_size", "source_budget")
+
+
+def _plan_without_budget(plan: dict) -> dict:
+    return {k: v for k, v in plan.items() if k not in _PLAN_BUDGET_ONLY_FIELDS}
+
+
 def _chunk_checkpoint_mismatch(progress: dict, current_plan: dict) -> str | None:
     """Return an incompatibility reason, or ``None`` for an exact safe restore."""
     saved_plan = progress.get("chunk_plan_v2")
     if not isinstance(saved_plan, dict):
         return "legacy checkpoint has no ChunkPlanV2"
-    if saved_plan != current_plan:
+    if _plan_without_budget(saved_plan) != _plan_without_budget(current_plan):
         for key in (
             "schema_version",
             "chunker_version",
@@ -200,8 +210,6 @@ def _chunk_checkpoint_mismatch(progress: dict, current_plan: dict) -> str | None
             "purpose_sha256",
             "source_text_sha256",
             "source_text_length",
-            "context_size",
-            "source_budget",
             "target_tokens",
             "target_chars",
             "overlap_chars",
@@ -460,6 +468,10 @@ def _run_chunk_pipeline(
         if mismatch:
             _invalidate_stage_2_2_checkpoint(config, _h, mismatch)
             checkpoint_invalidated = True
+        else:
+            # Same chunks: keep the saved plan (and its manifest binding) even
+            # when only the budget-only diagnostic fields differ.
+            chunk_plan = progress["chunk_plan_v2"]
     # Once any incompatible cache has been invalidated, bind the current plan
     # before a cached restore or a new Stage 2.2 marker can be accepted.
     bind_chunk_plan(config, _h, chunk_plan)

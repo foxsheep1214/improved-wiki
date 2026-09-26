@@ -36,6 +36,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
@@ -65,6 +66,8 @@ from _frontmatter_array import (  # noqa: E402
     write_frontmatter_array,
 )
 from _paths import iter_wiki_pages, atomic_write as _atomic_write  # noqa: E402
+from _paths import detect_runtime_dir  # noqa: E402
+from _maintenance_lock import MaintenanceLockError, maintenance_write_lock  # noqa: E402
 from _review_utils import (  # noqa: E402
     is_resolved_review_file,
     resolve_review_path,
@@ -742,6 +745,22 @@ def main() -> int:
 
     project_root = args.project_root or Path(
         os.environ.get("IMPROVED_WIKI_ROOT", os.getcwd()))
+    if not (args.apply or args.emit_review):
+        return _run(args, project_root)
+    # Writes (fixes, REVIEW items, orphan deletion) join the ingest project
+    # lock; inside wiki-lint.sh this is the lint run's inherited lock.
+    lock_root = args.project_root or (
+        args.wiki_root.parent if args.wiki_root else project_root)
+    try:
+        with maintenance_write_lock(SimpleNamespace(
+                runtime_dir=detect_runtime_dir(lock_root.expanduser().resolve()))):
+            return _run(args, project_root)
+    except MaintenanceLockError as exc:
+        print(f"[lint-fix] {exc}", file=sys.stderr)
+        return 1
+
+
+def _run(args, project_root: Path) -> int:
     wiki_dir = args.wiki_root or (project_root / "wiki")
     if not wiki_dir.is_dir():
         print(f"ERROR: wiki/ not found at {wiki_dir}", file=sys.stderr)

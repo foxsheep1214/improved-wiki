@@ -8,12 +8,13 @@ Review cannot close merely because somebody selected Fix.
 
 The durable flow is:
 
-1. ``--snapshot`` verifies scope and records pre-edit hashes under a temporary
-   path.
+1. ``--snapshot`` verifies scope and records pre-edit hashes of the declared
+   pages plus a size/mtime inventory of the whole wiki under a temporary path.
 2. The agent edits only declared pages and performs issue-specific validation.
 3. ``--finalize`` refuses to close the Review unless at least one declared
-   page changed, the Review itself did not change underfoot, and the caller
-   records what was verified.
+   page changed, no undeclared page changed or appeared/disappeared, every
+   changed page still has parseable frontmatter, the Review itself did not
+   change underfoot, and the caller records what was verified.
 
 The legacy no-mode invocation remains a read-only scope check.
 
@@ -45,14 +46,16 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
-from _frontmatter import parse_frontmatter  # noqa: E402
+from _frontmatter import frontmatter_error, parse_frontmatter  # noqa: E402
 from _frontmatter_array import parse_frontmatter_array  # noqa: E402
-from _paths import atomic_write  # noqa: E402
+from _paths import WIKI_ARTIFACT_DIRS, atomic_write  # noqa: E402
 from _review_utils import is_review_resolved  # noqa: E402
 from sweep_reviews import _resolve_review  # noqa: E402
 
 
-_SNAPSHOT_VERSION = 1
+_SNAPSHOT_VERSION = 2
+# Root aggregates follow index/log workflows, not a Review's declared scope.
+_INVENTORY_SKIP_ROOT_FILES = frozenset({"index.md", "log.md", "overview.md"})
 
 
 def normalize_page_ref(ref: str) -> str:
@@ -129,6 +132,29 @@ def _target_path(review_path: Path, target: str) -> Path:
     return (wiki_dir / f"{key}.md").resolve()
 
 
+def _wiki_inventory(wiki_dir: Path) -> dict[str, list[int]]:
+    """``[size, mtime_ns]`` of every wiki page outside derived artifact dirs.
+
+    The declared-page hashes alone cannot see an edit to an undeclared page —
+    the M8 incident itself — so finalize compares this whole-wiki inventory.
+    """
+    inventory: dict[str, list[int]] = {}
+    for entry in wiki_dir.iterdir():
+        if entry.is_dir():
+            if entry.name in WIKI_ARTIFACT_DIRS:
+                continue
+            paths = entry.rglob("*.md")
+        elif entry.suffix == ".md" and entry.name not in _INVENTORY_SKIP_ROOT_FILES:
+            paths = [entry]
+        else:
+            continue
+        for path in paths:
+            stat = path.stat()
+            inventory[path.relative_to(wiki_dir).as_posix()] = [
+                stat.st_size, stat.st_mtime_ns]
+    return inventory
+
+
 def create_fix_snapshot(review_path: Path, targets: list) -> dict:
     """Capture the pending Review and declared page hashes before editing."""
     review_path = review_path.resolve()
@@ -163,6 +189,8 @@ def create_fix_snapshot(review_path: Path, targets: list) -> dict:
         "review": str(review_path),
         "review_sha256": _sha256(review_path),
         "targets": records,
+        "wiki_inventory": _wiki_inventory(
+            _wiki_dir_for_review(review_path).resolve()),
     }
 
 
@@ -176,7 +204,10 @@ def write_fix_snapshot(snapshot_path: Path, snapshot: dict) -> None:
 def load_fix_snapshot(snapshot_path: Path) -> dict:
     data = json.loads(snapshot_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("version") != _SNAPSHOT_VERSION:
-        raise ValueError("unsupported or malformed review-fix snapshot")
+        raise ValueError("unsupported or malformed review-fix snapshot; "
+                         "re-run --snapshot before editing")
+    if not isinstance(data.get("wiki_inventory"), dict):
+        raise ValueError("review-fix snapshot has no wiki inventory")
     if not isinstance(data.get("targets"), list):
         raise ValueError("review-fix snapshot has no targets")
     return data
@@ -211,8 +242,30 @@ def validate_fix_changes(review_path: Path, snapshot: dict) -> list[dict]:
             raise ValueError(f"target page missing at finalize: {path}")
         if _sha256(path) != record.get("sha256"):
             changed.append(record)
+
+    declared = {record.get("key") for record in records}
+    before = snapshot.get("wiki_inventory") or {}
+    after = _wiki_inventory(wiki_dir)
+    undeclared = sorted(
+        rel for rel in set(before) | set(after)
+        if before.get(rel) != after.get(rel)
+        and normalize_page_ref(rel) not in declared)
+    if undeclared:
+        shown = ", ".join(f"wiki/{rel}" for rel in undeclared[:10])
+        more = f" (+{len(undeclared) - 10} more)" if len(undeclared) > 10 else ""
+        raise ValueError(
+            "undeclared pages were changed, added or removed since the snapshot: "
+            f"{shown}{more}. Revert them or obtain expanded scope; if another "
+            "writer changed them, re-snapshot after it finishes. Review remains "
+            "pending")
     if not changed:
         raise ValueError("no affected page changed; review remains pending")
+    broken = [f"wiki/{record['key']}.md: {error}" for record in changed
+              if (error := frontmatter_error(
+                  Path(record["path"]).read_text(encoding="utf-8")))]
+    if broken:
+        raise ValueError("repaired page has unusable frontmatter: "
+                         + "; ".join(broken))
     return changed
 
 

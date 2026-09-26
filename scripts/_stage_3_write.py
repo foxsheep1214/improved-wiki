@@ -309,6 +309,7 @@ def _stage_3_2_backup_existing_page(path: Path, config: Config) -> None:
 # ── Frontmatter: delegate to canonical _frontmatter.py (NashSU frontmatter.ts + page-merge.ts pattern) ──
 from _frontmatter import (
     MAX_REDIRECT_HOPS,
+    frontmatter_error,
     parse_frontmatter,
     redirect_target,
     write_frontmatter,
@@ -1089,6 +1090,16 @@ def stage_3_2_write_wiki_file(
         # page-history snapshot and atomic rewrite.
         if existing is not None and content == existing:
             return
+    # Last gate, after redirect handling and merges: the sanitizer already
+    # quoted repairable scalars, and a page whose block still fails would be
+    # read as having no type/sources/related at all.
+    fm_error = frontmatter_error(content)
+    if fm_error:
+        raise RuntimeError(
+            f"Stage 3.2 refuses to write {path.name}: {fm_error}. Every reader "
+            "would treat the page as having no frontmatter; correct the "
+            "generated FILE block and resume.")
+    if config is not None:
         _stage_3_2_backup_existing_page(path, config)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(path, content)

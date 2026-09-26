@@ -44,7 +44,10 @@ from _batch_supervisor import (
     _run_background_extract_worker,
     batch_ingest,
 )
-from _context_budget import apply_context_budget, context_tokens, CONTEXT_ENV
+from _context_budget import (
+    apply_context_budget, context_tokens, CONTEXT_ENV,
+    save_project_context_tokens,
+)
 from _ingest_prepare import _do_prepare
 from _ingest_runner import _is_ingestable_source_path, ingest_one
 from _source_filter import is_sensitive_config_source_file
@@ -176,7 +179,11 @@ def main() -> int:
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--context-tokens", type=int,
-                        help="Verified worker context capacity; default 64000, or IMPROVED_WIKI_CONTEXT_TOKENS")
+                        help="Verified worker context capacity for this run; overrides "
+                             "IMPROVED_WIKI_CONTEXT_TOKENS and the project setting")
+    parser.add_argument("--set-context-tokens", type=int, metavar="TOKENS",
+                        help="Save the verified worker context capacity for this project "
+                             "and exit; later runs use it when no override is given")
     parser.add_argument("--reprobe", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.reprobe:
@@ -187,6 +194,17 @@ def main() -> int:
         parser.error(str(exc))
     if args.context_tokens is not None:
         os.environ[CONTEXT_ENV] = str(budget)
+
+    if args.set_context_tokens is not None:
+        if args.file:
+            parser.error("--set-context-tokens is standalone; omit source files")
+        try:
+            path = save_project_context_tokens(
+                Config.from_env().runtime_dir, args.set_context_tokens)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"[context] saved {args.set_context_tokens:,} tokens to {path}")
+        return OK
 
     if args.parallel < 0:
         parser.error("--parallel must be >= 0")

@@ -20,6 +20,7 @@ upsert is best-effort.
 from __future__ import annotations
 
 import argparse
+import contextlib
 from dataclasses import dataclass
 from datetime import datetime, tzinfo
 import json
@@ -27,7 +28,9 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from types import SimpleNamespace
 
+from _maintenance_lock import MaintenanceLockError, maintenance_write_lock
 from _paths import atomic_write, detect_runtime_dir
 # Shared with the review Create Page / save: paths, as NashSU routes all three
 # query-page writers through wiki-filename.ts. `make_query_slug` is unused in
@@ -202,7 +205,9 @@ def build_research_page(
     created_date: str,
 ) -> str:
     """Assemble the exact deterministic research-page envelope."""
-    escaped_topic = topic.replace('"', '\\"')
+    # YAML double-quoted scalar: escape backslashes too, or a topic such as
+    # ``C:\data`` makes the whole frontmatter unparseable.
+    escaped_topic = topic.replace("\\", "\\\\").replace('"', '\\"')
     references = "\n".join(
         f"{index}. [{source['title']}]({source['url']}) — {source['source']}"
         for index, source in enumerate(sources, 1)
@@ -247,7 +252,8 @@ def embed_saved_page(project: Path, page: Path) -> None:
     stdout stays the saved path alone (callers parse it). A failure never
     undoes the page: v0.6.7 treats this embedding as non-critical.
     """
-    if not (detect_runtime_dir(project) / "lancedb").is_dir():
+    runtime_dir = detect_runtime_dir(project)
+    if not (runtime_dir / "lancedb").is_dir():
         print("embedding: skipped (project has no vector index)", file=sys.stderr)
         return
     retry = f"build_embeddings.py --project {project} sync"
@@ -255,13 +261,23 @@ def embed_saved_page(project: Path, page: Path) -> None:
         sys.executable, str(Path(__file__).with_name("build_embeddings.py")),
         "--project", str(project), "upsert", "--page", str(page),
     ]
-    try:
-        proc = subprocess.run(command, capture_output=True, text=True,
-                              timeout=180)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        print(f"embedding: WARNING {exc}; page kept. Retry: {retry}",
-              file=sys.stderr)
-        return
+    # The vector index is shared with ingest Stage 3.7: never write it while a
+    # writer holds the project lock or has reserved the write spine.
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(maintenance_write_lock(
+                SimpleNamespace(runtime_dir=runtime_dir)))
+        except MaintenanceLockError as exc:
+            print(f"embedding: skipped ({exc}); page kept. Retry: {retry}",
+                  file=sys.stderr)
+            return
+        try:
+            proc = subprocess.run(command, capture_output=True, text=True,
+                                  timeout=180)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"embedding: WARNING {exc}; page kept. Retry: {retry}",
+                  file=sys.stderr)
+            return
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip()[-500:]
         print(f"embedding: WARNING upsert exit {proc.returncode}: {tail}\n"

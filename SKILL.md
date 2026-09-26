@@ -43,9 +43,10 @@ contract. Do not load unrelated references for a simple operation.
   source identities and persisted cache keys are different contracts.
 - Runtime detection never moves files. Mixed `.iwiki-runtime` and `.llm-wiki`
   state requires explicit conflict-checked [migration](references/runtime-layout.md).
-- Context capacity comes from verified host settings or `--context-tokens` /
-  `IMPROVED_WIKI_CONTEXT_TOKENS`; absent a verified value, use the explicit
-  conservative default. See [budget/resume rules](references/context-budget.md).
+- Context capacity is the verified window of the handoff workers. Save it once
+  per project with `ingest.py --set-context-tokens <tokens>`; `--context-tokens`
+  / `IMPROVED_WIKI_CONTEXT_TOKENS` override it. Unset means a conservative 64K
+  default with much less Stage 2.4 evidence. See [budget/resume rules](references/context-budget.md).
 - Keep Stage 2.2 serial with its rolling digest. Stage 2.4 generates once from
   the whole source. `--parallel` overlaps Phase 1 across books; Stage 2.3 onward
   remains one ordered write spine. No per-type page quotas or automatic creation
@@ -61,17 +62,25 @@ contract. Do not load unrelated references for a simple operation.
   has a best-effort page upsert. Neither weakens ingest's mandatory embedding gate.
   Research saves one query page; it does not auto-ingest or edit aggregates.
 - Review repair: read source evidence → snapshot declared `affected_pages` → fix
-  within scope → validate/lint → guard finalize. Insufficient evidence or a failed
-  check leaves the Review pending. Closing the queue does not prove full wiki health.
-- Delete/dedup maintenance shares the ingest lock, rejects a reserved spine, and
-  checks source ambiguity/page snapshots before mutation. Never delete live lock
-  files. Keep scratch files under `/tmp/codex-work/<task>/`.
+  within scope → validate/lint → guard finalize, which also rejects any
+  undeclared page change and unparseable frontmatter. Insufficient evidence or a
+  failed check leaves the Review pending. Closing the queue does not prove full wiki health.
+- Wiki/index maintenance joins the ingest lock and rejects a reserved spine:
+  mutating lint, dedup, source delete, `wiki-lint-fix.py --apply`,
+  `normalize_raw_names.py --fix`, `build_embeddings.py embed|sync|delete|compact`
+  and the research-page index upsert (skipped with a sync hint when busy).
+  Mutation-free lint (`--structural-only`, `--diagnostic-only`) holds only the
+  lint-run lock, so it runs during a batch ingest. Delete paths also check source
+  ambiguity/page snapshots before mutation. Never delete live lock files. Keep
+  scratch files under `/tmp/codex-work/<task>/`.
 
 ## Conversation handoffs
 
 Exit `101` / `HANDOFF_PENDING` is an internal yield, not completion. For every
 handoff, dispatch one fresh worker/subagent for exactly one self-contained prompt;
-the main conversation orchestrates. Publish a complete `<stage>.txt.tmp`, validate,
+the main conversation orchestrates. Workers must have at least the configured
+context capacity; if the project has no saved setting, set it before the first
+ingest rather than relying on the default. Publish a complete `<stage>.txt.tmp`, validate,
 then atomically rename to `<stage>.txt`. Stage 2.2 requires `qc_stage22.py` before
 publication. Immediately resume the exact invocation with the same context budget.
 Continue until all authorized sources exit `0`, the user pauses, or a real external
