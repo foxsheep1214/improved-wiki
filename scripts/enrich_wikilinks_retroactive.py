@@ -13,9 +13,9 @@ sparsity), so this tool does only DETERMINISTIC, CORRECT link backfills:
      HardwareWiki have a `sources:` field → this alone cuts no-outlinks from
      6367 to ~680, with zero guessing.
   2. Broken-link auto-fix (--fix-broken): applies broken-link corrections at
-     or above the shared headless auto-rewrite gate
-     (_lint_suggest.BROKEN_LINK_AUTO_REWRITE_MIN_SCORE = 0.9, same as
-     wiki-lint-fix.py); lower-scored suggestions are listed for manual review.
+     the shared headless auto-rewrite gate
+     (_lint_suggest.is_auto_rewrite_suggestion: exact/same-basename only, same
+     as wiki-lint-fix.py); other suggestions are listed for manual review.
      O(n²) over the wiki — slow on large wikis; skip unless needed.
   3. Mention backlink (--mention-orphans): the deterministic core of NashSU
      enrich-wikilinks.ts — a page whose BODY literally mentions an orphan
@@ -50,7 +50,7 @@ if str(_SCRIPT_DIR) not in sys.path:
 from _frontmatter import WIKILINK_RE as _WIKILINK_RE  # noqa: E402
 from _frontmatter_array import parse_frontmatter_array  # noqa: E402
 from _paths import iter_wiki_pages, atomic_write  # noqa: E402
-from _lint_suggest import BROKEN_LINK_AUTO_REWRITE_MIN_SCORE  # noqa: E402
+from _lint_suggest import is_auto_rewrite_suggestion  # noqa: E402
 from pathlib import PurePosixPath  # noqa: E402
 
 
@@ -128,11 +128,11 @@ def scan_wiki(wiki_dir: Path):
 
 
 def fix_broken_links(wiki_dir: Path, apply: bool):
-    """Apply broken-link suggestions at or above the shared headless
-    auto-rewrite gate (_lint_suggest.BROKEN_LINK_AUTO_REWRITE_MIN_SCORE, 0.9 —
-    same threshold wiki-lint-fix.py enforces; the old local ≥0.74 let
-    contains-tier/fuzzy matches rewrite unattended). Suggestions below the
-    gate are PRINTED for manual handling, never rewritten.
+    """Apply broken-link suggestions that pass the shared headless
+    auto-rewrite gate (_lint_suggest.is_auto_rewrite_suggestion, exact or
+    same-basename only — the gate wiki-lint-fix.py enforces; the old local
+    ≥0.74 let contains-tier/fuzzy matches rewrite unattended). Other
+    suggestions are PRINTED for manual handling, never rewritten.
 
     O(n²) — slow on large wikis. Returns (n_fixed_pages, n_fixed_links).
     """
@@ -145,14 +145,13 @@ def fix_broken_links(wiki_dir: Path, apply: bool):
     findings = run_structural_lint(pages, with_suggestions=True)
     suggested = [f for f in findings
                  if f["type"] == "broken-link" and f.get("suggested_target")]
-    # Gate: a missing score (older engine output) is treated conservatively
-    # as below-gate — no unattended rewrite.
-    broken = [f for f in suggested
-              if (f.get("suggested_score") or 0) >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE]
+    # A finding without a tier (older engine output) is treated
+    # conservatively — no unattended rewrite unless its score is exact.
+    broken = [f for f in suggested if is_auto_rewrite_suggestion(f)]
     below_gate = [f for f in suggested if f not in broken]
     if below_gate:
         print(f"  [fix-broken] {len(below_gate)} suggestion(s) below the "
-              f"auto-rewrite gate ({BROKEN_LINK_AUTO_REWRITE_MIN_SCORE}) — "
+              f"auto-rewrite gate (exact/same-basename only) — "
               f"left for manual handling:")
         for f in below_gate:
             print(f"    {f['page']}: [[{f['broken_target']}]] → "

@@ -2,12 +2,11 @@
 (2026-07-10, user-approved lint hardening).
 
 Policy: a broken-link finding with a suggested_target is only auto-rewritten
-when its suggested_score >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE (0.9) — i.e.
-exact (1.0) and same-basename (0.96) tier suggestions. Contains-tier (0.82)
-and fuzzy-Levenshtein suggestions instead become REVIEW/suggestion items
-carrying the proposed target, for a human to approve. A finding with a
-suggestion but NO score (stale cache from an older lint) is treated
-conservatively as below-threshold.
+when its suggested_tier is exact or same-basename. Contains-tier and
+fuzzy-Levenshtein suggestions — however high their score — instead become
+REVIEW/suggestion items carrying the proposed target, for a human to approve.
+A finding without a tier (stale cache from an older lint) is rewritten only
+when its score is exact.
 
 Rationale (real incident class): automated linking once rewrote the literal
 substring 脉冲压缩 across 10+ pages to the narrower 脉冲压缩与MTI组合 page —
@@ -40,26 +39,29 @@ def _load_module():
     return mod
 
 
-def _bl(page, broken, suggested, score):
+def _bl(page, broken, suggested, score, tier=None):
     f = {"type": "broken-link", "severity": "warning", "page": page,
          "detail": f"Broken link: [[{broken}]] — target page not found.",
          "broken_target": broken, "suggested_target": suggested}
     if score is not None:
         f["suggested_score"] = score
+    if tier is not None:
+        f["suggested_tier"] = tier
     return f
 
 
 class TestPlanFixesScoreGate(unittest.TestCase):
     def test_high_score_becomes_rewrite(self):
         wlf = _load_module()
-        actions = wlf.plan_fixes([_bl("a.md", "transfomer-x", "transformer.md", 0.96)])
+        actions = wlf.plan_fixes([_bl("a.md", "concepts/transformer", "methodology/transformer.md",
+                                      0.96, "basename")])
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["kind"], "rewrite")
 
     def test_mid_score_becomes_review_rewrite(self):
         wlf = _load_module()
         actions = wlf.plan_fixes([_bl("a.md", "some phrase with transformer inside",
-                                      "transformer.md", 0.82)])
+                                      "transformer.md", 0.82, "fuzzy")])
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["kind"], "review-rewrite")
         self.assertEqual(actions[0]["suggested"], "transformer.md")
@@ -72,11 +74,18 @@ class TestPlanFixesScoreGate(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0]["kind"], "review-rewrite")
 
-    def test_exact_threshold_boundary_auto_rewrites(self):
+    def test_high_scoring_fuzzy_match_goes_to_review(self):
+        # One edit apart, opposite meaning: the score alone cannot tell.
         wlf = _load_module()
         actions = wlf.plan_fixes([_bl(
-            "a.md", "x", "y.md", wlf.BROKEN_LINK_AUTO_REWRITE_MIN_SCORE)])
-        self.assertEqual(actions[0]["kind"], "rewrite")
+            "a.md", "concepts/ac-coupling", "concepts/dc-coupling.md", 0.95, "fuzzy")])
+        self.assertEqual(actions[0]["kind"], "review-rewrite")
+
+    def test_tierless_cache_rewrites_only_an_exact_score(self):
+        wlf = _load_module()
+        actions = wlf.plan_fixes([_bl("a.md", "x", "y.md", 1.0),
+                                  _bl("a.md", "p", "q.md", 0.96)])
+        self.assertEqual([a["kind"] for a in actions], ["rewrite", "review-rewrite"])
 
     def test_no_suggestion_still_becomes_stub_action(self):
         wlf = _load_module()
@@ -87,7 +96,7 @@ class TestPlanFixesScoreGate(unittest.TestCase):
         wlf = _load_module()
         finding = _bl(
             "entities/legacy.md", "entities/canoncal",
-            "entities/canonical.md", 0.96)
+            "entities/canonical.md", 0.96, "basename")
         finding["link_origin"] = "redirect-frontmatter"
         actions = wlf.plan_fixes([finding])
         self.assertEqual(actions[0]["link_origin"], "redirect-frontmatter")
@@ -121,7 +130,7 @@ class TestMainEndToEndScoreGate(unittest.TestCase):
             encoding="utf-8")
         (wiki / "concepts" / "attention.md").write_text(
             "---\ntype: concept\ntitle: Attention\n---\n\n# A\n"
-            "high [[concepts/transformerX]] and mid [[transformer overview note]].",
+            "high [[methodology/transformer]] and mid [[transformer overview note]].",
             encoding="utf-8")
         return wiki
 
@@ -133,10 +142,10 @@ class TestMainEndToEndScoreGate(unittest.TestCase):
             wiki = self._make_wiki(root)
             cache = root / "lint-cache.json"
             cache.write_text(json.dumps([
-                _bl("concepts/attention.md", "concepts/transformerX",
-                    "concepts/transformer.md", 0.93),
+                _bl("concepts/attention.md", "methodology/transformer",
+                    "concepts/transformer.md", 0.96, "basename"),
                 _bl("concepts/attention.md", "transformer overview note",
-                    "concepts/transformer.md", 0.82),
+                    "concepts/transformer.md", 0.82, "fuzzy"),
             ]), encoding="utf-8")
 
             old_argv = sys.argv
@@ -151,10 +160,9 @@ class TestMainEndToEndScoreGate(unittest.TestCase):
             self.assertEqual(rc, 0)
 
             content = (wiki / "concepts" / "attention.md").read_text(encoding="utf-8")
-            # high-band (0.93) rewritten; mid-band (0.82) untouched
-            self.assertIn("[[concepts/transformer.md]]", content.replace(
-                "[[concepts/transformer]]", "[[concepts/transformer.md]]"))
-            self.assertNotIn("[[concepts/transformerX]]", content)
+            # same-basename rewritten; the contains-tier match untouched
+            self.assertIn("[[concepts/transformer]]", content)
+            self.assertNotIn("[[methodology/transformer]]", content)
             self.assertIn("[[transformer overview note]]", content)
             # mid-band routed to a review item that names the suggested target
             review_files = list((wiki / "REVIEW" / "suggestion").glob("*.md"))
@@ -322,10 +330,12 @@ class TestBrokenRelatedRepair(unittest.TestCase):
         findings = [
             {"type": "broken-related", "page": "concepts/a.md",
              "broken_target": "concepts/scan-loss", "suggested_target":
-             "methodology/scan-loss.md", "suggested_score": 0.96},
+             "methodology/scan-loss.md", "suggested_score": 0.96,
+             "suggested_tier": "basename"},
             {"type": "broken-related", "page": "concepts/a.md",
-             "broken_target": "concepts/never-written", "suggested_target":
-             "concepts/written.md", "suggested_score": 0.8},
+             "broken_target": "concepts/memory-ranks", "suggested_target":
+             "concepts/memory-banks.md", "suggested_score": 0.917,
+             "suggested_tier": "fuzzy"},
         ]
         actions = wlf.plan_fixes(findings)
         self.assertEqual([a["replacement"] for a in actions],
@@ -336,7 +346,7 @@ class TestBrokenRelatedRepair(unittest.TestCase):
             page = wiki / "concepts" / "a.md"
             page.write_text(
                 '---\ntype: concept\nrelated: ["concepts/b", "concepts/scan-loss", '
-                '"concepts/never-written"]\n---\n\nBody [[concepts/b]].\n',
+                '"concepts/memory-ranks"]\n---\n\nBody [[concepts/b]].\n',
                 encoding="utf-8")
             summary = wlf.apply_fixes(Path(t), wiki, actions, dry_run=False)
             self.assertEqual(summary["related"], 2)

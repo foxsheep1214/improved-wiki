@@ -85,7 +85,7 @@ class TestStubFixRewritesSource(unittest.TestCase):
         # letter-transposition typo (score ~0.82) — fuzzy-tier suggestions now
         # route to REVIEW instead of auto-rewriting (see
         # test_lint_fix_score_gate), so the ordering scenario needs a
-        # suggestion that clears the 0.9 auto-rewrite gate.
+        # suggestion that passes the exact/same-basename auto-rewrite gate.
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             wiki = tmp / "wiki"

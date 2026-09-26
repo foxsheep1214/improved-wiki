@@ -81,7 +81,7 @@ class TestBackfill(unittest.TestCase):
 
 class TestFixBrokenScoreGate(unittest.TestCase):
     """2026-07-12: --fix-broken applies only suggestions at/above the shared
-    BROKEN_LINK_AUTO_REWRITE_MIN_SCORE gate; lower scores are listed for
+    is_auto_rewrite_suggestion gate (exact/same-basename); others are listed for
     manual handling, never rewritten."""
 
     def _run(self, findings):
@@ -109,10 +109,12 @@ class TestFixBrokenScoreGate(unittest.TestCase):
         findings = [
             {"type": "broken-link", "page": "concepts/a.md",
              "broken_target": "hi-score-typo",
-             "suggested_target": "hi-score.md", "suggested_score": 0.96},
+             "suggested_target": "hi-score.md", "suggested_score": 0.96,
+             "suggested_tier": "basename"},
             {"type": "broken-link", "page": "concepts/a.md",
              "broken_target": "lo-score-typo",
-             "suggested_target": "lo-score.md", "suggested_score": 0.82},
+             "suggested_target": "lo-score.md", "suggested_score": 0.82,
+             "suggested_tier": "fuzzy"},
         ]
         fp, fl, content, printed = self._run(findings)
         self.assertEqual((fp, fl), (1, 1))

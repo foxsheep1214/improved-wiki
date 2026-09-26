@@ -43,7 +43,7 @@ __all__ = [
     "ANCHOR_FILES",
     "AGGREGATE_FILES",
     "STATE_FILES",
-    "BROKEN_LINK_AUTO_REWRITE_MIN_SCORE",
+    "is_auto_rewrite_suggestion",
 ]
 
 # Link-target UNIVERSE exclusion — NashSU runStructuralLint parity (lint.ts:161
@@ -87,8 +87,19 @@ def _lint_frontmatter(content: str) -> dict:
 # a human — contains-tier (0.82) and fuzzy-Levenshtein suggestions go to
 # review instead (string-similar is not meaning-similar; a headless batch
 # multiplies one bad suggestion). Shared here (2026-07-12) so wiki-lint-fix.py
-# and enrich_wikilinks_retroactive.py apply the SAME threshold.
-BROKEN_LINK_AUTO_REWRITE_MIN_SCORE = 0.9
+# and enrich_wikilinks_retroactive.py apply the SAME gate. It is decided by
+# tier, not score: a numeric 0.9 cut also admitted Levenshtein matches such
+# as ac-coupling → dc-coupling and mil-std-461e → mil-std-461h.
+AUTO_REWRITE_TIERS = frozenset({"exact", "basename"})
+
+
+def is_auto_rewrite_suggestion(finding: dict) -> bool:
+    """Whether a finding's suggestion may be applied without a human."""
+    tier = finding.get("suggested_tier")
+    if tier is None:
+        # Cache from an older lint: only an exact score is unambiguous.
+        return (finding.get("suggested_score") or 0) >= 1.0
+    return tier in AUTO_REWRITE_TIERS
 
 BROKEN_LINK_SUGGESTION_MIN_SCORE = 0.74
 RELATED_PAGE_SUGGESTION_MIN_SCORE = 0.08
@@ -347,7 +358,15 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 for fragment in _fragments(value):
                     _add_to_index(fragment_index, fragment, page_index)
 
-    def suggest_broken_target(target: str) -> "tuple[_PageData, float] | None":
+    def _tier(target: str, candidate: _PageData, score: float) -> str:
+        if score >= 1.0:
+            return "exact"
+        base = _get_file_name(normalize_link_target(target))
+        bases = {_get_file_name(normalize_link_target(value))
+                 for value in (candidate.slug, candidate.short_name, candidate.title)}
+        return "basename" if base in bases else "fuzzy"
+
+    def suggest_broken_target(target: str) -> "tuple[_PageData, float, str] | None":
         # Returns (page, score) — the score is persisted on the finding
         # (suggested_score, 2026-07-10) so the headless fixer can gate
         # auto-rewrites by confidence tier. NashSU never needs the score
@@ -368,7 +387,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             ):
                 page_index = slug_map.get(key)
                 if page_index is not None:
-                    return data[page_index], 1.0
+                    return data[page_index], 1.0, "exact"
 
         _MIN = BROKEN_LINK_SUGGESTION_MIN_SCORE
         candidate_scores: dict[int, float] = {}
@@ -402,7 +421,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             # counted in the single scan above — no second O(n) pass.)
             if best[1] <= CONTAINS_TARGET_SCORE and best_ties > 1:
                 return None
-            return best
+            return (*best, _tier(target, *best))
         return None
 
     def suggest_related_page(
@@ -478,9 +497,9 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
     # the target string and the (fixed) candidate set, so the same broken link
     # repeated across many pages is scanned once. On a wiki with lots of dangling
     # links this is a big win (e.g. 1856 broken links → 773 distinct targets).
-    _broken_cache: dict[str, "tuple[_PageData, float] | None"] = {}
+    _broken_cache: dict[str, "tuple[_PageData, float, str] | None"] = {}
 
-    def _cached_broken_target(target: str) -> "tuple[_PageData, float] | None":
+    def _cached_broken_target(target: str) -> "tuple[_PageData, float, str] | None":
         key = target.lower()
         if key not in _broken_cache:
             _broken_cache[key] = suggest_broken_target(target)
@@ -574,6 +593,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 "broken_target": entry,
                 "suggested_target": suggestion[0].short_name if suggestion else None,
                 "suggested_score": round(suggestion[1], 4) if suggestion else None,
+                "suggested_tier": suggestion[2] if suggestion else None,
             })
 
         # Broken links.
@@ -601,8 +621,10 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 "suggested_target": suggestion[0].short_name if suggestion else None,
                 # improved-wiki extension (2026-07-10): the suggestion's
                 # similarity score, persisted so wiki-lint-fix.py can gate
-                # headless auto-rewrites (>=0.9 auto, below -> review).
+                # headless auto-rewrites; the tier decides (exact/basename
+                # auto, contains/fuzzy -> review).
                 "suggested_score": round(suggestion[1], 4) if suggestion else None,
+                "suggested_tier": suggestion[2] if suggestion else None,
             })
 
     return results

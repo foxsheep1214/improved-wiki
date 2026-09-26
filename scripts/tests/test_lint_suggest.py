@@ -107,11 +107,13 @@ class TestRunStructuralLint(unittest.TestCase):
         fuzzy = finding(results, type="broken-link", broken_target="transfomer")
         self.assertIsNotNone(fuzzy)
         self.assertAlmostEqual(fuzzy["suggested_score"], 1 - 1 / 11, places=4)
+        self.assertEqual(fuzzy["suggested_tier"], "fuzzy")
         contains = finding(results, type="broken-link",
                            broken_target="the transformer architecture overview")
         self.assertIsNotNone(contains)
         self.assertEqual(contains["suggested_target"], "transformer.md")
         self.assertAlmostEqual(contains["suggested_score"], ls.CONTAINS_TARGET_SCORE)
+        self.assertEqual(contains["suggested_tier"], "fuzzy")
 
     def test_no_suggestion_has_none_score(self):
         pages = [

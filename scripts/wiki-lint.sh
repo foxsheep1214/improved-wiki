@@ -42,8 +42,8 @@
 #   $ ./wiki-lint.sh --fix           # auto-fix missing-frontmatter (default)
 #   $ ./wiki-lint.sh --fix-links     # auto-fix broken-link/orphan/no-outlinks (default)
 #                                     (stub-off is the default: broken→review, no bulk stubs;
-#                                      2026-07-10: rewrites need score>=0.9, lower
-#                                      scores → REVIEW/suggestion items instead)
+#                                      rewrites need an exact/same-basename
+#                                      suggestion; others → REVIEW/suggestion)
 #   $ ./wiki-lint.sh --sweep         # resolve satisfied review items (default)
 #   $ ./wiki-lint.sh --dedup         # cross-source semantic dedup/merge (default)
 #   $ ./wiki-lint.sh --no-delete-orphans # skip the final confirmation checkpoint

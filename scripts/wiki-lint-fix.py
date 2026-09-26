@@ -51,7 +51,7 @@ from _lint_suggest import (  # noqa: E402
     ANCHOR_FILES as _ANCHOR_FILES,
     AGGREGATE_FILES as _AGGREGATE_FILES,
     STATE_FILES as _STATE_FILES,
-    BROKEN_LINK_AUTO_REWRITE_MIN_SCORE,
+    is_auto_rewrite_suggestion,
 )
 from _lint_fixes import (  # noqa: E402
     append_wikilink,
@@ -90,10 +90,10 @@ def _collect_pages(wiki_dir: Path) -> list[tuple[str, str]]:
     ))
 
 
-# BROKEN_LINK_AUTO_REWRITE_MIN_SCORE (imported from _lint_suggest, 2026-07-12):
-# the headless auto-rewrite gate — only exact/same-basename tier suggestions
-# are rewritten without a human; contains-tier and fuzzy matches go to
-# REVIEW/suggestion instead (real incident class: the substring 脉冲压缩
+# is_auto_rewrite_suggestion (from _lint_suggest, 2026-07-12): the headless
+# auto-rewrite gate — only exact/same-basename tier suggestions are rewritten
+# without a human; contains-tier and fuzzy matches go to REVIEW/suggestion
+# instead (real incident class: the substring 脉冲压缩
 # auto-linked across 10+ pages to the narrower 脉冲压缩与MTI组合 page).
 # NashSU has no such gate because its Fix is human-clicked per item.
 
@@ -123,9 +123,8 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
                 continue
             if suggested:
                 score = fnd.get("suggested_score")
-                # A missing score (stale cache from an older lint) is treated
-                # conservatively: no headless rewrite, route to review.
-                if score is not None and score >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE:
+                # A cache without tiers (older lint) is treated conservatively.
+                if is_auto_rewrite_suggestion(fnd):
                     actions.append({"kind": "rewrite", "page": page,
                                     "broken": broken, "suggested": suggested,
                                     "link_origin": link_origin})
@@ -154,12 +153,10 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
         elif kind == "broken-related":
             page, entry = fnd.get("page"), fnd.get("broken_target")
             if page and entry:
-                score = fnd.get("suggested_score")
-                confident = (score is not None
-                             and score >= BROKEN_LINK_AUTO_REWRITE_MIN_SCORE)
                 actions.append({
                     "kind": "related", "page": page, "entry": entry,
-                    "replacement": fnd.get("suggested_target") if confident else None,
+                    "replacement": (fnd.get("suggested_target")
+                                    if is_auto_rewrite_suggestion(fnd) else None),
                 })
     return actions
 
@@ -692,8 +689,8 @@ affected_pages:
 # Uncertain link rewrite: [[{broken}]] → [[{suggested}]]
 
 Structural lint suggests rewriting the broken link ``[[{broken}]]`` to
-``[[{suggested}]]`` (similarity score {score_str}), but the score is below the
-headless auto-rewrite gate ({BROKEN_LINK_AUTO_REWRITE_MIN_SCORE}) — the match
+``[[{suggested}]]`` (similarity score {score_str}), but it is not an exact or
+same-basename match, which the headless auto-rewrite requires — the match
 may be string-similar without being the right page. Routed to review so a
 human decides.
 
@@ -706,7 +703,7 @@ human decides.
         print(f"  [review]    created {fpath.relative_to(wiki_dir)}")
         count += 1
     print(f"[lint-fix] emitted {count} uncertain-rewrite review item(s) "
-          f"(score < {BROKEN_LINK_AUTO_REWRITE_MIN_SCORE} — not auto-applied)")
+          f"(not an exact/same-basename match — not auto-applied)")
 
 
 def _emit_review_for_orphan_delete(
@@ -915,7 +912,7 @@ def _run(args, project_root: Path) -> int:
     if review_rewrites:
         actions = [a for a in actions if a.get("kind") != "review-rewrite"]
         print(f"[lint-fix] {len(review_rewrites)} suggestion(s) below the "
-              f"auto-rewrite gate ({BROKEN_LINK_AUTO_REWRITE_MIN_SCORE}) → review items")
+              f"auto-rewrite gate (exact/same-basename only) → review items")
         _emit_review_for_uncertain_rewrite(wiki_dir, review_rewrites,
                                            dry_run=not args.apply)
     # Stub-off is the DEFAULT (2026-07-12, NashSU parity: stubs only from an
