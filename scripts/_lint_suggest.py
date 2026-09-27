@@ -534,12 +534,13 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             })
 
         # A redirect stub without a target leads nowhere (improved-wiki
-        # extension). When its related: entries and links name exactly one
-        # other page, that page is the suggested target.
+        # extension). The suggested target is the one other page its
+        # related: entries name, else the one page all its links name.
         if p.page_type == "redirect" and not p.redirect_target:
-            named = {resolve(_related_target(e)) for e in p.related}
-            named |= {resolve(link) for link in p.outlinks}
-            named -= {None, page_index}
+            named = {resolve(_related_target(e)) for e in p.related} - {None, page_index}
+            if len(named) != 1:
+                named |= {resolve(link) for link in p.outlinks}
+                named -= {None, page_index}
             results.append({
                 "type": "redirect-missing-target",
                 "severity": "warning",

@@ -483,6 +483,16 @@ class TestRedirectMissingTarget(unittest.TestCase):
         self.assertEqual(found["concepts/old.md"]["suggested_target"], "concepts/new.md")
         self.assertIsNone(found["concepts/vague.md"]["suggested_target"])
 
+    def test_single_related_entry_outranks_extra_body_links(self):
+        stub = ("---\ntype: redirect\nrelated: [concepts/new]\n---\n\n"
+                "Merged into [[concepts/new]].\n\n## Related\n- [[concepts/b]]\n")
+        pages = [("concepts/old.md", stub),
+                 ("concepts/new.md", "---\ntype: concept\n---\n\n[[concepts/b]]\n"),
+                 ("concepts/b.md", "---\ntype: concept\n---\n\n[[concepts/new]]\n")]
+        [finding] = [f for f in ls.run_structural_lint(pages)
+                     if f["type"] == "redirect-missing-target"]
+        self.assertEqual(finding["suggested_target"], "concepts/new.md")
+
     def test_heading_anchor_is_not_a_broken_link(self):
         pages = [("concepts/a.md", "---\ntype: concept\n---\n\nSee [[concepts/b#Details]].\n"),
                  ("concepts/b.md", "---\ntype: concept\n---\n\nSee [[concepts/a]].\n")]
