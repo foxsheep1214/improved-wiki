@@ -400,6 +400,19 @@ class TestCrossDirectorySlugCollision(unittest.TestCase):
         self.assertIsNotNone(
             finding(results, type="slug-collision", page="methodology/mode-separation.md"))
 
+    def test_redirect_stub_twin_is_not_a_collision(self):
+        # Dedup skips stubs as well, so a compatibility alias left at the old
+        # path of a reclassified page blocks nothing.
+        pages = [
+            ("concepts/mode-separation.md",
+             "---\ntype: redirect\nredirect: methodology/mode-separation\n---\n# Moved\n"),
+            ("methodology/mode-separation.md",
+             "---\ntitle: Mode Separation\n---\n# Mode Separation\nSee [[concepts/emc]]."),
+            ("concepts/emc.md", "---\ntitle: EMC\n---\n# EMC\nSee [[mode-separation]]."),
+        ]
+        self.assertFalse([f for f in ls.run_structural_lint(pages)
+                          if f["type"] == "slug-collision"])
+
     def test_distinct_basenames_produce_no_collision_finding(self):
         pages = [
             ("concepts/alpha.md", "---\ntitle: Alpha\n---\n# Alpha\nSee [[concepts/beta]]."),

@@ -13,7 +13,9 @@ though both paths may be valid schema outcomes.
 The dangerous mutation path is guarded: embedding candidates are unique by
 slug, `cross_source_dedup.py` refuses to merge a group containing a collision,
 and structural lint reports `slug-collision` findings. A collision is therefore
-visible and cannot make dedup read or delete the wrong page.
+visible and cannot make dedup read or delete the wrong page. Redirect stubs are
+not dedup inputs, so a stub sharing a real page's basename is no collision;
+graph and lint resolve a bare link to the real page.
 
 The remaining limitation is content-level: colliding pages are excluded from
 automatic cross-source merging. Review each lint finding and decide whether

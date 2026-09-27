@@ -151,6 +151,20 @@ class TestDryRun(unittest.TestCase):
 
 
 class TestApply(unittest.TestCase):
+    def test_same_name_redirect_stub_does_not_block_or_join_a_merge(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            wiki = _make_wiki(root)
+            stub = wiki / "concepts" / "paos.md"
+            stub.write_text("---\ntype: redirect\nredirect: entities/paos\n---\n\n"
+                            "Moved to [[entities/paos]].\n", encoding="utf-8")
+            report = ds.run_phase2(root, _mock_llm(), apply=True, today=FIXED_TODAY,
+                                    embedding_prefilter=False)
+            self.assertEqual([a["merged_away"] for a in report["applied"]], [["聚磷菌"]])
+            self.assertIn("聚磷菌是聚磷微生物。",
+                          (wiki / "entities" / "paos.md").read_text(encoding="utf-8"))
+            self.assertTrue(stub.exists())
+
     def test_merges_backups_deletes_rewrites_and_prunes_index(self):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)

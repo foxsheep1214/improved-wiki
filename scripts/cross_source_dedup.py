@@ -57,6 +57,7 @@ import _dedup  # noqa: E402
 from _core import ConversationPending  # noqa: E402
 from _exit_codes import HANDOFF_PENDING  # noqa: E402
 from _paths import detect_runtime_dir, iter_wiki_pages, atomic_write  # noqa: E402
+from _frontmatter import parse_frontmatter  # noqa: E402
 from _embedding_store import remove_page_embeddings  # noqa: E402
 from _maintenance_lock import maintenance_write_lock  # noqa: E402
 from _llm_call import make_conversation_llm_call  # noqa: E402
@@ -602,10 +603,11 @@ def _run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
     pages = collect_wiki_pages(wiki_dir)
     # Source pages mirror raw files one-to-one, so they are never duplicate
     # candidates (NashSU's dedup reads only entities/concepts). Merging two of
-    # them kept a page citing a raw file that does not exist. They stay in
-    # ``pages`` so merges still rewrite references inside them.
+    # them kept a page citing a raw file that does not exist. Redirect stubs
+    # are compatibility aliases with nothing to merge. Both stay in ``pages``
+    # so merges still rewrite references inside them.
     summaries = [s for s in (_dedup.extract_entity_summary(p, c) for p, c in pages)
-                 if s is not None and s.type != "source"
+                 if s is not None and s.type not in ("source", "redirect")
                  and not s.path.startswith("wiki/sources/")]
     if len(summaries) < 2:
         print("[dedup] fewer than 2 summarizable pages; skipping.")
@@ -653,6 +655,10 @@ def _run_phase2(project_root, llm_call, *, apply=True, whitelist_pairs=None,
     return {"groups": groups, "applied": applied}
 
 
+def _is_redirect_stub(content: str) -> bool:
+    return str(parse_frontmatter(content)[0].get("type", "")).strip().lower() == "redirect"
+
+
 def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
                   apply_low_confidence) -> list:
     """Merge each detected group and persist. Internal to the project-locked run_phase2 entry point.
@@ -674,19 +680,21 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
     for g in groups:
         if g.get("confidence") == "low" and not apply_low_confidence:
             continue
-        pages_by_slug = {_slug_from_path(p): (p, c)
-                         for p, c in content_by_path.items()}
         # Slug-collision guard (2026-07-11): the whole merge path is keyed by
         # basename slug, so two files with the same basename in different dirs
-        # (e.g. queries/x.md and entities/x.md) silently shadow each other in
-        # pages_by_slug — a merge on such a group could read/delete the WRONG
-        # file. Refuse mechanically instead of relying on a manual pre-check;
-        # see references/known-issues.md (跨目录同名 basename 的 slug 碰撞).
-        slug_counts: dict = {}
-        for p in content_by_path:
+        # (e.g. queries/x.md and entities/x.md) silently shadow each other — a
+        # merge on such a group could read/delete the WRONG file. Refuse
+        # mechanically instead of relying on a manual pre-check; see
+        # references/known-issues.md (跨目录同名 basename 的 slug 碰撞).
+        # A redirect stub is a compatibility alias, not a merge input: it
+        # neither stands in for nor collides with a real page of its name.
+        group_slug_set = set(g["slugs"])
+        candidates: dict = {}
+        for p, c in content_by_path.items():
             s = _slug_from_path(p)
-            slug_counts[s] = slug_counts.get(s, 0) + 1
-        colliding = [s for s in g["slugs"] if slug_counts.get(s, 0) > 1]
+            if s in group_slug_set and not _is_redirect_stub(c):
+                candidates.setdefault(s, []).append((p, c))
+        colliding = [s for s in g["slugs"] if len(candidates.get(s, ())) > 1]
         if colliding:
             print(f"[dedup] SKIP group {g['slugs']}: slug collision — "
                   f"{colliding} maps to multiple files across dirs; resolve "
@@ -695,18 +703,19 @@ def _apply_merges(project_root, runtime, groups, pages, llm_call, today,
         canonical_slug = g["slugs"][0]
         group_pages = []
         for slug in g["slugs"]:
-            entry = pages_by_slug.get(slug)
-            if entry is None:
+            entries = candidates.get(slug)
+            if not entries:
                 group_pages = []
                 break
-            path, content = entry
+            path, content = entries[0]
             group_pages.append({"slug": slug, "path": path, "content": content})
         if len(group_pages) < 2:
             continue
-        group_slugs = {gp["slug"] for gp in group_pages}
+        # By path, so a same-name stub still gets its references rewritten.
+        group_paths = {gp["path"] for gp in group_pages}
         other_pages = [{"path": p, "content": c}
                        for p, c in content_by_path.items()
-                       if _slug_from_path(p) not in group_slugs]
+                       if p not in group_paths]
         # Eager-drain (2026-07-10): an uncached merge's prompt is written by
         # llm_call before it raises ConversationPending — catch it and
         # CONTINUE so one invocation emits ALL uncached merge prompts, then

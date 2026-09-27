@@ -500,8 +500,12 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
     # group happens to contain the slug — otherwise the collision stays
     # invisible. known-issues.md documented a manual `find wiki -name
     # "<slug>.md"` sweep as the workaround; this automates it (2026-07-30).
+    # Redirect stubs are compatibility aliases: dedup skips them too, so a
+    # stub sharing a real page's basename is no collision.
     paths_by_basename: dict[str, list[str]] = {}
     for p in data:
+        if p.page_type == "redirect":
+            continue
         stem = re.sub(r"\.md$", "", _get_file_name(p.short_name), flags=re.IGNORECASE)
         paths_by_basename.setdefault(stem, []).append(p.short_name)
 
@@ -517,7 +521,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         # Slug collision: same basename filed under two or more directories.
         _stem = re.sub(r"\.md$", "", _get_file_name(short_name), flags=re.IGNORECASE)
         _twins = [q for q in paths_by_basename.get(_stem, []) if q != short_name]
-        if _twins:
+        if _twins and p.page_type != "redirect":
             results.append({
                 "type": "slug-collision",
                 "severity": "warning",
