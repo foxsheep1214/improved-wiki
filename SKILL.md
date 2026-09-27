@@ -58,6 +58,11 @@ contract. Do not load unrelated references for a simple operation.
 - Ingest completes only after page-scoped embeddings, completion event/projections,
   and the matching `ingested` marker. History is append-only; current skip state
   is separate. [Time records](references/time-recording.md) owns this lifecycle.
+- For exact numbers, formulas, tables, figures, or gaps in Wiki retrieval, use
+  `search_wiki.py --scope all` and read the raw evidence. Resolve uncertain or
+  conflicting observations via `evidence_lookup.py --id ... --render-dir ...`
+  under `/tmp/codex-work/`, then inspect the returned images before citing them.
+  Raw `source_current` confirms bytes only, not completed ingest or verified facts.
 - Retrieval may report a vector failure and continue keyword-only. Deep Research
   has a best-effort page upsert. Neither weakens ingest's mandatory embedding gate.
   Research saves one query page; it does not auto-ingest or edit aggregates.

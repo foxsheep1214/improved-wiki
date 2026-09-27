@@ -24,8 +24,8 @@
 minerU 和 caption 都各有一个跨进程资源槽：
 
 - minerU：`~/.cache/improved-wiki/.mineru.lock`，一次一本。
-- caption：系统临时目录中的 per-user flock，一次一个 caption round；round 内仍按
-  `CAPTION_MAX_WORKERS=4` 并行逐图调用。这样两个后台 worker 不会叠加成 8 个远程请求。
+- caption：系统临时目录中的 per-user flock，一次一个 caption round；round 内默认以
+  `CAPTION_MAX_WORKERS=1` 串行逐图调用；显式调高可启用主模型并发。跨进程锁防止两个后台 worker 叠加 caption 请求。
 
 ## `--parallel N` 的真实语义
 

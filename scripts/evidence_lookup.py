@@ -143,6 +143,10 @@ def main(argv: list[str] | None = None) -> int:
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--page", help="Wiki page, e.g. concepts/x.md")
     target.add_argument("--source", help="Substring of the raw source path")
+    target.add_argument('--id', help='Exact raw evidence ID from search --scope evidence/all')
+    parser.add_argument('--raw', action='store_true', help='Read parser/caption observations instead of the claim ledger')
+    parser.add_argument('--render-dir', type=Path,
+                        help='With --id: render original PDF page and region into this scratch directory')
     parser.add_argument("--grep", nargs="+", default=[],
                         help="Keep items containing any of these terms")
     parser.add_argument("--json", action="store_true")
@@ -151,15 +155,38 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        result = lookup(Path(args.project).expanduser(), page=args.page or "",
-                        source=args.source or "", terms=args.grep, history=args.history)
+        project = Path(args.project).expanduser()
+        if args.render_dir and not args.id:
+            raise ValueError('--render-dir requires --id')
+        if args.id and args.render_dir:
+            from _source_evidence import render
+            item = render(project, args.id, args.render_dir.expanduser())
+            print(json.dumps(item, ensure_ascii=False, indent=2))
+            return 0
+        if args.raw or args.id:
+            from _source_evidence import collect
+            result = collect(project, page=args.page or '', source=args.source or '',
+                             history=args.history, evidence_id=args.id or '')
+            if args.grep:
+                result['matches'] = [r for r in result['matches']
+                                     if any(t.lower() in r['text'].lower() for t in args.grep)]
+        else:
+            result = lookup(project, page=args.page or "", source=args.source or "",
+                            terms=args.grep, history=args.history)
     except (OSError, ValueError, RuntimeError) as exc:
         print(f'ERROR: {exc}', file=sys.stderr)
         return 2
+    for diagnostic in result.get('diagnostics', []):
+        print('WARNING: ' + json.dumps(diagnostic, ensure_ascii=False), file=sys.stderr)
     if args.json:
         print(json.dumps(result, ensure_ascii=False))
         return 0
     for item in result["matches"]:
+        if item.get('result_type') == 'source_evidence':
+            print(f"[{item['evidence_id']} · {item['source']} · PDF page {item['pdf_page']} · "
+                  f"{item['kind']} · {item['evidence_status']} · {item['verification']}]")
+            print(f"  {item['text'][:600]}\n")
+            continue
         anchor = item.get("evidence") or item.get("label") or item.get("meaning") or ""
         print(f"[{item['source']} · {item['evidence_status']} · "
               f"hash {item['source_hash']} · run {item['run_id'] or 'unknown'} · "

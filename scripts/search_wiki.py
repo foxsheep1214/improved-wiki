@@ -181,7 +181,12 @@ def main() -> int:
                         help="Skip the vector path (pure keyword, no Ollama needed)")
     parser.add_argument("--json", action="store_true",
                         help="Output results as a JSON array (machine-readable, for agent use)")
+    parser.add_argument('--scope', choices=('wiki', 'evidence', 'all'), default='wiki',
+                        help='wiki (compatible default), raw evidence, or both; evidence uses offline keyword search')
+    parser.add_argument('--source', default='', help='Filter raw evidence by source path/name')
     args = parser.parse_args()
+    if args.top < 1:
+        parser.error('--top must be positive')
 
     project = Path(args.project).expanduser()
     runtime = detect_runtime_dir(project)
@@ -190,12 +195,12 @@ def main() -> int:
     # keyword path — always runs (offline, no deps); the same walk collects
     # the link graph for the one-hop expansion below
     graph_pages = GraphPages()
-    kw_results = keyword_search(wiki_dir, args.query, max_results=args.top,
-                                on_page=graph_pages.add)
+    kw_results = (keyword_search(wiki_dir, args.query, max_results=args.top,
+                                on_page=graph_pages.add) if args.scope != 'evidence' else [])
 
     vec_results: list[dict] = []
     vec_error = None
-    if not args.keyword_only:
+    if not args.keyword_only and args.scope != 'evidence':
         vec_results, vec_error = _vector_search(args.query, runtime, args.top,
                                                 wiki_dir)
         if vec_error:
@@ -213,23 +218,42 @@ def main() -> int:
         results = vec_results
         mode = "vector"
     else:
-        if args.json:
-            print("[]")
-        else:
-            print(f"No results for: {args.query}")
-        return 1
+        results, mode = [], 'keyword'
     results = _resolve_redirects(results, wiki_dir, args.query)
     results, graph_hits = blend_graph_results(
         results, graph_pages, args.top, len(vec_results))
     if graph_hits:
         mode = "hybrid"
 
+    if args.scope != 'wiki':
+        from _source_evidence import search
+        raw = search(project, args.query, args.top, source=args.source)
+        for diagnostic in raw['diagnostics']:
+            print('WARNING: ' + json.dumps(diagnostic, ensure_ascii=False), file=sys.stderr)
+        if raw['unavailable_sources']:
+            print(f"Raw evidence: excluded {len(raw['unavailable_sources'])} stale/missing source artifacts", file=sys.stderr)
+        # Interleave two ranked lists instead of comparing unrelated score scales.
+        wiki_hits = [dict(r, result_type='wiki') for r in results]
+        results = []
+        for index in range(max(len(wiki_hits), len(raw['matches']))):
+            if index < len(wiki_hits): results.append(wiki_hits[index])
+            if index < len(raw['matches']): results.append(raw['matches'][index])
+        results = results[:args.top]
+        mode += '+raw-evidence'
+    if not results:
+        print('[]' if args.json else f'No results for: {args.query}')
+        return 1
     if args.json:
         print(json.dumps(results, ensure_ascii=False))
         return 0
 
     print(f"{len(results)} result(s) for: {args.query}  [mode={mode}]\n")
     for i, r in enumerate(results, 1):
+        if r.get('result_type') == 'source_evidence':
+            print(f"{i}. [{r['evidence_id']}] {r['source']} · PDF page {r['pdf_page']} · {r['kind']}")
+            print(f"   {r['verification']} · {r['evidence_status']} · ingest completion not asserted")
+            print(f"   {r['snippet']}\n")
+            continue
         title = r.get("title", "")
         title_str = f"  ({title})" if title else ""
         vscore = r.get("vector_score")

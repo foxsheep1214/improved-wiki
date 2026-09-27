@@ -31,8 +31,9 @@ ls ~/Documents/知识库/
         命中 ≥ 1 → 用文件读取工具（Read）读具体段（按行号定位）
         命中 = 0 → 进入步骤 ③
 
-步骤 ③  知识库无内容（明示）
-        明确标注："知识库无相关内容，使用 LLM 通用知识"
+步骤 ③  Wiki未命中 → search_wiki.py --scope evidence 查询原始证据
+        两层均无命中且没有不可用/损坏诊断时，再明确标注：
+        "知识库未检索到相关内容，以下使用 LLM 通用知识"
         不可含糊带过、不可凭印象编造引用
 
 步骤 ④  输出格式（用户可观测）
@@ -109,7 +110,7 @@ python3 "$SKILL_DIR/scripts/search_wiki.py" "LC谐振导致振铃" \
 `Graph neighbor of …`，需要 Read 原文才知道内容。
 
 **Agent 标准工作流**：
-1. `search_wiki.py "query" --project <项目> --json` → 解析 JSON
+1. `search_wiki.py "query" --project <项目> --json` → 解析 JSON；精确数值/公式/图表问题加 `--scope all`，未命中时继续查 `--scope evidence`
 2. 取前 N 条的 `path` → `Read <项目>/wiki/<path>` 读全文
 3. 引用具体段落回答
 
@@ -144,7 +145,61 @@ python3 "$SKILL_DIR/scripts/evidence_lookup.py" --project <项目> \
 `missing_sources` 表示所选查询范围内没有可用证据；`unavailable_sources`
 说明被当前版本筛选排除的账本，不能把两者都解释成“从未消化”。
 
-### 5.3 补充：Read 精读
+### 5.3 原始证据检索与原页回看
+
+Wiki 保留知识综合；原始 OCR 与 VLM caption 作为独立证据返回，不由消化摘要替代。
+一般概念问题先查 Wiki。数值、公式、表格、插图、逐字引用的问题，或 Wiki 未命中时，
+必须同时查询原始证据，再读取完整命中记录：
+
+```bash
+python3 "$SKILL_DIR/scripts/search_wiki.py" "目标数字或关键词" \
+  --project <项目> --scope all --json
+python3 "$SKILL_DIR/scripts/search_wiki.py" "公式或图中标注" \
+  --project <项目> --scope evidence --source raw/Book/book.pdf --json
+python3 "$SKILL_DIR/scripts/evidence_lookup.py" --project <项目> \
+  --raw --page concepts/example.md --grep "目标词" --json
+python3 "$SKILL_DIR/scripts/evidence_lookup.py" --project <项目> \
+  --id <evidence_id> --json
+```
+
+默认 `--scope wiki` 保持旧调用契约。`all` 在 Wiki 排名与原始证据排名间交替取结果，
+总数受 `--top` 限制；不直接比较两套分数。结果类型是 `wiki` 或 `source_evidence`。
+原始证据目前使用离线关键词/CJK 检索，无需重新 embedding；它没有原始证据向量索引。
+匹配时兼容OCR数字间空格（如 `6 . 6 1`）和LaTeX命令前括号空格，返回的原文保持原样。
+`path` 对 Wiki 是 wiki 相对路径，对原始证据是项目相对 manifest 路径，必须先看类型。
+
+原始结果包含 `evidence_id`、`kind`、完整 `text`、`source`、`source_hash`、
+`pdf_page`（从1开始的PDF页序号）、`page_idx`（从0开始）、`bbox`（0–1000）、
+`verification`、`review`（如有）、`manifest` 和 `source_path`。
+`printed_page` 尚未提取，保持 null，不能拿 PDF 页序号冒充书上印刷页码。
+同一 parser 响应、来源版本及区域具有稳定 ID；新响应、来源版本或 caption 内容有独立 ID。
+
+**状态边界：** `source_current` 只表示当前原文件哈希匹配，
+`ingestion_status=not_asserted` 不宣称全书入库完成。OCR/caption 都是未验证观察；
+这一接口不改变 §5.2 完成事件与 run_id 一致的 claim 账本门禁。
+当前字节已变或来源被删除的证据默认排除，`evidence_lookup --raw --history` 可读历史并保留状态。
+来源重分类后若旧 manifest 未重新关联，明确表现为来源不可用，绝不按同名书猜测位置。
+旧书没有 scan-evidence 时只表示没有此类证据；不要声称未摄取，更不要自动重跑全库。
+
+以下情况回看原页：关键公式/数值的精确引用、OCR与caption或多来源冲突、
+符号无法辨认、复核状态 `needs-review/unavailable/deferred`，或用户明确要求：
+
+```bash
+mkdir -p /tmp/codex-work/wiki-evidence-view
+python3 "$SKILL_DIR/scripts/evidence_lookup.py" --project <项目> \
+  --id <evidence_id> --render-dir /tmp/codex-work/wiki-evidence-view
+```
+
+命令从哈希匹配的原PDF生成150 DPI原页和300 DPI区域图（bbox缺失时只生成原页），
+返回 `page_image`、`region_image` 绝对路径。使用图像查看工具读取图片后再回答。
+页码未知时拒绝猜测；不会调用OCR/VLM、写回Wiki或自动修正转录。
+引用形式：`来源完整路径 · PDF第N页 · region_id · evidence_id`；位置缺失要明示。
+模型二次转录相互一致也不等于人工核验通过。
+
+`--raw --page` 按该Wiki页的 `sources:` 筛选证据，仍是来源级关联，
+不声称每个返回区域都支持该页的每句话。只有读过对应原文/图片后才能作具体结论引用。
+
+### 5.4 补充：Read 精读
 
 搜索结果给出文件路径后，用文件读取工具（Read）按行号读具体段落：
 ```

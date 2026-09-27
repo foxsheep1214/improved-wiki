@@ -70,7 +70,7 @@ PDF (minerU harvest)                  PPTX/DOCX (zipfile office extract)
 
 | Parameter | Default | Env var | Description |
 |-----------|---------|---------|-------------|
-| Max workers | 4 | `CAPTION_MAX_WORKERS` | Per-image concurrency inside one caption round. A per-user cross-process flock prevents two batch workers from multiplying this into 8+ calls. |
+| Max workers | 1 | `CAPTION_MAX_WORKERS` | One image at a time by default; explicit overrides enable per-image concurrency inside one caption round. A per-user cross-process flock prevents caption rounds in different processes from overlapping. |
 | Image max dim | 1568 | — | Downscale threshold (vision limit) |
 | Context window | 150 chars/side | — | before/after body text fed as anchoring context (NashSU `CONTEXT_CHARS`, matched) |
 | Tiny-image min | 20px | `MINERU_IMG_MIN_WIDTH/HEIGHT` | 过滤噪声（故意低，保留公式截图） |
@@ -133,7 +133,7 @@ VLM 转录公式图成功率因模型而异。`CAPTION_SYSTEM_PROMPT` 规则：
 ## Usage
 
 ```bash
-export CAPTION_MAX_WORKERS=8    # 谨慎调高：GLM 免费档 12 并发即触发 429（默认 4）
+export CAPTION_MAX_WORKERS=1    # 默认逐张处理；显式调高可启用主模型并发
 ```
 
 直接调用补 caption：
@@ -164,7 +164,7 @@ captioned = _stage_1_3_caption_images_batch(images, config, media_dir, source_la
 `qwen3-vl:8b-instruct`（openai 协议）作 fallback——`caption_provider` 耗尽自身
 3 次重试后，自动切到 `caption_fallback_provider` 再试 3 次，每次切换打一行日志
 （`_stage_1_3_caption_one_image_with_failover`，见上方 Architecture）。远程端点
-支持真并行，但智谱 GLM-5v-turbo 免费档限流紧——默认 `CAPTION_MAX_WORKERS=4`
+支持真并行，但智谱 GLM-5v-turbo 免费档限流紧——默认 `CAPTION_MAX_WORKERS=1`
 （12 会触发 429，见下方"限流"节）。付费/高频账号可调高；fallback（本地）命中的图
 **不受此并发上限约束，而是代码强制一张一张来**（见下方"并发：本地 fallback
 provider 严格串行"）。
@@ -172,7 +172,7 @@ provider 严格串行"）。
 批量 ingest 可以让一本书的 caption 与下一本书的 minerU OCR 重叠，但不同书的
 caption round 不会彼此重叠：`_caption_batch_slot()` 在系统临时目录使用 per-user
 `fcntl.flock`。锁按 round 获取，重试 backoff 期间释放，因此不会无意义阻塞其他书；
-单个 round 内仍保留默认 4 路远程并发。
+单个 round 内默认逐张处理；显式设置 `CAPTION_MAX_WORKERS>1` 才启用主模型并发。
 
 ```json
 // ~/.agents/config.json
@@ -217,25 +217,23 @@ fallback 是否启用只看 `base_url`+`model` 是否非空（`_stage_1_3_provid
 
 key 直接写文件（`~/.agents/config.json` 权限 600、不进 git）。
 
-⚠️ **限流：必须降并发**。智谱 GLM 端点对并发敏感，`CAPTION_MAX_WORKERS=12`（旧默认）会触发 `HTTP 429: Too Many Requests`——代码重试 3 次（1s/2s/4s 退避）全落在限流窗口内，连续 3 张失败触发 `CONSECUTIVE_FAIL_PAUSE=3` 硬停（防静默降级策略）。实测 Wehner 书 12 并发跑出 39 个 429 占位 + 78 张没跑到。**代码默认已降为 `CAPTION_MAX_WORKERS=4`**（2026-07-07），降到 4 后 Wehner 书 117 张 pending 全部成功（0 占位）。Sidecar 是 cache，重跑只处理 pending（`[待重试]` 占位 + 缺失），已成功的跳过。若 4 仍 429（限流窗口期/账号日配额耗尽）：2026-07-08 起**不必再手动改并发或切 provider**——配好 `caption_fallback_provider` 后，429 耗尽 primary 重试即自动切本地 Ollama，一行日志记录切换。仍可手动降到 1 排查（详见下节）。
+⚠️ **限流：必须降并发**。智谱 GLM 端点对并发敏感，`CAPTION_MAX_WORKERS=12`（旧默认）会触发 `HTTP 429: Too Many Requests`——代码重试 3 次（1s/2s/4s 退避）全落在限流窗口内，连续 3 张失败触发 `CONSECUTIVE_FAIL_PAUSE=3` 硬停（防静默降级策略）。实测 Wehner 书 12 并发跑出 39 个 429 占位 + 78 张没跑到。历史上代码默认曾降为 `CAPTION_MAX_WORKERS=4`（2026-07-07），当时 Wehner 书 117 张 pending 全部成功（0 占位）。2026-09-26 起默认进一步改为 `1`（逐张处理）。Sidecar 是 cache，重跑只处理 pending（`[待重试]` 占位 + 缺失），已成功的跳过。若 4 仍 429（限流窗口期/账号日配额耗尽）：2026-07-08 起**不必再手动改并发或切 provider**——配好 `caption_fallback_provider` 后，429 耗尽 primary 重试即自动切本地 Ollama，一行日志记录切换。当前默认即为 1；显式调高后遇到限流时应恢复为 1。
 
 ## 并发：本地 fallback provider 严格串行（`_FALLBACK_SEMAPHORE`，2026-07-08）
 
 fallback（本地 Ollama）调用**代码强制一张一张来**，与 primary 的并发无关——
 `_stage_1_3_caption.py` 顶部一个进程级 `threading.Semaphore(1)`，
 `_stage_1_3_caption_one_image_with_failover` 里只把非 primary 的调用包在这把信号量里。
-primary 仍按 `CAPTION_MAX_WORKERS`（默认 4）并发；同一批里多张图同时 failover 到本地时，
+primary 仍按 `CAPTION_MAX_WORKERS`（默认 1，逐张处理）并发；同一批里多张图同时 failover 到本地时，
 后到的线程会在信号量上排队等，日志打一行 `waiting for the fallback provider ... — one
 image at a time`，等前一张本地 caption 做完才轮到。
 
-**为什么不像 primary 一样吃 `CAPTION_MAX_WORKERS`**：`CAPTION_MAX_WORKERS=4` 这个默认值
-是为智谱云端限流设的（HTTP 429 配额），对本地 Ollama 不成立——本地约束是硬件吞吐。
+**为什么 fallback 保留独立串行限制**：即使显式提高 `CAPTION_MAX_WORKERS` 来增加云端并发，本地 Ollama 的硬件吞吐约束仍然存在。
 Ollama 默认单模型单请求串行处理（除非服务端设了 `OLLAMA_NUM_PARALLEL` 开多槽位，本
 skill 不假设），并发发多个请求本来就只会在 Ollama 自己的队列里堆着、不会真并行；
 用客户端信号量显式串行化，比让 4 个线程都卡在同一个单线程本地推理队列上更干净，
 也避免真发生过的空响应/思考块泄漏这类本地模型高负载下的输出质量问题。
-无需手动设 `CAPTION_MAX_WORKERS=1`——那样会连 primary 的正常并发也一起拖慢，
-现在是 primary/fallback 各自独立限流，互不影响。
+默认 `CAPTION_MAX_WORKERS=1` 时，主模型及其重试/备用调用按图串行执行。显式调高该变量只改变主模型并发，备用模型仍逐张处理。已启动的进程需在下次启动时读取新默认值。
 
 ## 历史 caption「解析失败」可重试修复
 

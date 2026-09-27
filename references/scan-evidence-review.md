@@ -13,7 +13,9 @@ bytes), content list, original table HTML, and a region manifest under:
 
 The full source identity and SHA-256 distinguish same-named files and revisions.
 The manifest records PDF page numbers (one based), page indices (zero based),
-MinerU bounding boxes (normalized to 0–1000), original text and crop errors.
+MinerU bounding boxes (normalized to 0–1000), original text, reading order and crop errors.
+New manifests also retain body text blocks; old v1 content lists are projected
+read-only during retrieval, without rewriting the original artifacts.
 Table regions and detected anomalies receive 300-DPI source crops. Unknown page
 locations remain unknown; they are not inferred from nearby text. Source bytes
 are not duplicated wholesale: the exact response, table crops and anomaly crops
@@ -83,3 +85,34 @@ Re-running skips completed second opinions and retries unavailable/deferred
 regions (increase `--limit` if appropriate). Exit 2 means some requested regions
 are still unavailable/deferred. Human validation is still required to resolve a
 disagreement; never apply an opinion solely because a second model produced it.
+
+
+## Retrieval bindings
+
+`_source_evidence.py` exposes parser text/formulas/HTML tables and captions to
+`search_wiki.py --scope evidence|all`. It reads compact content lists and
+manifests, not large base64 parser responses. Source bytes are hashed only for
+candidate manifests, once per source per query. There is no background index
+build or extra model call.
+
+After Stage 1.3 validation (also on cached captions), `_ingest_prepare.py` calls
+`bind_captions` to save `caption-links.json` beside each source manifest.
+The join uses this source's chunk metadata, exact parser image basename and
+verified absolute page. It checks source identity/hash and caption/image pairs;
+unverified fallback page assignments are never bound. The sidecar stores
+canonical project-relative media paths, SHA256 values and model provenance.
+The original parser response and transcript are not changed.
+
+Retrieval validates the bound image/text/structured JSON hashes. Modified or
+missing artifacts are reported and their captions excluded; parser text remains
+available. Extraction scratch cleanup does not remove this durable join.
+Legacy captions may be bound with an explicit legacy/unverified status; no
+structured fields or model identity are fabricated. Old sources lacking the
+binding are not silently re-captioned: their OCR evidence remains searchable,
+and a later normal cached ingest can create the join while chunk metadata exists.
+
+Raw `source_current` means file-version correspondence, not finished ingestion,
+claim verification or absence of OCR errors. Review results remain separate
+second opinions. See [retrieval](kb-retrieval.md#53-原始证据检索与原页回看)
+for query, citation and exact-ID page-render commands. No original-evidence
+vector index or automatic sentence-to-region attribution is claimed.

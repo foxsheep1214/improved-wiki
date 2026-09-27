@@ -120,7 +120,7 @@ def persist_scan_evidence(results: dict, source: Path, config, chunk_out: Path,
         regions = []
         for index, block in enumerate(blocks):
             kind = block.get('type')
-            if kind not in ('equation', 'table', 'image', 'chart'):
+            if kind in ('header', 'footer', 'page_number'):
                 continue
             page_idx = block.get('page_idx')
             valid_page = (isinstance(page_idx, int) and not isinstance(page_idx, bool)
@@ -131,6 +131,7 @@ def persist_scan_evidence(results: dict, source: Path, config, chunk_out: Path,
                       'page_idx': absolute,
                       'pdf_page': absolute + 1 if valid_page else None,
                       'bbox': block.get('bbox'), 'original': region_text(block),
+                      'reading_order': index, 'coordinate_system': 'normalized-0-1000',
                       'reasons': reasons, 'crop': None}
             if kind == 'table':
                 atomic_write(folder / f'{region["id"]}.html', region['original'])
@@ -147,6 +148,7 @@ def persist_scan_evidence(results: dict, source: Path, config, chunk_out: Path,
         _json(manifest_path, {'schema_version': 1, 'source': identity,
                              'source_sha256': version,
                              'response_sha256': response_hash,
+                             'content_list_sha256': source_hash(folder / 'content-list.json'),
                              'page_range_zero_based': [start, end],
                              'regions': regions})
     _json(chunk_out / '_scan_evidence.json', {

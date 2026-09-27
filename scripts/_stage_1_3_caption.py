@@ -62,13 +62,10 @@ from _review_utils import (  # noqa: E402
 # Constants
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Default 4 parallel VLM calls — captioning is pure I/O-bound (one HTTP call
-# per image), so threads give real speedup. 12 (the former default) overruns the
-# GLM-5v-turbo free-tier rate limit and trips HTTP 429 after ~3 images; 4 stays
-# under it while still parallelizing. Override per run with the
-# CAPTION_MAX_WORKERS env var. This cap applies to the PRIMARY provider only —
-# see _FALLBACK_SEMAPHORE below for why the fallback provider is not scaled by it.
-CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "4"))
+# Process one image at a time by default, including its retries/failover.
+# CAPTION_MAX_WORKERS can explicitly opt the PRIMARY provider into parallel
+# requests. The fallback provider always retains its independent serial limit.
+CAPTION_MAX_WORKERS = int(os.environ.get("CAPTION_MAX_WORKERS", "1"))
 
 # The fallback provider (2026-07-08 failover, typically a local single-instance
 # server like Ollama) gets exactly ONE concurrent call, independent of

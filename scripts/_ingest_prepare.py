@@ -448,6 +448,12 @@ def _do_prepare(
 
         stage_1_2_result, stage_1_3_result = _run_image_pipeline()
 
+        # Bind verified caption artifacts to durable parser regions before any
+        # stop-after/checkpoint cleanup. Cached caption runs take this path too.
+        if raw_file.suffix.lower() == '.pdf' and stage_1_2_result.get('media_dir'):
+            from _source_evidence import bind_captions
+            bind_captions(config, raw_file, Path(stage_1_2_result['media_dir']))
+
         # Persist the VERIFIED artifact view, even on a cache hit. The media
         # directory + manifest/caption files, not stale counters, are
         # authoritative.
