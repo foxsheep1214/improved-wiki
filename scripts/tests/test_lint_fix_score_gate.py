@@ -354,5 +354,27 @@ class TestBrokenRelatedRepair(unittest.TestCase):
                           page.read_text(encoding="utf-8"))
 
 
+class TestRedirectMissingTargetFix(unittest.TestCase):
+    def test_suggested_target_is_written_and_unsuggested_left(self):
+        wlf = _load_module()
+        actions = wlf.plan_fixes([
+            {"type": "redirect-missing-target", "page": "concepts/old.md",
+             "suggested_target": "concepts/new.md"},
+            {"type": "redirect-missing-target", "page": "concepts/vague.md",
+             "suggested_target": None},
+        ])
+        self.assertEqual(actions, [{"kind": "redirect", "page": "concepts/old.md",
+                                    "target": "concepts/new.md"}])
+        with tempfile.TemporaryDirectory() as t:
+            wiki = Path(t) / "wiki"
+            (wiki / "concepts").mkdir(parents=True)
+            stub = wiki / "concepts" / "old.md"
+            stub.write_text("---\ntype: redirect\n---\n\nSee [[concepts/new]].\n",
+                            encoding="utf-8")
+            summary = wlf.apply_fixes(Path(t), wiki, actions, dry_run=False)
+            self.assertEqual(summary["redirect"], 1)
+            self.assertIn('redirect: "concepts/new"', stub.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -57,6 +57,16 @@
   refs to deleted pages. A bracketed entry counts as a link like any
   `[[wikilink]]`; if it appears only in `related:`, a dangling one is
   `broken-related` too, otherwise it stays a `broken-link`.
+- Structural lint reports `redirect-missing-target` (warning) for a
+  `type: redirect` stub without a `redirect:` line. When the stub's
+  `related:` entries and links name exactly one other page, `--fix-links`
+  writes that page as the target.
+- Lint and `graph.py` resolve links through one index (`_link_resolver.py`).
+  Each keeps its NashSU policy: lint matches the lowercased path, then the
+  basename (last page wins a shared one); the graph matches the exact id, then
+  NashSU's lowercase/whitespace-to-hyphen aliases, and resolves a shared stem
+  only when exactly one owner is not a redirect stub. Both ignore a
+  `#heading` anchor, which NashSU would report as a broken link.
 - Structural lint reports `invalid-frontmatter` (error) for a block that is
   unclosed, empty or not valid YAML: every reader treats such a page as having
   no frontmatter. It is not auto-fixed; `--strict` counts it as critical.

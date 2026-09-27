@@ -17,6 +17,8 @@
 #   3. no-outlinks         — page has no outbound [[wikilink]]s
 #      broken-related      — a bare related: entry names no page (fix-links
 #                            repoints a confident match, else drops the entry)
+#      redirect-missing-target — a type: redirect stub without redirect:
+#                            (fix-links fills it when the stub names one page)
 #   4. missing-frontmatter — page lacks the required YAML block
 #      invalid-frontmatter — block is unclosed or not valid YAML (not auto-fixed)
 #   5. semantic            — contradiction / stale / missing-page / suggestion /
@@ -342,6 +344,8 @@ for _f in run_structural_lint(structural_pages):
         _f["id"] = f"lint-nol-{_stem_key}"
     elif _f["type"] == "slug-collision":
         _f["id"] = f"lint-slugcol-{_stem_key}"
+    elif _f["type"] == "redirect-missing-target":
+        _f["id"] = f"lint-rmt-{_stem_key}"
     elif _f["type"] == "broken-related":
         _bl_counter += 1
         _f["id"] = f"lint-br-{_stem_key}-{_bl_counter}"
@@ -401,7 +405,7 @@ from collections import Counter
 findings = json.load(open('$LINT_CACHE', 'r', encoding='utf-8'))
 c = Counter(f['type'] for f in findings)
 total = sum(c.values())
-parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'broken-related: {c.get(\"broken-related\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
+parts = [f'{total} findings', f'broken-link: {c.get(\"broken-link\", 0)}', f'orphan: {c.get(\"orphan\", 0)}', f'no-outlinks: {c.get(\"no-outlinks\", 0)}', f'broken-related: {c.get(\"broken-related\", 0)}', f'redirect-missing-target: {c.get(\"redirect-missing-target\", 0)}', f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}', f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}', f'read-error: {c.get(\"read-error\", 0)}']
 print(' | '.join(parts))
 ")
   echo "[lint]$1 $SUMMARY_LINE"
@@ -556,6 +560,7 @@ parts = [f'{total} findings',
          f'orphan: {c.get(\"orphan\", 0)}',
          f'no-outlinks: {c.get(\"no-outlinks\", 0)}',
          f'broken-related: {c.get(\"broken-related\", 0)}',
+         f'redirect-missing-target: {c.get(\"redirect-missing-target\", 0)}',
          f'missing-frontmatter: {c.get(\"missing-frontmatter\", 0)}',
          f'invalid-frontmatter: {c.get(\"invalid-frontmatter\", 0)}',
          f'read-error: {c.get(\"read-error\", 0)}',

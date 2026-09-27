@@ -4,8 +4,9 @@
 Faithful port of the structural half of NashSU `src/lib/lint.ts`:
 orphan / broken-link / no-outlinks detection, each enriched with a suggested
 fix computed by a deterministic similarity engine. improved-wiki adds
-slug-collision and broken-related (a bare ``related:`` entry naming no page;
-NashSU writes bare-slug ``related:`` too but never checks it):
+slug-collision, broken-related (a bare ``related:`` entry naming no page;
+NashSU writes bare-slug ``related:`` too but never checks it) and
+redirect-missing-target (a ``type: redirect`` stub with no ``redirect:``):
 
   - broken link  → closest existing page by slug/path/title similarity
                    (basename equality, substring, Levenshtein ratio).
@@ -33,6 +34,7 @@ from _frontmatter import (
     parse_frontmatter,
 )
 from _frontmatter_array import parse_frontmatter_array
+from _link_resolver import PageIndex
 
 __all__ = [
     "run_structural_lint",
@@ -287,18 +289,6 @@ class _PageData:
     related_only_links: set[str] = field(default_factory=set)
 
 
-def _build_slug_map(pages: list[_PageData]) -> dict[str, int]:
-    """Dual-index by normalized relative slug and basename, as in 0.6.6."""
-    m: dict[str, int] = {}
-    for index, p in enumerate(pages):
-        basename = re.sub(
-            r"\.md$", "", _get_file_name(p.short_name), flags=re.IGNORECASE
-        )
-        m[normalize_link_target(p.slug)] = index
-        m[normalize_link_target(basename)] = index
-    return m
-
-
 # ── structural lint ─────────────────────────────────────────────────────────
 
 def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = True) -> list[dict]:
@@ -353,7 +343,10 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
             page_type, redirect_target, related, related_only,
         ))
 
-    slug_map = _build_slug_map(data)
+    # Shared with graph.py; lint policy = NashSU's normalized slug, then
+    # basename, last page winning a shared basename.
+    link_index = PageIndex(p.slug for p in data)
+    position = {p.slug: i for i, p in enumerate(data)}
     token_index: dict[str, list[int]] = {}
     fragment_index: dict[str, list[int]] = {}
     if with_suggestions:
@@ -384,16 +377,9 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         # *contains* the clean target (CONTAINS_TARGET_SCORE = 0.82).
         clean = target.strip().strip('"').strip("'")
         if clean != target:
-            clean_base = re.sub(
-                r"\.md$", "", _get_file_name(clean), flags=re.IGNORECASE
-            )
-            for key in (
-                normalize_link_target(clean),
-                normalize_link_target(clean_base),
-            ):
-                page_index = slug_map.get(key)
-                if page_index is not None:
-                    return data[page_index], 1.0, "exact"
+            hit = link_index.lint_resolve(clean)
+            if hit is not None:
+                return data[position[hit]], 1.0, "exact"
 
         _MIN = BROKEN_LINK_SUGGESTION_MIN_SCORE
         candidate_scores: dict[int, float] = {}
@@ -482,13 +468,8 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
 
     def resolve(link: str) -> int | None:
         """Existence check shared by links and related: entries."""
-        target = slug_map.get(normalize_link_target(link))
-        if target is None:
-            basename = re.sub(
-                r"\.md$", "", _get_file_name(link), flags=re.IGNORECASE
-            )
-            target = slug_map.get(normalize_link_target(basename))
-        return target
+        hit = link_index.lint_resolve(link)
+        return position[hit] if hit is not None else None
 
     # Inbound counts use the same normalization and basename fallback as
     # broken-link existence checks (NashSU 0.6.6 parity).
@@ -550,6 +531,23 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                     "or genuinely distinct (rename one to a type-specific "
                     "slug)."
                 ),
+            })
+
+        # A redirect stub without a target leads nowhere (improved-wiki
+        # extension). When its related: entries and links name exactly one
+        # other page, that page is the suggested target.
+        if p.page_type == "redirect" and not p.redirect_target:
+            named = {resolve(_related_target(e)) for e in p.related}
+            named |= {resolve(link) for link in p.outlinks}
+            named -= {None, page_index}
+            results.append({
+                "type": "redirect-missing-target",
+                "severity": "warning",
+                "page": short_name,
+                "detail": "type: redirect without a redirect: target; links "
+                          "to this stub cannot reach a canonical page.",
+                "suggested_target": (data[named.pop()].short_name
+                                     if len(named) == 1 else None),
             })
 
         # Redirect pages are compatibility aliases. Once callers have migrated

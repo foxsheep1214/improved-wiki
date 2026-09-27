@@ -470,5 +470,24 @@ class TestBrokenRelated(unittest.TestCase):
         self.assertEqual(orphans, ["concepts/b.md"])
 
 
+class TestRedirectMissingTarget(unittest.TestCase):
+    def test_stub_naming_one_page_gets_it_as_suggestion(self):
+        stub = ("---\ntype: redirect\ntitle: Old\nrelated: [concepts/new]\n---\n\n"
+                "Merged into [[concepts/new]].\n")
+        vague = "---\ntype: redirect\ntitle: Vague\n---\n\nSee [[concepts/new]] or [[concepts/b]].\n"
+        pages = [("concepts/old.md", stub), ("concepts/vague.md", vague),
+                 ("concepts/new.md", "---\ntype: concept\n---\n\n[[concepts/b]]\n"),
+                 ("concepts/b.md", "---\ntype: concept\n---\n\n[[concepts/new]]\n")]
+        found = {f["page"]: f for f in ls.run_structural_lint(pages)
+                 if f["type"] == "redirect-missing-target"}
+        self.assertEqual(found["concepts/old.md"]["suggested_target"], "concepts/new.md")
+        self.assertIsNone(found["concepts/vague.md"]["suggested_target"])
+
+    def test_heading_anchor_is_not_a_broken_link(self):
+        pages = [("concepts/a.md", "---\ntype: concept\n---\n\nSee [[concepts/b#Details]].\n"),
+                 ("concepts/b.md", "---\ntype: concept\n---\n\nSee [[concepts/a]].\n")]
+        self.assertFalse([f for f in ls.run_structural_lint(pages) if f["type"] == "broken-link"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

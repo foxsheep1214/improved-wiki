@@ -49,6 +49,7 @@ __all__ = [
     "clean_index_listing",
     "strip_deleted_wikilinks",
     "fix_related_entry",
+    "add_redirect_target",
 ]
 
 
@@ -352,3 +353,26 @@ def fix_related_entry(content: str, entry: str, replacement: str | None) -> str:
         if item and item not in kept:
             kept.append(item)
     return write_frontmatter_array(content, "related", kept)
+
+
+_TYPE_LINE_RE = re.compile(r"^type:[^\n]*$", re.MULTILINE)
+
+
+def add_redirect_target(content: str, target: str) -> str:
+    """Give a ``type: redirect`` stub its missing ``redirect:`` line.
+
+    The line goes right after ``type:``, as in stubs dedup writes; a stub
+    that already has one is left unchanged.
+    """
+    fm_match = _FRONTMATTER_BLOCK_RE.match(content)
+    if not fm_match:
+        return content
+    fm_text = fm_match.group(2)
+    type_line = _TYPE_LINE_RE.search(fm_text)
+    if _REDIRECT_LINE_RE.search(fm_text) or not type_line:
+        return content
+    value = lint_link_target(target)
+    quoted = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    new_fm = (fm_text[:type_line.end()] + f"\nredirect: {quoted}"
+              + fm_text[type_line.end():])
+    return content[:fm_match.start(2)] + new_fm + content[fm_match.end(2):]

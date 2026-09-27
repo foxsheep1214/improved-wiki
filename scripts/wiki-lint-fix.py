@@ -13,6 +13,7 @@ and applies the three fixes ported from NashSU ``lint-fixes.ts``:
                                        bulk-create ``type: query`` stub pages)
   - orphan + suggested_source        → append [[orphan]] to the source page
   - no-outlinks + suggested_target   → append [[suggested]] to the page
+  - redirect-missing-target + suggestion → add the stub's redirect: line
   - broken-related                   → point the related: entry at a
                                        suggestion scoring >= the rewrite gate,
                                        else drop it (NashSU's page-delete
@@ -62,6 +63,7 @@ from _lint_fixes import (  # noqa: E402
     build_deleted_keys,
     clean_index_listing,
     fix_related_entry,
+    add_redirect_target,
     extract_title_anywhere,
     normalize_wiki_ref_key,
     strip_deleted_wikilinks,
@@ -108,6 +110,7 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
                                        # → routed to REVIEW, never auto-applied
       {kind: "stub", broken, page}     # create stub AND rewrite [[broken]] in `page`
       {kind: "append", page, target}   # append [[target]] to `page`
+      {kind: "redirect", page, target}  # add a stub's missing redirect:
       {kind: "related", page, entry, replacement}
                                        # replacement None → drop the entry
     """
@@ -150,6 +153,10 @@ def plan_fixes(findings: list[dict]) -> list[dict]:
             page = fnd.get("page")
             if target and page:
                 actions.append({"kind": "append", "page": page, "target": target})
+        elif kind == "redirect-missing-target":
+            page, target = fnd.get("page"), fnd.get("suggested_target")
+            if page and target:
+                actions.append({"kind": "redirect", "page": page, "target": target})
         elif kind == "broken-related":
             page, entry = fnd.get("page"), fnd.get("broken_target")
             if page and entry:
@@ -176,12 +183,13 @@ def apply_fixes(
     # rewrite then produces. Process link-FIXING actions (rewrite/stub) before
     # link-ADDING ones (append) so append sees the final canonical link and
     # correctly skips. Stable sort preserves original order within each group.
-    _KIND_ORDER = {"rewrite": 0, "stub": 0, "related": 0, "append": 1}
+    _KIND_ORDER = {"rewrite": 0, "stub": 0, "related": 0, "redirect": 0, "append": 1}
     actions = sorted(actions, key=lambda a: _KIND_ORDER.get(a.get("kind"), 0))
 
     cache: dict[str, str] = {}
     dirty: set[str] = set()
-    summary = {"rewrite": 0, "stub": 0, "append": 0, "related": 0, "skipped": 0}
+    summary = {"rewrite": 0, "stub": 0, "append": 0, "related": 0,
+               "redirect": 0, "skipped": 0}
 
     def load(rel: str) -> str | None:
         if rel in cache:
@@ -262,6 +270,8 @@ def apply_fixes(
             new = append_wikilink(content, act["target"])
         elif kind == "related":
             new = fix_related_entry(content, act["entry"], act.get("replacement"))
+        elif kind == "redirect":
+            new = add_redirect_target(content, act["target"])
         else:
             summary["skipped"] += 1
             continue
@@ -271,7 +281,8 @@ def apply_fixes(
         cache[rel] = new
         dirty.add(rel)
         summary[kind] += 1
-        verb = {"rewrite": "rewrite", "related": "related"}.get(kind, "append")
+        verb = {"rewrite": "rewrite", "related": "related",
+                "redirect": "redirect"}.get(kind, "append")
         print(f"  [{verb:7}] {rel}")
 
     if not dry_run:
@@ -845,7 +856,7 @@ def _run(args, project_root: Path) -> int:
         # without finding-suppression must not let us mutate index/log/overview/schema.
         findings = [f for f in all_findings
                     if f.get("type") in ("broken-link", "orphan", "no-outlinks",
-                                         "broken-related")
+                                         "broken-related", "redirect-missing-target")
                     and Path(str(f.get("page", ""))).name not in _AGGREGATE_FILES]
         broken  = [f for f in findings if f["type"] == "broken-link"]
         orphans = [f for f in findings if f["type"] == "orphan"]
@@ -952,6 +963,7 @@ def _run(args, project_root: Path) -> int:
     print(f"[lint-fix] {mode} summary: "
           f"rewrite={summary['rewrite']} stub={summary['stub']} "
           f"append={summary['append']} related={summary['related']} "
+          f"redirect={summary['redirect']} "
           f"skipped={summary['skipped']}")
     if not args.apply:
         print("[lint-fix] dry-run — no files changed. Re-run with --apply to write.")

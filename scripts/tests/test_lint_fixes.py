@@ -302,5 +302,16 @@ class TestFixRelatedEntry(unittest.TestCase):
         self.assertEqual(f.fix_related_entry(self.PAGE, "concepts/zz", None), self.PAGE)
 
 
+class TestAddRedirectTarget(unittest.TestCase):
+    def test_inserted_after_type_line(self):
+        page = "---\ntype: redirect\ntitle: Old\n---\n\nBody\n"
+        out = f.add_redirect_target(page, "concepts/new.md")
+        self.assertEqual(out, '---\ntype: redirect\nredirect: "concepts/new"\ntitle: Old\n---\n\nBody\n')
+
+    def test_existing_target_is_kept(self):
+        page = '---\ntype: redirect\nredirect: "concepts/a"\n---\n\nBody\n'
+        self.assertEqual(f.add_redirect_target(page, "concepts/b"), page)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -565,3 +565,15 @@ def test_case_and_space_variants_resolve_like_nashsu(wiki):
     lg = graph.build_link_graph(pages)
     assert lg.out_links["wiki/a"] == {"wiki/concepts/power-factor", "wiki/concepts/loop-gain",
                                       "wiki/concepts/mesh-analysis"}
+
+
+def test_shared_stem_with_a_stub_resolves_to_the_real_page(wiki):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "x", subdir="methodology")
+    (wiki_dir / "concepts").mkdir(exist_ok=True)
+    (wiki_dir / "concepts" / "x.md").write_text(
+        "---\ntype: redirect\nredirect: methodology/x\n---\n", encoding="utf-8")
+    _write_page(wiki_dir, "reader", body_links=["x"])
+    pages = graph.load_pages(root)
+    lg = graph.build_link_graph(pages)
+    assert lg.out_links["wiki/reader"] == {"wiki/methodology/x"}
