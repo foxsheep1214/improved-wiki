@@ -54,8 +54,9 @@
   no-outlinks detection still read `[[wikilinks]]` only, as in NashSU.
   `--fix-links` repoints an entry whose suggestion is an exact or
   same-basename match (the headless rewrite gate) and otherwise drops it, as NashSU's page-delete cascade drops related
-  refs to deleted pages. Bracketed entries are wikilinks and stay
-  `broken-link` findings.
+  refs to deleted pages. A bracketed entry counts as a link like any
+  `[[wikilink]]`; if it appears only in `related:`, a dangling one is
+  `broken-related` too, otherwise it stays a `broken-link`.
 - Structural lint reports `invalid-frontmatter` (error) for a block that is
   unclosed, empty or not valid YAML: every reader treats such a page as having
   no frontmatter. It is not auto-fixed; `--strict` counts it as critical.

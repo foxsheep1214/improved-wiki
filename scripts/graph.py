@@ -53,7 +53,7 @@ import os
 import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -204,10 +204,17 @@ def load_pages(wiki_root: Path, include_hidden: bool = False) -> dict[str, Page]
 
 @dataclass
 class LinkResolver:
-    """Resolve a wikilink/related target string to a node id."""
+    """Resolve a wikilink/related target string to a node id.
+
+    Exact matches win; then NashSU's case-folded aliases (wiki-graph.ts
+    targetAliases: lowercase, whitespace -> hyphen), so `Power-Factor` or
+    `Loop gain` still find concepts/power-factor and concepts/loop-gain.
+    """
 
     by_path: dict[str, str]            # 'wiki/concepts/X' -> node_id
     by_stem: dict[str, list[str]]      # stem -> [node_id, ...]
+    folded_path: dict[str, str] = field(default_factory=dict)
+    folded_stem: dict[str, list[str]] = field(default_factory=dict)
 
     def resolve(self, target: str) -> Optional[str]:
         t = target.strip()
@@ -228,19 +235,37 @@ class LinkResolver:
         for cand in candidates:
             if cand in self.by_path:
                 return self.by_path[cand]
+        for cand in candidates:
+            for alias in _folded_aliases(cand):
+                if alias in self.folded_path:
+                    return self.folded_path[alias]
         stem = t.split("/")[-1]
         ids = self.by_stem.get(stem)
         if ids and len(ids) == 1:
             return ids[0]
+        for alias in _folded_aliases(stem):
+            ids = self.folded_stem.get(alias)
+            if ids and len(ids) == 1:
+                return ids[0]
         return None
+
+
+def _folded_aliases(value: str) -> tuple[str, ...]:
+    lower = value.lower()
+    return lower, re.sub(r"\s+", "-", lower)
 
 
 def build_resolver(pages: dict[str, Page]) -> LinkResolver:
     by_path = {nid: nid for nid in pages}
     by_stem: dict[str, list[str]] = defaultdict(list)
+    folded_path: dict[str, str] = {}
+    folded_stem: dict[str, list[str]] = defaultdict(list)
     for nid, p in pages.items():
         by_stem[p.stem].append(nid)
-    return LinkResolver(by_path=by_path, by_stem=dict(by_stem))
+        folded_path.setdefault(nid.lower(), nid)  # first wins, as in NashSU
+        folded_stem[p.stem.lower()].append(nid)
+    return LinkResolver(by_path=by_path, by_stem=dict(by_stem),
+                        folded_path=folded_path, folded_stem=dict(folded_stem))
 
 
 # --- Link graph (NashSU buildWikiGraph link relations) ----------------------

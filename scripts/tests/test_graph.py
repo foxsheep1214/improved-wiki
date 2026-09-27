@@ -553,3 +553,15 @@ def test_bracketed_and_md_related_entries_resolve(wiki):
     pages = graph.load_pages(root)
     lg = graph.build_link_graph(pages)
     assert lg.out_links["wiki/a"] == {"wiki/b", "wiki/c"}
+
+
+def test_case_and_space_variants_resolve_like_nashsu(wiki):
+    root, wiki_dir = wiki
+    _write_page(wiki_dir, "a", related=["Power-Factor", "Loop gain", "concepts/Mesh-Analysis"])
+    _write_page(wiki_dir, "power-factor", subdir="concepts")
+    _write_page(wiki_dir, "loop-gain", subdir="concepts")
+    _write_page(wiki_dir, "mesh-analysis", subdir="concepts")
+    pages = graph.load_pages(root)
+    lg = graph.build_link_graph(pages)
+    assert lg.out_links["wiki/a"] == {"wiki/concepts/power-factor", "wiki/concepts/loop-gain",
+                                      "wiki/concepts/mesh-analysis"}

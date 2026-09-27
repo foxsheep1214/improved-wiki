@@ -449,11 +449,18 @@ class TestBrokenRelated(unittest.TestCase):
         findings = ls.run_structural_lint(pages)
         related = [f for f in findings if f["type"] == "broken-related"]
         # concepts/b exists; methodology/b resolves by basename like a link.
-        self.assertEqual([f["broken_target"] for f in related], ["concepts/scan-losses"])
+        self.assertEqual([f["broken_target"] for f in related],
+                         ["concepts/scan-losses", "[[concepts/gone]]"])
         self.assertEqual(related[0]["suggested_target"], "concepts/scan-loss.md")
-        # A bracketed entry is a wikilink and stays a broken-link finding.
-        self.assertIn("concepts/gone",
-                      [f["broken_target"] for f in findings if f["type"] == "broken-link"])
+        # A bracketed entry found only in related: is not also a broken-link.
+        self.assertNotIn("concepts/gone",
+                         [f["broken_target"] for f in findings if f["type"] == "broken-link"])
+
+    def test_bracketed_entry_also_in_the_body_stays_a_broken_link(self):
+        pages = [("concepts/a.md", self._page(["[[concepts/gone]]"], "See [[concepts/gone]]."))]
+        findings = ls.run_structural_lint(pages)
+        self.assertEqual({f["type"] for f in findings if "gone" in f.get("broken_target", "")},
+                         {"broken-link"})
 
     def test_related_entries_do_not_count_as_inbound_links(self):
         # NashSU parity: orphan detection reads [[wikilinks]] only.

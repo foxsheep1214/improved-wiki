@@ -292,6 +292,12 @@ class TestFixRelatedEntry(unittest.TestCase):
         self.assertIn('related: ["concepts/a", "concepts/b"]',
                       f.fix_related_entry(self.PAGE, "concepts/x", "concepts/b.md"))
 
+    def test_bracketed_entry_keeps_its_form(self):
+        page = '---\ntype: concept\nrelated: ["[[concepts/x]]"]\n---\n\nBody\n'
+        self.assertIn('related: ["[[concepts/y]]"]',
+                      f.fix_related_entry(page, "[[concepts/x]]", "concepts/y.md"))
+        self.assertIn('related: []', f.fix_related_entry(page, "[[concepts/x]]", None))
+
     def test_absent_entry_leaves_page_untouched(self):
         self.assertEqual(f.fix_related_entry(self.PAGE, "concepts/zz", None), self.PAGE)
 

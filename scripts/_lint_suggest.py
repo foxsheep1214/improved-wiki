@@ -77,11 +77,6 @@ STATE_FILES = {
     "embed-cache.json", "dedup-report.json",
 }
 
-def _lint_frontmatter(content: str) -> dict:
-    """Use the same YAML/null/array semantics as graph, dedup and writers."""
-    return parse_frontmatter(content)[0]
-
-
 # Headless auto-rewrite gate (2026-07-10, user-approved lint hardening): only
 # exact (1.0) / same-basename (0.96) tier suggestions may be rewritten without
 # a human — contains-tier (0.82) and fuzzy-Levenshtein suggestions go to
@@ -119,6 +114,13 @@ _TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 def extract_wikilinks(content: str) -> list[str]:
     return [m.group(1).strip() for m in _WIKILINK_RE.finditer(content)]
+
+
+def _related_target(entry: str) -> str:
+    """The page a related: entry names: `x`, `"x"` or `[[x|alias]]`."""
+    entry = entry.strip().strip('"').strip("'")
+    m = _WIKILINK_RE.fullmatch(entry)
+    return m.group(1).strip() if m else entry
 
 
 def _get_file_name(path: str) -> str:
@@ -282,6 +284,7 @@ class _PageData:
     page_type: str = ""
     redirect_target: str = ""
     related: list[str] = field(default_factory=list)
+    related_only_links: set[str] = field(default_factory=set)
 
 
 def _build_slug_map(pages: list[_PageData]) -> dict[str, int]:
@@ -322,7 +325,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         slug = _relative_to_slug(short_name)
         title = _extract_title(content, short_name)
         outlinks = extract_wikilinks(content)
-        fm = _lint_frontmatter(content)
+        fm, body = parse_frontmatter(content)
         page_type = str(fm.get("type", "")).strip().lower()
         raw_redirect = fm.get("redirect")
         redirect_target = raw_redirect.strip() if isinstance(raw_redirect, str) else ""
@@ -338,13 +341,16 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
                 f"{title}\n{slug_name}\n{content[:SUGGESTION_TOKEN_WINDOW]}"
             ) if with_suggestions else set()
         )
-        # Bracketed entries are wikilinks already in `outlinks` (the scan
-        # reads the whole file, as NashSU's does); bare ones are checked here.
-        related = [entry for entry in parse_frontmatter_array(content, "related")
-                   if "[[" not in entry]
+        # A bracketed entry is also a wikilink in `outlinks` (the scan reads
+        # the whole file, as NashSU's does) and counts as a link there. When
+        # its only occurrence is the related: array, a dangling one is
+        # reported as broken-related rather than broken-link.
+        related = parse_frontmatter_array(content, "related")
+        related_only = ({_related_target(e) for e in related if e.startswith("[[")}
+                        - set(extract_wikilinks(body)))
         data.append(_PageData(
             short_name, short_name, slug, title, content, outlinks, tokens,
-            page_type, redirect_target, related,
+            page_type, redirect_target, related, related_only,
         ))
 
     slug_map = _build_slug_map(data)
@@ -582,9 +588,12 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
         # rewrites a confident suggestion and otherwise drops the entry, as
         # NashSU's page-delete cascade drops related refs to deleted pages.
         for entry in p.related:
-            if resolve(entry.strip().strip('"').strip("'")) is not None:
+            target = _related_target(entry)
+            if not target or resolve(target) is not None:
                 continue
-            suggestion = _cached_broken_target(entry) if with_suggestions else None
+            if entry.startswith("[[") and target not in p.related_only_links:
+                continue  # also a body link: reported as broken-link below
+            suggestion = _cached_broken_target(target) if with_suggestions else None
             results.append({
                 "type": "broken-related",
                 "severity": "warning",
@@ -598,7 +607,7 @@ def run_structural_lint(pages: list[tuple[str, str]], with_suggestions: bool = T
 
         # Broken links.
         for link in p.outlinks:
-            if resolve(link) is not None:
+            if resolve(link) is not None or link in p.related_only_links:
                 continue
             suggestion = _cached_broken_target(link) if with_suggestions else None
             link_origin = (

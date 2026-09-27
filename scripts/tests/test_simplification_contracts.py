@@ -85,7 +85,6 @@ def test_query_cache_identity_needs_unique_actual_source(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('tags', ['tags: [rf, "thermal, cooling"]', 'tags:\n  - rf\n  - "thermal, cooling"'])
 def test_all_frontmatter_readers_agree_on_arrays_and_scalars(tags):
-    from _lint_suggest import _lint_frontmatter
     from graph import _parse_frontmatter
     content = f'---\n{tags}\ncreated: 2026-09-25\nempty: null\nliteral: "null"\nactive: false\n---\nBody\n'
     fm, body = parse_frontmatter(content)
@@ -93,7 +92,6 @@ def test_all_frontmatter_readers_agree_on_arrays_and_scalars(tags):
     assert fm['created'] == '2026-09-25'
     assert fm['empty'] is None and fm['literal'] == 'null'
     assert fm['active'] == 'false'
-    assert _lint_frontmatter(content) == fm
     assert _parse_frontmatter(content) == (fm, body)
     assert parse_frontmatter_array(content, 'tags') == fm['tags']
     assert parse_frontmatter(write_frontmatter(fm, body)) == (fm, body)

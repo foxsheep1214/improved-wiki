@@ -343,6 +343,8 @@ def fix_related_entry(content: str, entry: str, replacement: str | None) -> str:
     if entry not in related:
         return content
     value = lint_link_target(replacement) if replacement else None
+    if value and entry.startswith("[["):
+        value = f"[[{value}]]"
     kept: list[str] = []
     for item in related:
         if item == entry:
