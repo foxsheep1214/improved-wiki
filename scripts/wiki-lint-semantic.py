@@ -167,8 +167,8 @@ def order_by_community(
     Batches are cut from this order, so related pages share a batch and a
     contradiction between them can be seen; path order put concepts, sources
     and comparisons of one topic in different batches. Communities come
-    from graph.py's Louvain on body links + ``related:`` (index/log/overview
-    are left out: they link everything and would merge all communities).
+    from graph.py's Louvain on body links + ``related:`` (structural pages
+    such as index.md are left out, as in graph.py: they link everything).
     Falls back to path order when the graph cannot be built.
     """
     try:
@@ -176,12 +176,10 @@ def order_by_community(
         import graph
         pages = graph.load_pages(root, include_hidden=True)
         lg = graph.build_link_graph(pages)
-        skip = {nid for nid, page in pages.items()
-                if page.stem in graph.INSIGHT_STRUCTURAL_IDS}
         g = nx.Graph()
-        g.add_nodes_from(nid for nid in pages if nid not in skip)
-        g.add_edges_from(tuple(e) for e in lg.edges if not (e & skip))
-        communities = graph.detect_communities(g, lg)
+        g.add_nodes_from(pages)
+        g.add_edges_from(tuple(e) for e in lg.edges)
+        communities = graph.detect_communities(g, lg, graph.structural_ids(pages))
     except Exception as exc:  # noqa: BLE001 — ordering is an optimization
         print(f"[semantic-lint] graph ordering unavailable ({exc}); using path order",
               file=sys.stderr)

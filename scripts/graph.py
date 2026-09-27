@@ -331,7 +331,8 @@ def shared_source_count(a: str, b: str, pages: dict[str, Page]) -> int:
 
 def calculate_relevance(a: str, b: str, pages: dict[str, Page],
                         lg: LinkGraph,
-                        retrieval_lg: Optional["LinkGraph"] = None) -> tuple[float, list[str]]:
+                        retrieval_lg: Optional["LinkGraph"] = None,
+                        skip: frozenset[str] = frozenset()) -> tuple[float, list[str]]:
     """Port of NashSU ``calculateRelevance(nodeA, nodeB, graph)``.
 
     Returns (weight, fired signal names). Type affinity is added
@@ -339,6 +340,7 @@ def calculate_relevance(a: str, b: str, pages: dict[str, Page],
     ``retrieval_lg`` (the full link graph incl. query pages) when provided —
     NashSU computes relevance over the retrieval graph, not the display graph —
     falling back to ``lg`` for backward-compatible single-graph callers.
+    ``skip`` (structural pages) never counts as a common neighbour.
     """
     if a == b:
         return 0.0, []
@@ -365,7 +367,7 @@ def calculate_relevance(a: str, b: str, pages: dict[str, Page],
     neighbors_b = rlg.neighbors(b)
     adamic_adar = 0.0
     for c in neighbors_a:
-        if c in neighbors_b:
+        if c in neighbors_b and c not in skip:
             adamic_adar += 1.0 / math.log(max(rlg.degree(c), 2))
     common_score = adamic_adar * W_COMMON_NEIGHBOR
     if common_score:
@@ -380,7 +382,8 @@ def calculate_relevance(a: str, b: str, pages: dict[str, Page],
 
 
 def build_weighted_graph(pages: dict[str, Page], lg: LinkGraph,
-                         retrieval_lg: Optional["LinkGraph"] = None) -> nx.Graph:
+                         retrieval_lg: Optional["LinkGraph"] = None,
+                         skip: frozenset[str] = frozenset()) -> nx.Graph:
     """Assemble the display link graph, weighting each edge by calculateRelevance.
 
     ``retrieval_lg`` (full graph incl. query pages) feeds the Adamic-Adar term;
@@ -390,9 +393,21 @@ def build_weighted_graph(pages: dict[str, Page], lg: LinkGraph,
     g.add_nodes_from(pages.keys())
     for pair in lg.edges:
         u, v = tuple(pair)
-        w, _ = calculate_relevance(u, v, pages, lg, retrieval_lg)
+        w, _ = calculate_relevance(u, v, pages, lg, retrieval_lg, skip)
         g.add_edge(u, v, weight=round(w, 4))
     return g
+
+
+def structural_ids(pages: dict[str, Page]) -> frozenset[str]:
+    """Pages kept out of community detection and Adamic-Adar.
+
+    index.md links nearly every page (11,721 of 11,858 on HardwareWiki), so as
+    a node it merged unrelated topics into a few giant communities and was a
+    common neighbour of every pair. NashSU keeps it in; this deviation keeps
+    the nodes themselves, their link counts and the display unchanged.
+    """
+    return frozenset(nid for nid, page in pages.items()
+                     if is_structural_graph_node(page))
 
 
 # --- Communities (NashSU detectCommunities) ---------------------------------
@@ -405,13 +420,20 @@ class Community:
     cohesion: float           # intra-edge density
     top_nodes: list[str]      # node ids, by unweighted link count desc
     hub: Optional[str]        # top node (highest link count)
+    # Mean links per member inside the community. Density (cohesion) shrinks
+    # with size, so it rates every large community "sparse"; this does not.
+    internal_degree: float = 0.0
 
 
-def detect_communities(g: nx.Graph, lg: LinkGraph) -> list[Community]:
+def detect_communities(g: nx.Graph, lg: LinkGraph,
+                       exclude: frozenset[str] = frozenset()) -> list[Community]:
     """Louvain (unweighted, resolution 1) + density cohesion, renumbered by size.
 
     NashSU passes no edge-weight getter to louvain → unweighted partition.
+    ``exclude`` (structural pages) belongs to no community.
     """
+    if exclude:
+        g = g.subgraph(n for n in g.nodes if n not in exclude)
     if g.number_of_edges() == 0:
         # No links → each node its own singleton; skip Louvain.
         return [Community(cid=i, nodes=[n], cohesion=0.0, top_nodes=[n], hub=n)
@@ -419,18 +441,12 @@ def detect_communities(g: nx.Graph, lg: LinkGraph) -> list[Community]:
 
     partition = louvain_communities(g, weight=None, seed=LOUVAIN_SEED, resolution=1.0)
 
-    edge_set = {frozenset(e) for e in g.edges()}
-
     communities: list[Community] = []
     for cid, members in enumerate(sorted(partition, key=len, reverse=True)):
         member_list = sorted(members)
         n = len(member_list)
         # Cohesion = intra-community edges / possible edges (density).
-        intra = 0
-        for i in range(n):
-            for j in range(i + 1, n):
-                if frozenset((member_list[i], member_list[j])) in edge_set:
-                    intra += 1
+        intra = g.subgraph(member_list).number_of_edges()
         possible = (n * (n - 1) / 2) if n > 1 else 1
         cohesion = intra / possible
         # Top nodes by unweighted link count.
@@ -438,7 +454,8 @@ def detect_communities(g: nx.Graph, lg: LinkGraph) -> list[Community]:
         top_nodes = by_links[:5]
         hub = by_links[0] if by_links else None
         communities.append(Community(cid=cid, nodes=member_list, cohesion=round(cohesion, 4),
-                                     top_nodes=top_nodes, hub=hub))
+                                     top_nodes=top_nodes, hub=hub,
+                                     internal_degree=round(2 * intra / n, 2)))
     return communities
 
 
@@ -460,6 +477,7 @@ class KnowledgeGap:
     description: str
     node_ids: list[str]
     suggestion: str
+    internal_degree: Optional[float] = None   # sparse-community gaps only
 
 
 def detect_knowledge_gaps(pages: dict[str, Page], lg: LinkGraph,
@@ -530,6 +548,7 @@ def detect_knowledge_gaps(pages: dict[str, Page], lg: LinkGraph,
                 node_ids=content_nodes,
                 suggestion="This knowledge area lacks internal cross-references. Consider adding "
                            "links between these pages or researching to fill gaps.",
+                internal_degree=round(2 * intra / n_content, 2),
             ))
 
     # 3. Bridge nodes: neighbors spanning >= 3 distinct communities.
@@ -691,13 +710,16 @@ def write_graph_json(out: Path, g: nx.Graph, pages: dict[str, Page], lg: LinkGra
         ],
         "communities": [
             {"id": c.cid, "nodes": c.nodes, "cohesion": c.cohesion,
+             "avgInternalDegree": c.internal_degree,
              "topNodes": c.top_nodes, "hub": c.hub,
              "low_quality": c.cohesion < COHESION_LOW}
             for c in communities
         ],
         "gaps": [
             {"type": gp.gap_type, "title": gp.title, "description": gp.description,
-             "nodeIds": gp.node_ids, "suggestion": gp.suggestion}
+             "nodeIds": gp.node_ids, "suggestion": gp.suggestion,
+             **({"avgInternalDegree": gp.internal_degree}
+                if gp.internal_degree is not None else {})}
             for gp in gaps
         ],
         "surprisingConnections": [
@@ -754,14 +776,16 @@ def write_graph_html(
         for t, cnt in sorted(type_counts.items(), key=lambda x: -x[1])
     )
 
+    # The largest communities, one per colour. Filtering on density hid
+    # nearly every large community, since density falls with size.
     community_legend = ""
-    for c in communities:
-        if c.cohesion >= COHESION_LOW and c.hub in pages:
+    for c in communities[:len(community_colors)]:
+        if c.hub in pages:
             hub_label = html.escape(pages[c.hub].title[:30])
             color = community_colors[c.cid % len(community_colors)]
             community_legend += (
                 f'<div class="legend-item"><span class="legend-dot" style="background:{color}"></span>'
-                f'<span>C{c.cid}: {hub_label} <span class="legend-meta">{len(c.nodes)}页 coh {c.cohesion:.2f}</span></span></div>'
+                f'<span>C{c.cid}: {hub_label} <span class="legend-meta">{len(c.nodes)}页 · 平均内部链接 {c.internal_degree:.1f}</span></span></div>'
             )
 
     isolated_gap = next((gp for gp in gaps if gp.gap_type == "isolated-node"), None)
@@ -1037,9 +1061,14 @@ def write_knowledge_gaps(out: Path, gaps: list[KnowledgeGap], pages: dict[str, P
         lines.append("")
     if sparse:
         lines.append("## Sparse clusters (cohesion < 0.15)")
-        for gp in sparse:
+        lines.append("Cohesion is edge density, which falls as a cluster grows, so large "
+                     "clusters nearly always qualify. Listed weakest first by average "
+                     "internal links per page, which does not depend on size.")
+        lines.append("")
+        for gp in sorted(sparse, key=lambda g: (g.internal_degree or 0.0, -len(g.node_ids))):
             lines.append(f"### {gp.title}")
-            lines.append(gp.description)
+            lines.append(f"{gp.description} Average internal links per page: "
+                         f"{gp.internal_degree}.")
             lines.append("")
     if bridges:
         lines.append("## Bridge pages (span ≥ 3 communities)")
@@ -1099,7 +1128,8 @@ def write_clusters(clusters_dir: Path, communities: list[Community],
 
 def query_suggestions(pages: dict[str, Page], lg: LinkGraph,
                       slug: str, top_n: int,
-                      retrieval_lg: Optional["LinkGraph"] = None) -> tuple[Optional[str], list[dict]]:
+                      retrieval_lg: Optional["LinkGraph"] = None,
+                      skip: frozenset[str] = frozenset()) -> tuple[Optional[str], list[dict]]:
     """Top calculateRelevance neighbors of ``slug`` (NashSU getRelatedNodes).
 
     CLI choice: already-linked pages are excluded so this suggests NEW links.
@@ -1117,7 +1147,7 @@ def query_suggestions(pages: dict[str, Page], lg: LinkGraph,
     for other in pages:
         if other in already:
             continue
-        w, fired = calculate_relevance(node, other, pages, lg, retrieval_lg)
+        w, fired = calculate_relevance(node, other, pages, lg, retrieval_lg, skip)
         if w > 0:
             scored.append({"target": other, "stem": pages[other].stem,
                            "title": pages[other].title, "weight": round(w, 4),
@@ -1142,12 +1172,13 @@ def run_build(wiki_root: Path, output: Optional[Path], dry_run: bool,
         return 1
     retrieval_lg = build_link_graph(all_pages)
     lg = build_link_graph(pages)                              # display graph (excl. query)
-    g = build_weighted_graph(pages, lg, retrieval_lg)
+    structural = structural_ids(all_pages)
+    g = build_weighted_graph(pages, lg, retrieval_lg, structural)
     # Stash linkCount on nodes so surprising-connection scoring matches NashSU.
     for nid in g.nodes:
         g.nodes[nid]["linkCount"] = lg.link_counts.get(nid, 0)
 
-    communities = detect_communities(g, lg)
+    communities = detect_communities(g, lg, structural)
     gaps = detect_knowledge_gaps(pages, lg, communities)
     surprising = find_surprising_connections(g, pages, communities)
 
@@ -1230,7 +1261,8 @@ def run_query(wiki_root: Path, slug: str, top_n: int) -> int:
         return 1
     retrieval_lg = build_link_graph(all_pages)
     lg = build_link_graph(pages)                              # display graph (excl. query)
-    node, suggestions = query_suggestions(pages, lg, slug, top_n, retrieval_lg)
+    node, suggestions = query_suggestions(pages, lg, slug, top_n, retrieval_lg,
+                                          structural_ids(all_pages))
     if not node:
         print(f"❌ No page matches slug '{slug}'")
         return 1

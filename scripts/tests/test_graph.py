@@ -577,3 +577,47 @@ def test_shared_stem_with_a_stub_resolves_to_the_real_page(wiki):
     pages = graph.load_pages(root)
     lg = graph.build_link_graph(pages)
     assert lg.out_links["wiki/reader"] == {"wiki/methodology/x"}
+
+
+def test_index_hub_is_kept_out_of_communities_and_adamic_adar(wiki):
+    root, wiki_dir = wiki
+    for grp in ("p", "q"):
+        _write_page(wiki_dir, f"{grp}1", body_links=[f"{grp}2", f"{grp}3"])
+        _write_page(wiki_dir, f"{grp}2", body_links=[f"{grp}3"])
+        _write_page(wiki_dir, f"{grp}3")
+    _write_page(wiki_dir, "index", type_="index",
+                body_links=["p1", "p2", "p3", "q1", "q2", "q3"])
+    pages = graph.load_pages(root)
+    lg = graph.build_link_graph(pages)
+    structural = graph.structural_ids(pages)
+    assert structural == {"wiki/index"}
+    g = graph.build_weighted_graph(pages, lg, skip=structural)
+    comms = graph.detect_communities(g, lg, structural)
+    assert sorted(sorted(c.nodes) for c in comms) == [
+        ["wiki/p1", "wiki/p2", "wiki/p3"], ["wiki/q1", "wiki/q2", "wiki/q3"]]
+    assert all(c.internal_degree == 2.0 for c in comms)
+    # p2-p3 share p1 and index; only p1 may count as a common neighbour.
+    with_index, _ = graph.calculate_relevance("wiki/p2", "wiki/p3", pages, lg)
+    without_index, _ = graph.calculate_relevance("wiki/p2", "wiki/p3", pages, lg, skip=structural)
+    assert with_index > without_index
+
+
+def test_gap_report_orders_sparse_clusters_by_internal_links(wiki, tmp_path):
+    root, wiki_dir = wiki
+    # A 15-page star (14 edges, 1.87 links/page) and a 20-page path
+    # (19 edges, 1.9 links/page): both sparse by density.
+    leaves = [f"s{i}" for i in range(14)]
+    _write_page(wiki_dir, "hub", body_links=leaves)
+    for leaf in leaves:
+        _write_page(wiki_dir, leaf)
+    chain = [f"c{i}" for i in range(20)]
+    for a, b in zip(chain, chain[1:]):
+        _write_page(wiki_dir, a, body_links=[b])
+    _write_page(wiki_dir, chain[-1])
+    assert graph.run_build(root, tmp_path / "graph.json", dry_run=False,
+                           include_all=False) == 0
+    report = (root / ".llm-wiki" / "knowledge-gaps.md").read_text(encoding="utf-8")
+    assert "Average internal links per page" in report
+    degrees = [float(line.rsplit(": ", 1)[1].rstrip("."))
+               for line in report.splitlines() if "Average internal links per page" in line]
+    assert degrees == sorted(degrees)
