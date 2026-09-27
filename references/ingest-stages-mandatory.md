@@ -245,7 +245,7 @@ test -d wiki/media/*/<slug> && find wiki/media/<type>/<slug> \( -name '*.jpeg' -
 Graph 不在 ingest 管线内。Ingest 管线不碰图——图建在 Graph 命令，图用在 Ingest 之外（`--mode query --slug <page>` 是只读工具，为任意页面返回 top-N 建议缺失 wikilink，不自动改文件、不在 ingest 管线内调用）。触发：仅手动运行 `python3 "$SKILL_DIR/scripts/graph.py"`（ingest/lint 不自动触发，对齐 NashSU：NashSU 无 post-ingest 图重建）。详见 `graph.py --help`。
 
 - **四信号图构建**：解析 wikilinks + `related:` + frontmatter，构建 networkx 加权无向图（direct link ×3.0 / source overlap ×4.0 / Adamic-Adar ×1.5 / type affinity ×1.0）。产物 `<runtime>/graph.json`。大书（>100 页/源）source-overlap 改用 star（成员↔source 页 hub）避免 N² clique；AA 丢弃 <0.2 的 hub 噪声对。
-- **Louvain 社区检测**：社区检测 + cohesion 评分（<0.15 标记低质量）；不计算 betweenness（与 NashSU 一致，桥接页按邻居跨越的社区数判断）。
+- **Louvain 社区检测**：社区检测 + cohesion 评分（<0.15 标记低质量）+ 平均内部连接数（与规模无关，稀疏社区按它排序）；index/log/overview 等结构页与 redirect 存根不参与社区划分与共同邻居加权；不计算 betweenness（与 NashSU 一致，桥接页按邻居跨越的社区数判断）。
 - **图谱洞察**：`.llm-wiki/knowledge-gaps.md`（孤立节点/稀疏社区/桥接节点，列出全部；不属于 Review；缺失链接建议用 `--mode query`）+ `wiki/clusters/cluster-NNN.md`（社区 hub 页）。旧 `wiki/REVIEW/knowledge-gaps.md` 在下一次非 dry-run Graph 构建时清除。
 
 ```bash
