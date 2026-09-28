@@ -510,10 +510,8 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
     Returns (api_proc, venv_python). Raises RuntimeError if the API never
     becomes healthy (caller must close any open fitz doc on failure).
     """
-    venv_python = Path(os.environ.get('IMPROVED_WIKI_MINERU_PYTHON',
-                                     str(Path.home() / '.venv' / 'bin' / 'python3')))
-    if not venv_python.exists():
-        venv_python = Path(sys.executable)
+    from _mineru_v4 import mineru_python
+    venv_python = mineru_python()
 
     # Check if minerU is already running on the port — if so, reuse it
     if _is_mineru_healthy():

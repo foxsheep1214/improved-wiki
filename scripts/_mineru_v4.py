@@ -5,6 +5,9 @@ import base64
 import hashlib
 import io
 import json
+import os
+import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -44,9 +47,43 @@ def health(port):
         return None
 
 
+def mineru_python() -> Path:
+    """Use the same environment for the API server and its native renderer."""
+    explicit = os.environ.get('IMPROVED_WIKI_MINERU_PYTHON')
+    if explicit:
+        return Path(explicit).expanduser()
+    default = Path.home() / '.venv' / 'bin' / 'python3'
+    return default if default.exists() else Path(sys.executable)
+
+
+def _render_content_list(middle: dict) -> list:
+    # Do not import MinerU into the ingest driver: it can use another Python.
+    python = mineru_python()
+    code = (
+        'import json,sys; '
+        'from mineru.parser.base import ParseResult; '
+        'from mineru.render import render_content_list; '
+        'parsed=ParseResult.from_dict(json.load(sys.stdin)); '
+        'json.dump(render_content_list(parsed.middle_json),sys.stdout)'
+    )
+    try:
+        result = subprocess.run(
+            [str(python), '-c', code], input=json.dumps(middle),
+            text=True, capture_output=True, check=True, timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        raise RuntimeError(
+            f'MinerU renderer failed using {python}: {detail}. '
+            'Check IMPROVED_WIKI_MINERU_PYTHON and its MinerU 4 installation.'
+        ) from exc
+    blocks = json.loads(result.stdout)
+    if not isinstance(blocks, list):
+        raise ValueError('MinerU renderer did not return a content list')
+    return blocks
+
+
 def decode_archive(data: bytes, filename: str) -> dict:
-    from mineru.parser.base import ParseResult
-    from mineru.render import render_content_list
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = archive.namelist()
         if len(names) != len(set(names)):
@@ -55,8 +92,7 @@ def decode_archive(data: bytes, filename: str) -> dict:
             if PurePosixPath(name).is_absolute() or '..' in PurePosixPath(name).parts:
                 raise ValueError('Unsafe archive member')
         middle = json.loads(archive.read('middle_json.json'))
-        parsed = ParseResult.from_dict(middle)
-        blocks = render_content_list(parsed.middle_json)
+        blocks = _render_content_list(middle)
         images = {}
         for name in names:
             if PurePosixPath(name).suffix.lower() in ('.png', '.jpg', '.jpeg', '.webp'):

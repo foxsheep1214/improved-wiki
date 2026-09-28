@@ -113,3 +113,69 @@ def test_page_coverage_rejects_missing_and_repeated_pages(tmp_path, monkeypatch,
         with pytest.raises(ValueError, match="source page indices"):
             v4.parse(19999, pdf, "chunk.pdf", expected_pages=3)
         assert canceled == ["/v1/parse/jobs/j1"]
+
+
+def test_decoder_uses_selected_python_without_importing_mineru(tmp_path, monkeypatch):
+    import base64
+    import io
+    import json
+    import sys
+    import zipfile
+    # Only the child sees this renderer; the driver has no MinerU dependency.
+    package = tmp_path / 'mineru'
+    (package / 'parser').mkdir(parents=True)
+    (package / '__init__.py').write_text('')
+    (package / 'parser' / '__init__.py').write_text('')
+    (package / 'parser' / 'base.py').write_text(
+        'from types import SimpleNamespace\n'
+        'class ParseResult:\n'
+        '    @staticmethod\n'
+        '    def from_dict(value): return SimpleNamespace(middle_json=value)\n')
+    (package / 'render.py').write_text(
+        'def render_content_list(value): return value["blocks"]\n')
+    monkeypatch.setenv('PYTHONPATH', str(tmp_path))
+    monkeypatch.setenv('IMPROVED_WIKI_MINERU_PYTHON', sys.executable)
+    monkeypatch.setitem(sys.modules, 'mineru', None)
+    middle = {'blocks': [{'type': 'text', 'text': '跨环境解析', 'page_idx': 0}]}
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w') as archive:
+        archive.writestr('middle_json.json', json.dumps(middle))
+        archive.writestr('markdown.md', '跨环境解析')
+        archive.writestr('images/figure.png', b'image-bytes')
+        archive.writestr('structured_content.json', '{"native": true}')
+    result = v4.decode_archive(buffer.getvalue(), 'chunk.pdf')['chunk.pdf']
+    assert result['content_list'] == middle['blocks']
+    assert result['middle_json'] == middle
+    assert result['md_content'] == '跨环境解析'
+    assert result['images']['figure.png'] == base64.b64encode(b'image-bytes').decode()
+    assert result['structured_content'] == {'native': True}
+
+
+def test_explicit_missing_python_is_not_silently_replaced(tmp_path, monkeypatch):
+    missing = tmp_path / 'missing-python'
+    monkeypatch.setenv('IMPROVED_WIKI_MINERU_PYTHON', str(missing))
+    assert v4.mineru_python() == missing
+    with pytest.raises(RuntimeError, match='IMPROVED_WIKI_MINERU_PYTHON'):
+        v4._render_content_list({})
+
+
+def test_default_renderer_python_matches_server_environment(tmp_path, monkeypatch):
+    import sys
+    from pathlib import Path
+    monkeypatch.delenv('IMPROVED_WIKI_MINERU_PYTHON', raising=False)
+    monkeypatch.setattr(Path, 'home', lambda: tmp_path)
+    assert v4.mineru_python() == Path(sys.executable)
+    python = tmp_path / '.venv' / 'bin' / 'python3'
+    python.parent.mkdir(parents=True)
+    python.touch()
+    assert v4.mineru_python() == python
+
+
+def test_renderer_failure_reports_selected_environment(monkeypatch):
+    import subprocess
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr='No module named mineru')
+    monkeypatch.setattr(v4.subprocess, 'run', fail)
+    monkeypatch.setenv('IMPROVED_WIKI_MINERU_PYTHON', '/selected/python')
+    with pytest.raises(RuntimeError, match='/selected/python: No module named mineru'):
+        v4._render_content_list({})

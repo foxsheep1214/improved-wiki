@@ -22,8 +22,11 @@ Check the interpreter actually launching the service:
 "$HOME/.venv/bin/python" -c 'import importlib.metadata as m; print(m.version("mineru"))'
 ```
 
-An optional `IMPROVED_WIKI_MINERU_PYTHON` selects the server interpreter. The wiki
-process must also have the matching MinerU 4 renderer installed for V1 output.
+An optional `IMPROVED_WIKI_MINERU_PYTHON` selects both the server and native
+renderer interpreter. Otherwise `~/.venv/bin/python3` is used when present,
+then the driver interpreter. V1 rendering runs in that environment over a
+JSON stdin/stdout subprocess; the wiki driver need not import MinerU. An
+explicit invalid interpreter fails visibly instead of silently falling back.
 4.x configuration uses `$MINERU_HOME/config.yaml` or `MINERU_CONFIG`; it does not
 read old `mineru.json`. Use the model verification command for the selected small
 backend and VLM engine. Do not equate a cached 3.x model directory with 4.x readiness.
