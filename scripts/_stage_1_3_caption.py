@@ -548,7 +548,7 @@ def _stage_1_3_build_caption_by_basename_map(config: Config, media_dir: Path) ->
     saved_by_md5: dict[str, str] = {}
     pat = re.compile(r"mineru_([0-9a-f]{8})\.")
     for f in media_dir.glob("p*-mineru_*.*"):
-        if f.name.endswith(".caption.txt"):
+        if f.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
             continue
         m = pat.search(f.name)
         if not m:

@@ -36,8 +36,22 @@ def parse_caption(text: str) -> dict:
         raise ValueError('caption summary must be a non-empty string')
     for field in FIELDS:
         values = data.get(field)
-        if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
-            raise ValueError(f'caption {field} must be an array of strings')
+        # Vision models sometimes return a single observation or a structured
+        # axes/legend object despite the requested array. Preserve that
+        # evidence while keeping the persisted v1 schema as list[str].
+        if values is None:
+            data[field] = []
+        elif isinstance(values, str):
+            data[field] = [values] if values.strip() else []
+        elif isinstance(values, dict):
+            data[field] = [json.dumps(values, ensure_ascii=False)] if values else []
+        elif isinstance(values, list):
+            if any(not isinstance(v, (str, dict)) for v in values):
+                raise ValueError(f'caption {field} must contain strings or objects')
+            data[field] = [json.dumps(v, ensure_ascii=False) if isinstance(v, dict) else v
+                           for v in values if v]
+        else:
+            raise ValueError(f'caption {field} must be an array, string, object, or null')
     return {key: data[key] for key in ('summary', *FIELDS)}
 
 

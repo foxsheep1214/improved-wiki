@@ -19,6 +19,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import _stage_1_1_scanned as scanned  # noqa: E402
 import _stage_1_2_images as images  # noqa: E402
 import _stage_1_3_caption as caption  # noqa: E402
+import _media_integrity as media_integrity  # noqa: E402
 
 
 def _png_data_uri() -> str:
@@ -46,6 +47,41 @@ class TestSourceScopedContext(unittest.TestCase):
 
     def tearDown(self):
         caption._CONTEXT_MAP_CACHE.clear()
+
+    def test_cached_media_recovery_excludes_caption_sidecars(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _config(root)
+            raw_file = config.raw_root / 'Book' / 'book.pdf'
+            raw_file.parent.mkdir(parents=True)
+            raw_file.write_bytes(b'%PDF')
+            media_dir = config.wiki_dir / 'media' / images.media_slug(raw_file, config)
+            media_dir.mkdir(parents=True)
+            image = media_dir / 'p0001-mineru_aaaaaaaa.jpg'
+            image.write_bytes(b'image bytes')
+            (media_dir / (image.name + '.caption.json')).write_text('{}')
+            (media_dir / (image.name + '.caption.txt')).write_text('a caption')
+            self.assertEqual(
+                media_integrity.canonical_mineru_figure_names(raw_file, config),
+                {image.name})
+
+            result = images._stage_1_2_extract_from_mineru(
+                config.runtime_dir / 'empty-mineru-output', config, raw_file)
+            self.assertEqual([item['filename'] for item in result['images']], [image.name])
+
+            manifest_path = Path(result['manifest'])
+            manifest = json.loads(manifest_path.read_text())
+            sidecar = media_dir / (image.name + '.caption.json')
+            bad = dict(result['images'][0], filename=sidecar.name,
+                       size_bytes=sidecar.stat().st_size,
+                       sha256=images.file_sha256(sidecar))
+            manifest['images'].append(bad)
+            manifest['total_images'] = 2
+            manifest_path.write_text(json.dumps(manifest))
+            cached = dict(result, count=2, images=manifest['images'])
+            valid, reason, _ = images.validate_stage_1_2_artifact(cached, config, raw_file)
+            self.assertFalse(valid)
+            self.assertIn('not a supported image', reason)
 
     def test_harvest_persists_source_join_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

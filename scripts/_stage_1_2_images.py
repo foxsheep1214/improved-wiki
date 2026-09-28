@@ -247,6 +247,9 @@ def validate_stage_1_2_artifact(
         filename = image.get("filename")
         if not isinstance(filename, str) or not filename:
             return False, f"manifest image {position} has no filename", {}
+        if (stage_result.get("mineru")
+                and Path(filename).suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp")):
+            return False, f"manifest entry is not a supported image: {filename}", {}
         if Path(filename).name != filename:
             return False, f"unsafe manifest image filename: {filename}", {}
         if filename in seen:
@@ -721,7 +724,7 @@ def _stage_1_2_extract_from_mineru(
         seen_source_names: set[str] = set()
         for img_source_dir in img_source_dirs:
             for img_path in sorted(img_source_dir.glob("*")):
-                if not img_path.is_file():
+                if not img_path.is_file() or img_path.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
                     continue
                 if img_path.name in seen_source_names:
                     continue
@@ -768,7 +771,7 @@ def _stage_1_2_extract_from_mineru(
         # media_dir as p*-mineru_*.* during chunk processing — recover them so
         # the manifest reflects reality and Stage 1.3 can caption them.
         for img_path in sorted(media_dir.glob("p*-mineru_*.*")):
-            if not img_path.is_file() or img_path.name.endswith(".caption.txt"):
+            if not img_path.is_file() or img_path.suffix.lower() not in (".jpg", ".jpeg", ".png", ".webp"):
                 continue
             bn = img_path.name
             if allowed_filenames is not None and bn not in allowed_filenames:

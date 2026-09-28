@@ -90,7 +90,7 @@ def canonical_mineru_figure_names(raw_file: Path, config: Config) -> set[str]:
     return {
         path.name
         for path in media_dir.glob("p*-mineru_*.*")
-        if path.is_file() and not path.name.endswith(".caption.txt")
+        if path.is_file() and path.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp")
     }
 
 
