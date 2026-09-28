@@ -64,11 +64,66 @@ def test_local_upload_cannot_send_document_to_external_origin():
 @pytest.mark.parametrize('version,module', [('4.0.7', 'mineru.parser.api_server'), ('3.4.5', 'mineru.cli.fast_api')])
 def test_server_command_follows_installed_major_version(monkeypatch, version, module):
     monkeypatch.setattr(scanned.subprocess, 'check_output', lambda *a, **kw: version)
-    command = scanned._mineru_server_command('/venv/python')
+    command = scanned._mineru_server_command('/venv/python', scanned.Path('/tmp/codex-work/wiki-ocr/uploads'))
     assert command[2] == module
     if version.startswith('4'):
         assert '--disable-image-analysis' in command
         assert command[command.index('--tier')+1] == 'standard'
+        assert command[command.index('--upload-dir')+1] == '/tmp/codex-work/wiki-ocr/uploads'
+
+
+def test_ocr_scratch_is_outside_project_and_removed_after_use():
+    import shutil
+    scratch = scanned._stage_1_1_mineru_scratch()
+    try:
+        assert scratch.is_relative_to('/tmp/codex-work/improved-wiki-mineru')
+        assert (scratch / 'uploads').is_dir()
+        assert (scratch / 'output').is_dir()
+    finally:
+        shutil.rmtree(scratch)
+
+
+def test_explicit_port_rejects_existing_service(monkeypatch):
+    class BusySocket:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def bind(self, address):
+            assert address == ('127.0.0.1', 19999)
+            raise OSError('port is occupied')
+    monkeypatch.setenv('MINERU_API_PORT', '19999')
+    monkeypatch.setattr(scanned.socket, 'socket', lambda *args: BusySocket())
+    with pytest.raises(RuntimeError, match='refusing to reuse'):
+        scanned._stage_1_1_choose_mineru_port()
+
+
+def test_server_starts_owned_process_even_when_existing_api_is_healthy(monkeypatch):
+    from types import SimpleNamespace
+    calls = []
+    proc = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(scanned, '_is_mineru_healthy', lambda: True)
+    monkeypatch.setattr(scanned, '_mineru_server_command',
+                        lambda python, upload: ['/venv/python', '--upload-dir', str(upload)])
+    monkeypatch.setattr(scanned.subprocess, 'Popen',
+                        lambda command, **kwargs: calls.append(command) or proc)
+    monkeypatch.setattr(scanned.time, 'sleep', lambda _: None)
+    actual, _ = scanned._stage_1_1_scanned_start_api_server(
+        scanned.Path('/tmp/codex-work/wiki-ocr/uploads'))
+    assert actual is proc
+    assert calls == [['/venv/python', '--upload-dir', '/tmp/codex-work/wiki-ocr/uploads']]
+
+
+def test_server_does_not_accept_other_process_after_own_exit(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(scanned, '_is_mineru_healthy', lambda: True)
+    monkeypatch.setattr(scanned, '_mineru_server_command', lambda *args: ['server'])
+    monkeypatch.setattr(scanned.subprocess, 'Popen',
+                        lambda *args, **kwargs: SimpleNamespace(poll=lambda: 1))
+    monkeypatch.setattr(scanned.time, 'sleep', lambda _: None)
+    with pytest.raises(RuntimeError, match='port may be occupied'):
+        scanned._stage_1_1_scanned_start_api_server(
+            scanned.Path('/tmp/codex-work/wiki-ocr/uploads'))
 
 
 def test_cleanup_targets_only_owned_process_group(monkeypatch):

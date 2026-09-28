@@ -12,8 +12,11 @@ import fcntl
 import json
 import os
 import re
+import shutil
+import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import urllib.error
@@ -39,7 +42,7 @@ from _stage_1_3_caption import (  # noqa: E402
 # ══════════════════════════════════════════════════════════════════════════════
 
 # minerU is strictly serialized by MINERU_LOCK_FILE (fcntl.flock), not a counter.
-MINERU_API_PORT = int(os.environ.get("MINERU_API_PORT", "19999"))
+MINERU_API_PORT = int(os.environ.get("MINERU_API_PORT", "0"))
 MINERU_LOCK_FILE = Path.home() / ".cache" / "improved-wiki" / ".mineru.lock"
 MINERU_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
@@ -374,20 +377,27 @@ def _is_mineru_healthy() -> bool:
         return False
 
 
-def _stage_1_1_kill_mineru_servers() -> None:
-    """Kill lingering mineru-api processes to ensure clean state.
+def _stage_1_1_mineru_scratch() -> Path:
+    """Give this OCR run its own server storage outside the wiki project."""
+    parent = Path('/tmp/codex-work/improved-wiki-mineru')
+    parent.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix='run-', dir=parent))
+    (scratch / 'uploads').mkdir()
+    (scratch / 'output').mkdir()
+    return scratch
 
-    Skip if a healthy server is already running on MINERU_API_PORT — we want
-    to reuse it rather than kill+restart.
-    """
-    if _is_mineru_healthy():
-        return  # reuse existing server
-    try:
-        subprocess.run(
-            ["pkill", "-f", "mineru-api"], capture_output=True, timeout=5,
-        )
-    except Exception:
-        pass  # best-effort
+
+def _stage_1_1_choose_mineru_port() -> int:
+    """Honor an explicit port; otherwise avoid any pre-existing local API."""
+    configured = os.environ.get('MINERU_API_PORT')
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(('127.0.0.1', int(configured) if configured else 0))
+        except OSError as exc:
+            raise RuntimeError(
+                f'MINERU_API_PORT {configured} is already in use; '
+                'refusing to reuse an unverified MinerU service') from exc
+        return int(sock.getsockname()[1])
 
 
 def _stage_1_1_extract_text_scanned_locked(file_path: Path, config: Config) -> str:
@@ -504,7 +514,7 @@ def _stage_1_1_scanned_load_stats(out_dir: Path) -> tuple[dict, Path]:
     return stats, stats_path
 
 
-def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
+def _stage_1_1_scanned_start_api_server(upload_dir: Path) -> tuple["object", Path]:
     """Start a persistent minerU API server (one per book) and wait for health.
 
     Returns (api_proc, venv_python). Raises RuntimeError if the API never
@@ -513,17 +523,16 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
     from _mineru_v4 import mineru_python
     venv_python = mineru_python()
 
-    # Check if minerU is already running on the port — if so, reuse it
-    if _is_mineru_healthy():
-        print(f"[ocr] minerU API already running on port {MINERU_API_PORT} — reusing")
-        return None, venv_python
-
     api_proc = subprocess.Popen(
-        _mineru_server_command(venv_python),
+        _mineru_server_command(venv_python, upload_dir),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
     for _ in range(30):
         time.sleep(2)
+        if api_proc.poll() is not None:
+            raise RuntimeError(
+                f'minerU API exited on port {MINERU_API_PORT}; '
+                'the port may be occupied or startup failed')
         try:
             if _is_mineru_healthy():
                 print(f"[ocr] minerU API ready on port {MINERU_API_PORT}")
@@ -534,7 +543,7 @@ def _stage_1_1_scanned_start_api_server() -> tuple["object", Path]:
     raise RuntimeError(f"minerU API failed to start on port {MINERU_API_PORT}")
 
 
-def _mineru_server_command(venv_python: Path) -> list[str]:
+def _mineru_server_command(venv_python: Path, upload_dir: Path) -> list[str]:
     version = subprocess.check_output([
         str(venv_python), '-c',
         'from importlib.metadata import version;print(version("mineru"))',
@@ -542,15 +551,16 @@ def _mineru_server_command(venv_python: Path) -> list[str]:
     if version.startswith('4.'):
         return [str(venv_python), '-m', 'mineru.parser.api_server',
                 '--host', '127.0.0.1', '--port', str(MINERU_API_PORT),
-                '--tier', 'standard', '--disable-image-analysis', '--concurrency', '1']
+                '--tier', 'standard', '--disable-image-analysis', '--concurrency', '1',
+                '--upload-dir', str(upload_dir)]
     return [str(venv_python), '-m', 'mineru.cli.fast_api',
             '--host', '127.0.0.1', '--port', str(MINERU_API_PORT)]
 
 
-def _stage_1_1_scanned_restart_server(venv_python: Path):
+def _stage_1_1_scanned_restart_server(venv_python: Path, upload_dir: Path):
     """Spawn a fresh minerU API server (after a crash / 5xx)."""
     return subprocess.Popen(
-        _mineru_server_command(venv_python),
+        _mineru_server_command(venv_python, upload_dir),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
     )
 
@@ -729,7 +739,7 @@ def _stage_1_1_scanned_poll_task(
 
 def _stage_1_1_scanned_submit_chunk_with_retries(
     chunk_pdf: Path, start: int, end: int, out_dir: Path, file_path: Path,
-    config, api_proc, venv_python: Path, ci: int, total_chunks: int,
+    config, api_proc, venv_python: Path, upload_dir: Path, ci: int, total_chunks: int,
 ):
     """Submit one chunk to minerU /file_parse with up to 3 retries + server restart.
 
@@ -802,14 +812,9 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
             if attempt < 2:
                 if e.code >= 500:
                     print(f"HTTP {e.code} (retry {attempt+1}/3, restarting server)...")
-                    if api_proc is not None:
-                        _stop_owned_mineru_server(api_proc)
-                    else:
-                        # This caller does not own the existing service.
-                        print("Reused API returned an error; retrying without stopping it.")
-                        continue
+                    _stop_owned_mineru_server(api_proc)
                     time.sleep(3)
-                    api_proc = _stage_1_1_scanned_restart_server(venv_python)
+                    api_proc = _stage_1_1_scanned_restart_server(venv_python, upload_dir)
                     time.sleep(5)
                     continue
                 print(f"HTTP {e.code} (retry {attempt+1}/3): {err_body[:100]}")
@@ -820,7 +825,7 @@ def _stage_1_1_scanned_submit_chunk_with_retries(
                 if "Connection refused" in str(e):
                     print(f"Connection failed (retry {attempt+1}/3, restarting server)...")
                     time.sleep(3)
-                    api_proc = _stage_1_1_scanned_restart_server(venv_python)
+                    api_proc = _stage_1_1_scanned_restart_server(venv_python, upload_dir)
                     time.sleep(8)
                     continue
                 print(f"Error (retry {attempt+1}/3): {str(e)[:100]}")
@@ -855,7 +860,7 @@ def _stage_1_1_scanned_print_failure_banner(start: int, end: int, chunk_pdf: Pat
 
 def _stage_1_1_scanned_process_chunk(
     ci: int, start: int, end: int, chunks, doc, out_dir: Path, stats: dict,
-    stats_path: Path, chunk_times: list, api_proc, venv_python: Path,
+    stats_path: Path, chunk_times: list, api_proc, venv_python: Path, upload_dir: Path,
     file_path: Path, config,
 ):
     """Process one chunk: create chunk PDF, submit with retries, persist stats.
@@ -902,7 +907,7 @@ def _stage_1_1_scanned_process_chunk(
           end=" ", flush=True)
 
     md_path, chunk_time, ok, api_proc = _stage_1_1_scanned_submit_chunk_with_retries(
-        chunk_pdf, start, end, out_dir, file_path, config, api_proc, venv_python,
+        chunk_pdf, start, end, out_dir, file_path, config, api_proc, venv_python, upload_dir,
         ci, len(chunks))
     if chunk_time is not None:
         chunk_times.append(chunk_time)
@@ -914,7 +919,6 @@ def _stage_1_1_scanned_process_chunk(
                   error="max retries exceeded")
         _stage_1_1_scanned_print_failure_banner(start, end, chunk_pdf)
         if len(stats["failed_chunks"]) > len(chunks) * 0.3:
-            _stage_1_1_kill_mineru_servers()
             raise RuntimeError(
                 f"minerU OCR: {len(stats['failed_chunks'])}/{len(chunks)} chunks failed. "
                 f"Aborting. Check _mineru_stats.json in extract_tmp_dir.")
@@ -1032,15 +1036,6 @@ def _stage_1_1_extract_text_scanned_impl(
     out_dir = out_dir_override or (config.extract_tmp_dir / file_path.stem)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Route the minerU API server's output root into the runtime temp dir
-    # (.llm-wiki/). minerU defaults to "./output" relative to the server's
-    # cwd, which previously polluted the wiki root with uuid-named dirs.
-    # The server reads MINERU_API_OUTPUT_ROOT at startup; both start and
-    # restart Popen calls inherit the parent env, so set it once here.
-    api_output_root = config.runtime_dir / "mineru-api-out"
-    api_output_root.mkdir(parents=True, exist_ok=True)
-    os.environ["MINERU_API_OUTPUT_ROOT"] = str(api_output_root)
-
     # Build chunks: 50 pages each
     chunks = []
     for start in range(0, total_pages, MINERU_CHUNK_SIZE):
@@ -1064,8 +1059,14 @@ def _stage_1_1_extract_text_scanned_impl(
         return _stage_1_1_assemble_ocr_text(out_dir, list(range(total_pages)))
 
     api_proc = None
+    scratch_dir = _stage_1_1_mineru_scratch()
+    previous_output_root = os.environ.get('MINERU_API_OUTPUT_ROOT')
     try:
-        api_proc, venv_python = _stage_1_1_scanned_start_api_server()
+        global MINERU_API_PORT
+        MINERU_API_PORT = _stage_1_1_choose_mineru_port()
+        os.environ['MINERU_API_OUTPUT_ROOT'] = str(scratch_dir / 'output')
+        upload_dir = scratch_dir / 'uploads'
+        api_proc, venv_python = _stage_1_1_scanned_start_api_server(upload_dir)
         _stage_1_1_scanned_warmup(doc, out_dir)
 
         # Run minerU on each pending chunk (with progress tracking)
@@ -1073,11 +1074,16 @@ def _stage_1_1_extract_text_scanned_impl(
         for ci, (start, end) in enumerate(chunks):
             api_proc = _stage_1_1_scanned_process_chunk(
                 ci, start, end, chunks, doc, out_dir, stats, stats_path,
-                chunk_times, api_proc, venv_python, file_path, config)
+                chunk_times, api_proc, venv_python, upload_dir, file_path, config)
     finally:
         doc.close()
         if api_proc is not None:
             _stop_owned_mineru_server(api_proc)
+        if previous_output_root is None:
+            os.environ.pop('MINERU_API_OUTPUT_ROOT', None)
+        else:
+            os.environ['MINERU_API_OUTPUT_ROOT'] = previous_output_root
+        shutil.rmtree(scratch_dir)
 
     # Final failure gate (no-silent-fallback): any chunk still failed after its
     # retries fails the whole extraction — the old "≤30% failed → silent

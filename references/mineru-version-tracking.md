@@ -12,9 +12,18 @@ MinerU's public renderer, preserving zero-based page indices and normalized
 Timeout/error paths request cancellation before the existing chunk retry policy.
 
 The 3.x fallback remains available for rollback, with `mineru.cli.fast_api` and
-`/file_parse`. Service selection checks the actual interpreter's package version;
-API discovery checks the running service. A healthy endpoint alone is not proof
-that models load or scientific content is extracted correctly.
+`/file_parse`. Service selection checks the actual interpreter's package version.
+Each OCR run starts its own local service on a free port. It never reuses an
+unidentified service on the configured/default port: a healthy endpoint does
+not prove its upload directory, output directory, model readiness, or content
+quality. An explicitly configured occupied `MINERU_API_PORT` fails visibly.
+
+MinerU's upload store (`blobs/`) and native API output are placed in a unique
+`/tmp/codex-work/improved-wiki-mineru/run-*` directory, then removed after the
+owned service stops. The wiki's resumable OCR page/chunk state remains in its
+runtime directory; old `.llm-wiki/mineru-api-out` data is read only as a legacy
+media recovery fallback. Do not set the API upload directory to the wiki root
+or remove an active run's scratch directory.
 
 Check the interpreter actually launching the service:
 

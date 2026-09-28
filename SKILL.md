@@ -43,6 +43,9 @@ contract. Do not load unrelated references for a simple operation.
   source identities and persisted cache keys are different contracts.
 - Runtime detection never moves files. Mixed `.iwiki-runtime` and `.llm-wiki`
   state requires explicit conflict-checked [migration](references/runtime-layout.md).
+- MinerU OCR owns a private local API server and keeps its upload blobs/native
+  output under `/tmp/codex-work/`; see [MinerU runtime checks](references/mineru-version-tracking.md).
+  Do not reuse an unverified API service or place its storage at the wiki root.
 - Context capacity is the verified window of the handoff workers. Save it once
   per project with `ingest.py --set-context-tokens <tokens>`; `--context-tokens`
   / `IMPROVED_WIKI_CONTEXT_TOKENS` override it. Unset means a conservative 64K
